@@ -144,6 +144,7 @@ st.session_state.gbo_role_name = role_name
 st.session_state.gbo_can_view_all_players = current_user.role.can_view_all_players
 st.session_state.gbo_can_edit_assessments = current_user.role.can_edit_assessments
 st.session_state.gbo_can_edit_sessions = current_user.role.can_edit_sessions
+st.session_state.gbo_coach_specialty = current_user.coach_specialty
 
 # --- Sidebar: identity + logout -----------------------------------------
 with st.sidebar:
@@ -195,8 +196,7 @@ if role_name in ("Administrator", "Head Coach", "Coach", "Strength Coach", "Athl
     pages["Player Development"] = [
         st.Page("pages/players.py", title="Players", url_path="players", icon=":material/person:"),
         st.Page("pages/assessments.py", title="Assessments", url_path="assessments", icon=":material/assignment:"),
-        st.Page("pages/import_rapsodo.py", title="Import Rapsodo Data", url_path="import-rapsodo", icon=":material/upload_file:"),
-        st.Page("pages/pitch_video.py", title="Pitch Video Review", url_path="pitch-video", icon=":material/videocam:"),
+        st.Page("pages/pitch_video.py", title="Video Review", url_path="pitch-video", icon=":material/videocam:"),
         st.Page("pages/idp.py", title="IDP", url_path="idp", icon=":material/track_changes:"),
         st.Page("pages/team_schedule.py", title="Team Schedule", url_path="team-schedule", icon=":material/calendar_month:"),
         st.Page("pages/player_assignments.py", title="Player Assignments", url_path="player-assignments", icon=":material/task_alt:"),
@@ -204,13 +204,37 @@ if role_name in ("Administrator", "Head Coach", "Coach", "Strength Coach", "Athl
         st.Page("pages/at_appointments.py", title="Athletic Trainer Appointments", url_path="at-appointments", icon=":material/medical_services:"),
     ]
 
-    # Bullpen Tracking/Scripts are pitching-coach tools -- not relevant to
-    # Strength Coach, Athletic Trainer, Sports Scientist, or Data Analyst.
-    if role_name in ("Administrator", "Head Coach", "Coach"):
+    # Import Rapsodo Data is Rapsodo/pitching-side data -- same
+    # Hitting-specialty exclusion as Bullpen Tracking/Scripts below.
+    if show_bullpen_pages := (role_name in ("Administrator", "Head Coach") or (
+        role_name == "Coach" and current_user.coach_specialty != "Hitting"
+    )):
+        pages["Player Development"].insert(2, st.Page("pages/import_rapsodo.py", title="Import Rapsodo Data", url_path="import-rapsodo", icon=":material/upload_file:"))
+
+    # Bullpen Tracking/Scripts are pitching-side tools -- not relevant to
+    # Strength Coach, Athletic Trainer, or a Coach specifically tagged
+    # Hitting (a Coach tagged Pitching/Both/unset still sees them, same
+    # as Administrator/Head Coach). Sports Scientist and Data Analyst
+    # get read-only visibility -- their can_edit_sessions permission is
+    # already False at the role level, so the pages themselves render
+    # read-only automatically with no further changes needed.
+    if show_bullpen_pages or role_name in ("Sports Scientist", "Data Analyst"):
         pages["Player Development"].extend([
             st.Page("pages/bullpen_tracking.py", title="Bullpen Tracking", url_path="bullpen-tracking", icon=":material/sports_baseball:"),
             st.Page("pages/bullpen_scripts.py", title="Bullpen Scripts", url_path="bullpen-scripts", icon=":material/edit_calendar:"),
         ])
+
+    # Hitter Tracking is hitting-side -- mirror-opposite exclusion from
+    # Bullpen Tracking: hidden from a Coach tagged Pitching (Pitching/
+    # Both/unset for Bullpen, Hitting/Both/unset here). Same read-only
+    # visibility for Sports Scientist/Data Analyst as above.
+    show_hitter_tracking = role_name in ("Administrator", "Head Coach") or (
+        role_name == "Coach" and current_user.coach_specialty != "Pitching"
+    )
+    if show_hitter_tracking or role_name in ("Sports Scientist", "Data Analyst"):
+        pages["Player Development"].append(
+            st.Page("pages/hitter_tracking.py", title="Hitter Tracking", url_path="hitter-tracking", icon=":material/sports_baseball:"),
+        )
 
 if role_name == "Administrator":
     pages["Administration"] = [
@@ -226,9 +250,10 @@ if role_name == "Player":
     pages["My Development"] = [
         st.Page("pages/player_schedule.py", title="My Schedule", url_path="my-schedule", icon=":material/calendar_month:"),
         st.Page("pages/player_development.py", title="My Development", url_path="my-development", icon=":material/track_changes:"),
-        st.Page("pages/player_stats.py", title="My Stats", url_path="my-stats", icon=":material/query_stats:"),
+        st.Page("pages/player_stats.py", title="My Assessments", url_path="my-stats", icon=":material/query_stats:"),
         st.Page("pages/player_video.py", title="My Video", url_path="my-video", icon=":material/videocam:"),
         st.Page("pages/player_bullpens.py", title="My Bullpens", url_path="my-bullpens", icon=":material/sports_baseball:"),
+        st.Page("pages/player_hitting.py", title="My Hitting", url_path="my-hitting", icon=":material/sports_baseball:"),
     ]
 
 navigation = st.navigation(pages)
