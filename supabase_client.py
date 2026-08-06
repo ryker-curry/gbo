@@ -4,6 +4,11 @@ GBO — Supabase client helper (used for Auth, not for data queries).
 Data queries still go through SQLAlchemy (database.py / models.py) against
 the same Postgres instance. This client is only for Supabase's Auth API
 (sign in, sign out, and -- for admins -- creating new user accounts).
+
+Reads from a local .env file (via python-dotenv) when running on a
+laptop, or from Streamlit Cloud's secrets manager once deployed there --
+.env files aren't used in that environment, so this falls back to
+st.secrets if the environment variable isn't set.
 """
 
 import os
@@ -12,9 +17,21 @@ from supabase import create_client, Client
 
 load_dotenv()
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
-SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+
+def _get_secret(key: str):
+    value = os.environ.get(key)
+    if not value:
+        try:
+            import streamlit as st
+            value = st.secrets.get(key)
+        except Exception:
+            pass
+    return value
+
+
+SUPABASE_URL = _get_secret("SUPABASE_URL")
+SUPABASE_ANON_KEY = _get_secret("SUPABASE_ANON_KEY")
+SUPABASE_SERVICE_ROLE_KEY = _get_secret("SUPABASE_SERVICE_ROLE_KEY")
 
 
 def get_supabase_client() -> Client:

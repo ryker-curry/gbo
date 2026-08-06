@@ -4,6 +4,11 @@ GBO — Database connection setup.
 Milestone 1: points SQLAlchemy at Supabase/Postgres instead of the
 old SQLite file. Nothing about the ORM models needs to change to make
 this swap — only the connection string.
+
+Reads DATABASE_URL from a local .env file (via python-dotenv) when
+running on a laptop, or from Streamlit Cloud's secrets manager once
+deployed there -- .env files aren't used in that environment, so this
+falls back to st.secrets if the environment variable isn't set.
 """
 
 import os
@@ -14,6 +19,13 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 load_dotenv()
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
+
+if not DATABASE_URL:
+    try:
+        import streamlit as st
+        DATABASE_URL = st.secrets.get("DATABASE_URL")
+    except Exception:
+        pass
 
 if not DATABASE_URL:
     raise RuntimeError(

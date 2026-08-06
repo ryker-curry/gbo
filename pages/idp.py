@@ -91,7 +91,7 @@ try:
     )
 
     if not goals:
-        st.info("No development goals yet for this player.")
+        empty_state("No development goals yet for this player.")
     else:
         for goal in goals:
             status_label = goal.status.status_name if goal.status else "—"
@@ -107,6 +107,42 @@ try:
                     if goal.target_date:
                         target_line += f" by {goal.target_date.strftime('%Y-%m-%d (%a)')}"
                     st.markdown(target_line)
+
+                    # Live "where are they now" -- rolling average for
+                    # Pitcher-Specific (continuous, per-pitch data), most
+                    # recent single value for other categories (periodic
+                    # snapshot testing).
+                    if goal.category.category_name == "Pitcher-Specific":
+                        cutoff = date.today() - timedelta(days=30)
+                        recent_results = (
+                            session.query(AssessmentResult)
+                            .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
+                            .filter(
+                                Assessment.player_id == goal.player_id,
+                                Assessment.category_id == goal.category_id,
+                                Assessment.assessment_date >= cutoff,
+                                AssessmentResult.test_type_id == goal.target_test_type_id,
+                            )
+                            .all()
+                        )
+                        if recent_results:
+                            avg = sum(float(r.value) for r in recent_results) / len(recent_results)
+                            st.caption(f"Current: {avg:.2f}{unit} (avg of {len(recent_results)} pitches, last 30 days)")
+                        else:
+                            st.caption("Current: no pitches with this metric in the last 30 days.")
+                    else:
+                        latest_pair = (
+                            session.query(AssessmentResult, Assessment.assessment_date)
+                            .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
+                            .filter(Assessment.player_id == goal.player_id, AssessmentResult.test_type_id == goal.target_test_type_id)
+                            .order_by(Assessment.assessment_date.desc())
+                            .first()
+                        )
+                        if latest_pair:
+                            latest_result, latest_date = latest_pair
+                            st.caption(f"Current: {float(latest_result.value):.2f}{unit} (most recent, {latest_date.strftime('%Y-%m-%d (%a)')})")
+                        else:
+                            st.caption("Current: no assessments recorded for this metric yet.")
                 if goal.source_assessment:
                     st.caption(f"Linked to assessment dated {goal.source_assessment.assessment_date.strftime('%Y-%m-%d (%a)')}")
 
@@ -116,7 +152,7 @@ try:
                     current_idx = status_names.index(goal.status.status_name) if goal.status else 0
                     new_status = st.selectbox("Status", status_names, index=current_idx, key=f"goal_status_{goal.goal_id}")
                     if new_status != status_label:
-                        if st.button("Update status", key=f"update_status_{goal.goal_id}"):
+                        if st.button("Update status", key=f"update_status_{goal.goal_id}", type="primary"):
                             goal.status_id = next(s.status_id for s in statuses if s.status_name == new_status)
                             session.commit()
                             st.rerun()
@@ -218,18 +254,28 @@ try:
         category_names = [c.category_name for c in goal_categories]
         category_choice = st.selectbox("Category", category_names, key="new_goal_category")
         linked_category_id = next(c.category_id for c in goal_categories if c.category_name == category_choice)
+        is_pitcher_specific = category_choice == "Pitcher-Specific"
 
-        player_assessments = (
-            session.query(Assessment)
-            .filter(Assessment.player_id == selected_player_id, Assessment.category_id == linked_category_id)
-            .order_by(Assessment.assessment_date.desc())
-            .limit(50)
-            .all()
-        )
-        assessments_by_key = {f"{a.assessment_date.strftime('%Y-%m-%d (%a)')} (#{a.assessment_id})": a for a in player_assessments}
-        assessment_options = ["-- Not linked to a specific assessment --"] + list(assessments_by_key.keys())
-        assessment_choice = st.selectbox("Link to assessment (optional)", assessment_options, key="new_goal_assessment")
-        selected_assessment = assessments_by_key.get(assessment_choice)
+        selected_assessment = None
+        lookback_days = 30
+        if is_pitcher_specific:
+            st.caption(
+                "Pitcher-Specific is continuous, per-pitch data (not a single testing-day measurement) -- "
+                "the baseline is calculated as an average over a recent window, not one specific pitch."
+            )
+            lookback_days = st.number_input("Lookback window (days)", min_value=1, max_value=365, value=30, step=1, key="new_goal_lookback")
+        else:
+            player_assessments = (
+                session.query(Assessment)
+                .filter(Assessment.player_id == selected_player_id, Assessment.category_id == linked_category_id)
+                .order_by(Assessment.assessment_date.desc())
+                .limit(50)
+                .all()
+            )
+            assessments_by_key = {f"{a.assessment_date.strftime('%Y-%m-%d (%a)')} (#{a.assessment_id})": a for a in player_assessments}
+            assessment_options = ["-- Not linked to a specific assessment --"] + list(assessments_by_key.keys())
+            assessment_choice = st.selectbox("Link to assessment (optional)", assessment_options, key="new_goal_assessment")
+            selected_assessment = assessments_by_key.get(assessment_choice)
 
         category_test_types = (
             session.query(AssessmentTestType)
@@ -249,7 +295,25 @@ try:
             if target_metric_choice != "-- No specific metric --":
                 target_test_type = test_types_by_name[target_metric_choice]
                 target_test_type_id = target_test_type.test_type_id
-                if selected_assessment:
+                if is_pitcher_specific:
+                    cutoff = date.today() - timedelta(days=lookback_days)
+                    recent_results = (
+                        session.query(AssessmentResult)
+                        .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
+                        .filter(
+                            Assessment.player_id == selected_player_id,
+                            Assessment.category_id == linked_category_id,
+                            Assessment.assessment_date >= cutoff,
+                            AssessmentResult.test_type_id == target_test_type_id,
+                        )
+                        .all()
+                    )
+                    if recent_results:
+                        baseline_value = sum(float(r.value) for r in recent_results) / len(recent_results)
+                        st.caption(f"Baseline auto-filled: average of {len(recent_results)} pitches over the last {lookback_days} days = {baseline_value:.2f} {target_test_type.unit or ''}")
+                    else:
+                        st.caption(f"No pitches with this metric in the last {lookback_days} days -- enter a baseline manually below, or widen the lookback window.")
+                elif selected_assessment:
                     matching_result = (
                         session.query(AssessmentResult)
                         .filter(AssessmentResult.assessment_id == selected_assessment.assessment_id, AssessmentResult.test_type_id == target_test_type_id)

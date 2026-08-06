@@ -25,15 +25,37 @@ from supabase_client import get_supabase_admin_client
 
 ROUTINE_VIDEO_BUCKET = "routine-videos"
 
+# Which session types belong to which coaching specialty -- used to filter
+# Training Routines so a Hitting Coach doesn't see pitcher-only routines
+# and vice versa. Anything not listed here is shared (visible to both).
+PITCHING_SESSION_TYPES = {"Arm Care", "Throwing", "Plyos", "Mechanical Work", "Bullpen"}
+HITTING_SESSION_TYPES = {"Hitting Drills"}
+
 page_header("Training Routines")
 
 current_user_id = st.session_state.get("gbo_user_id")
+role_name = st.session_state.get("gbo_role_name")
+coach_specialty = st.session_state.get("gbo_coach_specialty")
 can_edit_sessions = st.session_state.get("gbo_can_edit_sessions", False)
 
 if current_user_id is None:
     st.error("Session expired. Please log in again from the main page.")
     page_footer()
     st.stop()
+
+
+def excluded_session_type_names():
+    """Which session type names should be hidden from the current user,
+    based on coaching specialty. Empty set for anyone not specialty-tagged."""
+    if role_name != "Coach" or coach_specialty not in ("Pitching", "Hitting"):
+        return set()
+    return HITTING_SESSION_TYPES if coach_specialty == "Pitching" else PITCHING_SESSION_TYPES
+
+
+def filter_session_types_for_specialty(all_types):
+    """Filter a SessionType list by the current user's coaching specialty."""
+    excluded = excluded_session_type_names()
+    return [t for t in all_types if t.type_name not in excluded]
 
 
 def upload_routine_video(uploaded_file, identifier: str):
@@ -74,13 +96,17 @@ def render_exercise_list(exercises):
 session = get_session()
 try:
     session_types = session.query(SessionType).order_by(SessionType.display_order).all()
+    session_types = filter_session_types_for_specialty(session_types)
 
     st.subheader("Routine library")
     type_filter = st.selectbox("Filter by type", ["All"] + [t.type_name for t in session_types])
 
-    routines_query = session.query(TrainingRoutine)
+    routines_query = session.query(TrainingRoutine).join(SessionType)
+    excluded_types = excluded_session_type_names()
+    if excluded_types:
+        routines_query = routines_query.filter(SessionType.type_name.notin_(excluded_types))
     if type_filter != "All":
-        routines_query = routines_query.join(SessionType).filter(SessionType.type_name == type_filter)
+        routines_query = routines_query.filter(SessionType.type_name == type_filter)
     routines = routines_query.order_by(TrainingRoutine.routine_name).all()
 
     if not routines:
@@ -125,7 +151,7 @@ try:
             st.rerun()
 
     st.divider()
-    st.subheader("Add exercises to a routine")
+    st.subheader("Edit a routine")
 
     if not routines:
         st.caption("Create a routine above first.")
@@ -138,13 +164,42 @@ try:
         )
         selected_routine = routines_by_id[selected_routine_id]
 
-        st.caption(f"Type exercises for {selected_routine.routine_name} below -- add as many rows as you need, then save.")
+        with st.form(f"rename_routine_{selected_routine_id}"):
+            new_name = st.text_input("Routine name", value=selected_routine.routine_name)
+            new_description = st.text_area("Description (optional)", value=selected_routine.description or "")
+            rename_submitted = st.form_submit_button("Save name/description", type="primary")
+
+        if rename_submitted:
+            if not new_name.strip():
+                st.error("Routine name is required.")
+            else:
+                selected_routine.routine_name = new_name.strip()
+                selected_routine.description = new_description.strip() or None
+                session.commit()
+                st.success("Saved.")
+                st.rerun()
+
+        st.caption(
+            f"Edit exercises for {selected_routine.routine_name} below -- change values in place, use the trash "
+            f"icon on a row to remove it, or add new rows at the bottom. Existing videos are kept unless you "
+            f"remove that row entirely."
+        )
+        existing_exercises = sorted(selected_routine.exercises, key=lambda e: e.display_order)
+        existing_ids = [e.exercise_id for e in existing_exercises]
+        exercise_df = pd.DataFrame({
+            "ID": pd.array([e.exercise_id for e in existing_exercises], dtype="Int64"),
+            "Exercise Name": pd.array([e.exercise_name for e in existing_exercises], dtype="string"),
+            "Sets": pd.array([e.sets for e in existing_exercises], dtype="Int64"),
+            "Reps": pd.array([e.reps for e in existing_exercises], dtype="string"),
+            "Notes": pd.array([e.notes for e in existing_exercises], dtype="string"),
+        })
         exercise_table = st.data_editor(
-            pd.DataFrame(columns=["Exercise Name", "Sets", "Reps", "Notes"]),
+            exercise_df,
             num_rows="dynamic",
             use_container_width=True,
             key=f"exercise_table_{selected_routine_id}",
             column_config={
+                "ID": st.column_config.NumberColumn(disabled=True, help="Existing exercises keep their ID (and video) automatically -- leave blank for new rows."),
                 "Exercise Name": st.column_config.TextColumn(required=True),
                 "Sets": st.column_config.NumberColumn(min_value=0, max_value=20, step=1),
                 "Reps": st.column_config.TextColumn(help='e.g. "10", "AMRAP", "30 sec"'),
@@ -157,22 +212,51 @@ try:
             if valid_rows.empty:
                 st.error("Add at least one exercise with a name before saving.")
             else:
-                next_order = len(selected_routine.exercises) + 1
+                exercises_by_id = {e.exercise_id: e for e in existing_exercises}
+                kept_ids = set()
+                order = 1
                 added = 0
+                updated = 0
                 for _, row in valid_rows.iterrows():
                     sets_val = row.get("Sets")
-                    session.add(RoutineExercise(
-                        routine_id=selected_routine_id,
-                        exercise_name=str(row["Exercise Name"]).strip(),
-                        sets=int(sets_val) if pd.notna(sets_val) else None,
-                        reps=str(row["Reps"]).strip() if pd.notna(row.get("Reps")) else None,
-                        notes=str(row["Notes"]).strip() if pd.notna(row.get("Notes")) else None,
-                        display_order=next_order,
-                    ))
-                    next_order += 1
-                    added += 1
+                    row_id = row.get("ID")
+                    name = str(row["Exercise Name"]).strip()
+                    sets = int(sets_val) if pd.notna(sets_val) else None
+                    reps = str(row["Reps"]).strip() if pd.notna(row.get("Reps")) else None
+                    notes = str(row["Notes"]).strip() if pd.notna(row.get("Notes")) else None
+
+                    if pd.notna(row_id) and int(row_id) in exercises_by_id:
+                        # Existing exercise -- update in place, video_url untouched.
+                        ex = exercises_by_id[int(row_id)]
+                        ex.exercise_name = name
+                        ex.sets = sets
+                        ex.reps = reps
+                        ex.notes = notes
+                        ex.display_order = order
+                        kept_ids.add(ex.exercise_id)
+                        updated += 1
+                    else:
+                        # New row -- no ID, or an ID that no longer matches anything.
+                        session.add(RoutineExercise(
+                            routine_id=selected_routine_id,
+                            exercise_name=name,
+                            sets=sets,
+                            reps=reps,
+                            notes=notes,
+                            display_order=order,
+                        ))
+                        added += 1
+                    order += 1
+
+                # Any existing exercise whose row was removed from the table entirely.
+                removed_ids = set(existing_ids) - kept_ids
+                removed = 0
+                for rid in removed_ids:
+                    session.delete(exercises_by_id[rid])
+                    removed += 1
+
                 session.commit()
-                st.success(f"Added {added} exercise(s) to {selected_routine.routine_name}.")
+                st.success(f"Saved -- {updated} updated, {added} added, {removed} removed.")
                 st.rerun()
 
         # Refresh exercises after any save, and offer video attachment per exercise

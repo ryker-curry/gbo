@@ -28,7 +28,12 @@ if current_user_id is None:
     page_footer()
     st.stop()
 
-if role_name not in ("Administrator", "Head Coach", "Coach"):
+if role_name not in ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst"):
+    st.error("You don't have access to this page.")
+    page_footer()
+    st.stop()
+
+if role_name == "Coach" and st.session_state.get("gbo_coach_specialty") == "Hitting":
     st.error("You don't have access to this page.")
     page_footer()
     st.stop()

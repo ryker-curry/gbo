@@ -8,7 +8,7 @@ checks for existing rows before inserting.
 from database import get_session
 from models import (
     Role, AssessmentCategory, AssessmentTestType, IDPStatus, SessionType,
-    PlayerStatus, PlayerClass, Position, PitchType, TeamEventType, BullpenType,
+    PlayerStatus, PlayerClass, Position, PitchType, TeamEventType, BullpenType, HitterSessionType,
 )
 
 
@@ -127,7 +127,7 @@ ARM_HEALTH_TESTS = [
 # (test_name, unit) -- from Ryker's fully-populated Upper Body Strength sheet
 UPPER_BODY_STRENGTH_TESTS = [
     ("Push Strength: NG/DB Bench Press Load", "lbs"), ("Push Strength: NG/DB Bench Press Repetitions", "reps"),
-    ("Push Strength: Chin Up External Load", "lbs"), ("Pull Strength: Chin Up Repetitions", "reps"),
+    ("Pull Strength: Chin Up External Load", "lbs"), ("Pull Strength: Chin Up Repetitions", "reps"),
     ("Grip Strength: Right Grip Strength", "lbs"), ("Grip Strength: Left Grip Strength", "lbs"),
 ]
 
@@ -361,6 +361,21 @@ def seed_bullpen_types(session):
     print(f"Seeded {len(types)} bullpen types.")
 
 
+def seed_hitter_session_types(session):
+    if session.query(HitterSessionType).count() > 0:
+        return
+    types = [
+        HitterSessionType(type_name="Live ABs", display_order=1),
+        HitterSessionType(type_name="Batting Practice", display_order=2),
+        HitterSessionType(type_name="Intersquad", display_order=3),
+        HitterSessionType(type_name="Scrimmage", display_order=4),
+        HitterSessionType(type_name="Game", display_order=5),
+    ]
+    session.add_all(types)
+    session.commit()
+    print(f"Seeded {len(types)} hitter session types.")
+
+
 def run_all_seeds():
     session = get_session()
     try:
@@ -374,6 +389,7 @@ def run_all_seeds():
         seed_pitch_types(session)
         seed_team_event_types(session)
         seed_bullpen_types(session)
+        seed_hitter_session_types(session)
     finally:
         session.close()
 

@@ -3,9 +3,14 @@ GBO — Athletic Trainer Appointments.
 
 Real appointment scheduling: specific date, time, player, and which
 Athletic Trainer. Creating/editing restricted to Athletic Trainer and
-Administrator; everyone else with Player Development access can view
-which players have upcoming appointments (not clinical details beyond
-the reason field).
+Administrator.
+
+Viewing is scoped for privacy: full details (including the medical
+Reason field) go to Administrator, Athletic Trainer, and Head Coach.
+Everyone else with Player Development access (Coach, Strength Coach,
+Sports Scientist, Data Analyst) sees only date/time/player -- enough
+for scheduling coordination, without seeing why a player has a medical
+appointment.
 """
 
 import streamlit as st
@@ -24,6 +29,9 @@ can_view_all = st.session_state.get("gbo_can_view_all_players", False)
 
 CAN_EDIT_APPOINTMENTS = ("Administrator", "Athletic Trainer")
 can_edit_appointments = role_name in CAN_EDIT_APPOINTMENTS
+
+CAN_SEE_FULL_DETAILS = ("Administrator", "Athletic Trainer", "Head Coach")
+can_see_full_details = role_name in CAN_SEE_FULL_DETAILS
 
 if current_user_id is None:
     st.error("Session expired. Please log in again from the main page.")
@@ -63,16 +71,63 @@ try:
     if not upcoming:
         empty_state("No upcoming appointments scheduled.")
     else:
+        if not can_see_full_details:
+            st.caption("Showing date/time only -- appointment details are restricted to Administrator, Athletic Trainer, and Head Coach.")
         st.dataframe(
             [
                 {
                     "Date": a.appointment_date.strftime("%Y-%m-%d (%a)"),
                     "Time": a.appointment_time or "—",
                     "Player": f"{a.player.first_name} {a.player.last_name}" if a.player else "—",
-                    "Athletic Trainer": f"{a.athletic_trainer.first_name} {a.athletic_trainer.last_name}" if a.athletic_trainer else "—",
-                    "Reason": a.reason or "",
+                    **({
+                        "Athletic Trainer": f"{a.athletic_trainer.first_name} {a.athletic_trainer.last_name}" if a.athletic_trainer else "—",
+                        "Reason": a.reason or "",
+                    } if can_see_full_details else {}),
                 }
                 for a in upcoming
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.divider()
+    st.subheader("Check a specific player")
+    check_player_id = st.selectbox(
+        "Player",
+        options=list(players_by_id.keys()),
+        format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
+        key="at_check_player_choice",
+    )
+    check_player = players_by_id[check_player_id]
+
+    status_label = check_player.status.status_name if check_player.status else "—"
+    st.markdown(f"**Current status:** {status_label}")
+
+    player_appointments = (
+        session.query(ATAppointment)
+        .options(joinedload(ATAppointment.athletic_trainer))
+        .filter(ATAppointment.player_id == check_player_id)
+        .order_by(ATAppointment.appointment_date.desc(), ATAppointment.appointment_time.desc())
+        .all()
+    )
+    if not player_appointments:
+        empty_state(f"No appointments on file for {check_player.first_name} {check_player.last_name}.")
+    else:
+        if not can_see_full_details:
+            st.caption("Showing date/time only -- appointment details are restricted to Administrator, Athletic Trainer, and Head Coach.")
+        st.dataframe(
+            [
+                {
+                    "Date": a.appointment_date.strftime("%Y-%m-%d (%a)"),
+                    "Time": a.appointment_time or "—",
+                    "Upcoming": "Yes" if a.appointment_date >= date.today() else "No",
+                    **({
+                        "Athletic Trainer": f"{a.athletic_trainer.first_name} {a.athletic_trainer.last_name}" if a.athletic_trainer else "—",
+                        "Reason": a.reason or "",
+                        "Notes": a.notes or "",
+                    } if can_see_full_details else {}),
+                }
+                for a in player_appointments
             ],
             use_container_width=True,
             hide_index=True,

@@ -48,6 +48,7 @@ try:
                 "Name": f"{u.first_name} {u.last_name}",
                 "Email": u.email,
                 "Role": u.role.role_name if u.role else "—",
+                "Specialty": u.coach_specialty or "—",
                 "Linked Player": f"{u.player.first_name} {u.player.last_name}" if u.player else "—",
                 "Active": "Yes" if u.active else "No",
             }
@@ -68,6 +69,7 @@ try:
     role_choice = st.selectbox("Role", [r.role_name for r in roles], key="create_user_role")
 
     linked_player_id = None
+    coach_specialty_choice = None
     if role_choice == "Player":
         eligible_players = session.query(Player).filter(Player.active.is_(True)).order_by(Player.last_name, Player.first_name).all()
         if eligible_players:
@@ -80,6 +82,13 @@ try:
             )
         else:
             st.warning("No players exist on the roster yet -- add one first from the Players page.")
+    elif role_choice == "Coach":
+        coach_specialty_choice = st.selectbox(
+            "Specialty",
+            ["Both", "Pitching", "Hitting"],
+            key="create_user_specialty",
+            help="Filters which Training Routines this coach sees -- Pitching coaches won't see hitting-only routines and vice versa. Shared categories (Lifting, Conditioning, Mobility, Med Ball, General) are visible either way.",
+        )
 
     with st.form("create_user_form"):
         c1, c2 = st.columns(2)
@@ -113,6 +122,7 @@ try:
                     last_name=last_name.strip(),
                     role_id=role.role_id,
                     player_id=linked_player_id,
+                    coach_specialty=coach_specialty_choice,
                     active=True,
                 )
                 session.add(new_user)
@@ -147,6 +157,7 @@ try:
         )
 
         new_player_id = None
+        new_coach_specialty = None
         if new_role_choice == "Player":
             all_players = session.query(Player).filter(Player.active.is_(True)).order_by(Player.last_name, Player.first_name).all()
             if not all_players:
@@ -161,6 +172,16 @@ try:
                     format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
                     key="edit_player_choice",
                 )
+        elif new_role_choice == "Coach":
+            specialty_options = ["Both", "Pitching", "Hitting"]
+            current_specialty_idx = specialty_options.index(editing_user.coach_specialty) if editing_user.coach_specialty in specialty_options else 0
+            new_coach_specialty = st.selectbox(
+                "Specialty",
+                specialty_options,
+                index=current_specialty_idx,
+                key="edit_coach_specialty",
+                help="Filters which Training Routines this coach sees -- Pitching coaches won't see hitting-only routines and vice versa. Shared categories (Lifting, Conditioning, Mobility, Med Ball, General) are visible either way.",
+            )
 
         with st.form("edit_user_form"):
             c1, c2 = st.columns(2)
@@ -197,6 +218,8 @@ try:
                     # Clear the player link if the role isn't Player anymore;
                     # otherwise save whichever player was selected above.
                     editing_user.player_id = new_player_id if new_role_choice == "Player" else None
+                    # Same for specialty -- only meaningful for Coach.
+                    editing_user.coach_specialty = new_coach_specialty if new_role_choice == "Coach" else None
                     editing_user.active = active_choice
                     session.commit()
                     st.success(f"Updated {editing_user.first_name} {editing_user.last_name}.")

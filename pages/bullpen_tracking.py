@@ -38,7 +38,7 @@ from supabase_client import get_supabase_admin_client
 from models import (
     Player, StaffPlayerAssignment, BullpenType, BullpenSession, BullpenPitch,
     PitchType, Assessment, AssessmentCategory, AssessmentResult, PlayerAssignment,
-    BullpenScript,
+    BullpenScript, HitterSwing,
 )
 from ui_components import page_header, page_footer, empty_state
 
@@ -91,6 +91,139 @@ def render_scatter_with_averages(title, x_label, y_label, data_by_type, x_key, y
     st.plotly_chart(fig, use_container_width=True)
 
 
+def render_strike_zone_plot(title, data_by_type):
+    """Actual pitch locations (real Plate Side/Plate Height from linked
+    Rapsodo data) plotted against a drawn strike zone -- Rapsodo's own
+    signature visualization. Individual pitches only (no averaging --
+    the whole point is seeing the actual spread of locations), colored
+    by pitch type, with the 3x3 grid drawn in for reference."""
+    fig = go.Figure()
+
+    # Outer zone boundary
+    fig.add_shape(type="rect", x0=FULL_ZONE_SIDE[0], x1=FULL_ZONE_SIDE[1], y0=FULL_ZONE_HEIGHT[0], y1=FULL_ZONE_HEIGHT[1],
+                  line=dict(color="#FFFDE5", width=2), fillcolor="rgba(0,0,0,0)")
+    # Internal 3x3 grid lines
+    for x in ZONE_SIDE_BOUNDS:
+        fig.add_shape(type="line", x0=x, x1=x, y0=FULL_ZONE_HEIGHT[0], y1=FULL_ZONE_HEIGHT[1], line=dict(color="#5A5A5A", width=1, dash="dot"))
+    for y in ZONE_HEIGHT_BOUNDS:
+        fig.add_shape(type="line", x0=FULL_ZONE_SIDE[0], x1=FULL_ZONE_SIDE[1], y0=y, y1=y, line=dict(color="#5A5A5A", width=1, dash="dot"))
+
+    for i, (pitch_type, entries) in enumerate(data_by_type.items()):
+        color = PITCH_TYPE_COLORS[i % len(PITCH_TYPE_COLORS)]
+        xs = [e["Plate Side"] for e in entries if "Plate Side" in e and "Plate Height" in e]
+        ys = [e["Plate Height"] for e in entries if "Plate Side" in e and "Plate Height" in e]
+        if not xs:
+            continue
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="markers", name=pitch_type,
+            marker=dict(color=color, size=10, opacity=0.75, line=dict(color="#1E1E1E", width=1)),
+            hovertemplate=f"{pitch_type}<br>Side: %{{x:.2f}} ft<br>Height: %{{y:.2f}} ft<extra></extra>",
+        ))
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Plate Side (ft)", yaxis_title="Plate Height (ft)",
+        showlegend=True, height=480,
+        plot_bgcolor="#1E1E1E", paper_bgcolor="#1E1E1E",
+        font=dict(color="#FFFDE5"),
+        xaxis=dict(gridcolor="#3A3A3A", zerolinecolor="#3A3A3A", range=[FULL_ZONE_SIDE[0] - 1, FULL_ZONE_SIDE[1] + 1], scaleanchor="y", scaleratio=1),
+        yaxis=dict(gridcolor="#3A3A3A", zerolinecolor="#3A3A3A", range=[0, FULL_ZONE_HEIGHT[1] + 1.5]),
+        margin=dict(t=40, b=40, l=40, r=40),
+        legend=dict(bgcolor="rgba(0,0,0,0)"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+CONTACT_QUALITY_SCORE = {"Barrel": 3, "Solid": 2, "Weak": 1, "Miss": 0}
+
+
+def compute_zone_scores(swings):
+    """Average contact-quality score and count per zone, from a list of
+    HitterSwing objects."""
+    by_zone = {}
+    for s in swings:
+        if s.pitch_zone is None or s.contact_quality not in CONTACT_QUALITY_SCORE:
+            continue
+        by_zone.setdefault(s.pitch_zone, []).append(CONTACT_QUALITY_SCORE[s.contact_quality])
+    scores = {z: sum(vals) / len(vals) for z, vals in by_zone.items()}
+    counts = {z: len(vals) for z, vals in by_zone.items()}
+    return scores, counts
+
+
+def render_zone_heatmap(title, zone_scores, zone_counts, invert_colors=False, subtitle=None):
+    """3x3 heatmap of average contact-quality score per zone. Green =
+    good, red = poor -- inverted for the pitcher view, where a LOW
+    opponent contact-quality score is what's good for the pitcher."""
+    zone_grid = [[7, 8, 9], [4, 5, 6], [1, 2, 3]]
+    z = [[zone_scores.get(zid) for zid in row] for row in zone_grid]
+    text = [[f"{zone_scores[zid]:.1f}<br>({zone_counts[zid]})" if zid in zone_scores else "—" for zid in row] for row in zone_grid]
+
+    colorscale = "RdYlGn_r" if invert_colors else "RdYlGn"
+    fig = go.Figure(data=go.Heatmap(
+        z=z, text=text, texttemplate="%{text}", textfont=dict(color="#111111", size=14),
+        colorscale=colorscale, zmin=0, zmax=3, showscale=True,
+        colorbar=dict(title="Avg score", tickfont=dict(color="#FFFDE5"), title_font=dict(color="#FFFDE5")),
+        xgap=3, ygap=3,
+    ))
+    fig.update_layout(
+        title=title,
+        height=380,
+        plot_bgcolor="#1E1E1E", paper_bgcolor="#1E1E1E",
+        font=dict(color="#FFFDE5"),
+        xaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+        margin=dict(t=40, b=20, l=20, r=20),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    if subtitle:
+        st.caption(subtitle)
+
+
+def compute_execution_accuracy(swings):
+    """Hit-rate (0-100%) and attempt count per INTENDED zone, from a
+    list of HitterSwing objects -- how often, when this pitcher aimed
+    for a given zone, did he actually land it (with a hitter in the
+    box, live). Different from Bullpen Tracking's own execution % --
+    that's bullpen-only, no hitter present; this is specifically the
+    live-AB version, from Hitter Tracking swing data."""
+    by_zone = {}
+    for s in swings:
+        if s.intended_zone is None or s.pitch_zone is None:
+            continue
+        by_zone.setdefault(s.intended_zone, []).append(1 if s.intended_zone == s.pitch_zone else 0)
+    rates = {z: 100 * sum(vals) / len(vals) for z, vals in by_zone.items()}
+    counts = {z: len(vals) for z, vals in by_zone.items()}
+    return rates, counts
+
+
+def render_execution_heatmap(title, zone_rates, zone_counts, subtitle=None):
+    """3x3 heatmap of hit-rate % per intended zone. Green = high
+    accuracy, red = low -- always this direction (unlike the contact-
+    quality heatmap, there's no "inverted" case here)."""
+    zone_grid = [[7, 8, 9], [4, 5, 6], [1, 2, 3]]
+    z = [[zone_rates.get(zid) for zid in row] for row in zone_grid]
+    text = [[f"{zone_rates[zid]:.0f}%<br>({zone_counts[zid]})" if zid in zone_rates else "—" for zid in row] for row in zone_grid]
+
+    fig = go.Figure(data=go.Heatmap(
+        z=z, text=text, texttemplate="%{text}", textfont=dict(color="#111111", size=14),
+        colorscale="RdYlGn", zmin=0, zmax=100, showscale=True,
+        colorbar=dict(title="Hit rate %", tickfont=dict(color="#FFFDE5"), title_font=dict(color="#FFFDE5")),
+        xgap=3, ygap=3,
+    ))
+    fig.update_layout(
+        title=title,
+        height=380,
+        plot_bgcolor="#1E1E1E", paper_bgcolor="#1E1E1E",
+        font=dict(color="#FFFDE5"),
+        xaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+        margin=dict(t=40, b=20, l=20, r=20),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    if subtitle:
+        st.caption(subtitle)
+
+
 def upload_pitch_video(uploaded_file, identifier: str):
     try:
         admin_client = get_supabase_admin_client()
@@ -118,7 +251,12 @@ if current_user_id is None:
     page_footer()
     st.stop()
 
-if role_name not in ("Administrator", "Head Coach", "Coach"):
+if role_name not in ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst"):
+    st.error("You don't have access to this page.")
+    page_footer()
+    st.stop()
+
+if role_name == "Coach" and st.session_state.get("gbo_coach_specialty") == "Hitting":
     st.error("You don't have access to this page.")
     page_footer()
     st.stop()
@@ -129,6 +267,15 @@ if role_name not in ("Administrator", "Head Coach", "Coach"):
 ZONE_SIDE_BOUNDS = (-0.283, 0.283)  # left | middle | right column cutoffs
 ZONE_HEIGHT_BOUNDS = (2.167, 2.833)  # bottom | middle | top row cutoffs (generic 1.5-3.5 ft zone)
 BURY_HEIGHT_THRESHOLD = 1.5  # ft -- below this counts as "buried" (intentionally in the dirt), not just the Down row
+
+# Full strike zone rectangle bounds (feet), derived from the same fixed
+# generic per-third boundaries above -- the left/right third width and
+# top/bottom third height mirrored out to the zone's outer edges. Used
+# by render_strike_zone_plot for the drawn zone boundary.
+_SIDE_THIRD = ZONE_SIDE_BOUNDS[1] - ZONE_SIDE_BOUNDS[0]
+FULL_ZONE_SIDE = (ZONE_SIDE_BOUNDS[0] - _SIDE_THIRD, ZONE_SIDE_BOUNDS[1] + _SIDE_THIRD)
+_HEIGHT_THIRD = ZONE_HEIGHT_BOUNDS[1] - ZONE_HEIGHT_BOUNDS[0]
+FULL_ZONE_HEIGHT = (ZONE_HEIGHT_BOUNDS[0] - _HEIGHT_THIRD, ZONE_HEIGHT_BOUNDS[1] + _HEIGHT_THIRD)
 
 # Zone numbers (1-9) are physical field locations and never change.
 # Arm-side/glove-side is a pitcher-relative concept (tied to their
@@ -860,13 +1007,18 @@ try:
             movement_data = current_summary["movement_by_type"]
             has_movement = any("Horizontal Break" in e and "Induced Vertical Break" in e for entries in movement_data.values() for e in entries)
             has_release = any("Release Side" in e and "Release Height" in e for entries in movement_data.values() for e in entries)
+            has_location = any("Plate Side" in e and "Plate Height" in e for entries in movement_data.values() for e in entries)
             has_velocity = any(vs for vs in current_summary["velos_by_type"].values())
 
-            if has_movement or has_release or has_velocity:
+            if has_movement or has_release or has_location or has_velocity:
                 st.divider()
                 st.subheader("Charts")
-                st.caption("Bold labeled markers are the average per pitch type; smaller dots are individual pitches.")
 
+                if has_location:
+                    render_strike_zone_plot("Actual Pitch Locations", movement_data)
+                    st.caption("Where pitches actually crossed the plate -- from real Rapsodo Plate Side/Height, not the called intended zone.")
+
+                st.caption("Bold labeled markers are the average per pitch type; smaller dots are individual pitches.")
                 if has_movement:
                     render_scatter_with_averages(
                         "Movement Plot", "Horizontal Break (in)", "Induced Vertical Break (in)",
@@ -892,6 +1044,48 @@ try:
                         yaxis=dict(gridcolor="#3A3A3A"), height=380, margin=dict(t=40, b=40, l=40, r=40),
                     )
                     st.plotly_chart(velo_fig, use_container_width=True)
+
+    # --- This pitcher's zone heatmap: where opponents do damage,
+    # from every logged Hitter Tracking swing against him, any hitter.
+    # Shown here on his own page (Bullpen Tracking) since that's where
+    # a coach reviewing this specific pitcher already is -- the source
+    # data necessarily comes from hitter outcomes (there's no other way
+    # to know where he gets hit hard), but this isn't a hitter-tracking
+    # feature, it's his own page. Not tied to a specific bullpen
+    # session -- always shown for whichever pitcher is selected above. ---
+    st.divider()
+    st.subheader(f"{selected_pitcher.first_name} {selected_pitcher.last_name}'s zone heatmap")
+    st.caption("Where opponents do damage against him -- contact quality by zone, from every logged Hitter Tracking swing against him, any hitter.")
+    pitcher_swings = (
+        session.query(HitterSwing)
+        .filter(HitterSwing.pitcher_player_id == selected_pitcher_id)
+        .all()
+    )
+    if not pitcher_swings:
+        empty_state("No swings logged against this pitcher yet on Hitter Tracking.")
+    else:
+        pitcher_zone_scores, pitcher_zone_counts = compute_zone_scores(pitcher_swings)
+        if not pitcher_zone_scores:
+            empty_state("No swings with both a zone and contact quality recorded against this pitcher yet.")
+        else:
+            render_zone_heatmap(
+                "Opponent contact quality by zone", pitcher_zone_scores, pitcher_zone_counts, invert_colors=True,
+                subtitle="Green = pitches hardest to hit here (good for him), red = hit hardest here. Number in parentheses is swing count.",
+            )
+
+        # --- Live execution accuracy: intended zone vs. actual zone,
+        # with a hitter in the box -- distinct from the bullpen's own
+        # execution % (which has no hitter present at all). ---
+        st.divider()
+        st.caption(f"How well {selected_pitcher.first_name} executes to his intended locations with a hitter in the box (from Hitter Tracking).")
+        exec_rates, exec_counts = compute_execution_accuracy(pitcher_swings)
+        if not exec_rates:
+            empty_state("No swings with both an intended and actual zone recorded for this pitcher yet.")
+        else:
+            render_execution_heatmap(
+                "Live execution accuracy by intended zone", exec_rates, exec_counts,
+                subtitle="Green = hits his spot most often when he aims here, red = misses most often. Number in parentheses is attempt count.",
+            )
 
 finally:
     session.close()

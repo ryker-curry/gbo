@@ -25,7 +25,7 @@ from datetime import date
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import Player, Team, StaffPlayerAssignment, PlayerClass, PlayerStatus, Position
+from models import Player, Team, StaffPlayerAssignment, PlayerClass, PlayerStatus, Position, Assessment, IDPGoal, TrainingSession, PlayerAssignment, BullpenSession, User
 from supabase_client import get_supabase_admin_client
 
 PHOTO_BUCKET = "player-photos"
@@ -146,7 +146,7 @@ try:
     if not players:
         empty_state("No players to show yet." if can_view_all else "No players are currently assigned to you.")
     elif not filtered_players:
-        st.info("No players match the current search/filters.")
+        empty_state("No players match the current search/filters.")
     else:
         st.caption(f"Showing {len(filtered_players)} of {len(players)} player(s).")
         st.dataframe(
@@ -389,6 +389,45 @@ try:
                 session.commit()
                 st.success(f"Added {first_name} {last_name} to the roster.")
             st.rerun()
+
+    st.divider()
+    with st.expander("Delete a player"):
+        st.caption(
+            "For real players with any history (assessments, IDP goals, training sessions, etc.), "
+            "deactivate them above instead -- that preserves their record. This is meant for cleaning "
+            "up accidental duplicates or test entries with nothing attached to them yet."
+        )
+        delete_player_id = st.selectbox(
+            "Which player?",
+            options=list(players_by_id.keys()),
+            format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}" + ("" if players_by_id[pid].active else " (inactive)"),
+            key="delete_player_choice",
+        )
+        target_player = players_by_id[delete_player_id]
+
+        # Check for any related records before allowing a real delete --
+        # a player with real history shouldn't be silently destroyable.
+        related_counts = {
+            "assessments": session.query(Assessment).filter(Assessment.player_id == delete_player_id).count(),
+            "IDP goals": session.query(IDPGoal).filter(IDPGoal.player_id == delete_player_id).count(),
+            "training sessions": session.query(TrainingSession).filter(TrainingSession.player_id == delete_player_id).count(),
+            "player assignments": session.query(PlayerAssignment).filter(PlayerAssignment.player_id == delete_player_id).count(),
+            "bullpen sessions": session.query(BullpenSession).filter(BullpenSession.player_id == delete_player_id).count(),
+            "linked user accounts": session.query(User).filter(User.player_id == delete_player_id).count(),
+        }
+        has_related_data = any(count > 0 for count in related_counts.values())
+
+        if has_related_data:
+            present = ", ".join(f"{count} {label}" for label, count in related_counts.items() if count > 0)
+            st.error(f"{target_player.first_name} {target_player.last_name} has real data attached ({present}) -- deactivate them above instead of deleting.")
+        else:
+            st.caption(f"{target_player.first_name} {target_player.last_name} has no assessments, goals, sessions, assignments, bullpens, or linked accounts -- safe to delete.")
+            confirm_delete_player = st.checkbox("Yes, permanently delete this player", key=f"confirm_delete_player_{delete_player_id}")
+            if st.button("Delete player", key=f"delete_player_{delete_player_id}", disabled=not confirm_delete_player, type="primary"):
+                session.delete(target_player)
+                session.commit()
+                st.success(f"Deleted {target_player.first_name} {target_player.last_name}.")
+                st.rerun()
 
 finally:
     session.close()

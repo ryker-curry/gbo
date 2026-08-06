@@ -259,6 +259,7 @@ class User(Base):
     last_name = Column(String(80), nullable=False)
     role_id = Column(Integer, ForeignKey("roles.role_id"), nullable=False)
     player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)  # set only for Player role
+    coach_specialty = Column(String(20), nullable=True)  # "Pitching" / "Hitting" / "Both" -- only meaningful for role=Coach, filters which Training Routines they see
     active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -728,3 +729,66 @@ class BullpenScriptPitch(Base):
 
     script = relationship("BullpenScript", back_populates="pitches")
     pitch_type = relationship("PitchType")
+
+
+class HitterSessionType(Base):
+    """Lookup for hitter-tracking session type (Live ABs, Batting
+    Practice, Intersquad, Scrimmage, Game)."""
+    __tablename__ = "hitter_session_types"
+
+    session_type_id = Column(Integer, primary_key=True)
+    type_name = Column(String(50), unique=True, nullable=False)
+    display_order = Column(Integer, default=0, nullable=False)
+
+
+class HitterTrackingSession(Base):
+    """A hitter-tracking session (BP round, live AB work, scrimmage
+    at-bats) -- a grouping container. Unlike bullpens, the pitcher can
+    vary swing to swing within one session (facing multiple live arms,
+    or a BP arm plus some live look reps), so pitcher info lives on
+    each individual HitterSwing, not on the session itself."""
+    __tablename__ = "hitter_tracking_sessions"
+
+    session_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)  # the hitter
+    session_type_id = Column(Integer, ForeignKey("hitter_session_types.session_type_id"), nullable=False)
+    session_date = Column(Date, default=date.today, nullable=False)
+    label = Column(String(150), nullable=True)  # optional further detail, e.g. "Round 2" on top of the type
+    overall_notes = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    player = relationship("Player", foreign_keys=[player_id])
+    session_type = relationship("HitterSessionType")
+    created_by = relationship("User")
+    swings = relationship("HitterSwing", back_populates="session", cascade="all, delete-orphan", order_by="HitterSwing.swing_number")
+
+
+class HitterSwing(Base):
+    """One swing within a HitterTrackingSession -- pitch type, intended
+    location (what the pitcher was aiming for) vs. pitch_zone (the
+    ACTUAL location it ended up at -- both same 1-9 + 0=Bury convention
+    as pitcher zone tracking, only set when linked to a roster pitcher,
+    since intent only makes sense for our own guys), pitcher hand,
+    optional link to a specific roster pitcher (so a pitcher's own
+    execution-accuracy and "where hitters struggle against me" heatmaps
+    can both be built from the same data), contact quality, and where
+    the ball was hit."""
+    __tablename__ = "hitter_swings"
+
+    swing_id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("hitter_tracking_sessions.session_id"), nullable=False)
+    swing_number = Column(Integer, nullable=False)
+    pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=True)
+    intended_zone = Column(Integer, nullable=True)  # what the pitcher was aiming for -- only meaningful when pitcher_player_id is set (our own guy)
+    pitch_zone = Column(Integer, nullable=True)  # 0 = Bury, 1-9 = in-zone grid -- where it ACTUALLY ended up, same convention as BullpenPitch
+    pitcher_hand = Column(String(1), nullable=True)  # 'R' or 'L' -- always capturable even if the pitcher isn't a roster player (BP arm, machine, opponent)
+    pitcher_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)  # optional: only set if it's one of our own roster pitchers
+    contact_quality = Column(String(20), nullable=True)  # "Barrel" / "Solid" / "Weak" / "Miss"
+    hit_location = Column(String(20), nullable=True)  # field spray direction -- not applicable for Miss
+    notes = Column(Text, nullable=True)
+    video_url = Column(String(500), nullable=True)  # optional clip for this specific swing -- one per swing, no multi-angle, same as BullpenPitch
+
+    session = relationship("HitterTrackingSession", back_populates="swings")
+    pitch_type = relationship("PitchType")
+    pitcher_player = relationship("Player", foreign_keys=[pitcher_player_id])

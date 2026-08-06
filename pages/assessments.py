@@ -17,14 +17,14 @@ just a current snapshot.
 
 import streamlit as st
 from ui_components import page_header, page_footer, empty_state
-from datetime import date
+from datetime import date, timedelta
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
 from database import get_session
 from models import (
     Player, StaffPlayerAssignment, AssessmentCategory, AssessmentTestType,
-    Assessment, AssessmentResult, PitchType,
+    Assessment, AssessmentResult, PitchType, IDPGoal, IDPStatus,
 )
 
 page_header("Assessments")
@@ -66,6 +66,59 @@ try:
         format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
     )
     selected_player = players_by_id[selected_player_id]
+
+    # --- Goals in progress: baseline vs. current for any metric tied to
+    # an active IDP goal, reusing the same "current value" computation
+    # as the IDP page (rolling 30-day average for Pitcher-Specific,
+    # most recent single value for other categories) -- no new tagging
+    # needed, just surfacing data that's already tracked. ---
+    open_goals = (
+        session.query(IDPGoal)
+        .join(IDPStatus)
+        .options(joinedload(IDPGoal.category), joinedload(IDPGoal.target_test_type))
+        .filter(IDPGoal.player_id == selected_player_id, IDPGoal.target_test_type_id.isnot(None), IDPStatus.status_name != "Completed")
+        .all()
+    )
+    if open_goals:
+        st.subheader(f"Goals in progress — {selected_player.first_name} {selected_player.last_name}")
+        goal_rows = []
+        for g in open_goals:
+            unit = f" {g.target_test_type.unit}" if g.target_test_type.unit else ""
+            if g.category.category_name == "Pitcher-Specific":
+                cutoff = date.today() - timedelta(days=30)
+                recent_results = (
+                    session.query(AssessmentResult)
+                    .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
+                    .filter(
+                        Assessment.player_id == g.player_id,
+                        Assessment.category_id == g.category_id,
+                        Assessment.assessment_date >= cutoff,
+                        AssessmentResult.test_type_id == g.target_test_type_id,
+                    )
+                    .all()
+                )
+                current_value = sum(float(r.value) for r in recent_results) / len(recent_results) if recent_results else None
+            else:
+                latest_pair = (
+                    session.query(AssessmentResult, Assessment.assessment_date)
+                    .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
+                    .filter(Assessment.player_id == g.player_id, AssessmentResult.test_type_id == g.target_test_type_id)
+                    .order_by(Assessment.assessment_date.desc())
+                    .first()
+                )
+                current_value = float(latest_pair[0].value) if latest_pair else None
+
+            goal_rows.append({
+                "Category": g.category.category_name,
+                "Metric": g.target_test_type.test_name,
+                "Baseline": f"{float(g.baseline_value):.2f}{unit}" if g.baseline_value is not None else "—",
+                "Current": f"{current_value:.2f}{unit}" if current_value is not None else "—",
+                "Target": f"{float(g.target_value):.2f}{unit}" if g.target_value is not None else "—",
+                "Target date": g.target_date.strftime("%Y-%m-%d (%a)") if g.target_date else "—",
+            })
+        st.dataframe(goal_rows, use_container_width=True, hide_index=True)
+        st.caption("Full goal details (action steps, progress notes) are on the IDP page.")
+        st.divider()
 
     categories_by_id = {c.category_id: c for c in categories}
     selected_category_id = st.selectbox(
@@ -122,7 +175,7 @@ try:
     summary_rows = summary_query.all()
 
     if not summary_rows:
-        st.info("No assessment history yet for this player and category.")
+        empty_state("No assessment history yet for this player and category.")
     else:
         st.dataframe(
             [
@@ -154,7 +207,7 @@ try:
         past_assessments = history_query.order_by(Assessment.assessment_date.desc()).limit(500).all()
 
         if not past_assessments:
-            st.info("No entries to show.")
+            empty_state("No entries to show.")
         else:
             if len(past_assessments) == 500:
                 st.caption("Showing the most recent 500 entries.")
