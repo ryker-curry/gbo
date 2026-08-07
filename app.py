@@ -120,7 +120,7 @@ session = get_session()
 try:
     current_user = (
         session.query(User)
-        .options(joinedload(User.role))
+        .options(joinedload(User.role), joinedload(User.player))
         .filter(User.email == auth_email, User.active.is_(True))
         .first()
     )
@@ -252,9 +252,19 @@ if role_name == "Player":
         st.Page("pages/player_development.py", title="My Development", url_path="my-development", icon=":material/track_changes:"),
         st.Page("pages/player_stats.py", title="My Assessments", url_path="my-stats", icon=":material/query_stats:"),
         st.Page("pages/player_video.py", title="My Video", url_path="my-video", icon=":material/videocam:"),
-        st.Page("pages/player_bullpens.py", title="My Bullpens", url_path="my-bullpens", icon=":material/sports_baseball:"),
-        st.Page("pages/player_hitting.py", title="My Hitting", url_path="my-hitting", icon=":material/sports_baseball:"),
     ]
+    # My Bullpens is pitcher-specific (Bullpen Tracking's own player-facing
+    # view); My Hitting is the mirror-opposite for position players. Only
+    # one should show for a given player, based on their own is_pitcher flag.
+    is_pitcher_player = current_user.player.is_pitcher if current_user.player else False
+    if is_pitcher_player:
+        pages["My Development"].append(
+            st.Page("pages/player_bullpens.py", title="My Bullpens", url_path="my-bullpens", icon=":material/sports_baseball:"),
+        )
+    else:
+        pages["My Development"].append(
+            st.Page("pages/player_hitting.py", title="My Hitting", url_path="my-hitting", icon=":material/sports_baseball:"),
+        )
 
 navigation = st.navigation(pages)
 navigation.run()

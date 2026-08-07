@@ -78,6 +78,11 @@ try:
 
     my_player = session.query(Player).filter(Player.player_id == me.player_id).first()
 
+    if my_player.is_pitcher:
+        st.error("This page is only available to position players -- see My Bullpens instead.")
+        page_footer()
+        st.stop()
+
     sessions = (
         session.query(HitterTrackingSession)
         .filter(HitterTrackingSession.player_id == my_player.player_id)

@@ -231,6 +231,11 @@ try:
 
     my_player = session.query(Player).filter(Player.player_id == me.player_id).first()
 
+    if not my_player.is_pitcher:
+        st.error("This page is only available to pitchers -- see My Hitting instead.")
+        page_footer()
+        st.stop()
+
     sessions = (
         session.query(BullpenSession)
         .options(joinedload(BullpenSession.bullpen_type), joinedload(BullpenSession.pitches))
