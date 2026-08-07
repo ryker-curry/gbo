@@ -201,8 +201,15 @@ if role_name in ("Administrator", "Head Coach", "Coach", "Strength Coach", "Athl
         st.Page("pages/team_schedule.py", title="Team Schedule", url_path="team-schedule", icon=":material/calendar_month:"),
         st.Page("pages/player_assignments.py", title="Player Assignments", url_path="player-assignments", icon=":material/task_alt:"),
         st.Page("pages/training_routines.py", title="Training Routines", url_path="training-routines", icon=":material/fitness_center:"),
-        st.Page("pages/at_appointments.py", title="Athletic Trainer Appointments", url_path="at-appointments", icon=":material/medical_services:"),
     ]
+
+    # AT Appointments isn't sports-science-relevant -- everyone else with
+    # Player Development access still sees it (privacy-scoped separately
+    # inside the page itself).
+    if role_name != "Sports Scientist":
+        pages["Player Development"].append(
+            st.Page("pages/at_appointments.py", title="Athletic Trainer Appointments", url_path="at-appointments", icon=":material/medical_services:"),
+        )
 
     # Import Rapsodo Data is Rapsodo/pitching-side data -- same
     # Hitting-specialty exclusion as Bullpen Tracking/Scripts below.

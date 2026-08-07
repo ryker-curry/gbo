@@ -8,9 +8,10 @@ Administrator.
 Viewing is scoped for privacy: full details (including the medical
 Reason field) go to Administrator, Athletic Trainer, and Head Coach.
 Everyone else with Player Development access (Coach, Strength Coach,
-Sports Scientist, Data Analyst) sees only date/time/player -- enough
-for scheduling coordination, without seeing why a player has a medical
-appointment.
+Data Analyst) sees only date/time/player -- enough for scheduling
+coordination, without seeing why a player has a medical appointment.
+Sports Scientist doesn't see this page at all -- not sports-science
+relevant, per Ryker.
 """
 
 import streamlit as st
@@ -26,6 +27,11 @@ page_header("Athletic Trainer Appointments")
 current_user_id = st.session_state.get("gbo_user_id")
 role_name = st.session_state.get("gbo_role_name")
 can_view_all = st.session_state.get("gbo_can_view_all_players", False)
+
+if role_name == "Sports Scientist":
+    st.error("You don't have access to this page.")
+    page_footer()
+    st.stop()
 
 CAN_EDIT_APPOINTMENTS = ("Administrator", "Athletic Trainer")
 can_edit_appointments = role_name in CAN_EDIT_APPOINTMENTS

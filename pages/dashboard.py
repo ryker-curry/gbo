@@ -7,9 +7,15 @@ Role-adaptive:
   - Strength Coach: S&C focus (recent Upper/Lower Body Strength,
     Explosive Power, Rotational Power assessments; recent Conditioning
     sessions)
-  - Everyone else (Administrator, Head Coach, Coach, Sports Scientist,
-    Data Analyst): general overview -- roster size, open IDP goals,
-    recent assessments/sessions across all categories
+  - Sports Scientist: data/analytics focus (assessment volume, IDP
+    goals needing attention -- overdue ones specifically, team-wide
+    recent assessments across all categories, tracked-session activity
+    combining Bullpen + Hitter Tracking) -- deliberately NOT scheduling/
+    coaching-operations content (AT Appointments has no relevance here
+    at all, so it's excluded from their nav entirely, not just this page)
+  - Everyone else (Administrator, Head Coach, Coach, Data Analyst):
+    general overview -- roster size, open IDP goals, recent
+    assessments/sessions across all categories
 
 Every view is scoped to whichever players the logged-in role can see
 (same can_view_all_players filtering used everywhere else) -- this is
@@ -34,6 +40,7 @@ from models import (
     AssessmentTestType, AssessmentCategory, IDPGoal, IDPActionStep, IDPStatus,
     TrainingSession, PlayerStatus, TeamScheduleEvent, TeamEventType,
     User, PlayerAssignment, ATAppointment, TrainingRoutine, BullpenSession,
+    HitterTrackingSession,
 )
 from ui_components import render_kpi_cards, page_header, page_footer, empty_state, render_player_profile_header, render_staff_profile_header
 
@@ -432,6 +439,131 @@ try:
                     }
                     for s in recent_lifting
                 ],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    # =====================================================================
+    # SPORTS SCIENTIST — data/analytics focus
+    # =====================================================================
+    elif role_name == "Sports Scientist":
+        assessments_this_week = (
+            session.query(Assessment)
+            .filter(Assessment.player_id.in_(player_ids), Assessment.assessment_date >= week_ago)
+            .count()
+        )
+
+        completed_status = session.query(IDPStatus).filter(IDPStatus.status_name == "Completed").first()
+        open_goals_query = session.query(IDPGoal).options(joinedload(IDPGoal.player), joinedload(IDPGoal.target_test_type)).filter(IDPGoal.player_id.in_(player_ids))
+        if completed_status:
+            open_goals_query = open_goals_query.filter(IDPGoal.status_id != completed_status.status_id)
+        open_goals = open_goals_query.all()
+
+        overdue_goals = [g for g in open_goals if g.target_date and g.target_date < date.today()]
+
+        bullpen_sessions_this_week = (
+            session.query(BullpenSession)
+            .filter(BullpenSession.player_id.in_(player_ids), BullpenSession.session_date >= week_ago)
+            .count()
+        )
+        hitter_sessions_this_week = (
+            session.query(HitterTrackingSession)
+            .filter(HitterTrackingSession.player_id.in_(player_ids), HitterTrackingSession.session_date >= week_ago)
+            .count()
+        )
+
+        render_kpi_cards([
+            {"label": "Assessments This Week", "value": str(assessments_this_week)},
+            {"label": "Open IDP Goals", "value": str(len(open_goals))},
+            {"label": "Goals Overdue", "value": str(len(overdue_goals))},
+            {"label": "Tracked Sessions This Week", "value": str(bullpen_sessions_this_week + hitter_sessions_this_week)},
+        ])
+
+        st.divider()
+        st.subheader("Player status")
+        status_counts = {}
+        for p in players:
+            name = p.status.status_name if p.status else "Unknown"
+            status_counts[name] = status_counts.get(name, 0) + 1
+        st.write(" · ".join(f"{name}: {count}" for name, count in status_counts.items()) or "—")
+
+        st.divider()
+        st.subheader("Goals needing attention")
+        if not overdue_goals:
+            st.caption("No open goals are past their target date.")
+        else:
+            st.dataframe(
+                [
+                    {
+                        "Player": f"{g.player.first_name} {g.player.last_name}" if g.player else "—",
+                        "Metric": g.target_test_type.test_name if g.target_test_type else "—",
+                        "Target date": g.target_date.strftime("%Y-%m-%d (%a)") if g.target_date else "—",
+                    }
+                    for g in overdue_goals
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        st.divider()
+        st.subheader("Recent assessments (all categories)")
+        recent_assessments = (
+            session.query(Assessment)
+            .options(joinedload(Assessment.player), joinedload(Assessment.category))
+            .filter(Assessment.player_id.in_(player_ids))
+            .order_by(Assessment.assessment_date.desc())
+            .limit(15)
+            .all()
+        )
+        if not recent_assessments:
+            st.caption("No assessments recorded yet.")
+        else:
+            st.dataframe(
+                [
+                    {
+                        "Date": a.assessment_date.strftime("%Y-%m-%d (%a)"),
+                        "Player": f"{a.player.first_name} {a.player.last_name}" if a.player else "—",
+                        "Category": a.category.category_name if a.category else "—",
+                    }
+                    for a in recent_assessments
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        st.divider()
+        st.subheader("Recent tracked sessions (Bullpen + Hitter Tracking)")
+        recent_bullpens = (
+            session.query(BullpenSession)
+            .options(joinedload(BullpenSession.player), joinedload(BullpenSession.bullpen_type))
+            .filter(BullpenSession.player_id.in_(player_ids))
+            .order_by(BullpenSession.session_date.desc())
+            .limit(8)
+            .all()
+        )
+        recent_hitter_sessions = (
+            session.query(HitterTrackingSession)
+            .options(joinedload(HitterTrackingSession.player), joinedload(HitterTrackingSession.session_type))
+            .filter(HitterTrackingSession.player_id.in_(player_ids))
+            .order_by(HitterTrackingSession.session_date.desc())
+            .limit(8)
+            .all()
+        )
+        combined_sessions = sorted(
+            [
+                {"Date": b.session_date, "Player": f"{b.player.first_name} {b.player.last_name}" if b.player else "—", "Type": f"Bullpen: {b.bullpen_type.type_name}" if b.bullpen_type else "Bullpen"}
+                for b in recent_bullpens
+            ] + [
+                {"Date": h.session_date, "Player": f"{h.player.first_name} {h.player.last_name}" if h.player else "—", "Type": h.session_type.type_name if h.session_type else "Hitter Tracking"}
+                for h in recent_hitter_sessions
+            ],
+            key=lambda r: r["Date"], reverse=True,
+        )[:10]
+        if not combined_sessions:
+            st.caption("No tracked sessions logged yet.")
+        else:
+            st.dataframe(
+                [{"Date": r["Date"].strftime("%Y-%m-%d (%a)"), "Player": r["Player"], "Type": r["Type"]} for r in combined_sessions],
                 use_container_width=True,
                 hide_index=True,
             )
