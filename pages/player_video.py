@@ -1,12 +1,14 @@
 """
 GBO — My Video (Player role only).
 
-Mode toggle, mirroring Video Review:
+Shows the right content automatically based on their own is_pitcher
+flag -- no manual mode selection, since we already know which they
+are (same flag that gates My Bullpens vs. My Hitting):
   - Pitcher: the player's own pitch-by-pitch video review -- Rapsodo
     numbers side-by-side with video, for their own Pitcher-Specific
     pitches.
-  - Hitter: the player's own hitting clips (no paired numeric data,
-    same as Video Review's Hitter mode).
+  - Hitter (non-pitcher): the player's own hitting clips (no paired
+    numeric data, same as Video Review's Hitter mode).
 Read-only either way: uploading video stays staff-only (Video Review).
 """
 
@@ -42,8 +44,10 @@ try:
 
     my_player = session.query(Player).filter(Player.player_id == me.player_id).first()
 
-    mode = st.radio("Mode", ["Pitcher", "Hitter"], horizontal=True, key="my_video_mode")
-    st.divider()
+    # No manual selection -- we already know from their roster record
+    # whether they're a pitcher or a position player, same is_pitcher
+    # flag that already gates My Bullpens vs. My Hitting.
+    mode = "Pitcher" if my_player.is_pitcher else "Hitter"
 
     if mode == "Pitcher":
         category = session.query(AssessmentCategory).filter(AssessmentCategory.category_name == "Pitcher-Specific").first()
