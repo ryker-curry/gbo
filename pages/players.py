@@ -396,7 +396,15 @@ try:
         st.caption("Which pitches he actually throws -- filters the pitch-type dropdown to his real arsenal during live tracking (Game Tracking, Bullpen Tracking). Leave empty and every pitch type stays available, so this never blocks data entry.")
 
         pitch_types = session.query(PitchType).order_by(PitchType.pitch_type_id).all()
-        existing_arsenal = session.query(PlayerPitchArsenal).filter(PlayerPitchArsenal.player_id == editing_player.player_id, PlayerPitchArsenal.active.is_(True)).all()
+        # Deletes ALL rows for this player (active or not) before
+        # re-inserting the current selection -- the unique constraint on
+        # (player_id, pitch_type_id) applies regardless of the active
+        # flag, so leaving inactive rows behind would collide with a
+        # fresh insert for the same pitch type and raise an
+        # IntegrityError. This is a full replace each save, not an
+        # incremental toggle, so there's no reason to keep old inactive
+        # rows around at all.
+        existing_arsenal = session.query(PlayerPitchArsenal).filter(PlayerPitchArsenal.player_id == editing_player.player_id).all()
         existing_type_ids = {a.pitch_type_id for a in existing_arsenal}
 
         with st.form(f"arsenal_form_{editing_player.player_id}"):
