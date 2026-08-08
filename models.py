@@ -890,7 +890,7 @@ class Game(Base):
     is_home = Column(Boolean, nullable=True)  # True=home, False=away, None=unspecified (e.g. neutral site)
     our_score = Column(Integer, default=0, nullable=False)
     opponent_score = Column(Integer, default=0, nullable=False)
-    status = Column(String(20), default="In Progress", nullable=False)  # "In Progress" / "Final"
+    status = Column(String(20), default="Scheduled", nullable=False)  # "Scheduled" / "In Progress" / "Paused" / "Final" / "Cancelled"
     starting_pitcher_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)
     notes = Column(Text, nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
@@ -902,6 +902,7 @@ class Game(Base):
     lineup_slots = relationship("GameLineupSlot", back_populates="game", cascade="all, delete-orphan", order_by="GameLineupSlot.batting_order")
     starting_pitcher = relationship("Player", foreign_keys=[starting_pitcher_id])
     pitches = relationship("GamePitch", back_populates="game", cascade="all, delete-orphan", order_by="GamePitch.pitch_sequence")
+    pitching_changes = relationship("PitchingChange", back_populates="game", cascade="all, delete-orphan", order_by="PitchingChange.pitch_sequence_at_entry")
 
 
 class GameLineupSlot(Base):
@@ -935,6 +936,45 @@ class RunExpectancy(Base):
     bases = Column(String(3), nullable=False)  # e.g. "010" = runner on 2nd only
     count = Column(String(3), nullable=False)  # e.g. "0-0", "3-2"
     re_value = Column(Numeric(6, 3), nullable=False)
+
+
+class PitchingChange(Base):
+    """A formal record of a pitcher entering a game -- who, and when
+    (inning/outs/pitch sequence at entry). The "current pitcher" for
+    live tracking is derived from the MOST RECENT PitchingChange for
+    the game (falling back to Game.starting_pitcher_id if none exist
+    yet) -- the coach doesn't re-select the pitcher every plate
+    appearance, only when an actual change happens."""
+    __tablename__ = "pitching_changes"
+
+    pitching_change_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id"), nullable=False)
+    player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)
+    inning = Column(Integer, nullable=False)
+    outs_at_entry = Column(Integer, nullable=False)
+    pitch_sequence_at_entry = Column(Integer, nullable=False)  # the game's overall pitch # at the moment this pitcher entered -- used to order changes
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    game = relationship("Game", back_populates="pitching_changes")
+    player = relationship("Player")
+
+
+class PlayerPitchArsenal(Base):
+    """Which pitch types a given pitcher actually throws -- filters the
+    pitch-type dropdown during live tracking to just their real
+    arsenal. Optional: a pitcher with no arsenal configured yet still
+    sees the full pitch type list (doesn't block data entry)."""
+    __tablename__ = "player_pitch_arsenal"
+    __table_args__ = (UniqueConstraint("player_id", "pitch_type_id", name="uq_player_pitch_arsenal"),)
+
+    arsenal_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)
+    pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=False)
+    active = Column(Boolean, default=True, nullable=False)
+    is_primary = Column(Boolean, default=False, nullable=False)
+
+    player = relationship("Player")
+    pitch_type = relationship("PitchType")
 
 
 class GamePitch(Base):

@@ -28,7 +28,7 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from models import (
     Player, Position, PitchType, Game, GameLineupSlot, GamePitch, RunExpectancy,
-    OpponentTeam, OpponentPlayer, Season,
+    OpponentTeam, OpponentPlayer, Season, PitchingChange, PlayerPitchArsenal,
 )
 from ui_components import page_header, page_footer, empty_state
 
@@ -36,7 +36,7 @@ page_header("Game Tracking")
 
 current_user_id = st.session_state.get("gbo_user_id")
 role_name = st.session_state.get("gbo_role_name")
-can_edit_sessions = st.session_state.get("gbo_can_edit_sessions", False)
+can_edit_sessions = st.session_state.get("gbo_can_edit_sessions", False) or role_name == "Data Analyst"  # Data Analyst is "in charge of all game tracking data collection and analysis" -- real edit rights here specifically, without changing their broader can_edit_sessions flag (stays read-only on Bullpen/Hitter Tracking)
 
 if current_user_id is None:
     st.error("Session expired. Please log in again from the main page.")
@@ -103,6 +103,73 @@ def compute_re_and_rv(re_lookup, outs_before, bases_before, balls_before, strike
         run_value = round((re_after + runs_scored) - re_before, 3)
 
     return re_before, re_after, run_value
+
+
+def get_current_pitcher_id(game):
+    """Whoever most recently entered the game as pitcher (the latest
+    PitchingChange, ordered by when they entered), falling back to the
+    starting pitcher if no formal change has happened yet. This is the
+    single source of truth for "who's pitching" -- the coach only
+    interacts with this via an explicit "Make a pitching change"
+    action, never a per-PA dropdown."""
+    changes = sorted(game.pitching_changes, key=lambda c: c.pitch_sequence_at_entry)
+    if changes:
+        return changes[-1].player_id
+    return game.starting_pitcher_id
+
+
+def get_arsenal_pitch_type_names(session, pitcher_id, all_pitch_types):
+    """Pitch type names this pitcher is set up to throw. Falls back to
+    every pitch type if no arsenal has been configured for them yet --
+    doesn't block data entry before arsenals are set up."""
+    arsenal = (
+        session.query(PlayerPitchArsenal)
+        .filter(PlayerPitchArsenal.player_id == pitcher_id, PlayerPitchArsenal.active.is_(True))
+        .all()
+    )
+    if not arsenal:
+        return [pt.type_name for pt in all_pitch_types]
+    arsenal_type_ids = {a.pitch_type_id for a in arsenal}
+    return [pt.type_name for pt in all_pitch_types if pt.pitch_type_id in arsenal_type_ids]
+
+
+def suggest_next_our_batter(game, lineup_slots):
+    """Who should bat next for us -- derived from whoever last completed
+    a PA while we were batting (searching back across innings if
+    needed, not just the last pitch overall), wrapping through the
+    lineup. Returns None if there's no lineup to cycle through (coach
+    picks manually in that case, same as before)."""
+    if not lineup_slots:
+        return None
+    our_pa_endings = sorted(
+        [p for p in game.pitches if p.is_our_team_batting and p.ends_plate_appearance],
+        key=lambda p: p.pitch_sequence,
+    )
+    if not our_pa_endings:
+        return lineup_slots[0].player_id  # leadoff hitter, first time up
+    last_batter_id = our_pa_endings[-1].our_player_id
+    last_slot = next((s for s in lineup_slots if s.player_id == last_batter_id), None)
+    if last_slot is None:
+        return lineup_slots[0].player_id
+    slot_orders = sorted(s.batting_order for s in lineup_slots)
+    current_idx = slot_orders.index(last_slot.batting_order)
+    next_order = slot_orders[(current_idx + 1) % len(slot_orders)]
+    return next((s.player_id for s in lineup_slots if s.batting_order == next_order), lineup_slots[0].player_id)
+
+
+def suggest_next_opponent_order(game):
+    """Next opponent batting-order NUMBER (1-9, wrapping) -- external
+    games only, since there's no formal per-game opponent lineup yet
+    (Phase 2). The coach still picks which named player occupies that
+    slot; this just saves re-typing the number each time."""
+    opp_pa_endings = sorted(
+        [p for p in game.pitches if not p.is_our_team_batting and p.ends_plate_appearance and p.opponent_batting_order],
+        key=lambda p: p.pitch_sequence,
+    )
+    if not opp_pa_endings:
+        return 1
+    last_order = opp_pa_endings[-1].opponent_batting_order
+    return (last_order % 9) + 1
 
 
 def bases_display(bases_str):
@@ -326,6 +393,38 @@ try:
     opponent_teams = session.query(OpponentTeam).order_by(OpponentTeam.team_name).all()
     opponent_teams_by_id = {t.team_id: t for t in opponent_teams}
 
+    if can_edit_sessions:
+        with st.expander("Manage pitch arsenals"):
+            st.caption("Which pitch types each pitcher actually throws -- filters the pitch-type dropdown during live tracking to their real arsenal. A pitcher with nothing set here still sees every pitch type (doesn't block entry).")
+            pitcher_players = [p for p in players if p.is_pitcher]
+            if not pitcher_players:
+                st.caption("No players marked as pitchers on the roster yet.")
+            else:
+                pitcher_choice = st.selectbox(
+                    "Pitcher",
+                    options=[p.player_id for p in pitcher_players],
+                    format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
+                    key="gt_arsenal_pitcher_choice",
+                )
+                existing_arsenal = session.query(PlayerPitchArsenal).filter(PlayerPitchArsenal.player_id == pitcher_choice, PlayerPitchArsenal.active.is_(True)).all()
+                existing_type_ids = {a.pitch_type_id for a in existing_arsenal}
+                with st.form(f"arsenal_form_{pitcher_choice}"):
+                    selected_type_ids = st.multiselect(
+                        "Pitch types thrown",
+                        options=[pt.pitch_type_id for pt in pitch_types],
+                        default=list(existing_type_ids),
+                        format_func=lambda tid: next(pt.type_name for pt in pitch_types if pt.pitch_type_id == tid),
+                    )
+                    arsenal_submitted = st.form_submit_button("Save arsenal", type="primary")
+                if arsenal_submitted:
+                    for a in existing_arsenal:
+                        session.delete(a)
+                    for tid in selected_type_ids:
+                        session.add(PlayerPitchArsenal(player_id=pitcher_choice, pitch_type_id=tid, active=True))
+                    session.commit()
+                    st.success(f"Saved arsenal for {players_by_id[pitcher_choice].first_name} {players_by_id[pitcher_choice].last_name}.")
+                    st.rerun()
+
     if active_game_id is None and can_edit_sessions:
         st.subheader("Start a new game")
         if not seasons:
@@ -368,6 +467,7 @@ try:
                         is_intrasquad=is_intrasquad_choice,
                         game_date=game_date_input,
                         is_home=is_home,
+                        status="Scheduled",
                         created_by_user_id=current_user_id,
                     )
                     session.add(new_game)
@@ -394,15 +494,20 @@ try:
         if not lineup_slots and can_edit_sessions:
             st.subheader("Set lineup")
             st.caption("9 batting order slots + starting pitcher. You can still track the game without a full lineup -- this just makes the batter picker faster.")
+
+            include_pitchers_in_lineup = st.checkbox("Include pitchers in the batting order (two-way players)")
+            batter_candidate_ids = list(players_by_id.keys()) if include_pitchers_in_lineup else [pid for pid, p in players_by_id.items() if not p.is_pitcher]
+            pitcher_candidate_ids = [pid for pid, p in players_by_id.items() if p.is_pitcher]
+
             with st.form("lineup_form"):
                 slot_choices = {}
                 for i in range(1, 10):
                     cols = st.columns([1, 3, 2])
                     cols[0].markdown(f"**{i}.**")
-                    player_choice = cols[1].selectbox(f"Batter {i}", options=[None] + list(players_by_id.keys()), format_func=lambda pid: "-- Select --" if pid is None else f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}", key=f"lineup_player_{i}", label_visibility="collapsed")
+                    player_choice = cols[1].selectbox(f"Batter {i}", options=[None] + batter_candidate_ids, format_func=lambda pid: "-- Select --" if pid is None else f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}", key=f"lineup_player_{i}", label_visibility="collapsed")
                     position_choice = cols[2].selectbox(f"Position {i}", options=[None] + [p.position_id for p in positions], format_func=lambda pid: "-- Position --" if pid is None else next(p.position_name for p in positions if p.position_id == pid), key=f"lineup_pos_{i}", label_visibility="collapsed")
                     slot_choices[i] = (player_choice, position_choice)
-                starting_pitcher_choice = st.selectbox("Starting pitcher", options=[None] + list(players_by_id.keys()), format_func=lambda pid: "-- Select --" if pid is None else f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}")
+                starting_pitcher_choice = st.selectbox("Starting pitcher", options=[None] + pitcher_candidate_ids, format_func=lambda pid: "-- Select --" if pid is None else f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}")
                 lineup_submitted = st.form_submit_button("Save lineup", type="primary")
 
             if lineup_submitted:
@@ -430,8 +535,22 @@ try:
                     st.caption(f"Starting pitcher: {p.first_name} {p.last_name}")
 
         # --- Live pitch entry ---
-        if can_edit_sessions:
+        if can_edit_sessions and active_game.status == "In Progress":
             state = compute_current_state(active_game, lineup_slots)
+
+            # Auto-suggest who's up next, applied exactly once per new PA
+            # transition (detected via pitch count changing) so a manual
+            # override by the coach isn't overwritten on later reruns
+            # within the same PA (e.g. tapping a zone button).
+            current_pitch_count = len(active_game.pitches)
+            if state["new_pa"] and st.session_state.get("gt_suggestion_applied_for_count", -1) != current_pitch_count:
+                if state["is_our_batting"]:
+                    suggested_batter = suggest_next_our_batter(active_game, lineup_slots)
+                    if suggested_batter is not None:
+                        st.session_state["gt_our_batter"] = suggested_batter
+                elif not active_game.is_intrasquad:
+                    st.session_state["gt_opp_order"] = suggest_next_opponent_order(active_game)
+                st.session_state["gt_suggestion_applied_for_count"] = current_pitch_count
 
             st.divider()
             half_label = "We're batting" if state["is_our_batting"] else "We're pitching"
@@ -451,9 +570,9 @@ try:
             opp_player_choice = None
             opp_our_player_choice = None
             if state["new_pa"]:
-                st.caption("New plate appearance -- who's up?")
+                st.caption("New plate appearance -- who's up? (auto-suggested from the lineup order, override if needed)")
                 if state["is_our_batting"]:
-                    lineup_player_ids = [s.player_id for s in lineup_slots] if lineup_slots else list(players_by_id.keys())
+                    lineup_player_ids = [s.player_id for s in lineup_slots] if lineup_slots else [pid for pid, p in players_by_id.items() if not p.is_pitcher]
                     our_player_choice = st.selectbox("Our batter", options=lineup_player_ids, format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}", key="gt_our_batter")
 
                     if active_game.is_intrasquad:
@@ -468,10 +587,7 @@ try:
                     else:
                         opp_hand_choice = st.radio("Opposing pitcher's hand", ["R", "L"], horizontal=True, key="gt_opp_pitcher_hand")
                 else:
-                    pitcher_options = list(players_by_id.keys())
-                    default_pitcher_idx = pitcher_options.index(active_game.starting_pitcher_id) if active_game.starting_pitcher_id in pitcher_options else 0
-                    our_player_choice = st.selectbox("Our pitcher", options=pitcher_options, index=default_pitcher_idx, format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}", key="gt_our_pitcher")
-
+                    our_player_choice = get_current_pitcher_id(active_game)
                     default_hand = "R"
                     if active_game.is_intrasquad:
                         opp_our_player_choice = st.selectbox(
@@ -506,11 +622,40 @@ try:
                 opp_batting_order_choice = state.get("current_opp_order")
                 opp_player_choice = state.get("current_opp_player")
                 opp_our_player_choice = state.get("current_opp_our_player")
-                if our_player_choice and our_player_choice in players_by_id:
+                if state["is_our_batting"] and our_player_choice and our_player_choice in players_by_id:
                     st.caption(f"At bat: {players_by_id[our_player_choice].first_name} {players_by_id[our_player_choice].last_name}")
 
+            if not state["is_our_batting"]:
+                if our_player_choice and our_player_choice in players_by_id:
+                    st.markdown(f"**Currently pitching:** {players_by_id[our_player_choice].first_name} {players_by_id[our_player_choice].last_name}")
+                else:
+                    st.warning("No pitcher set yet -- set a starting pitcher on the lineup above, or make a pitching change below.")
+
+                with st.expander("Make a pitching change"):
+                    pitcher_candidates = [pid for pid, p in players_by_id.items() if p.is_pitcher]
+                    new_pitcher_choice = st.selectbox(
+                        "New pitcher",
+                        options=pitcher_candidates,
+                        format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
+                        key="gt_pitching_change_choice",
+                    )
+                    if st.button("Confirm pitching change", key="gt_confirm_pitching_change"):
+                        session.add(PitchingChange(
+                            game_id=active_game.game_id,
+                            player_id=new_pitcher_choice,
+                            inning=state["inning"],
+                            outs_at_entry=state["outs"],
+                            pitch_sequence_at_entry=len(active_game.pitches),
+                        ))
+                        session.commit()
+                        st.success(f"{players_by_id[new_pitcher_choice].first_name} {players_by_id[new_pitcher_choice].last_name} is now pitching.")
+                        st.rerun()
+
             st.divider()
-            pitch_type_choice = st.selectbox("Pitch type", [pt.type_name for pt in pitch_types], key="gt_pitch_type")
+            arsenal_pitch_type_names = get_arsenal_pitch_type_names(session, our_player_choice, pitch_types) if not state["is_our_batting"] and our_player_choice else [pt.type_name for pt in pitch_types]
+            if st.session_state.get("gt_pitch_type") not in arsenal_pitch_type_names:
+                st.session_state.pop("gt_pitch_type", None)  # stale selection from before a pitching change/different pitcher's arsenal -- avoid crashing the widget
+            pitch_type_choice = st.selectbox("Pitch type", arsenal_pitch_type_names, key="gt_pitch_type")
 
             zone_choice = None
             if not state["is_our_batting"]:
@@ -616,6 +761,10 @@ try:
                     session.commit()
                     st.success("Pitch recorded.")
                     st.rerun()
+        elif can_edit_sessions and active_game.status == "Scheduled":
+            st.info("This game hasn't started yet -- click \"Start game\" below to begin live tracking.")
+        elif can_edit_sessions and active_game.status == "Paused":
+            st.info("This game is paused -- click \"Resume game\" below to continue tracking.")
 
         # --- Pitch log ---
         st.divider()
@@ -645,11 +794,42 @@ try:
                 use_container_width=True, hide_index=True,
             )
 
-        if can_edit_sessions and active_game.status == "In Progress":
-            if st.button("Mark game Final", type="primary"):
-                active_game.status = "Final"
+        if can_edit_sessions and active_game.status not in ("Final", "Cancelled"):
+            st.divider()
+            st.caption(f"Status: {active_game.status}")
+            status_cols = st.columns(4)
+            if active_game.status == "Scheduled":
+                if status_cols[0].button("Start game", type="primary"):
+                    active_game.status = "In Progress"
+                    session.commit()
+                    st.success("Game started.")
+                    st.rerun()
+            if active_game.status == "In Progress":
+                if status_cols[0].button("Pause game"):
+                    active_game.status = "Paused"
+                    session.commit()
+                    st.success("Game paused.")
+                    st.rerun()
+                if status_cols[1].button("Mark game Final", type="primary"):
+                    active_game.status = "Final"
+                    session.commit()
+                    st.success("Game marked Final.")
+                    st.rerun()
+            if active_game.status == "Paused":
+                if status_cols[0].button("Resume game", type="primary"):
+                    active_game.status = "In Progress"
+                    session.commit()
+                    st.success("Game resumed.")
+                    st.rerun()
+                if status_cols[1].button("Mark game Final"):
+                    active_game.status = "Final"
+                    session.commit()
+                    st.success("Game marked Final.")
+                    st.rerun()
+            if status_cols[2].button("Cancel game"):
+                active_game.status = "Cancelled"
                 session.commit()
-                st.success("Game marked Final.")
+                st.success("Game cancelled.")
                 st.rerun()
 
         if can_edit_sessions:
