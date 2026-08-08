@@ -243,6 +243,15 @@ if role_name in ("Administrator", "Head Coach", "Coach", "Strength Coach", "Athl
             st.Page("pages/hitter_tracking.py", title="Hitter Tracking", url_path="hitter-tracking", icon=":material/sports_baseball:"),
         )
 
+    # Game Tracking covers BOTH sides of the ball (our hitting AND our
+    # pitching in the same game) -- not specialty-restricted like
+    # Bullpen/Hitter Tracking, since a game always involves both. Same
+    # read-only visibility for Sports Scientist/Data Analyst.
+    if role_name in ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst"):
+        pages["Player Development"].append(
+            st.Page("pages/game_tracking.py", title="Game Tracking", url_path="game-tracking", icon=":material/scoreboard:"),
+        )
+
 if role_name == "Administrator":
     pages["Administration"] = [
         st.Page("pages/user_management.py", title="User Management", url_path="user-management", icon=":material/settings:"),

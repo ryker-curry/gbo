@@ -792,3 +792,111 @@ class HitterSwing(Base):
     session = relationship("HitterTrackingSession", back_populates="swings")
     pitch_type = relationship("PitchType")
     pitcher_player = relationship("Player", foreign_keys=[pitcher_player_id])
+
+
+class Game(Base):
+    """A tracked game -- opponent, date, home/away. Both our hitting
+    (our batters facing the opposing pitcher) and our pitching (our
+    pitcher facing the opposing batters) get tracked here, in the same
+    GamePitch table -- see that model for how the two sides share one
+    schema via is_our_team_batting rather than needing two separate
+    tracking systems (same "one entry point" reasoning already applied
+    to Hitter Tracking's intended-zone field)."""
+    __tablename__ = "games"
+
+    game_id = Column(Integer, primary_key=True)
+    opponent_name = Column(String(150), nullable=False)
+    game_date = Column(Date, default=date.today, nullable=False)
+    is_home = Column(Boolean, nullable=True)  # True=home, False=away, None=unspecified (e.g. neutral site)
+    our_score = Column(Integer, default=0, nullable=False)
+    opponent_score = Column(Integer, default=0, nullable=False)
+    status = Column(String(20), default="In Progress", nullable=False)  # "In Progress" / "Final"
+    starting_pitcher_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)
+    notes = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    created_by = relationship("User")
+    lineup_slots = relationship("GameLineupSlot", back_populates="game", cascade="all, delete-orphan", order_by="GameLineupSlot.batting_order")
+    starting_pitcher = relationship("Player", foreign_keys=[starting_pitcher_id])
+    pitches = relationship("GamePitch", back_populates="game", cascade="all, delete-orphan", order_by="GamePitch.pitch_sequence")
+
+
+class GameLineupSlot(Base):
+    """One batting-order slot for OUR lineup in a given game -- who's
+    hitting where, and their starting defensive position. Pitching
+    changes aren't tracked as a separate list in this first version --
+    who pitched is simply whatever's on the GamePitch records
+    (pitcher_player_id), derived rather than pre-declared."""
+    __tablename__ = "game_lineup_slots"
+
+    lineup_slot_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id"), nullable=False)
+    batting_order = Column(Integer, nullable=False)  # 1-9 (or more, extra hitters/re-entry not handled in v1)
+    player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)
+    starting_position_id = Column(Integer, ForeignKey("positions.position_id"), nullable=True)
+
+    game = relationship("Game", back_populates="lineup_slots")
+    player = relationship("Player")
+    starting_position = relationship("Position")
+
+
+class GamePitch(Base):
+    """One pitch within a tracked game -- the fundamental unit, same as
+    Ryker's own tracking sheet (one row per pitch). Covers BOTH sides
+    of the ball via is_our_team_batting:
+      - True: our_player_id is the BATTER (from our lineup), the
+        opponent is the pitcher we don't have in our roster (hand only).
+      - False: our_player_id is the PITCHER (ours), the opponent is the
+        batter we don't have in our roster (hand + their batting order
+        position only, matching Ryker's sheet's "Batting Order" column
+        used for opponent lineup tracking when we're pitching).
+
+    Base/out state (outs_before/after, bases_before/after as a simple
+    3-char string like "010" matching Ryker's own sheet -- 1st/2nd/3rd,
+    1=occupied) is entered by the coach per pitch, with sensible
+    defaults suggested by the AB outcome but always overridable --
+    deliberately not a fully automated rules engine (errors, odd
+    advances, etc. are exactly the cases that need human judgment).
+
+    Run Expectancy / Run Value are NOT computed in this first version
+    -- deferred to the advanced-stats follow-up phase, once a standard
+    RE24-style matrix is decided on."""
+    __tablename__ = "game_pitches"
+
+    game_pitch_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id"), nullable=False)
+    pitch_sequence = Column(Integer, nullable=False)  # overall pitch # for the game, in order
+
+    inning = Column(Integer, nullable=False)
+    is_our_team_batting = Column(Boolean, nullable=False)
+
+    our_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)  # batter if is_our_team_batting, else pitcher
+    opponent_hand = Column(String(1), nullable=True)  # 'R' / 'L' -- the OTHER side's hand (pitcher's hand if we're batting, batter's hand if we're pitching)
+    opponent_batting_order = Column(Integer, nullable=True)  # only meaningful when is_our_team_batting is False -- their lineup slot
+
+    pa_pitch_number = Column(Integer, nullable=True)  # pitch # within this specific plate appearance
+    balls_before = Column(Integer, nullable=True)
+    strikes_before = Column(Integer, nullable=True)
+    outs_before = Column(Integer, nullable=True)
+    bases_before = Column(String(3), nullable=True)  # e.g. "010" = runner on 2nd only
+
+    pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=True)
+    intended_zone = Column(Integer, nullable=True)  # 0=Bury, 1-9 grid -- same convention as Bullpen/Hitter Tracking, only meaningful when we're pitching
+    pitch_zone = Column(Integer, nullable=True)  # actual location, same convention
+    pitch_outcome = Column(String(20), nullable=True)  # "Ball" / "Called Strike" / "Swinging Strike" / "Foul" / "In Play" / "HBP"
+    contact_quality = Column(String(20), nullable=True)  # "Barrel" / "Solid" / "Weak" / "Miss" -- same categories as Hitter Tracking
+
+    ends_plate_appearance = Column(Boolean, default=False, nullable=False)
+    ab_outcome = Column(String(30), nullable=True)  # only set when ends_plate_appearance -- "K", "BB", "1B", "2B", "3B", "HR", "HBP", "E", "FC", "Sac Bunt", "Sac Fly", "Groundout", "Flyout", "Lineout", etc.
+
+    outs_after = Column(Integer, nullable=True)
+    bases_after = Column(String(3), nullable=True)
+    runs_scored_on_play = Column(Integer, default=0, nullable=False)
+
+    notes = Column(Text, nullable=True)
+    video_url = Column(String(500), nullable=True)  # optional clip for this specific pitch, same "pitch-videos" bucket
+
+    game = relationship("Game", back_populates="pitches", foreign_keys=[game_id])
+    our_player = relationship("Player", foreign_keys=[our_player_id])
+    pitch_type = relationship("PitchType")
