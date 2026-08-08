@@ -65,24 +65,24 @@ try:
     batting_pitches = get_batting_pitches(session, selected_player_id, season_choice)
     pitching_pitches = get_pitching_pitches(session, selected_player_id, season_choice)
 
-    st.markdown("### Batting")
-    if not batting_pitches:
-        empty_state("No batting data recorded yet for this player in Game Tracking.")
-    else:
-        batting_line = compute_batting_line(batting_pitches)
-        cols = st.columns(6)
-        cols[0].metric("PA", batting_line["PA"])
-        cols[1].metric("AB", batting_line["AB"])
-        cols[2].metric("H", batting_line["H"])
-        cols[3].metric("BB", batting_line["BB"])
-        cols[4].metric("K", batting_line["K"])
-        cols[5].metric("AVG", f"{batting_line['AVG']:.3f}" if batting_line["AVG"] is not None else "—")
-        st.caption(
-            f"1B: {batting_line['1B']} · 2B: {batting_line['2B']} · 3B: {batting_line['3B']} · HR: {batting_line['HR']} · "
-            f"HBP: {batting_line['HBP']} · Total RV: {batting_line['Total RV']} · Avg RV/PA: {batting_line['Avg RV/PA']}"
-        )
-
-    st.divider()
+    if not selected_player.is_pitcher:
+        st.markdown("### Hitting")
+        if not batting_pitches:
+            empty_state("No hitting data recorded yet for this player in Game Tracking.")
+        else:
+            batting_line = compute_batting_line(batting_pitches)
+            cols = st.columns(6)
+            cols[0].metric("PA", batting_line["PA"])
+            cols[1].metric("AB", batting_line["AB"])
+            cols[2].metric("H", batting_line["H"])
+            cols[3].metric("BB", batting_line["BB"])
+            cols[4].metric("K", batting_line["K"])
+            cols[5].metric("AVG", f"{batting_line['AVG']:.3f}" if batting_line["AVG"] is not None else "—")
+            st.caption(
+                f"1B: {batting_line['1B']} · 2B: {batting_line['2B']} · 3B: {batting_line['3B']} · HR: {batting_line['HR']} · "
+                f"HBP: {batting_line['HBP']} · Total RV: {batting_line['Total RV']} · Avg RV/PA: {batting_line['Avg RV/PA']}"
+            )
+        st.divider()
     st.markdown("### Pitching")
     if not pitching_pitches:
         empty_state("No pitching data recorded yet for this player in Game Tracking.")

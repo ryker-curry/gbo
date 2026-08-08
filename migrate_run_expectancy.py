@@ -14,6 +14,7 @@ Run:
     python migrate_run_expectancy.py
 """
 
+from sqlalchemy import text
 from database import engine, Base, get_session
 import models  # noqa: F401 -- registers all model classes with Base
 from models import RunExpectancy
@@ -153,7 +154,19 @@ def main():
     Base.metadata.create_all(bind=engine)
     print("Done.")
 
-    print("Step 2: seeding run expectancy data...")
+    print("Step 2: adding re_before/re_after/run_value to game_pitches...")
+    # Base.metadata.create_all() above only creates MISSING tables -- it
+    # never alters an EXISTING table to add new columns. game_pitches
+    # already existed by the time these 3 columns were added to the
+    # GamePitch model, so they were silently never added to the real
+    # database until this explicit ALTER TABLE step was added here.
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE game_pitches ADD COLUMN IF NOT EXISTS re_before NUMERIC(6, 3)"))
+        conn.execute(text("ALTER TABLE game_pitches ADD COLUMN IF NOT EXISTS re_after NUMERIC(6, 3)"))
+        conn.execute(text("ALTER TABLE game_pitches ADD COLUMN IF NOT EXISTS run_value NUMERIC(6, 3)"))
+    print("Done.")
+
+    print("Step 3: seeding run expectancy data...")
     session = get_session()
     try:
         if session.query(RunExpectancy).count() > 0:
