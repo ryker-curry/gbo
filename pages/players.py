@@ -25,7 +25,7 @@ from datetime import date
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import Player, Team, StaffPlayerAssignment, PlayerClass, PlayerStatus, Position, Assessment, IDPGoal, TrainingSession, PlayerAssignment, BullpenSession, User
+from models import Player, Team, StaffPlayerAssignment, PlayerClass, PlayerStatus, Position, Assessment, IDPGoal, TrainingSession, PlayerAssignment, BullpenSession, User, PitchType, PlayerPitchArsenal
 from supabase_client import get_supabase_admin_client
 
 PHOTO_BUCKET = "player-photos"
@@ -388,6 +388,33 @@ try:
                 session.add(new_player)
                 session.commit()
                 st.success(f"Added {first_name} {last_name} to the roster.")
+            st.rerun()
+
+    if editing_player is not None and editing_player.is_pitcher:
+        st.divider()
+        st.subheader(f"Pitch arsenal — {editing_player.first_name} {editing_player.last_name}")
+        st.caption("Which pitches he actually throws -- filters the pitch-type dropdown to his real arsenal during live tracking (Game Tracking, Bullpen Tracking). Leave empty and every pitch type stays available, so this never blocks data entry.")
+
+        pitch_types = session.query(PitchType).order_by(PitchType.pitch_type_id).all()
+        existing_arsenal = session.query(PlayerPitchArsenal).filter(PlayerPitchArsenal.player_id == editing_player.player_id, PlayerPitchArsenal.active.is_(True)).all()
+        existing_type_ids = {a.pitch_type_id for a in existing_arsenal}
+
+        with st.form(f"arsenal_form_{editing_player.player_id}"):
+            selected_type_ids = st.multiselect(
+                "Pitch types thrown",
+                options=[pt.pitch_type_id for pt in pitch_types],
+                default=list(existing_type_ids),
+                format_func=lambda tid: next(pt.type_name for pt in pitch_types if pt.pitch_type_id == tid),
+            )
+            arsenal_submitted = st.form_submit_button("Save arsenal", type="primary")
+
+        if arsenal_submitted:
+            for a in existing_arsenal:
+                session.delete(a)
+            for tid in selected_type_ids:
+                session.add(PlayerPitchArsenal(player_id=editing_player.player_id, pitch_type_id=tid, active=True))
+            session.commit()
+            st.success(f"Saved arsenal for {editing_player.first_name} {editing_player.last_name}.")
             st.rerun()
 
     st.divider()

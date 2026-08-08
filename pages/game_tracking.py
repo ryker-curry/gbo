@@ -394,36 +394,7 @@ try:
     opponent_teams_by_id = {t.team_id: t for t in opponent_teams}
 
     if can_edit_sessions:
-        with st.expander("Manage pitch arsenals"):
-            st.caption("Which pitch types each pitcher actually throws -- filters the pitch-type dropdown during live tracking to their real arsenal. A pitcher with nothing set here still sees every pitch type (doesn't block entry).")
-            pitcher_players = [p for p in players if p.is_pitcher]
-            if not pitcher_players:
-                st.caption("No players marked as pitchers on the roster yet.")
-            else:
-                pitcher_choice = st.selectbox(
-                    "Pitcher",
-                    options=[p.player_id for p in pitcher_players],
-                    format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
-                    key="gt_arsenal_pitcher_choice",
-                )
-                existing_arsenal = session.query(PlayerPitchArsenal).filter(PlayerPitchArsenal.player_id == pitcher_choice, PlayerPitchArsenal.active.is_(True)).all()
-                existing_type_ids = {a.pitch_type_id for a in existing_arsenal}
-                with st.form(f"arsenal_form_{pitcher_choice}"):
-                    selected_type_ids = st.multiselect(
-                        "Pitch types thrown",
-                        options=[pt.pitch_type_id for pt in pitch_types],
-                        default=list(existing_type_ids),
-                        format_func=lambda tid: next(pt.type_name for pt in pitch_types if pt.pitch_type_id == tid),
-                    )
-                    arsenal_submitted = st.form_submit_button("Save arsenal", type="primary")
-                if arsenal_submitted:
-                    for a in existing_arsenal:
-                        session.delete(a)
-                    for tid in selected_type_ids:
-                        session.add(PlayerPitchArsenal(player_id=pitcher_choice, pitch_type_id=tid, active=True))
-                    session.commit()
-                    st.success(f"Saved arsenal for {players_by_id[pitcher_choice].first_name} {players_by_id[pitcher_choice].last_name}.")
-                    st.rerun()
+        st.caption("Pitch arsenals are managed on each pitcher's profile (Players page), not here.")
 
     if active_game_id is None and can_edit_sessions:
         st.subheader("Start a new game")
