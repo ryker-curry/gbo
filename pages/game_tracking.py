@@ -28,7 +28,7 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from models import (
     Player, Position, PitchType, Game, GameLineupSlot, GamePitch, RunExpectancy,
-    OpponentTeam, OpponentPlayer,
+    OpponentTeam, OpponentPlayer, Season,
 )
 from ui_components import page_header, page_footer, empty_state
 
@@ -221,6 +221,7 @@ def compute_current_state(game, lineup_slots):
             "current_opp_hand": last.opponent_hand,
             "current_opp_order": last.opponent_batting_order,
             "current_opp_player": last.opponent_player_id,
+            "current_opp_our_player": last.opponent_our_player_id,
         }
     else:
         outs = last.outs_after if last.outs_after is not None else last.outs_before
@@ -241,11 +242,46 @@ def compute_current_state(game, lineup_slots):
 
 session = get_session()
 try:
-    games = (
-        session.query(Game)
-        .order_by(Game.game_date.desc())
-        .all()
+    seasons = session.query(Season).order_by(Season.start_date.desc().nullslast(), Season.season_name.desc()).all()
+    seasons_by_id = {s.season_id: s for s in seasons}
+
+    if can_edit_sessions:
+        with st.expander("Manage seasons"):
+            if seasons:
+                st.dataframe(
+                    [
+                        {"Season": s.season_name, "Official": "Yes" if s.is_official else "No (practice/fall)", "Games": len(s.games)}
+                        for s in seasons
+                    ],
+                    use_container_width=True, hide_index=True,
+                )
+            with st.form("new_season_form"):
+                new_season_name = st.text_input("New season name", placeholder="e.g. Fall 2026, Spring 2027")
+                new_season_official = st.checkbox("Official (counts toward real record -- uncheck for fall/practice)", value=True)
+                new_season_submitted = st.form_submit_button("Create season", type="primary")
+            if new_season_submitted:
+                if not new_season_name.strip():
+                    st.error("Season name is required.")
+                elif session.query(Season).filter(Season.season_name == new_season_name.strip()).first():
+                    st.error(f"A season named \"{new_season_name.strip()}\" already exists.")
+                else:
+                    session.add(Season(season_name=new_season_name.strip(), is_official=new_season_official, created_by_user_id=current_user_id))
+                    session.commit()
+                    st.success(f"Created season: {new_season_name.strip()}.")
+                    st.rerun()
+
+    season_filter_options = [None] + list(seasons_by_id.keys())
+    season_filter_choice = st.selectbox(
+        "Season",
+        options=season_filter_options,
+        format_func=lambda sid: "-- All seasons --" if sid is None else f"{seasons_by_id[sid].season_name}" + ("" if seasons_by_id[sid].is_official else " (practice/fall, not official)"),
+        key="gt_season_filter",
     )
+
+    games_query = session.query(Game).order_by(Game.game_date.desc())
+    if season_filter_choice is not None:
+        games_query = games_query.filter(Game.season_id == season_filter_choice)
+    games = games_query.all()
     games_by_id = {g.game_id: g for g in games}
 
     query_game_id_raw = st.query_params.get("game_id")
@@ -272,7 +308,8 @@ try:
             return "-- Start a new game --"
         g = games_by_id[gid]
         loc = "vs" if g.is_home else ("@" if g.is_home is False else "vs (neutral)")
-        return f"{g.game_date.strftime('%Y-%m-%d (%a)')} — {loc} {_opponent_display_name(g)} ({g.status}) — {g.our_score}-{g.opponent_score}"
+        season_label = f"[{g.season.season_name}] " if g.season else ""
+        return f"{season_label}{g.game_date.strftime('%Y-%m-%d (%a)')} — {loc} {_opponent_display_name(g)} ({g.status}) — {g.our_score}-{g.opponent_score}"
 
     game_options = [None] + list(games_by_id.keys())
     game_index = game_options.index(default_game_id) if default_game_id in game_options else 0
@@ -291,39 +328,57 @@ try:
 
     if active_game_id is None and can_edit_sessions:
         st.subheader("Start a new game")
-        opponent_team_choice = st.selectbox(
-            "Opponent",
-            options=[None] + list(opponent_teams_by_id.keys()),
-            format_func=lambda tid: "-- One-off opponent, just type a name --" if tid is None else opponent_teams_by_id[tid].team_name,
-        )
-        if opponent_team_choice is None:
-            st.caption("Not in your list yet? Add them as a reusable team on Opponent Teams for next time -- or just type a name below for a one-off.")
-        with st.form("new_game_form"):
-            opponent_name_input = None
-            if opponent_team_choice is None:
-                opponent_name_input = st.text_input("Opponent name")
-            game_date_input = st.date_input("Date", value=date.today())
-            location_choice = st.selectbox("Location", ["Home", "Away", "Neutral site"])
-            new_game_submitted = st.form_submit_button("Create game", type="primary")
+        if not seasons:
+            st.warning("Create a season above first (e.g. \"Fall 2026\") before starting a game.")
+        else:
+            season_choice = st.selectbox(
+                "Season",
+                options=list(seasons_by_id.keys()),
+                format_func=lambda sid: f"{seasons_by_id[sid].season_name}" + ("" if seasons_by_id[sid].is_official else " (practice/fall, not official)"),
+            )
+            is_intrasquad_choice = st.checkbox("Intrasquad scrimmage (Squad A vs Squad B, our own roster on both sides)")
 
-        if new_game_submitted:
-            if opponent_team_choice is None and not (opponent_name_input or "").strip():
-                st.error("Opponent name is required.")
-            else:
-                is_home = {"Home": True, "Away": False, "Neutral site": None}[location_choice]
-                new_game = Game(
-                    opponent_team_id=opponent_team_choice,
-                    opponent_name=opponent_name_input.strip() if opponent_name_input else None,
-                    game_date=game_date_input,
-                    is_home=is_home,
-                    created_by_user_id=current_user_id,
+            opponent_team_choice = None
+            if not is_intrasquad_choice:
+                opponent_team_choice = st.selectbox(
+                    "Opponent",
+                    options=[None] + list(opponent_teams_by_id.keys()),
+                    format_func=lambda tid: "-- One-off opponent, just type a name --" if tid is None else opponent_teams_by_id[tid].team_name,
                 )
-                session.add(new_game)
-                session.commit()
-                _set_active_game(new_game.game_id)
-                display_name = opponent_teams_by_id[opponent_team_choice].team_name if opponent_team_choice else opponent_name_input.strip()
-                st.success(f"Created game vs {display_name}.")
-                st.rerun()
+                if opponent_team_choice is None:
+                    st.caption("Not in your list yet? Add them as a reusable team on Opponent Teams for next time -- or just type a name below for a one-off.")
+
+            with st.form("new_game_form"):
+                opponent_name_input = None
+                if not is_intrasquad_choice and opponent_team_choice is None:
+                    opponent_name_input = st.text_input("Opponent name")
+                game_date_input = st.date_input("Date", value=date.today())
+                location_choice = st.selectbox("Location", ["Home", "Away", "Neutral site"], disabled=is_intrasquad_choice)
+                new_game_submitted = st.form_submit_button("Create game", type="primary")
+
+            if new_game_submitted:
+                if not is_intrasquad_choice and opponent_team_choice is None and not (opponent_name_input or "").strip():
+                    st.error("Opponent name is required.")
+                else:
+                    is_home = None if is_intrasquad_choice else {"Home": True, "Away": False, "Neutral site": None}[location_choice]
+                    new_game = Game(
+                        season_id=season_choice,
+                        opponent_team_id=opponent_team_choice if not is_intrasquad_choice else None,
+                        opponent_name=(opponent_name_input.strip() if opponent_name_input else None) if not is_intrasquad_choice else "Intrasquad Scrimmage",
+                        is_intrasquad=is_intrasquad_choice,
+                        game_date=game_date_input,
+                        is_home=is_home,
+                        created_by_user_id=current_user_id,
+                    )
+                    session.add(new_game)
+                    session.commit()
+                    _set_active_game(new_game.game_id)
+                    if is_intrasquad_choice:
+                        display_name = "Intrasquad Scrimmage"
+                    else:
+                        display_name = opponent_teams_by_id[opponent_team_choice].team_name if opponent_team_choice else opponent_name_input.strip()
+                    st.success(f"Created game vs {display_name} ({seasons_by_id[season_choice].season_name}).")
+                    st.rerun()
     elif active_game_id is None:
         st.info("Your role has read-only access to game tracking.")
 
@@ -394,33 +449,54 @@ try:
             opp_hand_choice = None
             opp_batting_order_choice = None
             opp_player_choice = None
+            opp_our_player_choice = None
             if state["new_pa"]:
                 st.caption("New plate appearance -- who's up?")
                 if state["is_our_batting"]:
                     lineup_player_ids = [s.player_id for s in lineup_slots] if lineup_slots else list(players_by_id.keys())
                     our_player_choice = st.selectbox("Our batter", options=lineup_player_ids, format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}", key="gt_our_batter")
-                    opp_hand_choice = st.radio("Opposing pitcher's hand", ["R", "L"], horizontal=True, key="gt_opp_pitcher_hand")
+
+                    if active_game.is_intrasquad:
+                        opp_our_player_choice = st.selectbox(
+                            "Opposing pitcher (Squad B)",
+                            options=list(players_by_id.keys()),
+                            format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
+                            key="gt_opp_our_pitcher",
+                        )
+                        default_hand = players_by_id[opp_our_player_choice].throws or "R"
+                        opp_hand_choice = st.radio("Their hand", ["R", "L"], index=0 if default_hand == "R" else 1, horizontal=True, key="gt_opp_pitcher_hand")
+                    else:
+                        opp_hand_choice = st.radio("Opposing pitcher's hand", ["R", "L"], horizontal=True, key="gt_opp_pitcher_hand")
                 else:
                     pitcher_options = list(players_by_id.keys())
                     default_pitcher_idx = pitcher_options.index(active_game.starting_pitcher_id) if active_game.starting_pitcher_id in pitcher_options else 0
                     our_player_choice = st.selectbox("Our pitcher", options=pitcher_options, index=default_pitcher_idx, format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}", key="gt_our_pitcher")
 
-                    opp_roster = active_game.opponent_team.roster if active_game.opponent_team else []
                     default_hand = "R"
-                    opp_player_choice = None
-                    if opp_roster:
-                        opp_roster_by_id = {p.opponent_player_id: p for p in opp_roster}
-                        opp_player_choice = st.selectbox(
-                            "Opposing batter (optional -- pick from roster)",
-                            options=[None] + list(opp_roster_by_id.keys()),
-                            format_func=lambda pid: "-- Not on roster / unknown --" if pid is None else f"{opp_roster_by_id[pid].player_name}" + (f" (#{opp_roster_by_id[pid].jersey_number})" if opp_roster_by_id[pid].jersey_number else ""),
-                            key="gt_opp_roster_player",
+                    if active_game.is_intrasquad:
+                        opp_our_player_choice = st.selectbox(
+                            "Opposing batter (Squad B)",
+                            options=list(players_by_id.keys()),
+                            format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
+                            key="gt_opp_our_batter",
                         )
-                        if opp_player_choice is not None and opp_roster_by_id[opp_player_choice].bats:
-                            default_hand = opp_roster_by_id[opp_player_choice].bats if opp_roster_by_id[opp_player_choice].bats in ("R", "L") else "R"
+                        default_hand = players_by_id[opp_our_player_choice].bats or "R"
+                    else:
+                        opp_roster = active_game.opponent_team.roster if active_game.opponent_team else []
+                        if opp_roster:
+                            opp_roster_by_id = {p.opponent_player_id: p for p in opp_roster}
+                            opp_player_choice = st.selectbox(
+                                "Opposing batter (optional -- pick from roster)",
+                                options=[None] + list(opp_roster_by_id.keys()),
+                                format_func=lambda pid: "-- Not on roster / unknown --" if pid is None else f"{opp_roster_by_id[pid].player_name}" + (f" (#{opp_roster_by_id[pid].jersey_number})" if opp_roster_by_id[pid].jersey_number else ""),
+                                key="gt_opp_roster_player",
+                            )
+                            if opp_player_choice is not None and opp_roster_by_id[opp_player_choice].bats:
+                                default_hand = opp_roster_by_id[opp_player_choice].bats if opp_roster_by_id[opp_player_choice].bats in ("R", "L") else "R"
 
                     opp_hand_choice = st.radio("Opposing batter's hand", ["R", "L"], index=0 if default_hand == "R" else 1, horizontal=True, key="gt_opp_batter_hand")
-                    opp_batting_order_choice = st.number_input("Opponent's batting order #", min_value=1, max_value=12, value=1, step=1, key="gt_opp_order")
+                    if not active_game.is_intrasquad:
+                        opp_batting_order_choice = st.number_input("Opponent's batting order #", min_value=1, max_value=12, value=1, step=1, key="gt_opp_order")
             else:
                 # continuing the same PA -- derived from the last pitch
                 # stored in the DB (robust to a hard refresh), not
@@ -429,6 +505,7 @@ try:
                 opp_hand_choice = state.get("current_opp_hand")
                 opp_batting_order_choice = state.get("current_opp_order")
                 opp_player_choice = state.get("current_opp_player")
+                opp_our_player_choice = state.get("current_opp_our_player")
                 if our_player_choice and our_player_choice in players_by_id:
                     st.caption(f"At bat: {players_by_id[our_player_choice].first_name} {players_by_id[our_player_choice].last_name}")
 
@@ -511,6 +588,7 @@ try:
                         opponent_hand=opp_hand_choice,
                         opponent_batting_order=opp_batting_order_choice if not state["is_our_batting"] else None,
                         opponent_player_id=opp_player_choice if not state["is_our_batting"] else None,
+                        opponent_our_player_id=opp_our_player_choice,
                         pa_pitch_number=state["pa_pitch_number"],
                         balls_before=state["balls"],
                         strikes_before=state["strikes"],
@@ -553,7 +631,7 @@ try:
                         "Inn": p.inning,
                         "Side": "Us batting" if p.is_our_team_batting else "Us pitching",
                         "Player": f"{p.our_player.first_name} {p.our_player.last_name}" if p.our_player else "—",
-                        "Opponent": f"{p.opponent_player.player_name}" if p.opponent_player else (f"#{p.opponent_batting_order} ({p.opponent_hand})" if p.opponent_batting_order else "—"),
+                        "Opponent": (f"{p.opponent_our_player.first_name} {p.opponent_our_player.last_name}" if p.opponent_our_player else None) or (f"{p.opponent_player.player_name}" if p.opponent_player else None) or (f"#{p.opponent_batting_order} ({p.opponent_hand})" if p.opponent_batting_order else "—"),
                         "Pitch": p.pitch_type.type_name if p.pitch_type else "—",
                         "Outcome": p.pitch_outcome or "—",
                         "AB Result": p.ab_outcome or "",

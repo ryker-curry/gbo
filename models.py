@@ -829,6 +829,29 @@ class OpponentPlayer(Base):
     team = relationship("OpponentTeam", back_populates="roster")
 
 
+class Season(Base):
+    """A season a Game belongs to (e.g. "Fall 2026", "Spring 2027") --
+    lets fall/practice games stay separate from real spring regular-
+    season stats once games are actually aggregated into a stats page.
+    is_official distinguishes "counts toward real record" (spring
+    regular season) from practice/exhibition play (fall ball,
+    intrasquad scrimmages) -- created as needed by coaches, not a
+    fixed pre-seeded list, since season names/dates are program-
+    specific."""
+    __tablename__ = "seasons"
+
+    season_id = Column(Integer, primary_key=True)
+    season_name = Column(String(100), unique=True, nullable=False)
+    is_official = Column(Boolean, default=True, nullable=False)
+    start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    created_by = relationship("User")
+    games = relationship("Game", back_populates="season")
+
+
 class Game(Base):
     """A tracked game -- opponent, date, home/away. Both our hitting
     (our batters facing the opposing pitcher) and our pitching (our
@@ -842,12 +865,27 @@ class Game(Base):
     pick from a list for future games). opponent_name stays as a
     nullable legacy field -- games created before opponent teams
     existed still display correctly from it; new games use the team
-    link instead."""
+    link instead.
+
+    is_intrasquad: when True, the "opponent" side of every pitch in
+    this game is actually one of OUR OWN roster players (Squad A vs
+    Squad B), not an external opponent -- see GamePitch.
+    opponent_our_player_id for how that's captured so both squads'
+    stats stay attributed to real player profiles, not lost to a
+    generic hand/order entry or a disconnected OpponentPlayer.
+
+    season_id: which Season this game counts toward (e.g. "Fall 2026"
+    vs "Spring 2027") -- keeps fall/practice stats separate from real
+    spring regular-season stats once games get aggregated. Nullable
+    for backward compatibility with games created before seasons
+    existed."""
     __tablename__ = "games"
 
     game_id = Column(Integer, primary_key=True)
+    season_id = Column(Integer, ForeignKey("seasons.season_id"), nullable=True)
     opponent_team_id = Column(Integer, ForeignKey("opponent_teams.team_id"), nullable=True)
     opponent_name = Column(String(150), nullable=True)
+    is_intrasquad = Column(Boolean, default=False, nullable=False)
     game_date = Column(Date, default=date.today, nullable=False)
     is_home = Column(Boolean, nullable=True)  # True=home, False=away, None=unspecified (e.g. neutral site)
     our_score = Column(Integer, default=0, nullable=False)
@@ -859,6 +897,7 @@ class Game(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     created_by = relationship("User")
+    season = relationship("Season", back_populates="games")
     opponent_team = relationship("OpponentTeam")
     lineup_slots = relationship("GameLineupSlot", back_populates="game", cascade="all, delete-orphan", order_by="GameLineupSlot.batting_order")
     starting_pitcher = relationship("Player", foreign_keys=[starting_pitcher_id])
@@ -932,6 +971,7 @@ class GamePitch(Base):
     opponent_hand = Column(String(1), nullable=True)  # 'R' / 'L' -- the OTHER side's hand (pitcher's hand if we're batting, batter's hand if we're pitching). Auto-filled if opponent_player_id is set and that player has a hand on file, but always independently editable.
     opponent_batting_order = Column(Integer, nullable=True)  # only meaningful when is_our_team_batting is False -- their lineup slot
     opponent_player_id = Column(Integer, ForeignKey("opponent_players.opponent_player_id"), nullable=True)  # optional: a specific named player from the opponent's roster, if their team roster is built out
+    opponent_our_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)  # intrasquad games only: the OTHER side is actually one of our own roster players (Squad A vs Squad B) -- keeps their stats attributed to their real profile instead of a generic hand/order entry
 
     pa_pitch_number = Column(Integer, nullable=True)  # pitch # within this specific plate appearance
     balls_before = Column(Integer, nullable=True)
@@ -969,5 +1009,6 @@ class GamePitch(Base):
 
     game = relationship("Game", back_populates="pitches", foreign_keys=[game_id])
     our_player = relationship("Player", foreign_keys=[our_player_id])
+    opponent_our_player = relationship("Player", foreign_keys=[opponent_our_player_id])
     pitch_type = relationship("PitchType")
     opponent_player = relationship("OpponentPlayer")
