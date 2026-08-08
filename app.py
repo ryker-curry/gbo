@@ -243,15 +243,25 @@ if role_name in ("Administrator", "Head Coach", "Coach", "Strength Coach", "Athl
             st.Page("pages/hitter_tracking.py", title="Hitter Tracking", url_path="hitter-tracking", icon=":material/sports_baseball:"),
         )
 
-    # Game Tracking covers BOTH sides of the ball (our hitting AND our
-    # pitching in the same game) -- not specialty-restricted like
-    # Bullpen/Hitter Tracking, since a game always involves both. Same
-    # read-only visibility for Sports Scientist/Data Analyst.
-    if role_name in ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst"):
-        pages["Player Development"].extend([
-            st.Page("pages/game_tracking.py", title="Game Tracking", url_path="game-tracking", icon=":material/scoreboard:"),
-            st.Page("pages/opponent_teams.py", title="Opponent Teams", url_path="opponent-teams", icon=":material/groups:"),
-        ])
+# Game Operations, Scouting, and Analytics -- split out from Player
+# Development per Ryker's request. Not specialty-restricted (a game
+# always involves both pitching and hitting). Data Analyst is "in
+# charge of all game tracking data collection and analysis" -- gets
+# real edit rights here specifically (a page-level override inside
+# game_tracking.py/opponent_teams.py), without touching their broader
+# can_edit_sessions flag, which stays False for Bullpen/Hitter
+# Tracking (unaffected, not requested). Sports Scientist stays
+# read-only, consistent with their existing analytics-focused access.
+if role_name in ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst"):
+    pages["Game Operations"] = [
+        st.Page("pages/game_tracking.py", title="Game Tracking", url_path="game-tracking", icon=":material/scoreboard:"),
+    ]
+    pages["Scouting"] = [
+        st.Page("pages/opponent_teams.py", title="Opponent Teams", url_path="opponent-teams", icon=":material/groups:"),
+    ]
+    pages["Analytics"] = [
+        st.Page("pages/analytics.py", title="Player Stats", url_path="analytics", icon=":material/query_stats:"),
+    ]
 
 if role_name == "Administrator":
     pages["Administration"] = [
@@ -268,6 +278,7 @@ if role_name == "Player":
         st.Page("pages/player_schedule.py", title="My Schedule", url_path="my-schedule", icon=":material/calendar_month:"),
         st.Page("pages/player_development.py", title="My Development", url_path="my-development", icon=":material/track_changes:"),
         st.Page("pages/player_stats.py", title="My Assessments", url_path="my-stats", icon=":material/query_stats:"),
+        st.Page("pages/player_game_stats.py", title="My Stats", url_path="my-game-stats", icon=":material/bar_chart:"),
         st.Page("pages/player_video.py", title="My Video", url_path="my-video", icon=":material/videocam:"),
     ]
     # My Bullpens is pitcher-specific (Bullpen Tracking's own player-facing
