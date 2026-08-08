@@ -568,7 +568,7 @@ try:
 
         if active_bullpen.source_assignment and can_edit_sessions:
             if active_bullpen.source_assignment.completed:
-                st.caption("✓ Source assignment already marked completed.")
+                st.caption("Source assignment already marked completed.")
             elif active_bullpen.pitches:
                 if st.button("Mark source assignment as completed", key="complete_source_assignment", type="primary"):
                     active_bullpen.source_assignment.completed = True
@@ -654,7 +654,7 @@ try:
                         label = f"Pitch #{aid}" + (f" — {float(velo):.1f} mph" if velo is not None else "")
                         rapsodo_pt_name = a.pitch_type.type_name if a.pitch_type else None
                         if rapsodo_pt_name and rapsodo_pt_name != pitch_type_choice:
-                            label += f" ⚠️ ({rapsodo_pt_name}, not {pitch_type_choice})"
+                            label += f" [mismatch: {rapsodo_pt_name}, not {pitch_type_choice}]"
                         return label
 
                     linked_choice = st.selectbox(
@@ -717,7 +717,7 @@ try:
                     "Pitch Type": pt_name,
                     "Intended Zone": f"{p.target_zone} ({zone_labels.get(p.target_zone, '—')})" if p.target_zone is not None else "—",
                     "Actual": f"{actual_zone} ({zone_labels.get(actual_zone, '—')})" if actual_zone is not None else "Not linked yet",
-                    "Hit Target": "✓" if hit_target is True else ("✗" if hit_target is False else "—"),
+                    "Hit Target": "Yes" if hit_target is True else ("No" if hit_target is False else "—"),
                     "Notes": p.notes or "",
                 })
 
@@ -731,7 +731,7 @@ try:
                     options=list(video_pitches_by_id.keys()),
                     format_func=lambda pid: f"Pitch #{video_pitches_by_id[pid].pitch_number}"
                     + (f" ({video_pitches_by_id[pid].pitch_type.type_name})" if video_pitches_by_id[pid].pitch_type else "")
-                    + (" 🎥" if video_pitches_by_id[pid].video_url else ""),
+                    + (" (video)" if video_pitches_by_id[pid].video_url else ""),
                     key="video_pitch_choice",
                 )
                 selected_video_pitch = video_pitches_by_id[video_pitch_id]
@@ -792,7 +792,7 @@ try:
                             label = f"Pitch #{aid}" + (f" — {float(velo):.1f} mph" if velo is not None else "")
                             rapsodo_pt_name = a.pitch_type.type_name if a.pitch_type else None
                             if rapsodo_pt_name and rapsodo_pt_name != bullpen_pitch_type_name:
-                                label += f" ⚠️ ({rapsodo_pt_name}, not {bullpen_pitch_type_name})"
+                                label += f" [mismatch: {rapsodo_pt_name}, not {bullpen_pitch_type_name}]"
                             return label
 
                         # Safeguard 3: default each unlinked bullpen pitch to
@@ -821,7 +821,7 @@ try:
                             chosen = post_pitches_by_id[link_choice]
                             chosen_pt_name = chosen.pitch_type.type_name if chosen.pitch_type else None
                             if chosen_pt_name and chosen_pt_name != pt_name:
-                                st.caption(f"⚠️ Selected Rapsodo pitch is a {chosen_pt_name}, but this bullpen pitch was called as {pt_name}. Double-check before linking.")
+                                st.warning(f"Selected Rapsodo pitch is a {chosen_pt_name}, but this bullpen pitch was called as {pt_name}. Double-check before linking.")
                             if col3.button("Link", key=f"link_btn_{p.bullpen_pitch_id}"):
                                 p.linked_assessment_id = link_choice
                                 session.commit()

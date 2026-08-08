@@ -58,15 +58,18 @@ def page_footer():
     )
 
 
-def empty_state(message: str, icon: str = "📭"):
-    """Friendlier empty-state message with an icon, used in place of a
-    plain st.info() when a list/table has nothing to show yet."""
+def empty_state(message: str, icon: str = ""):
+    """Friendlier empty-state message, used in place of a plain
+    st.info() when a list/table has nothing to show yet. No emoji/icon
+    by default, per the no-emojis rule -- pass icon= only with a plain
+    text/symbol if a specific caller genuinely needs one."""
+    icon_html = f'<div class="icon">{icon}</div>' if icon else ""
     st.markdown(
         '<style>'
         '.gbo-empty-state { text-align: center; padding: 24px 16px; color: #B8B8B8; }'
-        '.gbo-empty-state .icon { font-size: 2rem; margin-bottom: 8px; }'
+        '.gbo-empty-state .icon { font-size: 1.5rem; margin-bottom: 8px; }'
         '</style>'
-        f'<div class="gbo-empty-state"><div class="icon">{icon}</div>{message}</div>',
+        f'<div class="gbo-empty-state">{icon_html}{message}</div>',
         unsafe_allow_html=True,
     )
 

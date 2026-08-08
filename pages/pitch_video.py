@@ -126,7 +126,7 @@ try:
                 pt = p.pitch_type.type_name if p.pitch_type else "Unknown type"
                 velo = next((r.value for r in p.results if r.test_type.test_name == "Velocity"), None)
                 velo_label = f" — {float(velo):.1f} mph" if velo is not None else ""
-                has_video = " 🎥" if p.videos else ""
+                has_video = " (video)" if p.videos else ""
                 return f"{p.assessment_date.strftime('%Y-%m-%d (%a)')} — {pt}{velo_label}{has_video}"
 
             selected_pitch_id = st.selectbox(

@@ -373,7 +373,7 @@ try:
                         "Pitch Type": s.pitch_type.type_name if s.pitch_type else "—",
                         "Intended": f"{s.intended_zone} ({ZONE_LABELS.get(s.intended_zone, '—')})" if s.intended_zone is not None else "—",
                         "Actual": f"{s.pitch_zone} ({ZONE_LABELS.get(s.pitch_zone, '—')})" if s.pitch_zone is not None else "—",
-                        "Located": "✓" if (s.intended_zone is not None and s.pitch_zone is not None and s.intended_zone == s.pitch_zone) else ("✗" if s.intended_zone is not None and s.pitch_zone is not None else "—"),
+                        "Located": "Yes" if (s.intended_zone is not None and s.pitch_zone is not None and s.intended_zone == s.pitch_zone) else ("No" if s.intended_zone is not None and s.pitch_zone is not None else "—"),
                         "Pitcher Hand": s.pitcher_hand or "—",
                         "Roster Pitcher": f"{s.pitcher_player.first_name} {s.pitcher_player.last_name}" if s.pitcher_player else "—",
                         "Contact": s.contact_quality or "—",
@@ -394,7 +394,7 @@ try:
                     format_func=lambda sid: f"Swing #{video_swings_by_id[sid].swing_number}"
                     + (f" ({video_swings_by_id[sid].pitch_type.type_name})" if video_swings_by_id[sid].pitch_type else "")
                     + (f" — {video_swings_by_id[sid].contact_quality}" if video_swings_by_id[sid].contact_quality else "")
-                    + (" 🎥" if video_swings_by_id[sid].video_url else ""),
+                    + (" (video)" if video_swings_by_id[sid].video_url else ""),
                     key="ht_video_swing_choice",
                 )
                 selected_video_swing = video_swings_by_id[video_swing_id]
