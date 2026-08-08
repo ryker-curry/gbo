@@ -75,22 +75,23 @@ try:
                 f"HBP: {batting_line['HBP']} · Total RV: {batting_line['Total RV']} · Avg RV/PA: {batting_line['Avg RV/PA']}"
             )
         st.divider()
-    st.markdown("### Pitching")
-    if not pitching_pitches:
-        empty_state("No pitching data recorded yet for you in Game Tracking.")
-    else:
-        pitching_line = compute_pitching_line(pitching_pitches)
-        cols = st.columns(6)
-        cols[0].metric("Batters Faced", pitching_line["Batters Faced"])
-        cols[1].metric("Pitches", pitching_line["Pitches"])
-        cols[2].metric("K", pitching_line["K"])
-        cols[3].metric("BB", pitching_line["BB"])
-        cols[4].metric("H Allowed", pitching_line["H Allowed"])
-        cols[5].metric("Execution %", f"{pitching_line['Execution %']:.1f}%" if pitching_line["Execution %"] is not None else "—")
-        st.caption(
-            f"HR Allowed: {pitching_line['HR Allowed']} · Runs Allowed: {pitching_line['Runs Allowed']} · "
-            f"Total RV Allowed: {pitching_line['Total RV Allowed']} · Avg RV Allowed/Pitch: {pitching_line['Avg RV Allowed/Pitch']}"
-        )
+    if my_player.is_pitcher:
+        st.markdown("### Pitching")
+        if not pitching_pitches:
+            empty_state("No pitching data recorded yet for you in Game Tracking.")
+        else:
+            pitching_line = compute_pitching_line(pitching_pitches)
+            cols = st.columns(6)
+            cols[0].metric("Batters Faced", pitching_line["Batters Faced"])
+            cols[1].metric("Pitches", pitching_line["Pitches"])
+            cols[2].metric("K", pitching_line["K"])
+            cols[3].metric("BB", pitching_line["BB"])
+            cols[4].metric("H Allowed", pitching_line["H Allowed"])
+            cols[5].metric("Execution %", f"{pitching_line['Execution %']:.1f}%" if pitching_line["Execution %"] is not None else "—")
+            st.caption(
+                f"HR Allowed: {pitching_line['HR Allowed']} · Runs Allowed: {pitching_line['Runs Allowed']} · "
+                f"Total RV Allowed: {pitching_line['Total RV Allowed']} · Avg RV Allowed/Pitch: {pitching_line['Avg RV Allowed/Pitch']}"
+            )
 
 finally:
     session.close()
