@@ -794,41 +794,6 @@ class HitterSwing(Base):
     pitcher_player = relationship("Player", foreign_keys=[pitcher_player_id])
 
 
-class OpponentTeam(Base):
-    """A reusable opponent team -- create once, select from a list for
-    every future game against them instead of re-typing the name (and,
-    once a roster is built out, picking real opposing players by name
-    instead of just entering hand + batting order each time)."""
-    __tablename__ = "opponent_teams"
-
-    team_id = Column(Integer, primary_key=True)
-    team_name = Column(String(150), unique=True, nullable=False)
-    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-    created_by = relationship("User")
-    roster = relationship("OpponentPlayer", back_populates="team", cascade="all, delete-orphan", order_by="OpponentPlayer.player_name")
-
-
-class OpponentPlayer(Base):
-    """One player on an opponent team's roster -- name, and whatever's
-    known about them (jersey #, bats/throws, position). Optional --
-    Game Tracking still works with just hand + batting order typed in
-    if a team's roster isn't built out yet."""
-    __tablename__ = "opponent_players"
-
-    opponent_player_id = Column(Integer, primary_key=True)
-    team_id = Column(Integer, ForeignKey("opponent_teams.team_id"), nullable=False)
-    player_name = Column(String(150), nullable=False)
-    jersey_number = Column(String(10), nullable=True)
-    bats = Column(String(1), nullable=True)  # 'R' / 'L' / 'S' (switch)
-    throws = Column(String(1), nullable=True)  # 'R' / 'L' -- relevant if this player pitches
-    position = Column(String(50), nullable=True)
-    notes = Column(Text, nullable=True)
-
-    team = relationship("OpponentTeam", back_populates="roster")
-
-
 class Game(Base):
     """A tracked game -- opponent, date, home/away. Both our hitting
     (our batters facing the opposing pitcher) and our pitching (our
@@ -836,18 +801,11 @@ class Game(Base):
     GamePitch table -- see that model for how the two sides share one
     schema via is_our_team_batting rather than needing two separate
     tracking systems (same "one entry point" reasoning already applied
-    to Hitter Tracking's intended-zone field).
-
-    opponent_team_id links to a reusable OpponentTeam (create once,
-    pick from a list for future games). opponent_name stays as a
-    nullable legacy field -- games created before opponent teams
-    existed still display correctly from it; new games use the team
-    link instead."""
+    to Hitter Tracking's intended-zone field)."""
     __tablename__ = "games"
 
     game_id = Column(Integer, primary_key=True)
-    opponent_team_id = Column(Integer, ForeignKey("opponent_teams.team_id"), nullable=True)
-    opponent_name = Column(String(150), nullable=True)
+    opponent_name = Column(String(150), nullable=False)
     game_date = Column(Date, default=date.today, nullable=False)
     is_home = Column(Boolean, nullable=True)  # True=home, False=away, None=unspecified (e.g. neutral site)
     our_score = Column(Integer, default=0, nullable=False)
@@ -859,7 +817,6 @@ class Game(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     created_by = relationship("User")
-    opponent_team = relationship("OpponentTeam")
     lineup_slots = relationship("GameLineupSlot", back_populates="game", cascade="all, delete-orphan", order_by="GameLineupSlot.batting_order")
     starting_pitcher = relationship("Player", foreign_keys=[starting_pitcher_id])
     pitches = relationship("GamePitch", back_populates="game", cascade="all, delete-orphan", order_by="GamePitch.pitch_sequence")
@@ -929,9 +886,8 @@ class GamePitch(Base):
     is_our_team_batting = Column(Boolean, nullable=False)
 
     our_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)  # batter if is_our_team_batting, else pitcher
-    opponent_hand = Column(String(1), nullable=True)  # 'R' / 'L' -- the OTHER side's hand (pitcher's hand if we're batting, batter's hand if we're pitching). Auto-filled if opponent_player_id is set and that player has a hand on file, but always independently editable.
+    opponent_hand = Column(String(1), nullable=True)  # 'R' / 'L' -- the OTHER side's hand (pitcher's hand if we're batting, batter's hand if we're pitching)
     opponent_batting_order = Column(Integer, nullable=True)  # only meaningful when is_our_team_batting is False -- their lineup slot
-    opponent_player_id = Column(Integer, ForeignKey("opponent_players.opponent_player_id"), nullable=True)  # optional: a specific named player from the opponent's roster, if their team roster is built out
 
     pa_pitch_number = Column(Integer, nullable=True)  # pitch # within this specific plate appearance
     balls_before = Column(Integer, nullable=True)
@@ -970,4 +926,3 @@ class GamePitch(Base):
     game = relationship("Game", back_populates="pitches", foreign_keys=[game_id])
     our_player = relationship("Player", foreign_keys=[our_player_id])
     pitch_type = relationship("PitchType")
-    opponent_player = relationship("OpponentPlayer")

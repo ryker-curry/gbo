@@ -28,6 +28,7 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from models import (
     Player, Position, PitchType, Game, GameLineupSlot, GamePitch, RunExpectancy,
+    OpponentTeam, OpponentPlayer,
 )
 from ui_components import page_header, page_footer, empty_state
 
@@ -219,6 +220,7 @@ def compute_current_state(game, lineup_slots):
             "current_our_player": last.our_player_id,
             "current_opp_hand": last.opponent_hand,
             "current_opp_order": last.opponent_batting_order,
+            "current_opp_player": last.opponent_player_id,
         }
     else:
         outs = last.outs_after if last.outs_after is not None else last.outs_before
@@ -260,12 +262,17 @@ try:
         else:
             st.query_params["game_id"] = str(game_id)
 
+    def _opponent_display_name(g):
+        if g.opponent_team:
+            return g.opponent_team.team_name
+        return g.opponent_name or "Unknown opponent"
+
     def _game_label(gid):
         if gid is None:
             return "-- Start a new game --"
         g = games_by_id[gid]
         loc = "vs" if g.is_home else ("@" if g.is_home is False else "vs (neutral)")
-        return f"{g.game_date.strftime('%Y-%m-%d (%a)')} — {loc} {g.opponent_name} ({g.status}) — {g.our_score}-{g.opponent_score}"
+        return f"{g.game_date.strftime('%Y-%m-%d (%a)')} — {loc} {_opponent_display_name(g)} ({g.status}) — {g.our_score}-{g.opponent_score}"
 
     game_options = [None] + list(games_by_id.keys())
     game_index = game_options.index(default_game_id) if default_game_id in game_options else 0
@@ -279,22 +286,34 @@ try:
     players_by_id = {p.player_id: p for p in players}
     positions = session.query(Position).order_by(Position.display_order).all()
     pitch_types = session.query(PitchType).order_by(PitchType.pitch_type_id).all()
+    opponent_teams = session.query(OpponentTeam).order_by(OpponentTeam.team_name).all()
+    opponent_teams_by_id = {t.team_id: t for t in opponent_teams}
 
     if active_game_id is None and can_edit_sessions:
         st.subheader("Start a new game")
+        opponent_team_choice = st.selectbox(
+            "Opponent",
+            options=[None] + list(opponent_teams_by_id.keys()),
+            format_func=lambda tid: "-- One-off opponent, just type a name --" if tid is None else opponent_teams_by_id[tid].team_name,
+        )
+        if opponent_team_choice is None:
+            st.caption("Not in your list yet? Add them as a reusable team on Opponent Teams for next time -- or just type a name below for a one-off.")
         with st.form("new_game_form"):
-            opponent_name = st.text_input("Opponent")
+            opponent_name_input = None
+            if opponent_team_choice is None:
+                opponent_name_input = st.text_input("Opponent name")
             game_date_input = st.date_input("Date", value=date.today())
             location_choice = st.selectbox("Location", ["Home", "Away", "Neutral site"])
             new_game_submitted = st.form_submit_button("Create game", type="primary")
 
         if new_game_submitted:
-            if not opponent_name.strip():
+            if opponent_team_choice is None and not (opponent_name_input or "").strip():
                 st.error("Opponent name is required.")
             else:
                 is_home = {"Home": True, "Away": False, "Neutral site": None}[location_choice]
                 new_game = Game(
-                    opponent_name=opponent_name.strip(),
+                    opponent_team_id=opponent_team_choice,
+                    opponent_name=opponent_name_input.strip() if opponent_name_input else None,
                     game_date=game_date_input,
                     is_home=is_home,
                     created_by_user_id=current_user_id,
@@ -302,7 +321,8 @@ try:
                 session.add(new_game)
                 session.commit()
                 _set_active_game(new_game.game_id)
-                st.success(f"Created game vs {opponent_name.strip()}.")
+                display_name = opponent_teams_by_id[opponent_team_choice].team_name if opponent_team_choice else opponent_name_input.strip()
+                st.success(f"Created game vs {display_name}.")
                 st.rerun()
     elif active_game_id is None:
         st.info("Your role has read-only access to game tracking.")
@@ -310,7 +330,7 @@ try:
     if active_game:
         st.divider()
         loc = "vs" if active_game.is_home else ("@" if active_game.is_home is False else "vs (neutral)")
-        st.markdown(f"### {loc} {active_game.opponent_name} — {active_game.game_date.strftime('%Y-%m-%d (%a)')}")
+        st.markdown(f"### {loc} {_opponent_display_name(active_game)} — {active_game.game_date.strftime('%Y-%m-%d (%a)')}")
         st.markdown(f"**Score: {active_game.our_score} - {active_game.opponent_score}** ({active_game.status})")
 
         lineup_slots = session.query(GameLineupSlot).options(joinedload(GameLineupSlot.player)).filter(GameLineupSlot.game_id == active_game.game_id).order_by(GameLineupSlot.batting_order).all()
@@ -373,6 +393,7 @@ try:
             our_player_choice = None
             opp_hand_choice = None
             opp_batting_order_choice = None
+            opp_player_choice = None
             if state["new_pa"]:
                 st.caption("New plate appearance -- who's up?")
                 if state["is_our_batting"]:
@@ -383,7 +404,22 @@ try:
                     pitcher_options = list(players_by_id.keys())
                     default_pitcher_idx = pitcher_options.index(active_game.starting_pitcher_id) if active_game.starting_pitcher_id in pitcher_options else 0
                     our_player_choice = st.selectbox("Our pitcher", options=pitcher_options, index=default_pitcher_idx, format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}", key="gt_our_pitcher")
-                    opp_hand_choice = st.radio("Opposing batter's hand", ["R", "L"], horizontal=True, key="gt_opp_batter_hand")
+
+                    opp_roster = active_game.opponent_team.roster if active_game.opponent_team else []
+                    default_hand = "R"
+                    opp_player_choice = None
+                    if opp_roster:
+                        opp_roster_by_id = {p.opponent_player_id: p for p in opp_roster}
+                        opp_player_choice = st.selectbox(
+                            "Opposing batter (optional -- pick from roster)",
+                            options=[None] + list(opp_roster_by_id.keys()),
+                            format_func=lambda pid: "-- Not on roster / unknown --" if pid is None else f"{opp_roster_by_id[pid].player_name}" + (f" (#{opp_roster_by_id[pid].jersey_number})" if opp_roster_by_id[pid].jersey_number else ""),
+                            key="gt_opp_roster_player",
+                        )
+                        if opp_player_choice is not None and opp_roster_by_id[opp_player_choice].bats:
+                            default_hand = opp_roster_by_id[opp_player_choice].bats if opp_roster_by_id[opp_player_choice].bats in ("R", "L") else "R"
+
+                    opp_hand_choice = st.radio("Opposing batter's hand", ["R", "L"], index=0 if default_hand == "R" else 1, horizontal=True, key="gt_opp_batter_hand")
                     opp_batting_order_choice = st.number_input("Opponent's batting order #", min_value=1, max_value=12, value=1, step=1, key="gt_opp_order")
             else:
                 # continuing the same PA -- derived from the last pitch
@@ -392,6 +428,7 @@ try:
                 our_player_choice = state.get("current_our_player")
                 opp_hand_choice = state.get("current_opp_hand")
                 opp_batting_order_choice = state.get("current_opp_order")
+                opp_player_choice = state.get("current_opp_player")
                 if our_player_choice and our_player_choice in players_by_id:
                     st.caption(f"At bat: {players_by_id[our_player_choice].first_name} {players_by_id[our_player_choice].last_name}")
 
@@ -473,6 +510,7 @@ try:
                         our_player_id=our_player_choice,
                         opponent_hand=opp_hand_choice,
                         opponent_batting_order=opp_batting_order_choice if not state["is_our_batting"] else None,
+                        opponent_player_id=opp_player_choice if not state["is_our_batting"] else None,
                         pa_pitch_number=state["pa_pitch_number"],
                         balls_before=state["balls"],
                         strikes_before=state["strikes"],
@@ -515,6 +553,7 @@ try:
                         "Inn": p.inning,
                         "Side": "Us batting" if p.is_our_team_batting else "Us pitching",
                         "Player": f"{p.our_player.first_name} {p.our_player.last_name}" if p.our_player else "—",
+                        "Opponent": f"{p.opponent_player.player_name}" if p.opponent_player else (f"#{p.opponent_batting_order} ({p.opponent_hand})" if p.opponent_batting_order else "—"),
                         "Pitch": p.pitch_type.type_name if p.pitch_type else "—",
                         "Outcome": p.pitch_outcome or "—",
                         "AB Result": p.ab_outcome or "",

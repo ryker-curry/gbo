@@ -248,9 +248,10 @@ if role_name in ("Administrator", "Head Coach", "Coach", "Strength Coach", "Athl
     # Bullpen/Hitter Tracking, since a game always involves both. Same
     # read-only visibility for Sports Scientist/Data Analyst.
     if role_name in ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst"):
-        pages["Player Development"].append(
+        pages["Player Development"].extend([
             st.Page("pages/game_tracking.py", title="Game Tracking", url_path="game-tracking", icon=":material/scoreboard:"),
-        )
+            st.Page("pages/opponent_teams.py", title="Opponent Teams", url_path="opponent-teams", icon=":material/groups:"),
+        ])
 
 if role_name == "Administrator":
     pages["Administration"] = [
