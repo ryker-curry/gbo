@@ -27,7 +27,7 @@ from sqlalchemy.orm import joinedload
 
 from database import get_session
 from models import (
-    Player, Position, PitchType, Game, GameLineupSlot, GamePitch,
+    Player, Position, PitchType, Game, GameLineupSlot, GamePitch, RunExpectancy,
 )
 from ui_components import page_header, page_footer, empty_state
 
@@ -59,6 +59,49 @@ ZONE_LABELS = {
     7: "Down-Left", 8: "Down-Middle", 9: "Down-Right",
 }
 CONTACT_QUALITY_OPTIONS = ["Barrel", "Solid", "Weak", "Miss"]
+
+
+def build_re_lookup(session):
+    """Load Ryker's RunExpectancy table into a dict for fast lookup:
+    (outs, bases, count) -> re_value. Returns an empty dict (RE/RV
+    silently skipped, not an error) if the table hasn't been migrated
+    yet or is empty."""
+    rows = session.query(RunExpectancy).all()
+    return {(r.outs, r.bases, r.count): float(r.re_value) for r in rows}
+
+
+def compute_re_and_rv(re_lookup, outs_before, bases_before, balls_before, strikes_before,
+                       ends_pa, outs_after, bases_after, runs_scored, new_balls=None, new_strikes=None):
+    """RE Before/After and Run Value for one pitch, using Ryker's own
+    table. Mirrors exactly how his own tracking sheet computes it
+    (verified against his real example rows before building this):
+      - re_before = lookup at the state before this pitch.
+      - re_after: if this pitch ended the PA, look up the resulting
+        state with count reset to 0-0 (next batter's starting count) --
+        or 0 if the inning ended (3 outs). Otherwise, only the count
+        changed (outs/bases stayed the same), so look up the same
+        outs/bases with the ACTUAL new count (new_balls/new_strikes,
+        passed in by the caller -- this function doesn't re-derive it,
+        since a Ball, Called Strike, Swinging Strike, and Foul all
+        change the count differently).
+      - run_value = (re_after + runs_scored) - re_before.
+    Returns (re_before, re_after, run_value) -- any of these can be
+    None if the needed state isn't in the table."""
+    re_before = re_lookup.get((outs_before, bases_before, f"{balls_before}-{strikes_before}"))
+
+    if ends_pa:
+        if outs_after is not None and outs_after >= 3:
+            re_after = 0.0
+        else:
+            re_after = re_lookup.get((outs_after, bases_after, "0-0"))
+    else:
+        re_after = re_lookup.get((outs_before, bases_before, f"{new_balls}-{new_strikes}"))
+
+    run_value = None
+    if re_before is not None and re_after is not None:
+        run_value = round((re_after + runs_scored) - re_before, 3)
+
+    return re_before, re_after, run_value
 
 
 def bases_display(bases_str):
@@ -414,6 +457,14 @@ try:
                     pitch_type_id = next(pt.pitch_type_id for pt in pitch_types if pt.type_name == pitch_type_choice)
                     cq = contact_quality_choice if contact_quality_choice and contact_quality_choice != "-- N/A --" else None
                     next_seq = (max((p.pitch_sequence for p in active_game.pitches), default=0)) + 1
+
+                    re_lookup = build_re_lookup(session)
+                    re_before, re_after, run_value = compute_re_and_rv(
+                        re_lookup, state["outs"], state["bases"], state["balls"], state["strikes"],
+                        ends_pa, final_outs if ends_pa else None, final_bases if ends_pa else None,
+                        final_runs if ends_pa else 0, new_balls=new_balls, new_strikes=new_strikes,
+                    )
+
                     session.add(GamePitch(
                         game_id=active_game.game_id,
                         pitch_sequence=next_seq,
@@ -436,6 +487,9 @@ try:
                         outs_after=final_outs if ends_pa else None,
                         bases_after=final_bases if ends_pa else None,
                         runs_scored_on_play=final_runs if ends_pa else 0,
+                        re_before=re_before,
+                        re_after=re_after,
+                        run_value=run_value,
                         notes=pitch_notes.strip() or None,
                     ))
                     if ends_pa and final_runs:
@@ -465,6 +519,9 @@ try:
                         "Outcome": p.pitch_outcome or "—",
                         "AB Result": p.ab_outcome or "",
                         "Runs": p.runs_scored_on_play,
+                        "RE Before": f"{float(p.re_before):.2f}" if p.re_before is not None else "—",
+                        "RE After": f"{float(p.re_after):.2f}" if p.re_after is not None else "—",
+                        "RV": f"{float(p.run_value):+.3f}" if p.run_value is not None else "—",
                     }
                     for p in all_pitches[:50]
                 ],

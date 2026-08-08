@@ -841,6 +841,20 @@ class GameLineupSlot(Base):
     starting_position = relationship("Position")
 
 
+class RunExpectancy(Base):
+    """Lookup table for run expectancy by (outs, bases, count) -- Ryker's
+    own real RE table (not a generic published one), keyed more finely
+    than the standard 24-state RE24 matrix since it includes the count.
+    Used to compute RE Before/RE After/Run Value on each GamePitch."""
+    __tablename__ = "run_expectancy"
+
+    re_id = Column(Integer, primary_key=True)
+    outs = Column(Integer, nullable=False)
+    bases = Column(String(3), nullable=False)  # e.g. "010" = runner on 2nd only
+    count = Column(String(3), nullable=False)  # e.g. "0-0", "3-2"
+    re_value = Column(Numeric(6, 3), nullable=False)
+
+
 class GamePitch(Base):
     """One pitch within a tracked game -- the fundamental unit, same as
     Ryker's own tracking sheet (one row per pitch). Covers BOTH sides
@@ -893,6 +907,18 @@ class GamePitch(Base):
     outs_after = Column(Integer, nullable=True)
     bases_after = Column(String(3), nullable=True)
     runs_scored_on_play = Column(Integer, default=0, nullable=False)
+
+    # Run Expectancy / Run Value -- computed from RunExpectancy at save
+    # time using Ryker's own table: re_before = lookup(outs_before,
+    # bases_before, count_before). re_after = lookup(outs_after,
+    # bases_after, "0-0") if this pitch ended the PA (0 if the inning
+    # ended too), otherwise lookup(outs_before, bases_before, the new
+    # count) since only the count changed. run_value = (re_after +
+    # runs_scored_on_play) - re_before. Null if the state fell outside
+    # the table (e.g. a count that doesn't appear in it).
+    re_before = Column(Numeric(6, 3), nullable=True)
+    re_after = Column(Numeric(6, 3), nullable=True)
+    run_value = Column(Numeric(6, 3), nullable=True)
 
     notes = Column(Text, nullable=True)
     video_url = Column(String(500), nullable=True)  # optional clip for this specific pitch, same "pitch-videos" bucket
