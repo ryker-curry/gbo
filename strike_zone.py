@@ -2,26 +2,28 @@
 GBO — Strike zone coordinate system (Game Tracking).
 
 Replaces manual 1-9 zone-button entry with click-the-exact-spot
-location, per Ryker's architecture doc. All math here was verified
-with round-trip and zone-center tests before this was wired into any
-page -- see the conversation this was built in for the test output.
+location, per Ryker's architecture doc.
+
+Click capture uses Streamlit's own native st.plotly_chart(on_select=)
+-- NOT the third-party streamlit-image-coordinates package, which
+failed against a recent Streamlit release (ImportError on an internal
+Streamlit class the package depended on, streamlit==1.61.1). Native
+Plotly selection is first-party, documented Streamlit behavior
+maintained by the Streamlit team itself, so it can't go stale against
+future Streamlit releases the same way.
 
 Coordinate convention (matches Statcast/Trackman): plate_x in feet,
-0 = center of the plate; plate_z in feet, 0 = the ground. Positive
-plate_x is drawn on the right side of the generated image.
+0 = center of the plate; plate_z in feet, 0 = the ground.
 
-The image is intentionally simple (zone rectangle + 3x3 reference grid
-+ ground line) rather than a photorealistic batter/plate graphic --
-easy to read at a glance during a live game, which matters more than
-visual flourish here.
+The zone-derivation math (derive_old_zone, is_in_zone) is unchanged
+from the original version -- verified with round-trip and zone-center
+tests before this was wired into any page.
 """
 
-from PIL import Image, ImageDraw
+import streamlit as st
+import numpy as np
+import plotly.graph_objects as go
 
-IMG_WIDTH, IMG_HEIGHT = 400, 500
-
-# View window in feet -- wide/tall enough to click a real ball (chase
-# pitch, pitchout) without the zone itself being tiny.
 X_MIN, X_MAX = -2.5, 2.5
 Z_MIN, Z_MAX = 0.0, 5.0
 
@@ -37,20 +39,12 @@ GBO_CREAM = "#FFFDE5"
 BG_DARK = "#1E1E1E"
 GRID_GRAY = "#3A3A3A"
 
-
-def plate_to_pixel(x, z):
-    """Feet (plate_x, plate_z) -> pixel (px, py) on the generated image."""
-    px = (x - X_MIN) / (X_MAX - X_MIN) * IMG_WIDTH
-    py = IMG_HEIGHT - (z - Z_MIN) / (Z_MAX - Z_MIN) * IMG_HEIGHT
-    return px, py
-
-
-def pixel_to_plate(px, py):
-    """Pixel (px, py) from a click on the generated image -> feet
-    (plate_x, plate_z)."""
-    x = X_MIN + (px / IMG_WIDTH) * (X_MAX - X_MIN)
-    z = Z_MIN + ((IMG_HEIGHT - py) / IMG_HEIGHT) * (Z_MAX - Z_MIN)
-    return round(x, 3), round(z, 3)
+# Click-grid resolution -- a dense invisible grid of selectable points
+# spanning the view window. 30x30 gives roughly 2-inch click
+# resolution, plenty precise for this use case.
+_GRID_RES = 30
+_GRID_X = np.linspace(X_MIN, X_MAX, _GRID_RES)
+_GRID_Z = np.linspace(Z_MIN, Z_MAX, _GRID_RES)
 
 
 def derive_old_zone(plate_x, plate_z):
@@ -91,29 +85,48 @@ def is_in_zone(plate_x, plate_z):
     return (-ZONE_HALF_WIDTH <= plate_x <= ZONE_HALF_WIDTH) and (ZONE_BOTTOM <= plate_z <= ZONE_TOP)
 
 
-def generate_zone_image(marker_x=None, marker_z=None, marker_color=GBO_CRIMSON):
-    """The clickable strike-zone graphic. If marker_x/marker_z are
-    given (a previously-recorded click), draws a small circle there so
-    the coach can see what was captured, not just a blank zone."""
-    img = Image.new("RGB", (IMG_WIDTH, IMG_HEIGHT), color=BG_DARK)
-    draw = ImageDraw.Draw(img)
+def render_zone_selector(key, marker_x=None, marker_z=None):
+    """Renders the clickable strike-zone graphic and returns whatever
+    was clicked THIS run as (plate_x, plate_z), or (None, None) if
+    nothing was clicked this run. marker_x/marker_z (a previously
+    recorded click) are drawn as a small circle so the coach can see
+    what's currently captured, not just a blank zone."""
+    xs, zs = np.meshgrid(_GRID_X, _GRID_Z)
+    xs, zs = xs.flatten(), zs.flatten()
 
-    ground_y = plate_to_pixel(0, 0)[1]
-    draw.line([(0, ground_y), (IMG_WIDTH, ground_y)], fill=GRID_GRAY, width=2)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=xs, y=zs, mode="markers",
+        marker=dict(size=16, opacity=0.001, color=GBO_CREAM),
+        showlegend=False, hoverinfo="skip", name="grid",
+    ))
 
-    x1, y1 = plate_to_pixel(-ZONE_HALF_WIDTH, ZONE_TOP)
-    x2, y2 = plate_to_pixel(ZONE_HALF_WIDTH, ZONE_BOTTOM)
-    draw.rectangle([x1, y1, x2, y2], outline=GBO_CREAM, width=3)
-
-    for i in range(1, 3):
-        gx = x1 + (x2 - x1) * i / 3
-        draw.line([(gx, y1), (gx, y2)], fill=GBO_CREAM, width=1)
-        gy = y1 + (y2 - y1) * i / 3
-        draw.line([(x1, gy), (x2, gy)], fill=GBO_CREAM, width=1)
+    fig.add_shape(type="line", x0=X_MIN, x1=X_MAX, y0=0, y1=0, line=dict(color=GRID_GRAY, width=2))
+    fig.add_shape(type="rect", x0=-ZONE_HALF_WIDTH, x1=ZONE_HALF_WIDTH, y0=ZONE_BOTTOM, y1=ZONE_TOP, line=dict(color=GBO_CREAM, width=3))
+    third_w = (2 * ZONE_HALF_WIDTH) / 3
+    third_h = (ZONE_TOP - ZONE_BOTTOM) / 3
+    for i in (1, 2):
+        gx = -ZONE_HALF_WIDTH + third_w * i
+        fig.add_shape(type="line", x0=gx, x1=gx, y0=ZONE_BOTTOM, y1=ZONE_TOP, line=dict(color=GBO_CREAM, width=1))
+        gz = ZONE_BOTTOM + third_h * i
+        fig.add_shape(type="line", x0=-ZONE_HALF_WIDTH, x1=ZONE_HALF_WIDTH, y0=gz, y1=gz, line=dict(color=GBO_CREAM, width=1))
 
     if marker_x is not None and marker_z is not None:
-        mx, my = plate_to_pixel(marker_x, marker_z)
-        r = 8
-        draw.ellipse([mx - r, my - r, mx + r, my + r], fill=marker_color, outline=GBO_CREAM, width=2)
+        fig.add_trace(go.Scatter(
+            x=[marker_x], y=[marker_z], mode="markers",
+            marker=dict(size=18, color=GBO_CRIMSON, line=dict(color=GBO_CREAM, width=2)),
+            showlegend=False, hoverinfo="skip", name="marker",
+        ))
 
-    return img
+    fig.update_layout(
+        xaxis=dict(range=[X_MIN, X_MAX], visible=False, fixedrange=True),
+        yaxis=dict(range=[Z_MIN, Z_MAX], visible=False, fixedrange=True, scaleanchor="x", scaleratio=1),
+        paper_bgcolor=BG_DARK, plot_bgcolor=BG_DARK,
+        height=350, margin=dict(l=0, r=0, t=0, b=0),
+    )
+
+    result = st.plotly_chart(fig, on_select="rerun", key=key, config={"displayModeBar": False})
+    if result and result.get("selection", {}).get("points"):
+        pt = result["selection"]["points"][0]
+        return round(pt["x"], 3), round(pt["y"], 3)
+    return None, None

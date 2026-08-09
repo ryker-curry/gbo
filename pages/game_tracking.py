@@ -26,7 +26,6 @@ from datetime import date
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from streamlit_image_coordinates import streamlit_image_coordinates
 import strike_zone
 import field_location
 from models import (
@@ -711,15 +710,12 @@ try:
                 if intended_state_key not in st.session_state:
                     st.session_state[intended_state_key] = (None, None)
                 cur_ix, cur_iz = st.session_state[intended_state_key]
-                intended_click = streamlit_image_coordinates(
-                    strike_zone.generate_zone_image(cur_ix, cur_iz),
-                    key=f"gt_intended_click_{pitch_count_for_key}",
+                new_ix, new_iz = strike_zone.render_zone_selector(
+                    key=f"gt_intended_click_{pitch_count_for_key}", marker_x=cur_ix, marker_z=cur_iz,
                 )
-                if intended_click is not None:
-                    new_ix, new_iz = strike_zone.pixel_to_plate(intended_click["x"], intended_click["y"])
-                    if (new_ix, new_iz) != (cur_ix, cur_iz):
-                        st.session_state[intended_state_key] = (new_ix, new_iz)
-                        st.rerun()
+                if new_ix is not None and (new_ix, new_iz) != (cur_ix, cur_iz):
+                    st.session_state[intended_state_key] = (new_ix, new_iz)
+                    st.rerun()
                 intended_plate_x, intended_plate_z = st.session_state[intended_state_key]
                 st.caption(f"Intended: {intended_plate_x:+.2f} ft, {intended_plate_z:.2f} ft high" if intended_plate_x is not None else "Not yet set -- click the image above.")
 
@@ -728,15 +724,12 @@ try:
             if actual_state_key not in st.session_state:
                 st.session_state[actual_state_key] = (None, None)
             cur_ax, cur_az = st.session_state[actual_state_key]
-            actual_click = streamlit_image_coordinates(
-                strike_zone.generate_zone_image(cur_ax, cur_az),
-                key=f"gt_actual_click_{pitch_count_for_key}",
+            new_ax, new_az = strike_zone.render_zone_selector(
+                key=f"gt_actual_click_{pitch_count_for_key}", marker_x=cur_ax, marker_z=cur_az,
             )
-            if actual_click is not None:
-                new_ax, new_az = strike_zone.pixel_to_plate(actual_click["x"], actual_click["y"])
-                if (new_ax, new_az) != (cur_ax, cur_az):
-                    st.session_state[actual_state_key] = (new_ax, new_az)
-                    st.rerun()
+            if new_ax is not None and (new_ax, new_az) != (cur_ax, cur_az):
+                st.session_state[actual_state_key] = (new_ax, new_az)
+                st.rerun()
             actual_plate_x, actual_plate_z = st.session_state[actual_state_key]
             if actual_plate_x is not None:
                 located = strike_zone.is_in_zone(actual_plate_x, actual_plate_z)
@@ -762,15 +755,12 @@ try:
                 if field_state_key not in st.session_state:
                     st.session_state[field_state_key] = (None, None)
                 cur_bx, cur_by = st.session_state[field_state_key]
-                field_click = streamlit_image_coordinates(
-                    field_location.generate_field_image(cur_bx, cur_by),
-                    key=f"gt_batted_ball_click_{pitch_count_for_key}",
+                new_bx, new_by = field_location.render_field_selector(
+                    key=f"gt_batted_ball_click_{pitch_count_for_key}", marker_x=cur_bx, marker_y=cur_by,
                 )
-                if field_click is not None:
-                    new_bx, new_by = field_location.pixel_to_field(field_click["x"], field_click["y"])
-                    if (new_bx, new_by) != (cur_bx, cur_by):
-                        st.session_state[field_state_key] = (new_bx, new_by)
-                        st.rerun()
+                if new_bx is not None and (new_bx, new_by) != (cur_bx, cur_by):
+                    st.session_state[field_state_key] = (new_bx, new_by)
+                    st.rerun()
                 batted_ball_x, batted_ball_y = st.session_state[field_state_key]
                 if batted_ball_x is not None:
                     dist = field_location.distance_from_plate(batted_ball_x, batted_ball_y)
