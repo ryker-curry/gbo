@@ -18,7 +18,6 @@ just a current snapshot.
 import streamlit as st
 from ui_components import page_header, page_footer, empty_state
 from datetime import date, timedelta
-from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
 from database import get_session
@@ -158,9 +157,6 @@ try:
 
     st.divider()
 
-    # --- Summary stats (Max / Average / Min / Count per test) ---
-    st.subheader(f"{selected_category.category_name} summary — {selected_player.first_name} {selected_player.last_name}")
-
     pitch_type_filter_id = None
     if selected_category.category_name == "Pitcher-Specific":
         used_pitch_types = (
@@ -175,43 +171,6 @@ try:
             pt_options.update({pt.type_name: pt.pitch_type_id for pt in used_pitch_types})
             pt_choice = st.selectbox("Filter by pitch type", list(pt_options.keys()))
             pitch_type_filter_id = pt_options[pt_choice]
-
-    summary_query = (
-        session.query(
-            AssessmentTestType.test_name,
-            AssessmentTestType.unit,
-            func.count(AssessmentResult.value).label("count"),
-            func.max(AssessmentResult.value).label("max"),
-            func.avg(AssessmentResult.value).label("avg"),
-            func.min(AssessmentResult.value).label("min"),
-        )
-        .join(Assessment, Assessment.assessment_id == AssessmentResult.assessment_id)
-        .join(AssessmentTestType, AssessmentTestType.test_type_id == AssessmentResult.test_type_id)
-        .filter(Assessment.player_id == selected_player_id, Assessment.category_id == selected_category_id)
-    )
-    if pitch_type_filter_id is not None:
-        summary_query = summary_query.filter(Assessment.pitch_type_id == pitch_type_filter_id)
-    summary_query = summary_query.group_by(AssessmentTestType.test_type_id, AssessmentTestType.test_name, AssessmentTestType.unit, AssessmentTestType.display_order).order_by(AssessmentTestType.display_order)
-
-    summary_rows = summary_query.all()
-
-    if not summary_rows:
-        empty_state("No assessment history yet for this player and category.")
-    else:
-        st.dataframe(
-            [
-                {
-                    "Test": f"{r.test_name}" + (f" ({r.unit})" if r.unit else ""),
-                    "Count": r.count,
-                    "Average": round(float(r.avg), 2),
-                    "Max": round(float(r.max), 2),
-                    "Min": round(float(r.min), 2),
-                }
-                for r in summary_rows
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
 
     # --- Full per-entry history (collapsed by default -- can be large after CSV imports) ---
     with st.expander("Show full history (every individual entry)"):
