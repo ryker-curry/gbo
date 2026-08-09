@@ -878,7 +878,12 @@ class Game(Base):
     vs "Spring 2027") -- keeps fall/practice stats separate from real
     spring regular-season stats once games get aggregated. Nullable
     for backward compatibility with games created before seasons
-    existed."""
+    existed.
+
+    opponent_starting_pitcher_id: their starting pitcher, from the
+    linked OpponentTeam's roster -- only meaningful for external games
+    with a real OpponentTeam linked (not intrasquad, not a one-off
+    typed name)."""
     __tablename__ = "games"
 
     game_id = Column(Integer, primary_key=True)
@@ -892,6 +897,7 @@ class Game(Base):
     opponent_score = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="Scheduled", nullable=False)  # "Scheduled" / "In Progress" / "Paused" / "Final" / "Cancelled"
     starting_pitcher_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)
+    opponent_starting_pitcher_id = Column(Integer, ForeignKey("opponent_players.opponent_player_id"), nullable=True)
     notes = Column(Text, nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -901,6 +907,8 @@ class Game(Base):
     opponent_team = relationship("OpponentTeam")
     lineup_slots = relationship("GameLineupSlot", back_populates="game", cascade="all, delete-orphan", order_by="GameLineupSlot.batting_order")
     starting_pitcher = relationship("Player", foreign_keys=[starting_pitcher_id])
+    opponent_lineup_slots = relationship("OpponentLineupSlot", back_populates="game", cascade="all, delete-orphan", order_by="OpponentLineupSlot.batting_order")
+    opponent_starting_pitcher = relationship("OpponentPlayer", foreign_keys=[opponent_starting_pitcher_id])
     pitches = relationship("GamePitch", back_populates="game", cascade="all, delete-orphan", order_by="GamePitch.pitch_sequence")
     pitching_changes = relationship("PitchingChange", back_populates="game", cascade="all, delete-orphan", order_by="PitchingChange.pitch_sequence_at_entry")
 
@@ -922,6 +930,26 @@ class GameLineupSlot(Base):
     game = relationship("Game", back_populates="lineup_slots")
     player = relationship("Player")
     starting_position = relationship("Position")
+
+
+class OpponentLineupSlot(Base):
+    """One batting-order slot for the OPPONENT's lineup in a given game
+    -- mirrors GameLineupSlot, but for a real named player from their
+    OpponentTeam roster instead of one of ours. Only meaningful for
+    external games with a real OpponentTeam linked (not intrasquad,
+    not a one-off typed opponent name, and not useful without a team
+    roster built out). Optional -- Game Tracking still works with just
+    hand + batting order typed in if this isn't set up for a given
+    game, same as before this existed."""
+    __tablename__ = "opponent_lineup_slots"
+
+    opponent_lineup_slot_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id"), nullable=False)
+    batting_order = Column(Integer, nullable=False)  # 1-9
+    opponent_player_id = Column(Integer, ForeignKey("opponent_players.opponent_player_id"), nullable=False)
+
+    game = relationship("Game", back_populates="opponent_lineup_slots")
+    opponent_player = relationship("OpponentPlayer")
 
 
 class RunExpectancy(Base):
