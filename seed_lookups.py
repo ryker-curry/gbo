@@ -125,46 +125,54 @@ ARM_HEALTH_TESTS = [
 ]
 
 # (test_name, unit) -- from Ryker's fully-populated Upper Body Strength sheet
+# (test_name, unit) -- matches Ryker's bucket-system spreadsheet exactly
+# (raw metrics only, DRIVE/PLANT leg framing per the spreadsheet, units as
+# given there -- not GBO's earlier framing/units for the tests this replaces)
 UPPER_BODY_STRENGTH_TESTS = [
-    ("Push Strength: NG/DB Bench Press Load", "lbs"), ("Push Strength: NG/DB Bench Press Repetitions", "reps"),
-    ("Pull Strength: Chin Up External Load", "lbs"), ("Pull Strength: Chin Up Repetitions", "reps"),
-    ("Grip Strength: Right Grip Strength", "lbs"), ("Grip Strength: Left Grip Strength", "lbs"),
+    ("Neutral Grip Chin Up Max External Load", "lbs"),
+    ("Neutral Grip/DB Bench Press Max Load", "lbs"),
+    ("Grip Strength (Seated, Throwing Hand)", "lbs"),
 ]
 
-# (test_name, unit) -- from Ryker's fully-populated Lower Body Strength sheet
+# (test_name, unit) -- matches Ryker's bucket-system spreadsheet exactly
 LOWER_BODY_STRENGTH_TESTS = [
-    ("Bilateral Strength: Front Squat", "lbs"), ("Bilateral Strength: Trap Bar Deadlift", "lbs"),
-    ("Bilateral Strength: Isometric Mid-Thigh Pull (IMTP) Peak Force", "N"),
-    ("Unilateral Strength: Right Split Squat", "lbs"), ("Unilateral Strength: Left Split Squat", "lbs"),
-    ("Hip Strength: Right Hip Abduction Force", "N"), ("Hip Strength: Left Hip Abduction Force", "N"),
-    ("Hip Strength: Right Hip Adduction Force", "N"), ("Hip Strength: Left Hip Adduction Force", "N"),
-    ("Hip Strength: Right Hip Extension Force", "N"), ("Hip Strength: Left Hip Extension Force", "N"),
-    ("Knee Strength: Right Knee Flexion Force", "N"), ("Knee Strength: Left Knee Flexion Force", "N"),
-    ("Knee Strength: Right Knee Extension Force", "N"), ("Knee Strength: Left Knee Extension Force", "N"),
+    ("Hex Bar Deadlift Max", "lbs"), ("Front Squat Max", "lbs"),
+    ("Hip Abduction Force (Drive Leg)", "N"), ("Hip Abduction Force (Plant Leg)", "N"),
+    ("Hip Adduction Force (Drive Leg)", "N"), ("Hip Adduction Force (Plant Leg)", "N"),
+    ("Isometric Mid-Thigh Pull Average Force", "N"),
+    ("Isometric Mid-Thigh Pull Peak Vertical Force", "N"),
+    ("Isometric Mid-Thigh Pull Peak Vertical Force (Drive Leg)", "N"),
+    ("Isometric Mid-Thigh Pull Peak Vertical Force (Plant Leg)", "N"),
 ]
 
-# (test_name, unit) -- from Ryker's fully-populated Explosive Power sheet
+# (test_name, unit) -- matches Ryker's bucket-system spreadsheet exactly
 EXPLOSIVE_POWER_TESTS = [
-    ("Upper Body Power: Plyometric Push-Up Peak Force", "N"), ("Upper Body Power: Plyometric Push-Up Peak Power", "W"),
-    ("Upper Body Power: Plyometric Push-Up Flight Time", "ms"),
-    ("Jump Performance: Countermovement Jump Height", "in"), ("Jump Performance: Countermovement Jump RSI-Modified", "m/s"),
-    ("Jump Performance: Squat Jump Height", "in"),
-    ("Jump Performance: Single-Leg Jump Height (Right)", "in"), ("Jump Performance: Single-Leg Jump Height (Left)", "in"),
-    ("Reactive Power: Hop Test RSI (Right)", "ms/ms"), ("Reactive Power: Hop Test RSI (Left)", "ms/ms"),
-    ("Horizontal Power: Broad Jump Distance", "in"),
-    ("Lateral Power: Lateral Jump Distance (Right)", "in"), ("Lateral Power: Lateral Jump Distance (Left)", "in"),
+    ("Vertical Jump (Jump Mat)", "in"),
+    ("Broad Jump Distance", "ft"),
+    ("Lateral Jump Distance (Drive Leg)", "ft"), ("Lateral Jump Distance (Plant Leg)", "ft"),
+    ("Countermovement Jump Height", "in"),
+    ("Countermovement Jump RSI-Modified", "ratio"),
+    ("Countermovement Jump Concentric Duration", "ms"),
+    ("Countermovement Jump Concentric Mean Force", "N"),
+    ("Hop Test RSI (10/5)", "ratio"),
+    ("Hop Test Average Force", "N"),
+    ("Hop Test Mean Contact Time", "ms"),
+    ("Single-Leg Jump Height (Drive Leg)", "in"), ("Single-Leg Jump Height (Plant Leg)", "in"),
+    ("Single-Leg Jump Concentric Impulse (Drive Leg)", "Ns"), ("Single-Leg Jump Concentric Impulse (Plant Leg)", "Ns"),
 ]
 
-# (test_name, unit) -- from Ryker's fully-populated Rotational Power sheet
+# (test_name, unit) -- matches Ryker's bucket-system spreadsheet exactly
 ROTATIONAL_POWER_TESTS = [
-    ("Rotational Medicine Ball Throw Distance (Right)", "ft"), ("Rotational Medicine Ball Throw Distance (Left)", "ft"),
-    ("Rotational Medicine Ball Throw Velocity (Right)", "mph"), ("Rotational Medicine Ball Throw Velocity (Left)", "mph"),
+    ("Medicine Ball Shot Put Distance", "ft"),
 ]
 
-# (test_name, unit) -- from Ryker's fully-populated Speed sheet
+# (test_name, unit) -- from Ryker's fully-populated Speed sheet, already
+# matches the bucket-system spreadsheet exactly (10y accel / 10y fly).
+# 20-Yard Sprint Time and Maximum Sprint Velocity aren't in the bucket
+# spreadsheet, so per Ryker's rule they're excluded here too.
 SPEED_TESTS = [
-    ("Acceleration: 10-Yard Sprint Time", "s"), ("Acceleration: 20-Yard Sprint Time", "s"),
-    ("Top Speed: Flying 10 Sprint Time", "s"), ("Top Speed: Maximum Sprint Velocity", "mph"),
+    ("Acceleration: 10-Yard Sprint Time", "s"),
+    ("Top Speed: Flying 10 Sprint Time", "s"),
 ]
 
 # (test_name, unit) -- from Ryker's fully-populated Pitch Characteristics
