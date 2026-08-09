@@ -26,6 +26,9 @@ from datetime import date
 from sqlalchemy.orm import joinedload
 
 from database import get_session
+from streamlit_image_coordinates import streamlit_image_coordinates
+import strike_zone
+import field_location
 from models import (
     Player, Position, PitchType, Game, GameLineupSlot, GamePitch, RunExpectancy,
     OpponentTeam, OpponentPlayer, Season, PitchingChange, PlayerPitchArsenal,
@@ -53,12 +56,6 @@ AB_OUTCOMES = [
     "K", "BB", "HBP", "1B", "2B", "3B", "HR", "E", "FC",
     "Sac Bunt", "Sac Fly", "Groundout", "Flyout", "Lineout", "Double Play",
 ]
-ZONE_LABELS = {
-    0: "Bury (in the dirt)",
-    1: "Up-Left", 2: "Up-Middle", 3: "Up-Right",
-    4: "Middle-Left", 5: "Middle-Middle", 6: "Middle-Right",
-    7: "Down-Left", 8: "Down-Middle", 9: "Down-Right",
-}
 CONTACT_QUALITY_OPTIONS = ["Barrel", "Solid", "Weak", "Miss"]
 
 
@@ -628,30 +625,81 @@ try:
                 st.session_state.pop("gt_pitch_type", None)  # stale selection from before a pitching change/different pitcher's arsenal -- avoid crashing the widget
             pitch_type_choice = st.selectbox("Pitch type", arsenal_pitch_type_names, key="gt_pitch_type")
 
-            zone_choice = None
+            pitch_count_for_key = len(active_game.pitches)  # part of the state/widget keys below, so each new pitch always starts fresh -- a stale click from the last pitch never silently carries over
+
+            intended_plate_x = intended_plate_z = None
             if not state["is_our_batting"]:
-                st.caption("Intended zone")
-                if "gt_intended_zone" not in st.session_state:
-                    st.session_state.gt_intended_zone = 5
-                zone_layout = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
-                for row in zone_layout:
-                    cols = st.columns(3)
-                    for i, zone in enumerate(row):
-                        is_selected = st.session_state.gt_intended_zone == zone
-                        label = f"● {zone}" if is_selected else str(zone)
-                        if cols[i].button(label, key=f"gt_zone_btn_{zone}", use_container_width=True):
-                            st.session_state.gt_intended_zone = zone
-                            st.rerun()
-                if st.button("Bury (in the dirt)", key="gt_zone_btn_bury", use_container_width=True):
-                    st.session_state.gt_intended_zone = 0
+                st.caption("Intended location -- click where the pitch was supposed to go")
+                intended_state_key = f"gt_intended_plate_{pitch_count_for_key}"
+                if intended_state_key not in st.session_state:
+                    st.session_state[intended_state_key] = (None, None)
+                cur_ix, cur_iz = st.session_state[intended_state_key]
+                intended_click = streamlit_image_coordinates(
+                    strike_zone.generate_zone_image(cur_ix, cur_iz),
+                    key=f"gt_intended_click_{pitch_count_for_key}",
+                )
+                if intended_click is not None:
+                    new_ix, new_iz = strike_zone.pixel_to_plate(intended_click["x"], intended_click["y"])
+                    if (new_ix, new_iz) != (cur_ix, cur_iz):
+                        st.session_state[intended_state_key] = (new_ix, new_iz)
+                        st.rerun()
+                intended_plate_x, intended_plate_z = st.session_state[intended_state_key]
+                st.caption(f"Intended: {intended_plate_x:+.2f} ft, {intended_plate_z:.2f} ft high" if intended_plate_x is not None else "Not yet set -- click the image above.")
+
+            st.caption("Actual location -- click where the pitch actually crossed the plate")
+            actual_state_key = f"gt_actual_plate_{pitch_count_for_key}"
+            if actual_state_key not in st.session_state:
+                st.session_state[actual_state_key] = (None, None)
+            cur_ax, cur_az = st.session_state[actual_state_key]
+            actual_click = streamlit_image_coordinates(
+                strike_zone.generate_zone_image(cur_ax, cur_az),
+                key=f"gt_actual_click_{pitch_count_for_key}",
+            )
+            if actual_click is not None:
+                new_ax, new_az = strike_zone.pixel_to_plate(actual_click["x"], actual_click["y"])
+                if (new_ax, new_az) != (cur_ax, cur_az):
+                    st.session_state[actual_state_key] = (new_ax, new_az)
                     st.rerun()
-                st.caption(f"Selected: {st.session_state.gt_intended_zone} ({ZONE_LABELS[st.session_state.gt_intended_zone]})")
-                zone_choice = st.session_state.gt_intended_zone
+            actual_plate_x, actual_plate_z = st.session_state[actual_state_key]
+            if actual_plate_x is not None:
+                located = strike_zone.is_in_zone(actual_plate_x, actual_plate_z)
+                st.caption(f"Actual: {actual_plate_x:+.2f} ft, {actual_plate_z:.2f} ft high — {'In zone' if located else 'Out of zone'}")
+            else:
+                st.caption("Not yet set -- click the image above. Optional, but needed for location-based reports later.")
 
             pitch_outcome_choice = st.selectbox("Pitch outcome", PITCH_OUTCOMES, key="gt_pitch_outcome")
             contact_quality_choice = None
             if pitch_outcome_choice in ("In Play", "Foul", "Swinging Strike"):
                 contact_quality_choice = st.selectbox("Contact quality (optional)", ["-- N/A --"] + CONTACT_QUALITY_OPTIONS, key="gt_contact_quality")
+
+            batted_ball_type_choice = None
+            batted_ball_x = batted_ball_y = None
+            if pitch_outcome_choice == "In Play":
+                batted_ball_type_choice = st.selectbox(
+                    "Batted ball type (optional)",
+                    ["-- N/A --", "Ground Ball", "Line Drive", "Fly Ball", "Pop Up"],
+                    key="gt_batted_ball_type",
+                )
+                st.caption("Where did it land? Click the field below.")
+                field_state_key = f"gt_batted_ball_field_{pitch_count_for_key}"
+                if field_state_key not in st.session_state:
+                    st.session_state[field_state_key] = (None, None)
+                cur_bx, cur_by = st.session_state[field_state_key]
+                field_click = streamlit_image_coordinates(
+                    field_location.generate_field_image(cur_bx, cur_by),
+                    key=f"gt_batted_ball_click_{pitch_count_for_key}",
+                )
+                if field_click is not None:
+                    new_bx, new_by = field_location.pixel_to_field(field_click["x"], field_click["y"])
+                    if (new_bx, new_by) != (cur_bx, cur_by):
+                        st.session_state[field_state_key] = (new_bx, new_by)
+                        st.rerun()
+                batted_ball_x, batted_ball_y = st.session_state[field_state_key]
+                if batted_ball_x is not None:
+                    dist = field_location.distance_from_plate(batted_ball_x, batted_ball_y)
+                    st.caption(f"Landed: {batted_ball_x:+.0f} ft, {batted_ball_y:.0f} ft deep ({dist:.0f} ft from home)")
+                else:
+                    st.caption("Not yet set -- click the field above. Optional, but needed for spray charts later.")
 
             # Determine if this pitch ends the PA
             new_balls = state["balls"] + (1 if pitch_outcome_choice == "Ball" else 0)
@@ -686,6 +734,7 @@ try:
                 else:
                     pitch_type_id = next(pt.pitch_type_id for pt in pitch_types if pt.type_name == pitch_type_choice)
                     cq = contact_quality_choice if contact_quality_choice and contact_quality_choice != "-- N/A --" else None
+                    bbt = batted_ball_type_choice if batted_ball_type_choice and batted_ball_type_choice != "-- N/A --" else None
                     next_seq = (max((p.pitch_sequence for p in active_game.pitches), default=0)) + 1
 
                     re_lookup = build_re_lookup(session)
@@ -711,9 +760,17 @@ try:
                         outs_before=state["outs"],
                         bases_before=state["bases"],
                         pitch_type_id=pitch_type_id,
-                        intended_zone=zone_choice,
+                        intended_zone=strike_zone.derive_old_zone(intended_plate_x, intended_plate_z),
+                        pitch_zone=strike_zone.derive_old_zone(actual_plate_x, actual_plate_z),
+                        actual_plate_x=actual_plate_x,
+                        actual_plate_z=actual_plate_z,
+                        intended_plate_x=intended_plate_x,
+                        intended_plate_z=intended_plate_z,
                         pitch_outcome=pitch_outcome_choice,
                         contact_quality=cq,
+                        batted_ball_type=bbt,
+                        batted_ball_x=batted_ball_x,
+                        batted_ball_y=batted_ball_y,
                         ends_plate_appearance=ends_pa,
                         ab_outcome=ab_outcome_choice,
                         outs_after=final_outs if ends_pa else None,
@@ -753,7 +810,9 @@ try:
                         "Player": f"{p.our_player.first_name} {p.our_player.last_name}" if p.our_player else "—",
                         "Opponent": (f"{p.opponent_our_player.first_name} {p.opponent_our_player.last_name}" if p.opponent_our_player else None) or (f"{p.opponent_player.player_name}" if p.opponent_player else None) or (f"#{p.opponent_batting_order} ({p.opponent_hand})" if p.opponent_batting_order else "—"),
                         "Pitch": p.pitch_type.type_name if p.pitch_type else "—",
+                        "Location": f"{float(p.actual_plate_x):+.2f}, {float(p.actual_plate_z):.2f}" if p.actual_plate_x is not None else "—",
                         "Outcome": p.pitch_outcome or "—",
+                        "Batted Ball": (p.batted_ball_type or "") + (f" ({float(p.batted_ball_x):+.0f}, {float(p.batted_ball_y):.0f})" if p.batted_ball_x is not None else "") if (p.batted_ball_type or p.batted_ball_x is not None) else "—",
                         "AB Result": p.ab_outcome or "",
                         "Runs": p.runs_scored_on_play,
                         "RE Before": f"{float(p.re_before):.2f}" if p.re_before is not None else "—",

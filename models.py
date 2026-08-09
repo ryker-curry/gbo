@@ -1020,10 +1020,36 @@ class GamePitch(Base):
     bases_before = Column(String(3), nullable=True)  # e.g. "010" = runner on 2nd only
 
     pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=True)
-    intended_zone = Column(Integer, nullable=True)  # 0=Bury, 1-9 grid -- same convention as Bullpen/Hitter Tracking, only meaningful when we're pitching
-    pitch_zone = Column(Integer, nullable=True)  # actual location, same convention
+    intended_zone = Column(Integer, nullable=True)  # 0=Bury, 1-9 grid -- DERIVED from intended_plate_x/z below, kept so existing execution-accuracy calculations elsewhere in the app (game_stats.py, etc.) keep working unchanged
+    pitch_zone = Column(Integer, nullable=True)  # actual location, same convention -- DERIVED from actual_plate_x/z below
+    # Precise pitch location, replacing manual zone-button entry per
+    # Ryker's architecture doc (click the exact spot instead of picking
+    # a coarse 1-9 zone). Feet, matching Statcast/Trackman convention:
+    # plate_x = 0 at the center of the plate, negative = 3B/left side as
+    # drawn on the graphic; plate_z = 0 at the ground. intended_* is
+    # only set when we're pitching (we don't know an opposing pitcher's
+    # intent when we're batting). intended_zone/pitch_zone above are
+    # auto-derived from these via strike_zone.derive_old_zone() at save
+    # time -- never entered separately, so the two can't drift.
+    actual_plate_x = Column(Numeric(5, 3), nullable=True)
+    actual_plate_z = Column(Numeric(5, 3), nullable=True)
+    intended_plate_x = Column(Numeric(5, 3), nullable=True)
+    intended_plate_z = Column(Numeric(5, 3), nullable=True)
     pitch_outcome = Column(String(20), nullable=True)  # "Ball" / "Called Strike" / "Swinging Strike" / "Foul" / "In Play" / "HBP"
     contact_quality = Column(String(20), nullable=True)  # "Barrel" / "Solid" / "Weak" / "Miss" -- same categories as Hitter Tracking
+    # Only meaningful when pitch_outcome == "In Play". Swing/take itself
+    # isn't a separate field -- it's already fully derivable from
+    # pitch_outcome (Swinging Strike/Foul/In Play = swung; Ball/Called
+    # Strike/HBP = didn't), so storing it again here would just be
+    # redundant data that could drift out of sync. batted_ball_x/y are
+    # raw field coordinates (see field_location.py) -- Pull/Straight/
+    # Oppo is deliberately NOT computed/stored here, since that
+    # classification depends on batter handedness (varies by scenario:
+    # our batter, an intrasquad opponent, an external roster player, or
+    # hand-only) and belongs in analysis code, not entry.
+    batted_ball_type = Column(String(20), nullable=True)  # "Ground Ball" / "Line Drive" / "Fly Ball" / "Pop Up"
+    batted_ball_x = Column(Numeric(6, 1), nullable=True)  # feet, right of the CF line
+    batted_ball_y = Column(Numeric(6, 1), nullable=True)  # feet, from home plate toward the outfield
 
     ends_plate_appearance = Column(Boolean, default=False, nullable=False)
     ab_outcome = Column(String(30), nullable=True)  # only set when ends_plate_appearance -- "K", "BB", "1B", "2B", "3B", "HR", "HBP", "E", "FC", "Sac Bunt", "Sac Fly", "Groundout", "Flyout", "Lineout", etc.
