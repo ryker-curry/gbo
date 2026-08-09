@@ -89,6 +89,23 @@ try:
     statuses = session.query(PlayerStatus).order_by(PlayerStatus.display_order).all()
     positions = session.query(Position).order_by(Position.display_order).all()
 
+    # --- Same query, but including inactive players -- used only for
+    # the Add/Edit and Delete sections below, so an inactive player
+    # (e.g. marked inactive by mistake, or a duplicate created before
+    # noticing an earlier save went through) can still be found and
+    # fixed or removed. The roster browsing table above stays
+    # active-only on purpose -- this is specifically for management. ---
+    manageable_query = session.query(Player).options(
+        joinedload(Player.player_position),
+        joinedload(Player.player_secondary_position),
+        joinedload(Player.player_class),
+        joinedload(Player.status),
+        joinedload(Player.team),
+    )
+    if not can_view_all:
+        manageable_query = manageable_query.filter(Player.player_id.in_(assigned_ids))
+    manageable_players = manageable_query.order_by(Player.active.desc(), Player.last_name, Player.first_name).all()
+
     # --- Search / filter ---
     if players:
         search_col, pos_col, class_col, status_col = st.columns([2, 1, 1, 1])
@@ -200,11 +217,11 @@ try:
         page_footer()
         st.stop()
 
-    players_by_id = {p.player_id: p for p in players}
+    players_by_id = {p.player_id: p for p in manageable_players}
     selected_id = st.selectbox(
         "Select a player to edit, or add a new one:",
         options=[None] + list(players_by_id.keys()),
-        format_func=lambda pid: "-- Add new player --" if pid is None else f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
+        format_func=lambda pid: "-- Add new player --" if pid is None else f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}" + ("" if players_by_id[pid].active else " (Inactive)"),
     )
     # Re-fetch by plain ID (not a live object) so we never hand a stale,
     # session-detached Player across Streamlit reruns.
