@@ -18,8 +18,8 @@ spreadsheet's actual data (not guessed):
     final Total, along with Shoulder Health.
   - Total = ROUND(AVERAGE(Body Comp, Power, Strength), 0).
 
-"Team" comparison population = every active player with at least one
-result for that test type, using each player's most recent value per
+"Team" comparison population = every player (active and inactive) with
+at least one result for that test type, using each player's most recent value per
 metric (an ongoing system, not a one-time snapshot like the original
 spreadsheet).
 """
@@ -143,9 +143,13 @@ def get_bucket_test_names_for_category(category_name):
 
 
 def get_latest_values_by_player(session, test_name):
-    """{player_id: (value, assessment_date)} -- each active player's most
-    recent result for this test type, across the whole roster. Returns
-    {} if the test type doesn't exist yet (e.g. not seeded)."""
+    """{player_id: (value, assessment_date)} -- each player's most
+    recent result for this test type, across the whole roster --
+    ACTIVE AND INACTIVE both count toward the comparison pool (Ryker's
+    explicit call, so last year's players' data still contributes to
+    percentiles even though they're hidden from the current roster
+    everywhere else in the app). Returns {} if the test type doesn't
+    exist yet (e.g. not seeded)."""
     test_type = session.query(AssessmentTestType).filter(AssessmentTestType.test_name == test_name).first()
     if test_type is None:
         return {}
@@ -153,7 +157,7 @@ def get_latest_values_by_player(session, test_name):
         session.query(AssessmentResult, Assessment.player_id, Assessment.assessment_date)
         .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
         .join(Player, Assessment.player_id == Player.player_id)
-        .filter(AssessmentResult.test_type_id == test_type.test_type_id, Player.active.is_(True))
+        .filter(AssessmentResult.test_type_id == test_type.test_type_id)
         .all()
     )
     latest = {}
