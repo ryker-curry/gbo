@@ -17,6 +17,8 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from models import Player, User, AssessmentCategory, Assessment, AssessmentResult, AssessmentTestType, PitchType, IDPGoal, IDPStatus
 from ui_components import page_header, page_footer, empty_state
+from bucket_system import compute_bucket_system
+from bucket_system_display import render_full_breakdown
 
 page_header("My Assessments")
 
@@ -92,6 +94,20 @@ try:
         st.dataframe(goal_rows, use_container_width=True, hide_index=True)
         st.caption("Full goal details (action steps, progress notes) are on My Development.")
         st.divider()
+
+    # --- Bucket System: full breakdown by metric, horizontal bar per
+    # test showing percentile (bar length) and raw value (label). The
+    # big overall Total/Body Comp/Power/Strength numbers are on the
+    # Dashboard -- this is the detail underneath them. ---
+    st.subheader("Physical Testing Breakdown")
+    bucket_data = compute_bucket_system(session, my_player.player_id)
+    has_any_data = any(bucket_data[k] is not None for k in ("total_score", "body_comp_score", "power_score", "strength_score"))
+    if not has_any_data:
+        empty_state("No physical testing data yet.")
+    else:
+        render_full_breakdown(bucket_data, key_prefix="myassess")
+
+    st.divider()
 
     categories = session.query(AssessmentCategory).order_by(AssessmentCategory.display_order).all()
     categories_by_id = {c.category_id: c for c in categories}
