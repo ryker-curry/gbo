@@ -7,9 +7,11 @@ categories) -- this is game statistics specifically. Shares its
 computation logic with Analytics (the coach-facing equivalent) via
 game_stats.py, so the two never drift apart. Read-only.
 
-First, honest pass at counting stats + Run Value -- NOT the full
-Baseball-Savant-style page yet (Whiff%/CSW%/Chase%/Putaway%/splits
-etc. are a deferred follow-up).
+Plate Discipline (Zone%/Swing%/Chase%/Whiff%/etc.) and Pitch Command/
+Usage are computed from the coordinate data captured in Phase 2 (see
+plate_discipline.py). Still not the full Baseball-Savant-style page --
+CSW%/Putaway%/splits by handedness/heat maps/spray charts are a
+deferred follow-up.
 """
 
 import streamlit as st
@@ -18,8 +20,13 @@ from database import get_session
 from models import Player, User, Season
 from ui_components import page_header, page_footer, empty_state
 from game_stats import get_batting_pitches, get_pitching_pitches, compute_batting_line, compute_pitching_line
+from plate_discipline import compute_hitter_discipline, compute_pitcher_command
 
 page_header("My Stats")
+
+
+def _fmt_pct(value):
+    return f"{value:.0f}%" if value is not None else "—"
 
 current_user_id = st.session_state.get("gbo_user_id")
 role_name = st.session_state.get("gbo_role_name")
@@ -74,6 +81,23 @@ try:
                 f"1B: {batting_line['1B']} · 2B: {batting_line['2B']} · 3B: {batting_line['3B']} · HR: {batting_line['HR']} · "
                 f"HBP: {batting_line['HBP']} · Total RV: {batting_line['Total RV']} · Avg RV/PA: {batting_line['Avg RV/PA']}"
             )
+
+            st.markdown("**Plate Discipline**")
+            discipline = compute_hitter_discipline(batting_pitches)
+            if discipline["Pitches Seen"] == 0:
+                st.caption("No pitches seen yet.")
+            else:
+                d1, d2, d3, d4, d5 = st.columns(5)
+                d1.metric("Zone %", _fmt_pct(discipline["Zone %"]))
+                d2.metric("Swing %", _fmt_pct(discipline["Swing %"]))
+                d3.metric("Chase %", _fmt_pct(discipline["Chase %"]))
+                d4.metric("Whiff %", _fmt_pct(discipline["Whiff %"]))
+                d5.metric("1st-Pitch Swing %", _fmt_pct(discipline["First-Pitch Swing %"]))
+                st.caption(
+                    f"Zone Swing %: {_fmt_pct(discipline['Zone Swing %'])} · Zone Contact %: {_fmt_pct(discipline['Zone Contact %'])} · "
+                    f"Chase Contact %: {_fmt_pct(discipline['Chase Contact %'])} · Pitches Seen: {discipline['Pitches Seen']} "
+                    f"({discipline['Located Pitches']} with a recorded location)"
+                )
         st.divider()
     if my_player.is_pitcher:
         st.markdown("### Pitching")
@@ -92,6 +116,20 @@ try:
                 f"HR Allowed: {pitching_line['HR Allowed']} · Runs Allowed: {pitching_line['Runs Allowed']} · "
                 f"Total RV Allowed: {pitching_line['Total RV Allowed']} · Avg RV Allowed/Pitch: {pitching_line['Avg RV Allowed/Pitch']}"
             )
+
+            st.markdown("**Pitch Command / Usage**")
+            command = compute_pitcher_command(pitching_pitches)
+            if command["Pitches Thrown"] == 0:
+                st.caption("No pitches thrown yet.")
+            else:
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Zone %", _fmt_pct(command["Zone %"]))
+                c2.metric("Whiff % Induced", _fmt_pct(command["Whiff % Induced"]))
+                c3.metric("Chase % Induced", _fmt_pct(command["Chase % Induced"]))
+                st.caption(f"Pitches Thrown: {command['Pitches Thrown']} ({command['Located Pitches']} with a recorded location)")
+                if command["Usage %"]:
+                    usage_str = " · ".join(f"{name}: {_fmt_pct(pct)}" for name, pct in sorted(command["Usage %"].items(), key=lambda kv: -(kv[1] or 0)))
+                    st.caption(f"Usage — {usage_str}")
 
 finally:
     session.close()
