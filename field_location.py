@@ -99,10 +99,20 @@ def render_field_selector(key, marker_x=None, marker_y=None):
         yaxis=dict(range=[Y_MIN, Y_MAX], visible=False, fixedrange=True, scaleanchor="x", scaleratio=1),
         paper_bgcolor=BG_DARK, plot_bgcolor=BG_DARK,
         height=370, margin=dict(l=0, r=0, t=0, b=0),
+        clickmode="event+select",
+        dragmode=False,
     )
 
     result = st.plotly_chart(fig, on_select="rerun", key=key, config={"displayModeBar": False})
-    if result and result.get("selection", {}).get("points"):
-        pt = result["selection"]["points"][0]
-        return round(pt["x"], 1), round(pt["y"], 1)
+
+    # TEMPORARY DEBUG -- remove once click selection is confirmed working.
+    with st.expander("Debug: raw click result", expanded=False):
+        st.write(result)
+
+    if result:
+        selection_data = result.get("selection") or result.get("select") or {}
+        points = selection_data.get("points")
+        if points:
+            pt = points[0]
+            return round(pt["x"], 1), round(pt["y"], 1)
     return None, None

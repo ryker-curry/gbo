@@ -123,10 +123,25 @@ def render_zone_selector(key, marker_x=None, marker_z=None):
         yaxis=dict(range=[Z_MIN, Z_MAX], visible=False, fixedrange=True, scaleanchor="x", scaleratio=1),
         paper_bgcolor=BG_DARK, plot_bgcolor=BG_DARK,
         height=350, margin=dict(l=0, r=0, t=0, b=0),
+        clickmode="event+select",
+        dragmode=False,
     )
 
     result = st.plotly_chart(fig, on_select="rerun", key=key, config={"displayModeBar": False})
-    if result and result.get("selection", {}).get("points"):
-        pt = result["selection"]["points"][0]
-        return round(pt["x"], 3), round(pt["y"], 3)
+
+    # TEMPORARY DEBUG -- remove once click selection is confirmed working.
+    # Shows exactly what Streamlit returns, so we can see the real
+    # structure instead of continuing to guess at it.
+    with st.expander("Debug: raw click result", expanded=False):
+        st.write(result)
+
+    if result:
+        # Defensive: checking both "selection" and "select" since the
+        # exact key couldn't be verified without live testing (no
+        # network access to install/run plotly in the build sandbox).
+        selection_data = result.get("selection") or result.get("select") or {}
+        points = selection_data.get("points")
+        if points:
+            pt = points[0]
+            return round(pt["x"], 3), round(pt["y"], 3)
     return None, None
