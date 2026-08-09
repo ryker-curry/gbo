@@ -44,7 +44,7 @@ from models import (
 )
 from ui_components import render_kpi_cards, page_header, page_footer, empty_state, render_player_profile_header, render_staff_profile_header
 from bucket_system import compute_bucket_system
-from bucket_system_display import render_bucket_gauges
+from bucket_system_display import render_score_rings
 
 page_header("Dashboard")
 
@@ -84,9 +84,9 @@ if role_name == "Player":
         # --- Physical testing: the big overall scores, shown right up
         # top like the reference dashboard layout. Full breakdown by
         # metric lives on My Assessments, not here -- this is just
-        # Total/Body Comp/Power/Strength at a glance. ---
+        # Overall/Strength/Power at a glance. ---
         bucket_data = compute_bucket_system(session, my_player.player_id)
-        if render_bucket_gauges(bucket_data, key_prefix="dash"):
+        if render_score_rings(bucket_data, key_prefix="dash"):
             st.caption("Full breakdown by metric is on My Assessments.")
 
         today = date.today()
