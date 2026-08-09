@@ -47,6 +47,11 @@ if not can_edit_assessments:
     page_footer()
     st.stop()
 
+if role_name == "Coach" and st.session_state.get("gbo_coach_specialty") == "Hitting":
+    st.error("You don't have access to this page.")
+    page_footer()
+    st.stop()
+
 # Best-guess default column mappings: test_name -> likely Rapsodo column name.
 # "-- Skip --" default for anything ambiguous -- verify these before relying on them.
 DEFAULT_GUESSES = {
@@ -107,7 +112,12 @@ try:
     test_types = session.query(AssessmentTestType).filter(AssessmentTestType.category_id == category.category_id).all()
     test_types_by_name = {t.test_name: t for t in test_types}
 
-    roster = session.query(Player).all()
+    # Pitchers only -- this page is specifically Pitcher-Specific data.
+    # Includes inactive pitchers too (not just active), matching the
+    # same philosophy as Assessments' own entry form -- a coach may
+    # still need to import historical Rapsodo data for a prior-year
+    # pitcher who's since been marked inactive.
+    roster = session.query(Player).filter(Player.is_pitcher.is_(True)).order_by(Player.active.desc(), Player.last_name, Player.first_name).all()
     roster_by_name = {f"{p.first_name} {p.last_name}".strip().lower(): p for p in roster}
 
     # --- Who is this for? (asked before upload -- doesn't need the CSV) ---
@@ -121,14 +131,14 @@ try:
     single_player_bullpen_id = None
     if single_player_mode:
         if not roster:
-            st.warning("No players on the roster yet -- add one first from the Players page.")
+            st.warning("No pitchers on the roster yet -- add one first from the Players page (make sure \"Pitcher\" is checked).")
             page_footer()
             st.stop()
         roster_by_id = {p.player_id: p for p in roster}
         single_player_id = st.selectbox(
             "Player",
             options=list(roster_by_id.keys()),
-            format_func=lambda pid: f"{roster_by_id[pid].first_name} {roster_by_id[pid].last_name}",
+            format_func=lambda pid: f"{roster_by_id[pid].first_name} {roster_by_id[pid].last_name}" + ("" if roster_by_id[pid].active else " (Inactive / prior roster)"),
         )
 
         # Only offer this to roles that can actually reach Bullpen
