@@ -16,7 +16,6 @@ just a current snapshot.
 """
 
 import streamlit as st
-import plotly.graph_objects as go
 from ui_components import page_header, page_footer, empty_state
 from datetime import date, timedelta
 from sqlalchemy import func
@@ -27,7 +26,7 @@ from models import (
     Player, StaffPlayerAssignment, AssessmentCategory, AssessmentTestType,
     Assessment, AssessmentResult, PitchType, IDPGoal, IDPStatus,
 )
-from bucket_system import compute_bucket_system, BUCKET_RELEVANT_CATEGORIES, get_bucket_test_names_for_category
+from bucket_system import BUCKET_RELEVANT_CATEGORIES, get_bucket_test_names_for_category
 
 page_header("Assessments")
 
@@ -126,87 +125,6 @@ try:
         st.dataframe(goal_rows, use_container_width=True, hide_index=True)
         st.caption("Full goal details (action steps, progress notes) are on the IDP page.")
         st.divider()
-
-    # --- Bucket System: composite physical testing score (body comp,
-    # power, strength percentiles vs the team, rolled up into one
-    # Total). Speed is shown for reference but excluded from the Total,
-    # per Ryker's professor's methodology -- see bucket_system.py for
-    # the full formula/rollup, verified directly against his real
-    # spreadsheet data before building this. ---
-    st.subheader("Bucket System")
-    bucket_data = compute_bucket_system(session, selected_player_id)
-    if bucket_data["total_score"] is None and bucket_data["body_comp_score"] is None and bucket_data["power_score"] is None and bucket_data["strength_score"] is None:
-        empty_state("No bucket-system data yet for this player -- needs at least one result for a Body Comp, Power, or Strength test.")
-    else:
-        gauge_cols = st.columns(4)
-        gauge_specs = [
-            ("Total", bucket_data["total_score"], gauge_cols[0]),
-            ("Body Comp", bucket_data["body_comp_score"], gauge_cols[1]),
-            ("Power", bucket_data["power_score"], gauge_cols[2]),
-            ("Strength", bucket_data["strength_score"], gauge_cols[3]),
-        ]
-        for label, score, col in gauge_specs:
-            with col:
-                if score is None:
-                    st.markdown(f"**{label}**")
-                    st.caption("No data yet")
-                    continue
-                fig = go.Figure(go.Indicator(
-                    mode="gauge+number",
-                    value=score,
-                    number={"font": {"color": "#FFFDE5"}},
-                    title={"text": label, "font": {"color": "#FFFDE5", "size": 16}},
-                    gauge={
-                        "axis": {"range": [0, 100], "tickcolor": "#FFFDE5"},
-                        "bar": {"color": "#BF1E2D"},
-                        "bgcolor": "#1E1E1E",
-                        "borderwidth": 0,
-                    },
-                ))
-                fig.update_layout(height=220, margin=dict(t=40, b=10, l=20, r=20), paper_bgcolor="#1E1E1E", font=dict(color="#FFFDE5"))
-                st.plotly_chart(fig, use_container_width=True)
-        if bucket_data["speed_score"] is not None:
-            st.caption(f"Speed (reference only, not in Total): {bucket_data['speed_score']}")
-
-        with st.expander("Bucket System detail"):
-            st.markdown("**Body Comp**")
-            if bucket_data["body_comp_metrics"]:
-                st.dataframe(
-                    [{"Metric": name, "Value": f"{d['raw']:.2f}{d['unit'] or ''}", "Percentile": d["percentile"]} for name, d in bucket_data["body_comp_metrics"].items()],
-                    use_container_width=True, hide_index=True,
-                )
-            else:
-                st.caption("No data yet.")
-
-            st.markdown("**Power**")
-            for sub_name, sub_score in bucket_data["power_subgroup_scores"].items():
-                metrics = bucket_data["power_subgroup_metrics"][sub_name]
-                if not metrics:
-                    continue
-                st.markdown(f"*{sub_name}* — {sub_score if sub_score is not None else '—'}")
-                st.dataframe(
-                    [{"Metric": name, "Value": f"{d['raw']:.2f}{d['unit'] or ''}", "Percentile": d["percentile"]} for name, d in metrics.items()],
-                    use_container_width=True, hide_index=True,
-                )
-
-            st.markdown("**Strength**")
-            for sub_name, sub_score in bucket_data["strength_subgroup_scores"].items():
-                metrics = bucket_data["strength_subgroup_metrics"][sub_name]
-                if not metrics:
-                    continue
-                st.markdown(f"*{sub_name}* — {sub_score if sub_score is not None else '—'}")
-                st.dataframe(
-                    [{"Metric": name, "Value": f"{d['raw']:.2f}{d['unit'] or ''}", "Percentile": d["percentile"]} for name, d in metrics.items()],
-                    use_container_width=True, hide_index=True,
-                )
-
-            if bucket_data["speed_metrics"]:
-                st.markdown("**Speed** (reference only)")
-                st.dataframe(
-                    [{"Metric": name, "Value": f"{d['raw']:.2f}{d['unit'] or ''}", "Percentile": d["percentile"]} for name, d in bucket_data["speed_metrics"].items()],
-                    use_container_width=True, hide_index=True,
-                )
-    st.divider()
 
     categories_by_id = {c.category_id: c for c in categories}
     selected_category_id = st.selectbox(
