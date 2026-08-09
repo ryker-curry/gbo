@@ -29,10 +29,20 @@ from models import Player, Assessment, AssessmentResult, AssessmentTestType
 
 # (test_name, direction) -- direction is "higher" or "lower" (lower =
 # lower raw value is the better score, e.g. sprint times).
+# ONLY these 2 feed the Body Comp composite score -- see
+# BODY_COMP_ENTRY_FIELDS below for the full set of 4 raw fields that
+# are actually in the bucket spreadsheet (Fat Mass and Body Fat % are
+# tracked as raw reference data, per Ryker's professor's email, but
+# aren't part of the composite).
 BODY_COMP_METRICS = [
     ("Body Weight", "higher"),
     ("Skeletal Muscle Mass", "higher"),
 ]
+
+# All 4 Body Comp raw fields that are actually in the bucket
+# spreadsheet -- used to scope the assessment ENTRY FORM (Ryker wants
+# all 4 enterable, even though only 2 feed the calculation above).
+BODY_COMP_ENTRY_FIELDS = {"Body Weight", "Body Fat Mass", "Skeletal Muscle Mass", "Percent Body Fat"}
 
 # sub_group_name -> [(test_name, direction), ...]
 POWER_SUBGROUPS = {
@@ -91,6 +101,45 @@ SPEED_METRICS = [
     ("Acceleration: 10-Yard Sprint Time", "lower"),
     ("Top Speed: Flying 10 Sprint Time", "lower"),
 ]
+
+# Categories where data entry should be limited to ONLY the metrics in
+# the bucket spreadsheet -- Ryker's explicit rule, so a coach entering
+# e.g. Body Composition data isn't shown 15 extra InBody fields that
+# have nothing to do with the bucket system. Arm Health is NOT included
+# here even though GIRD lives there -- GIRD is excluded from the bucket
+# system entirely, so nothing in Arm Health is bucket-relevant anymore.
+BUCKET_RELEVANT_CATEGORIES = {
+    "Body Composition", "Explosive Power", "Rotational Power",
+    "Lower Body Strength", "Upper Body Strength", "Speed",
+}
+
+
+def get_bucket_test_names_for_category(category_name):
+    """Every test name in the bucket system that belongs to the given
+    category -- used to filter the entry form down to just these for
+    BUCKET_RELEVANT_CATEGORIES. Returns an empty set for a category
+    with no bucket-system metrics."""
+    if category_name == "Body Composition":
+        return set(BODY_COMP_ENTRY_FIELDS)
+    if category_name == "Rotational Power":
+        return {name for name, _ in POWER_SUBGROUPS["Med Ball Throw"]}
+    if category_name == "Explosive Power":
+        names = set()
+        for sub_name, metrics in POWER_SUBGROUPS.items():
+            if sub_name != "Med Ball Throw":  # that one's under Rotational Power in GBO's category structure
+                names.update(name for name, _ in metrics)
+        return names
+    if category_name == "Lower Body Strength":
+        names = set()
+        for sub_name, metrics in STRENGTH_SUBGROUPS.items():
+            if sub_name in ("Lower Body Strength", "Mid-Thigh Pull"):
+                names.update(name for name, _ in metrics)
+        return names
+    if category_name == "Upper Body Strength":
+        return {name for name, _ in STRENGTH_SUBGROUPS["Upper Body Strength"]}
+    if category_name == "Speed":
+        return {name for name, _ in SPEED_METRICS}
+    return set()
 
 
 def get_latest_values_by_player(session, test_name):

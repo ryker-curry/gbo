@@ -27,7 +27,7 @@ from models import (
     Player, StaffPlayerAssignment, AssessmentCategory, AssessmentTestType,
     Assessment, AssessmentResult, PitchType, IDPGoal, IDPStatus,
 )
-from bucket_system import compute_bucket_system
+from bucket_system import compute_bucket_system, BUCKET_RELEVANT_CATEGORIES, get_bucket_test_names_for_category
 
 page_header("Assessments")
 
@@ -309,7 +309,18 @@ try:
     st.divider()
 
     # --- New assessment entry ---
-    if not test_types:
+    # For bucket-relevant categories, entry is scoped to ONLY the fields
+    # that are actually in the bucket spreadsheet (Ryker's explicit
+    # rule) -- e.g. Body Composition entry shows just Body Weight, Body
+    # Fat Mass, Skeletal Muscle Mass, Percent Body Fat, not the other 15
+    # InBody770 fields GBO also tracks. Doesn't affect the summary/
+    # history views above, which still show whatever data exists.
+    entry_test_types = test_types
+    if selected_category.category_name in BUCKET_RELEVANT_CATEGORIES:
+        allowed_names = get_bucket_test_names_for_category(selected_category.category_name)
+        entry_test_types = [t for t in test_types if t.test_name in allowed_names]
+
+    if not entry_test_types:
         st.warning(
             f"No individual tests are defined yet for {selected_category.category_name}. "
             f"This category is waiting on the protocol details -- once those are added, "
@@ -336,7 +347,7 @@ try:
             # categories like Mobility & ROM (33 fields) and Arm Health (26
             # fields) are unusable as one flat list.
             groups = {}
-            for t in test_types:
+            for t in entry_test_types:
                 if ": " in t.test_name:
                     group_name, field_label = t.test_name.split(": ", 1)
                 else:
