@@ -211,6 +211,10 @@ try:
     )
     selected_category = categories_by_id[selected_category_id]
 
+    pitch_types = []
+    if selected_category.category_name == "Pitcher-Specific":
+        pitch_types = session.query(PitchType).order_by(PitchType.display_order).all()
+
     test_types = (
         session.query(AssessmentTestType)
         .filter(AssessmentTestType.category_id == selected_category_id)
@@ -306,6 +310,98 @@ try:
                 rows.append(row)
             st.dataframe(rows, use_container_width=True, hide_index=True)
 
+    # --- Edit or delete a past entry -- fixing a typo, or removing a bad
+    # entry entirely. Shows whatever fields actually exist on that
+    # specific assessment record, regardless of the current bucket-
+    # system entry scoping above -- an older entry might have values
+    # for fields no longer shown on the New assessment form, and this
+    # should still let a coach fix those. ---
+    if can_edit_assessments:
+        with st.expander("Edit or delete a past entry"):
+            edit_query = (
+                session.query(Assessment)
+                .options(
+                    joinedload(Assessment.results).joinedload(AssessmentResult.test_type),
+                    joinedload(Assessment.pitch_type),
+                )
+                .filter(Assessment.player_id == selected_player_id, Assessment.category_id == selected_category_id)
+            )
+            if pitch_type_filter_id is not None:
+                edit_query = edit_query.filter(Assessment.pitch_type_id == pitch_type_filter_id)
+            editable_assessments = edit_query.order_by(Assessment.assessment_date.desc()).limit(500).all()
+
+            if not editable_assessments:
+                st.caption("No entries to edit yet.")
+            else:
+                assessments_by_id = {a.assessment_id: a for a in editable_assessments}
+
+                def _entry_label(aid):
+                    a = assessments_by_id[aid]
+                    label = a.assessment_date.strftime("%Y-%m-%d (%a)")
+                    if a.pitch_type:
+                        label += f" — {a.pitch_type.type_name}"
+                    if a.notes:
+                        label += f" — {a.notes[:40]}"
+                    return label
+
+                edit_assessment_id = st.selectbox(
+                    "Which entry?",
+                    options=list(assessments_by_id.keys()),
+                    format_func=_entry_label,
+                    key=f"edit_entry_choice_{selected_category_id}",
+                )
+                editing_assessment = assessments_by_id[edit_assessment_id]
+
+                with st.form(f"edit_assessment_form_{edit_assessment_id}"):
+                    edit_date = st.date_input("Assessment date", value=editing_assessment.assessment_date)
+                    edit_pitch_type_choice = None
+                    if pitch_types:
+                        pitch_type_names = ["--"] + [pt.type_name for pt in pitch_types]
+                        current_pt_name = editing_assessment.pitch_type.type_name if editing_assessment.pitch_type else "--"
+                        edit_pitch_type_choice = st.selectbox("Pitch Type", pitch_type_names, index=pitch_type_names.index(current_pt_name) if current_pt_name in pitch_type_names else 0)
+
+                    edit_groups = {}
+                    for r in editing_assessment.results:
+                        t = r.test_type
+                        if ": " in t.test_name:
+                            group_name, field_label = t.test_name.split(": ", 1)
+                        else:
+                            group_name, field_label = selected_category.category_name, t.test_name
+                        edit_groups.setdefault(group_name, []).append((t, field_label, r))
+
+                    edit_values = {}
+                    for group_name, fields in edit_groups.items():
+                        if len(edit_groups) > 1:
+                            st.markdown(f"**{group_name}**")
+                        cols = st.columns(2)
+                        for i, (t, field_label, r) in enumerate(fields):
+                            label = field_label + (f" ({t.unit})" if t.unit else "")
+                            edit_values[r.result_id] = cols[i % 2].number_input(label, value=float(r.value), step=0.1, format="%.2f", key=f"edit_result_{r.result_id}")
+
+                    edit_notes = st.text_area("Notes (optional)", value=editing_assessment.notes or "")
+                    edit_submitted = st.form_submit_button("Save changes", type="primary")
+
+                if edit_submitted:
+                    editing_assessment.assessment_date = edit_date
+                    editing_assessment.notes = edit_notes.strip() or None
+                    if pitch_types:
+                        editing_assessment.pitch_type_id = next((pt.pitch_type_id for pt in pitch_types if pt.type_name == edit_pitch_type_choice), None) if edit_pitch_type_choice != "--" else None
+                    for result_id, new_value in edit_values.items():
+                        result = next(r for r in editing_assessment.results if r.result_id == result_id)
+                        result.value = new_value
+                    session.commit()
+                    st.success("Saved changes.")
+                    st.rerun()
+
+                st.divider()
+                st.warning("Deleting an entry removes it and all its test values permanently -- this can't be undone.")
+                confirm_delete_entry = st.checkbox("Yes, I want to permanently delete this entry", key=f"confirm_delete_entry_{edit_assessment_id}")
+                if st.button("Delete this entry", key=f"delete_entry_{edit_assessment_id}", disabled=not confirm_delete_entry, type="primary"):
+                    session.delete(editing_assessment)
+                    session.commit()
+                    st.success("Deleted.")
+                    st.rerun()
+
     st.divider()
 
     # --- New assessment entry ---
@@ -330,10 +426,6 @@ try:
         st.info("Your role has read-only access to assessments.")
     else:
         st.subheader(f"New {selected_category.category_name} assessment")
-
-        pitch_types = []
-        if selected_category.category_name == "Pitcher-Specific":
-            pitch_types = session.query(PitchType).order_by(PitchType.display_order).all()
 
         with st.form("assessment_form"):
             assessment_date = st.date_input("Assessment date", value=date.today())
