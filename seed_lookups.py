@@ -70,8 +70,8 @@ ANTHROPOMETRICS_TESTS = [
 
 # (test_name, unit) -- from Ryker's fully-populated Body Composition (InBody770) sheet
 BODY_COMPOSITION_TESTS = [
-    ("Body Weight", "lb"), ("Skeletal Muscle Mass", "lb"), ("Skeletal Muscle Mass %", "%"),
-    ("Body Fat Mass", "lb"), ("Percent Body Fat", "%"), ("Fat-Free Mass", "lb"),
+    ("Body Weight", "lb"), ("Body Fat Mass", "lb"), ("Skeletal Muscle Mass", "lb"),
+    ("Percent Body Fat", "%"), ("Skeletal Muscle Mass %", "%"), ("Fat-Free Mass", "lb"),
     ("Fat Mass Index (FMI)", "kg/m2"), ("Skeletal Muscle Index (SMI)", "kg/m2"),
     ("ECW/TBW Ratio", "ratio"), ("Throwing Arm Lean Mass", "lb"),
     ("Non-Throwing Arm Lean Mass", "lb"), ("Trunk Lean Mass", "lb"),
@@ -157,8 +157,8 @@ EXPLOSIVE_POWER_TESTS = [
     ("Hop Test RSI (10/5)", "ratio"),
     ("Hop Test Average Force", "N"),
     ("Hop Test Mean Contact Time", "ms"),
-    ("Single-Leg Jump Height (Drive Leg)", "in"), ("Single-Leg Jump Height (Plant Leg)", "in"),
-    ("Single-Leg Jump Concentric Impulse (Drive Leg)", "Ns"), ("Single-Leg Jump Concentric Impulse (Plant Leg)", "Ns"),
+    ("Single-Leg Jump Height (Drive Leg)", "in"), ("Single-Leg Jump Concentric Impulse (Drive Leg)", "Ns"),
+    ("Single-Leg Jump Height (Plant Leg)", "in"), ("Single-Leg Jump Concentric Impulse (Plant Leg)", "Ns"),
 ]
 
 # (test_name, unit) -- matches Ryker's bucket-system spreadsheet exactly
@@ -171,8 +171,8 @@ ROTATIONAL_POWER_TESTS = [
 # 20-Yard Sprint Time and Maximum Sprint Velocity aren't in the bucket
 # spreadsheet, so per Ryker's rule they're excluded here too.
 SPEED_TESTS = [
-    ("Acceleration: 10-Yard Sprint Time", "s"),
     ("Top Speed: Flying 10 Sprint Time", "s"),
+    ("Acceleration: 10-Yard Sprint Time", "s"),
 ]
 
 # (test_name, unit) -- from Ryker's fully-populated Pitch Characteristics
