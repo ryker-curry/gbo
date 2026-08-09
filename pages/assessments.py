@@ -42,8 +42,13 @@ if current_user_id is None:
 
 session = get_session()
 try:
-    # --- Visible players (same role-based filtering as Player Management) ---
-    player_query = session.query(Player).options(joinedload(Player.team)).filter(Player.active.is_(True))
+    # --- Visible players (same role-based filtering as Player Management)
+    # --- NOT filtered to active-only, unlike every other roster-facing
+    # picker in GBO (Game Tracking lineups, Analytics, Bucket System
+    # comparisons) -- Ryker wants to keep entering assessment data for
+    # last year's players even after marking them inactive so they don't
+    # show up on the current roster anywhere else. ---
+    player_query = session.query(Player).options(joinedload(Player.team))
     if not can_view_all:
         assigned_ids = [
             a.player_id for a in
@@ -52,7 +57,7 @@ try:
             .all()
         ]
         player_query = player_query.filter(Player.player_id.in_(assigned_ids))
-    players = player_query.order_by(Player.last_name, Player.first_name).all()
+    players = player_query.order_by(Player.active.desc(), Player.last_name, Player.first_name).all()
 
     if not players:
         empty_state("No players to show yet." if can_view_all else "No players are currently assigned to you.")
@@ -65,7 +70,7 @@ try:
     selected_player_id = st.selectbox(
         "Player",
         options=list(players_by_id.keys()),
-        format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
+        format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}" + ("" if players_by_id[pid].active else " (Inactive / prior roster)"),
     )
     selected_player = players_by_id[selected_player_id]
 
