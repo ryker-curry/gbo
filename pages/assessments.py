@@ -26,7 +26,8 @@ from models import (
     Player, StaffPlayerAssignment, AssessmentCategory, AssessmentTestType,
     Assessment, AssessmentResult, PitchType, IDPGoal, IDPStatus,
 )
-from bucket_system import BUCKET_RELEVANT_CATEGORIES, get_bucket_test_names_for_category
+from bucket_system import BUCKET_RELEVANT_CATEGORIES, get_bucket_test_names_for_category, compute_bucket_system
+from bucket_system_display import render_score_rings, render_full_breakdown
 
 page_header("Assessments")
 
@@ -72,6 +73,14 @@ try:
         format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}" + ("" if players_by_id[pid].active else " (Inactive / prior roster)"),
     )
     selected_player = players_by_id[selected_player_id]
+
+    # --- Physical testing: rings + full breakdown, right at the top for
+    # this player, ahead of category browsing/entry below. ---
+    bucket_data = compute_bucket_system(session, selected_player_id)
+    if render_score_rings(bucket_data, key_prefix="assess"):
+        with st.expander("Physical testing detail"):
+            render_full_breakdown(bucket_data, key_prefix="assess_detail")
+        st.divider()
 
     # --- Goals in progress: baseline vs. current for any metric tied to
     # an active IDP goal, reusing the same "current value" computation
