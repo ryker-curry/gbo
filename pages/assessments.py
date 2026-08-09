@@ -75,11 +75,13 @@ try:
     selected_player = players_by_id[selected_player_id]
 
     # --- Physical testing: rings + full breakdown, right at the top for
-    # this player, ahead of category browsing/entry below. ---
+    # this player, ahead of category browsing/entry below. Always
+    # visible, not tucked in an expander -- matches exactly what a
+    # player sees on their own My Assessments page. ---
     bucket_data = compute_bucket_system(session, selected_player_id)
     if render_score_rings(bucket_data, key_prefix="assess"):
-        with st.expander("Physical testing detail"):
-            render_full_breakdown(bucket_data, key_prefix="assess_detail")
+        st.subheader("Physical Testing Breakdown")
+        render_full_breakdown(bucket_data, key_prefix="assess_detail")
         st.divider()
 
     # --- Goals in progress: baseline vs. current for any metric tied to
