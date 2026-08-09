@@ -18,7 +18,7 @@ from database import get_session
 from models import Player, User, AssessmentCategory, Assessment, AssessmentResult, AssessmentTestType, PitchType, IDPGoal, IDPStatus
 from ui_components import page_header, page_footer, empty_state
 from bucket_system import compute_bucket_system
-from bucket_system_display import render_full_breakdown
+from bucket_system_display import render_full_breakdown, render_score_rings
 
 page_header("My Assessments")
 
@@ -44,6 +44,11 @@ try:
         st.stop()
 
     my_player = session.query(Player).filter(Player.player_id == me.player_id).first()
+
+    # --- Overall/Strength/Power rings, right at the top of the page. ---
+    top_bucket_data = compute_bucket_system(session, my_player.player_id)
+    if render_score_rings(top_bucket_data, key_prefix="myassess_top"):
+        st.divider()
 
     # --- Goals in progress: baseline vs. current for any metric tied to
     # an active IDP goal, same computation as the IDP page. ---
@@ -100,12 +105,11 @@ try:
     # big overall Total/Body Comp/Power/Strength numbers are on the
     # Dashboard -- this is the detail underneath them. ---
     st.subheader("Physical Testing Breakdown")
-    bucket_data = compute_bucket_system(session, my_player.player_id)
-    has_any_data = any(bucket_data[k] is not None for k in ("total_score", "body_comp_score", "power_score", "strength_score"))
+    has_any_data = any(top_bucket_data[k] is not None for k in ("total_score", "body_comp_score", "power_score", "strength_score"))
     if not has_any_data:
         empty_state("No physical testing data yet.")
     else:
-        render_full_breakdown(bucket_data, key_prefix="myassess")
+        render_full_breakdown(top_bucket_data, key_prefix="myassess")
 
     st.divider()
 

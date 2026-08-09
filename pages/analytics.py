@@ -19,7 +19,7 @@ from models import Player, Season
 from ui_components import page_header, page_footer, empty_state
 from game_stats import get_batting_pitches, get_pitching_pitches, compute_batting_line, compute_pitching_line
 from bucket_system import compute_bucket_system
-from bucket_system_display import render_bucket_gauges, render_full_breakdown
+from bucket_system_display import render_score_rings, render_full_breakdown
 
 page_header("Player Stats")
 
@@ -68,7 +68,7 @@ try:
     # player's own Dashboard/My Assessments, so a coach can see it here
     # too without needing to go to Assessments. ---
     bucket_data = compute_bucket_system(session, selected_player_id)
-    if render_bucket_gauges(bucket_data, key_prefix="analytics"):
+    if render_score_rings(bucket_data, key_prefix="analytics"):
         with st.expander("Physical testing detail"):
             render_full_breakdown(bucket_data, key_prefix="analytics_detail")
         st.divider()

@@ -12,42 +12,61 @@ import streamlit as st
 import plotly.graph_objects as go
 
 
-def render_bucket_gauges(bucket_data, key_prefix):
-    """The 4 big gauges: Total, Body Comp, Power, Strength. Shows
-    nothing at all (not 4 empty boxes) if there's no data yet for any
-    of them. key_prefix keeps chart keys unique across pages/calls."""
-    has_any_data = any(bucket_data[k] is not None for k in ("total_score", "body_comp_score", "power_score", "strength_score"))
+def _ordinal(n):
+    """45 -> '45th', 82 -> '82nd', 21 -> '21st', 13 -> '13th'."""
+    if 10 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def render_score_rings(bucket_data, key_prefix):
+    """Total/Body Comp/Power/Strength as full-circle percentage rings (a
+    donut chart with 2 slices: filled + remainder), matching Ryker's
+    reference screenshot's style -- not Plotly's default semicircle
+    gauge, which doesn't produce a true full ring. Shows nothing at all
+    if there's no data yet for any of them."""
+    specs = [
+        ("Total", "total_score"),
+        ("Body Comp", "body_comp_score"),
+        ("Power", "power_score"),
+        ("Strength", "strength_score"),
+    ]
+    has_any_data = any(bucket_data[key] is not None for _, key in specs)
     if not has_any_data:
         return False
 
-    gauge_cols = st.columns(4)
-    gauge_specs = [
-        ("Total", "total_score", gauge_cols[0]),
-        ("Body Comp", "body_comp_score", gauge_cols[1]),
-        ("Power", "power_score", gauge_cols[2]),
-        ("Strength", "strength_score", gauge_cols[3]),
-    ]
-    for label, key, col in gauge_specs:
+    cols = st.columns(4)
+    for (label, key), col in zip(specs, cols):
         score = bucket_data[key]
         with col:
             if score is None:
                 st.markdown(f"**{label}**")
                 st.caption("No data yet")
                 continue
-            fig = go.Figure(go.Indicator(
-                mode="gauge+number",
-                value=score,
-                number={"font": {"color": "#FFFDE5"}},
-                title={"text": label, "font": {"color": "#FFFDE5", "size": 16}},
-                gauge={
-                    "axis": {"range": [0, 100], "tickcolor": "#FFFDE5"},
-                    "bar": {"color": "#BF1E2D"},
-                    "bgcolor": "#1E1E1E",
-                    "borderwidth": 0,
-                },
+            fig = go.Figure(go.Pie(
+                values=[score, 100 - score],
+                hole=0.72,
+                marker=dict(colors=["#BF1E2D", "#3A3A3A"]),
+                direction="clockwise",
+                rotation=0,
+                sort=False,
+                textinfo="none",
+                hoverinfo="skip",
             ))
-            fig.update_layout(height=200, margin=dict(t=40, b=10, l=20, r=20), paper_bgcolor="#1E1E1E", font=dict(color="#FFFDE5"))
-            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_gauge_{key}")
+            fig.update_layout(
+                showlegend=False,
+                annotations=[dict(
+                    text=f"<b>{_ordinal(score)}</b><br><span style='font-size:13px'>Percentile</span>",
+                    x=0.5, y=0.5, font=dict(size=26, color="#FFFDE5"), showarrow=False,
+                )],
+                paper_bgcolor="#1E1E1E",
+                margin=dict(t=10, b=10, l=10, r=10),
+                height=200,
+            )
+            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_ring_{key}")
+            st.markdown(f"<p style='text-align:center; margin-top:-10px;'><b>{label}</b></p>", unsafe_allow_html=True)
     return True
 
 
