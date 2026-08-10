@@ -254,6 +254,7 @@ try:
                     # Same for specialty -- only meaningful for Coach.
                     editing_user.coach_specialty = new_coach_specialty if new_role_choice == "Coach" else None
                     editing_user.active = active_choice
+                    photo_upload_failed = False
                     if remove_photo:
                         editing_user.photo_url = None
                     elif photo_file is not None:
@@ -261,9 +262,18 @@ try:
                         uploaded_url = upload_staff_photo(photo_file, identifier)
                         if uploaded_url:
                             editing_user.photo_url = uploaded_url
-                    session.commit()
-                    st.success(f"Updated {editing_user.first_name} {editing_user.last_name}.")
-                    st.rerun()
+                        else:
+                            # upload_staff_photo already showed the real
+                            # error -- stop here instead of continuing on
+                            # to commit/success/rerun, which would wipe
+                            # that error before it's readable and imply
+                            # the photo saved when it didn't.
+                            photo_upload_failed = True
+
+                    if not photo_upload_failed:
+                        session.commit()
+                        st.success(f"Updated {editing_user.first_name} {editing_user.last_name}.")
+                        st.rerun()
 
         st.markdown("**Reset password**")
         with st.form("reset_password_form"):
