@@ -21,32 +21,28 @@ def _ordinal(n):
     return f"{n}{suffix}"
 
 
-def render_score_rings(bucket_data, key_prefix):
-    """Total/Body Comp/Power/Strength as full-circle percentage rings (a
-    donut chart with 2 slices: filled + remainder), matching Ryker's
-    reference screenshot's style -- not Plotly's default semicircle
-    gauge, which doesn't produce a true full ring. Shows nothing at all
-    if there's no data yet for any of them."""
-    specs = [
-        ("Total", "total_score"),
-        ("Body Comp", "body_comp_score"),
-        ("Power", "power_score"),
-        ("Strength", "strength_score"),
-    ]
-    has_any_data = any(bucket_data[key] is not None for _, key in specs)
+def render_percentage_rings(metrics, key_prefix, show_ordinal=False):
+    """Generic full-circle percentage ring display -- metrics is a list
+    of (label, value) tuples, value 0-100 or None. show_ordinal=True
+    displays the value as an ordinal ("45th") with "Percentile" as the
+    sub-label, for percentile-style data (Physical Testing); False
+    (the default) displays it as a plain percentage ("45%") with the
+    metric's own label as the sub-label, for direct-percentage KPIs
+    (pitching command, etc.). Returns False (renders nothing) if every
+    value is None."""
+    has_any_data = any(v is not None for _, v in metrics)
     if not has_any_data:
         return False
 
-    cols = st.columns(4)
-    for (label, key), col in zip(specs, cols):
-        score = bucket_data[key]
+    cols = st.columns(len(metrics))
+    for (label, value), col in zip(metrics, cols):
         with col:
-            if score is None:
+            if value is None:
                 st.markdown(f"**{label}**")
                 st.caption("No data yet")
                 continue
             fig = go.Figure(go.Pie(
-                values=[score, 100 - score],
+                values=[value, 100 - value],
                 hole=0.72,
                 marker=dict(colors=["#BF1E2D", "#3A3A3A"]),
                 direction="clockwise",
@@ -55,19 +51,36 @@ def render_score_rings(bucket_data, key_prefix):
                 textinfo="none",
                 hoverinfo="skip",
             ))
+            center_text = _ordinal(round(value)) if show_ordinal else f"{value:.0f}%"
+            sub_text = "Percentile" if show_ordinal else label
             fig.update_layout(
                 showlegend=False,
                 annotations=[dict(
-                    text=f"<b>{_ordinal(score)}</b><br><span style='font-size:13px'>Percentile</span>",
+                    text=f"<b>{center_text}</b><br><span style='font-size:13px'>{sub_text}</span>",
                     x=0.5, y=0.5, font=dict(size=26, color="#FFFDE5"), showarrow=False,
                 )],
                 paper_bgcolor="#1E1E1E",
                 margin=dict(t=10, b=10, l=10, r=10),
                 height=200,
             )
-            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_ring_{key}")
-            st.markdown(f"<p style='text-align:center; margin-top:-10px;'><b>{label}</b></p>", unsafe_allow_html=True)
+            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_ring_{label}")
+            if show_ordinal:
+                st.markdown(f"<p style='text-align:center; margin-top:-10px;'><b>{label}</b></p>", unsafe_allow_html=True)
     return True
+
+
+def render_score_rings(bucket_data, key_prefix):
+    """Total/Body Comp/Power/Strength as full-circle percentage rings,
+    matching Ryker's reference screenshot's style -- not Plotly's
+    default semicircle gauge, which doesn't produce a true full ring.
+    Shows nothing at all if there's no data yet for any of them."""
+    specs = [
+        ("Total", bucket_data["total_score"]),
+        ("Body Comp", bucket_data["body_comp_score"]),
+        ("Power", bucket_data["power_score"]),
+        ("Strength", bucket_data["strength_score"]),
+    ]
+    return render_percentage_rings(specs, key_prefix, show_ordinal=True)
 
 
 def render_metric_bars(metrics_dict, chart_key):

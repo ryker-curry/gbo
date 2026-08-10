@@ -20,7 +20,10 @@ specific metrics, shown separately as "located_pitches" vs the full
 pitch count, rather than silently treated as in-zone or out.
 """
 
-from strike_zone import is_in_zone
+import streamlit as st
+import plotly.graph_objects as go
+
+from strike_zone import is_in_zone, derive_old_zone
 
 SWING_OUTCOMES = {"Swinging Strike", "Foul", "In Play"}
 WHIFF_OUTCOMES = {"Swinging Strike"}
@@ -92,3 +95,49 @@ def compute_pitcher_command(pitches):
         "Chase % Induced": _pct(len(chase_swings_induced), len(out_zone_located)),
         "Usage %": usage_pct,
     }
+
+
+def compute_zone_performance(pitches):
+    """Average Run Value and pitch count per zone, from this pitcher's
+    OWN Game Tracking pitches (not swing-outcome data from Hitter
+    Tracking, unlike the heatmap this replaces) -- how well his
+    pitches actually perform when located in each part of the zone.
+    Run Value is from the BATTING team's perspective, so lower/more
+    negative = better for the pitcher. Only counts pitches with both a
+    recorded location and a computed Run Value."""
+    by_zone = {}
+    for p in pitches:
+        if p.actual_plate_x is None or p.actual_plate_z is None or p.run_value is None:
+            continue
+        zone = derive_old_zone(float(p.actual_plate_x), float(p.actual_plate_z))
+        by_zone.setdefault(zone, []).append(float(p.run_value))
+    avg_rv = {z: sum(vals) / len(vals) for z, vals in by_zone.items()}
+    counts = {z: len(vals) for z, vals in by_zone.items()}
+    return avg_rv, counts
+
+
+def render_zone_performance_heatmap(avg_rv, counts, title="Performance by zone"):
+    """3x3 heatmap of average Run Value per zone. Green = good for the
+    pitcher (low/negative RV), red = poor (high/positive RV) -- an
+    inverted colorscale, since low RV is the good outcome here."""
+    zone_grid = [[7, 8, 9], [4, 5, 6], [1, 2, 3]]
+    z = [[avg_rv.get(zid) for zid in row] for row in zone_grid]
+    text = [[f"{avg_rv[zid]:+.2f}<br>({counts[zid]})" if zid in avg_rv else "—" for zid in row] for row in zone_grid]
+
+    fig = go.Figure(data=go.Heatmap(
+        z=z, text=text, texttemplate="%{text}", textfont=dict(color="#111111", size=14),
+        colorscale="RdYlGn_r", zmin=-0.3, zmax=0.3, showscale=True,
+        colorbar=dict(title="Avg RV", tickfont=dict(color="#FFFDE5"), title_font=dict(color="#FFFDE5")),
+        xgap=3, ygap=3,
+    ))
+    fig.update_layout(
+        title=title,
+        height=380,
+        plot_bgcolor="#1E1E1E", paper_bgcolor="#1E1E1E",
+        font=dict(color="#FFFDE5"),
+        xaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+        margin=dict(t=40, b=20, l=20, r=20),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("Green = good for him (low/negative Run Value), red = poor (high/positive). Number in parentheses is pitch count. Zone 0/Bury not shown on this grid.")

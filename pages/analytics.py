@@ -20,7 +20,8 @@ from database import get_session
 from models import Player, Season
 from ui_components import page_header, page_footer, empty_state
 from game_stats import get_batting_pitches, get_pitching_pitches, compute_batting_line, compute_pitching_line
-from plate_discipline import compute_hitter_discipline, compute_pitcher_command
+from plate_discipline import compute_hitter_discipline, compute_pitcher_command, compute_zone_performance, render_zone_performance_heatmap
+from bucket_system_display import render_percentage_rings
 
 page_header("Player Stats")
 
@@ -113,6 +114,19 @@ try:
             empty_state("No pitching data recorded yet for this player in Game Tracking.")
         else:
             pitching_line = compute_pitching_line(pitching_pitches)
+            command = compute_pitcher_command(pitching_pitches)
+
+            st.markdown("**Pitching KPIs**")
+            render_percentage_rings(
+                [
+                    ("Zone %", command["Zone %"]),
+                    ("Whiff % Induced", command["Whiff % Induced"]),
+                    ("Chase % Induced", command["Chase % Induced"]),
+                    ("Execution %", pitching_line["Execution %"]),
+                ],
+                key_prefix=f"pitch_kpi_{selected_player_id}",
+            )
+
             cols = st.columns(6)
             cols[0].metric("Batters Faced", pitching_line["Batters Faced"])
             cols[1].metric("Pitches", pitching_line["Pitches"])
@@ -126,7 +140,6 @@ try:
             )
 
             st.markdown("**Pitch Command / Usage**")
-            command = compute_pitcher_command(pitching_pitches)
             if command["Pitches Thrown"] == 0:
                 st.caption("No pitches thrown yet.")
             else:
@@ -138,6 +151,14 @@ try:
                 if command["Usage %"]:
                     usage_str = " · ".join(f"{name}: {_fmt_pct(pct)}" for name, pct in sorted(command["Usage %"].items(), key=lambda kv: -(kv[1] or 0)))
                     st.caption(f"Usage — {usage_str}")
+
+            st.markdown("**Zone Performance**")
+            st.caption("How well his pitches perform in each part of the zone, from his own Game Tracking pitches (Run Value by location).")
+            avg_rv, zone_counts = compute_zone_performance(pitching_pitches)
+            if not avg_rv:
+                empty_state("No pitches yet with both a recorded location and a computed Run Value.")
+            else:
+                render_zone_performance_heatmap(avg_rv, zone_counts)
 
 
 finally:
