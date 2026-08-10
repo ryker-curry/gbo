@@ -280,6 +280,13 @@ if role_name == "Player":
         st.Page("pages/player_stats.py", title="My Assessments", url_path="my-stats", icon=":material/query_stats:"),
         st.Page("pages/player_game_stats.py", title="My Stats", url_path="my-game-stats", icon=":material/bar_chart:"),
         st.Page("pages/player_video.py", title="My Video", url_path="my-video", icon=":material/videocam:"),
+        # Same page coaches use to build/edit routines -- already
+        # correctly read-only for non-edit-capable roles (shows the
+        # full browsable library with per-exercise video, stops before
+        # the create/edit sections), so players can browse every
+        # routine, not just ones assigned to them, with zero separate
+        # page needed.
+        st.Page("pages/training_routines.py", title="Training Routines", url_path="training-routines", icon=":material/fitness_center:"),
     ]
     # My Bullpens is pitcher-specific (Bullpen Tracking's own player-facing
     # view); My Hitting is the mirror-opposite for position players. Only
