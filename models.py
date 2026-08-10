@@ -260,6 +260,7 @@ class User(Base):
     role_id = Column(Integer, ForeignKey("roles.role_id"), nullable=False)
     player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)  # set only for Player role
     coach_specialty = Column(String(20), nullable=True)  # "Pitching" / "Hitting" / "Both" -- only meaningful for role=Coach, filters which Training Routines they see
+    photo_url = Column(String(500), nullable=True)  # staff profile photo, same pattern as Player.photo_url
     active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

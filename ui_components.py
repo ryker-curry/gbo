@@ -74,10 +74,15 @@ def empty_state(message: str, icon: str = ""):
     )
 
 
-def render_staff_profile_header(first_name: str, last_name: str, role_name: str, logo_base64: str = None):
+def render_staff_profile_header(first_name: str, last_name: str, role_name: str, logo_base64: str = None, photo_url: str = None):
     """Same bold crimson/gold card style as render_player_profile_header,
-    for staff dashboards -- role name in place of jersey/position/class,
-    no photo (staff don't have profile photos)."""
+    for staff dashboards -- role name in place of jersey/position/class.
+    Photo is optional (staff photo uploads added later than player
+    photos) -- reuses the exact same .gbo-profile-photo styling."""
+    photo_html = ""
+    if photo_url:
+        photo_html = f'<img src="{photo_url}" class="gbo-profile-photo" />'
+
     logo_html = ""
     if logo_base64:
         logo_html = f'<img src="data:image/png;base64,{logo_base64}" class="gbo-profile-logo" />'
@@ -87,6 +92,8 @@ def render_staff_profile_header(first_name: str, last_name: str, role_name: str,
         '.gbo-profile-card { position: relative; background: linear-gradient(135deg, #BF1E2D 0%, #7A1420 100%); '
         'border: 2px solid #D4AF37; border-radius: 14px; padding: 24px 28px; margin-bottom: 8px; '
         'display: flex; align-items: center; gap: 20px; overflow: hidden; }'
+        '.gbo-profile-photo { width: 84px; height: 84px; border-radius: 50%; object-fit: cover; '
+        'border: 3px solid #D4AF37; flex-shrink: 0; }'
         '.gbo-profile-name { color: #FFFDE5; font-size: 2.4rem; font-weight: 900; line-height: 1.1; '
         'letter-spacing: 0.01em; margin: 0; }'
         '.gbo-profile-subtitle { color: #D4AF37; font-size: 1.1rem; font-weight: 700; '
@@ -95,6 +102,7 @@ def render_staff_profile_header(first_name: str, last_name: str, role_name: str,
         'width: 70px; height: 70px; opacity: 0.25; object-fit: contain; }'
         '</style>'
         f'<div class="gbo-profile-card">'
+        f'{photo_html}'
         f'<div><div class="gbo-profile-name">{first_name} {last_name}</div>'
         f'<div class="gbo-profile-subtitle">{role_name}</div></div>'
         f'{logo_html}'

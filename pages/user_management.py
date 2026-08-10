@@ -14,12 +14,38 @@ Admin API (service role key) -- same mechanism the terminal scripts used.
 """
 
 import streamlit as st
+import uuid
 from ui_components import page_header, page_footer, empty_state
 from sqlalchemy.orm import joinedload
 
 from database import get_session
 from models import User, Role, Organization, Player
 from supabase_client import get_supabase_admin_client
+
+STAFF_PHOTO_BUCKET = "staff-photos"
+
+
+def upload_staff_photo(uploaded_file, user_identifier: str) -> str | None:
+    """Uploads to the staff-photos Supabase Storage bucket, returns the
+    public URL. Same pattern as players.py's upload_player_photo.
+    Returns None (with an on-screen error) if the bucket doesn't exist
+    yet or the upload fails."""
+    try:
+        admin_client = get_supabase_admin_client()
+        ext = uploaded_file.name.split(".")[-1].lower()
+        path = f"{user_identifier}_{uuid.uuid4().hex[:8]}.{ext}"
+        file_bytes = uploaded_file.getvalue()
+        admin_client.storage.from_(STAFF_PHOTO_BUCKET).upload(
+            path, file_bytes, {"content-type": uploaded_file.type}
+        )
+        return admin_client.storage.from_(STAFF_PHOTO_BUCKET).get_public_url(path)
+    except Exception as e:
+        st.error(
+            f"Photo upload failed: {e}. "
+            f"Make sure a public Storage bucket named '{STAFF_PHOTO_BUCKET}' exists in your Supabase project "
+            f"(Supabase dashboard -> Storage -> New bucket -> name it '{STAFF_PHOTO_BUCKET}' -> make it Public)."
+        )
+        return None
 
 page_header("User Management")
 
@@ -184,6 +210,13 @@ try:
             )
 
         with st.form("edit_user_form"):
+            st.markdown("**Photo**")
+            remove_photo = False
+            if editing_user.photo_url:
+                st.image(editing_user.photo_url, width=150)
+                remove_photo = st.checkbox("Remove current photo")
+            photo_file = st.file_uploader("Upload a photo (optional)", type=["jpg", "jpeg", "png", "webp"])
+
             c1, c2 = st.columns(2)
             new_first_name = c1.text_input("First name", value=editing_user.first_name)
             new_last_name = c2.text_input("Last name", value=editing_user.last_name)
@@ -221,6 +254,13 @@ try:
                     # Same for specialty -- only meaningful for Coach.
                     editing_user.coach_specialty = new_coach_specialty if new_role_choice == "Coach" else None
                     editing_user.active = active_choice
+                    if remove_photo:
+                        editing_user.photo_url = None
+                    elif photo_file is not None:
+                        identifier = f"staff-{editing_user.user_id}"
+                        uploaded_url = upload_staff_photo(photo_file, identifier)
+                        if uploaded_url:
+                            editing_user.photo_url = uploaded_url
                     session.commit()
                     st.success(f"Updated {editing_user.first_name} {editing_user.last_name}.")
                     st.rerun()

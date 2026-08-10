@@ -169,7 +169,13 @@ if role_name == "Player":
 
 first_name = st.session_state.get("gbo_user_first_name", "")
 last_name = st.session_state.get("gbo_user_last_name", "")
-render_staff_profile_header(first_name, last_name, role_name, logo_base64=GBO_LOGO_BASE64)
+_header_session = get_session()
+try:
+    _current_user_row = _header_session.query(User).filter(User.user_id == current_user_id).first()
+    _staff_photo_url = _current_user_row.photo_url if _current_user_row else None
+finally:
+    _header_session.close()
+render_staff_profile_header(first_name, last_name, role_name, logo_base64=GBO_LOGO_BASE64, photo_url=_staff_photo_url)
 
 session = get_session()
 try:
