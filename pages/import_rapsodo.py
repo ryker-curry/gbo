@@ -31,10 +31,10 @@ than after.
 import streamlit as st
 from ui_components import page_header, page_footer
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
 
 from database import get_session
-from models import Player, AssessmentCategory, AssessmentTestType, Assessment, AssessmentResult, PitchType, BullpenSession, BullpenPitch
+from models import Player, AssessmentCategory, AssessmentTestType, Assessment, AssessmentResult, PitchType, BullpenSession, BullpenPitch, BullpenType
 
 page_header("Import Rapsodo Data")
 
@@ -128,7 +128,10 @@ try:
     )
 
     single_player_id = None
-    single_player_bullpen_id = None
+    auto_bullpen_mode = False
+    target_bullpen_id = None
+    new_bullpen_type_id = None
+    new_bullpen_date = None
     if single_player_mode:
         if not roster:
             st.warning("No pitchers on the roster yet -- add one first from the Players page (make sure \"Pitcher\" is checked).")
@@ -142,28 +145,47 @@ try:
         )
 
         # Only offer this to roles that can actually reach Bullpen
-        # Tracking to do the linking -- no point sending someone to a
-        # page they don't have access to.
+        # Tracking to view the result -- no point offering it to
+        # someone who can't get there.
         if role_name in ("Administrator", "Head Coach", "Coach"):
-            unlinked_bullpens = (
-                session.query(BullpenSession)
-                .join(BullpenSession.pitches)
-                .filter(BullpenSession.player_id == single_player_id, BullpenPitch.linked_assessment_id.is_(None))
-                .distinct()
-                .order_by(BullpenSession.session_date.desc())
-                .all()
+            st.divider()
+            auto_bullpen_mode = st.checkbox(
+                "Also create the Bullpen Tracking pitch log from this import",
+                help="Skips live click-by-click tracking during the bullpen -- creates each pitch directly from this file "
+                     "(pitch type auto-filled from the file's own pitch-type column), so you can still view it on Bullpen "
+                     "Tracking with the same summary and charts. No intended-zone entry, since that's not something "
+                     "Rapsodo measures -- only actual results.",
             )
-            if unlinked_bullpens:
-                bullpens_by_id = {b.bullpen_id: b for b in unlinked_bullpens}
-                single_player_bullpen_id = st.selectbox(
-                    "Is this for a specific bullpen session? (optional)",
-                    options=[None] + list(bullpens_by_id.keys()),
-                    format_func=lambda bid: "-- Not tied to a bullpen session --" if bid is None else (
-                        f"{bullpens_by_id[bid].session_date.strftime('%Y-%m-%d (%a)')} — {bullpens_by_id[bid].bullpen_type.type_name if bullpens_by_id[bid].bullpen_type else '—'}"
+            if auto_bullpen_mode:
+                empty_sessions = (
+                    session.query(BullpenSession)
+                    .outerjoin(BullpenSession.pitches)
+                    .filter(BullpenSession.player_id == single_player_id, BullpenPitch.bullpen_pitch_id.is_(None))
+                    .order_by(BullpenSession.session_date.desc())
+                    .all()
+                )
+                sessions_by_id = {b.bullpen_id: b for b in empty_sessions}
+                NEW_SESSION = "__new__"
+                session_choice = st.selectbox(
+                    "Bullpen session",
+                    options=[NEW_SESSION] + list(sessions_by_id.keys()),
+                    format_func=lambda x: "-- Create a new session --" if x == NEW_SESSION else (
+                        f"{sessions_by_id[x].session_date.strftime('%Y-%m-%d (%a)')} — {sessions_by_id[x].bullpen_type.type_name if sessions_by_id[x].bullpen_type else '—'} (empty, no pitches yet)"
                     ),
                 )
-                if single_player_bullpen_id is not None:
-                    st.caption("After importing, you'll get a shortcut straight to linking these pitches on Bullpen Tracking.")
+                if session_choice == NEW_SESSION:
+                    bullpen_types = session.query(BullpenType).order_by(BullpenType.display_order).all()
+                    if not bullpen_types:
+                        st.warning("No bullpen types set up yet -- run the app's seed script first.")
+                    else:
+                        new_bullpen_type_id = st.selectbox(
+                            "Bullpen type", options=[bt.bullpen_type_id for bt in bullpen_types],
+                            format_func=lambda btid: next(bt.type_name for bt in bullpen_types if bt.bullpen_type_id == btid),
+                        )
+                        new_bullpen_date = st.date_input("Session date", value=date.today())
+                else:
+                    target_bullpen_id = session_choice
+                st.caption("Pitches will be created in the same order they appear in the file. Only empty sessions (no pitches logged yet) show up here, to avoid mixing this with live-tracked pitches.")
 
     st.divider()
     uploaded_file = st.file_uploader("Upload Rapsodo CSV export", type=["csv"])
@@ -274,6 +296,22 @@ try:
         pitch_types_cache = {pt.type_name.lower(): pt for pt in session.query(PitchType).all()}
         roster_by_id_for_import = {p.player_id: p for p in roster}
 
+        target_bullpen = None
+        if auto_bullpen_mode:
+            if target_bullpen_id is not None:
+                target_bullpen = session.query(BullpenSession).filter(BullpenSession.bullpen_id == target_bullpen_id).first()
+            elif new_bullpen_type_id is not None:
+                target_bullpen = BullpenSession(
+                    player_id=single_player_id,
+                    bullpen_type_id=new_bullpen_type_id,
+                    session_date=new_bullpen_date,
+                    created_by_user_id=current_user_id,
+                    overall_notes="Created from Rapsodo CSV import (no live tracking).",
+                )
+                session.add(target_bullpen)
+                session.flush()
+        bullpen_pitch_number = 0
+
         imported = 0
         skipped_no_player = 0
         skipped_no_values = 0
@@ -343,6 +381,16 @@ try:
                 skipped_no_values += 1
                 continue
 
+            if auto_bullpen_mode and target_bullpen is not None:
+                bullpen_pitch_number += 1
+                session.add(BullpenPitch(
+                    bullpen_id=target_bullpen.bullpen_id,
+                    pitch_number=bullpen_pitch_number,
+                    pitch_type_id=pitch_type_id,
+                    target_zone=None,  # not tracked live -- this import skips that step entirely
+                    linked_assessment_id=new_assessment.assessment_id,  # auto-linked immediately, no manual step needed
+                ))
+
             imported += 1
             if imported % 100 == 0:
                 session.commit()
@@ -357,15 +405,14 @@ try:
             f"{skipped_no_values} (no mapped values present)."
         )
 
-        if single_player_mode and single_player_bullpen_id is not None:
-            target_bullpen = session.query(BullpenSession).filter(BullpenSession.bullpen_id == single_player_bullpen_id).first()
-            if target_bullpen:
-                label = f"{target_bullpen.session_date.strftime('%Y-%m-%d (%a)')} — {target_bullpen.bullpen_type.type_name if target_bullpen.bullpen_type else '—'}"
-                if st.button(f"Go link these pitches to {label}", type="primary"):
-                    st.session_state.bp_selected_pitcher_id = single_player_id
-                    st.query_params["bullpen_id"] = str(single_player_bullpen_id)
-                    st.session_state.active_bullpen_id = single_player_bullpen_id
-                    st.switch_page("pages/bullpen_tracking.py")
+        if auto_bullpen_mode and target_bullpen is not None:
+            label = f"{target_bullpen.session_date.strftime('%Y-%m-%d (%a)')} — {target_bullpen.bullpen_type.type_name if target_bullpen.bullpen_type else '—'}"
+            st.success(f"Also created {bullpen_pitch_number} bullpen pitch(es) in {label}, already linked -- no manual linking needed.")
+            if st.button(f"Go view {label} on Bullpen Tracking", type="primary"):
+                st.session_state.bp_selected_pitcher_id = single_player_id
+                st.query_params["bullpen_id"] = str(target_bullpen.bullpen_id)
+                st.session_state.active_bullpen_id = target_bullpen.bullpen_id
+                st.switch_page("pages/bullpen_tracking.py")
 
 finally:
     session.close()
