@@ -23,7 +23,7 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from models import (
     Player, StaffPlayerAssignment, AssessmentCategory, AssessmentTestType,
-    Assessment, AssessmentResult, PitchType, IDPGoal, IDPStatus,
+    Assessment, AssessmentResult, PitchType, IDPGoal, IDPStatus, BullpenPitch,
 )
 from bucket_system import BUCKET_RELEVANT_CATEGORIES, get_bucket_test_names_for_category, compute_bucket_system
 from bucket_system_display import render_score_rings, render_full_breakdown
@@ -181,6 +181,16 @@ try:
                 joinedload(Assessment.pitch_type),
             )
             .filter(Assessment.player_id == selected_player_id, Assessment.category_id == selected_category_id)
+            # Exclude entries that were auto-created by a Rapsodo import
+            # tied to a Bullpen Tracking session -- that data already has
+            # a proper home there (with the full pitch log and charts),
+            # so it doesn't need to also clutter this general browsing
+            # view. The underlying data isn't hidden from anything else
+            # (IDP goals, Bucket System, etc. still use it normally) --
+            # just this specific list.
+            .filter(~Assessment.assessment_id.in_(
+                session.query(BullpenPitch.linked_assessment_id).filter(BullpenPitch.linked_assessment_id.isnot(None))
+            ))
         )
         if pitch_type_filter_id is not None:
             history_query = history_query.filter(Assessment.pitch_type_id == pitch_type_filter_id)

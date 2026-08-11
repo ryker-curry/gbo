@@ -14,7 +14,7 @@ from datetime import date, timedelta
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import Player, User, AssessmentCategory, Assessment, AssessmentResult, AssessmentTestType, PitchType, IDPGoal, IDPStatus
+from models import Player, User, AssessmentCategory, Assessment, AssessmentResult, AssessmentTestType, PitchType, IDPGoal, IDPStatus, BullpenPitch
 from ui_components import page_header, page_footer, empty_state
 from bucket_system import compute_bucket_system
 from bucket_system_display import render_full_breakdown, render_score_rings
@@ -144,6 +144,13 @@ try:
                 joinedload(Assessment.pitch_type),
             )
             .filter(Assessment.player_id == my_player.player_id, Assessment.category_id == selected_category_id)
+            # Exclude entries that were auto-created by a Rapsodo import
+            # tied to a Bullpen Tracking session -- that data already has
+            # a proper home there, so it doesn't need to also clutter
+            # this general browsing view (same as the coach-facing page).
+            .filter(~Assessment.assessment_id.in_(
+                session.query(BullpenPitch.linked_assessment_id).filter(BullpenPitch.linked_assessment_id.isnot(None))
+            ))
         )
         if pitch_type_filter_id is not None:
             history_query = history_query.filter(Assessment.pitch_type_id == pitch_type_filter_id)
