@@ -173,7 +173,49 @@ try:
         page_footer()
         st.stop()
 
-    df = pd.read_csv(uploaded_file, encoding="utf-8-sig")
+    try:
+        df = pd.read_csv(uploaded_file, encoding="utf-8-sig")
+    except pd.errors.ParserError:
+        # Some Rapsodo exports include a few metadata/summary rows
+        # before the real header row, which makes read_csv see an
+        # inconsistent number of columns per row and fail outright.
+        # Find the actual header row (the one containing known Rapsodo
+        # column names) and re-parse starting from there instead.
+        uploaded_file.seek(0)
+        raw_text = uploaded_file.read().decode("utf-8-sig", errors="replace")
+        raw_lines = raw_text.splitlines()
+        known_markers = ["Player_Name", "Pitch_Type", "Date", "Velocity", "Spin Rate", "Pitch Type"]
+        # Require at least 2 markers on the SAME line -- a genuine
+        # header row has several recognizable column names together,
+        # while a metadata line (e.g. "Session Date,2026-08-09")
+        # typically has at most one and would otherwise false-positive.
+        header_row_idx = next(
+            (i for i, line in enumerate(raw_lines) if sum(1 for marker in known_markers if marker in line) >= 2),
+            None,
+        )
+        if header_row_idx is None:
+            st.error(
+                "This file couldn't be read as a Rapsodo export -- the parser hit an inconsistent number of "
+                "columns per row, and none of the lines look like a normal Rapsodo header (Player_Name, "
+                "Pitch_Type, Date, etc.). Double check this is the right file, or open it in a spreadsheet "
+                "and confirm the top rows before the real data table look like they'd normally be there."
+            )
+            page_footer()
+            st.stop()
+        uploaded_file.seek(0)
+        try:
+            df = pd.read_csv(uploaded_file, encoding="utf-8-sig", skiprows=header_row_idx)
+        except pd.errors.ParserError as e:
+            st.error(
+                f"Still couldn't parse this file after skipping what looked like {header_row_idx} metadata "
+                f"row(s) above the header. The underlying error was: {e}. This file may have a format GBO "
+                f"doesn't recognize yet -- worth checking it opens cleanly in Excel/Sheets first."
+            )
+            page_footer()
+            st.stop()
+        if header_row_idx > 0:
+            st.info(f"Skipped {header_row_idx} metadata row(s) at the top of the file before finding the real header.")
+
     df.columns = [c.strip() for c in df.columns]
     csv_columns = list(df.columns)
 
