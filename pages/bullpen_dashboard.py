@@ -1,13 +1,20 @@
 """
-GBO — Bullpen Dashboard (Rapsodo Bullpen Analytics, Phase 2).
+GBO — Bullpen Dashboard (Rapsodo Bullpen Analytics, Phase 2 + Phase 3).
 
 Opens a single bullpen session's Rapsodo-imported data: session header/
-KPI cards, filters (pitch type, pitch number range), and the pitch-type
+KPI cards, filters (pitch type, pitch number range), the pitch-type
 summary table with an expandable individual-pitch view (spec Sections
-5-6). Regenerates entirely from stored RapsodoPitch rows -- never needs
-the original file re-uploaded, per spec Section 3 Step 7.
+5-6), and the core visualizations -- movement, release point, velocity/
+spin trend, location, and spin axis (spec Sections 7-11, Phase 3).
+Regenerates entirely from stored RapsodoPitch rows -- never needs the
+original file re-uploaded, per spec Section 3 Step 7.
 
-No charts yet -- that's Phase 3 (visualizations/bullpen_charts.py).
+Chart layout follows spec Section 25's grouping: Movement | Release
+Point, then Velocity + Spin, then Location | Spin Axis. All charts
+respect the same pitch-type/pitch-number filters as the summary table
+above them, except the individual-pitch spin-axis view (busy at "All
+Pitches" scale by design, per its own docstring) which gets its own
+type selector.
 
 Reached two ways:
   - With ?bullpen_id=<id> in the URL (e.g. linked from Bullpen Tracking's
@@ -33,6 +40,10 @@ from ui_components import page_header, page_footer, empty_state, render_kpi_card
 from analytics.bullpen_metrics import (
     session_summary, pitch_type_summary, individual_pitch_rows, filter_pitches, pitch_type_label,
 )
+from visualizations.bullpen_charts import (
+    movement_chart, release_point_chart, velocity_spin_trend_chart, location_chart,
+)
+from visualizations.spin_axis_chart import individual_spin_axis_chart, average_spin_axis_chart
 
 page_header("Bullpen Dashboard")
 
@@ -201,10 +212,44 @@ try:
             st.dataframe(individual_pitch_rows(pitches_by_type[label]), use_container_width=True, hide_index=True)
 
     st.divider()
-    st.caption(
-        "Movement, release-point, velocity/spin trend, location, and spin-axis charts are Phase 3 of the "
-        "Rapsodo Bullpen Analytics build -- not yet available here."
-    )
+
+    # --- Charts (spec Sections 7-11, Phase 3) -- respect the same
+    # filters as the summary table above (pitch type, pitch number
+    # range), per spec Section 5's "charts should respond to the
+    # filters whenever appropriate." ---
+    st.subheader("Charts")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.plotly_chart(movement_chart(filtered_pitches), use_container_width=True)
+        st.caption("Centered on release point; color-coded by pitch type. Hover a pitch for details.")
+    with col2:
+        st.plotly_chart(release_point_chart(filtered_pitches), use_container_width=True)
+        st.caption("Tighter clustering across pitch types suggests better tunneling out of the hand.")
+
+    st.plotly_chart(velocity_spin_trend_chart(filtered_pitches), use_container_width=True)
+    if selected_type == "All Pitches":
+        st.caption(
+            "Showing every pitch in throwing order -- a fastball/offspeed mix will naturally zigzag here. "
+            "Filter to a single pitch type above for that type's own trend."
+        )
+
+    col3, col4 = st.columns(2)
+    with col3:
+        location_mode = st.radio("Location view", ["Heat Map", "Individual Pitches"], horizontal=True, key="dash_location_mode")
+        st.plotly_chart(
+            location_chart(filtered_pitches, mode="heatmap" if location_mode == "Heat Map" else "individual"),
+            use_container_width=True,
+        )
+    with col4:
+        spin_axis_mode = st.radio("Spin axis view", ["Average by Pitch Type", "Individual Pitches"], horizontal=True, key="dash_spin_axis_mode")
+        if spin_axis_mode == "Average by Pitch Type":
+            st.plotly_chart(average_spin_axis_chart(filtered_pitches), use_container_width=True)
+        else:
+            individual_type_filter = None if selected_type == "All Pitches" else selected_type
+            if selected_type == "All Pitches":
+                st.caption("Showing every pitch type at once gets busy -- filter to one type above for a cleaner view.")
+            st.plotly_chart(individual_spin_axis_chart(filtered_pitches, pitch_type_filter=individual_type_filter), use_container_width=True)
 
 finally:
     session.close()

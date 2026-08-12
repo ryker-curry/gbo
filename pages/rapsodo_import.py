@@ -256,7 +256,7 @@ try:
         if st.button("Open full Bullpen Dashboard for this session", type="primary", key="rapsodo_import_open_dashboard"):
             st.query_params["bullpen_id"] = str(target_bullpen.bullpen_id)
             st.switch_page("pages/bullpen_dashboard.py")
-        st.caption("Charts (movement, release point, velocity/spin trend, location, spin axis) are Phase 3 of the Rapsodo Bullpen Analytics build -- not yet on the dashboard.")
+        st.caption("The dashboard includes movement, release point, velocity/spin trend, location, and spin-axis charts.")
 
 finally:
     session.close()
