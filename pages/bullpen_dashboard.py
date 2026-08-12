@@ -49,14 +49,9 @@ from sqlalchemy.orm import joinedload
 
 from database import get_session
 from models import Player, StaffPlayerAssignment, User, BullpenSession, RapsodoPitch
-from ui_components import page_header, page_footer, empty_state, render_kpi_cards
-from bullpen_dashboard_style import inject_dashboard_theme, section_label, pitch_type_legend
-from bullpen_dashboard_render import render_bullpen_session
-from analytics.bullpen_metrics import session_summary, pitch_type_summary
-from visualizations.bullpen_charts import (
-    movement_chart, release_point_chart, velocity_spin_trend_chart, location_chart, color_for_pitch_label,
-)
-from visualizations.spin_axis_chart import individual_spin_axis_chart, average_spin_axis_chart
+from ui_components import page_header, page_footer, empty_state
+from bullpen_dashboard_style import inject_dashboard_theme
+from bullpen_dashboard_render import render_bullpen_session, render_overall_pitch_tracking
 
 page_header("Bullpen Dashboard")
 inject_dashboard_theme()
@@ -162,79 +157,10 @@ try:
     # --- Overall Pitch Tracking: every one of this pitcher's Rapsodo
     # sessions combined, ahead of the single-session drill-down below --
     # per Ryker's request for a career/overall total table before the
-    # existing per-session view. Reuses the exact same pitch_type_summary()
-    # table shape as the per-session Pitch Summary further down, just fed
-    # every pitch across every session instead of one. ---
-    overall_pitches = (
-        session.query(RapsodoPitch)
-        .options(joinedload(RapsodoPitch.pitch_type))
-        .filter(RapsodoPitch.bullpen_id.in_(player_session_ids))
-        .order_by(RapsodoPitch.pitch_date)
-        .all()
-    )
-    with st.container(border=True):
-        section_label(1, f"Overall Pitch Tracking — {target_player.first_name} {target_player.last_name}")
-        overall_summary = session_summary(overall_pitches)
-        render_kpi_cards([
-            {"label": "Sessions", "value": str(len(player_session_ids))},
-            {"label": "Total Pitches", "value": str(overall_summary["total_pitches"])},
-            {"label": "Pitch Types", "value": str(len(overall_summary["pitch_type_names"]))},
-            {"label": "Avg Velocity", "value": f"{overall_summary['avg_velocity']:.1f} mph" if overall_summary["avg_velocity"] is not None else "—"},
-            {"label": "Avg Spin Rate", "value": f"{overall_summary['avg_spin_rate']:.0f} rpm" if overall_summary["avg_spin_rate"] is not None else "—"},
-        ])
-        overall_rows = pitch_type_summary(overall_pitches)
-        st.dataframe(overall_rows, use_container_width=True, hide_index=True)
-
-        if overall_pitches:
-            st.write("")
-            st.markdown("**Charts — every imported pitch for this pitcher, all sessions combined**")
-
-            # Same five charts as the single-session view below, fed
-            # every pitch across every one of this pitcher's sessions
-            # instead of just one -- per Ryker's request that the overall
-            # section show charts too, not just the totals table. Widget
-            # keys are prefixed "overall_" since these are a second,
-            # independent instance of the same controls used lower down
-            # for the single-session Charts section.
-            overall_min_shading = st.slider(
-                "Minimum pitches to shade a pitch type's cluster", min_value=1, max_value=10, value=2,
-                key="overall_min_shading_pitches",
-                help="A pitch type with fewer pitches than this still shows its dots, just no shaded cluster region.",
-            )
-            st.plotly_chart(
-                movement_chart(overall_pitches, min_pitches_for_shading=overall_min_shading), use_container_width=True
-            )
-            pitch_type_legend(overall_rows, overall_summary["total_pitches"], color_for_pitch_label)
-            st.caption("Centered on release point; color-coded by pitch type. Hover a pitch for details.")
-
-            st.plotly_chart(release_point_chart(overall_pitches), use_container_width=True)
-            st.caption("Tighter clustering across pitch types suggests better tunneling out of the hand.")
-
-            st.plotly_chart(velocity_spin_trend_chart(overall_pitches), use_container_width=True)
-            st.caption(
-                "Showing every pitch across every session in throwing order -- a jump between sessions "
-                "will show up as a break in the trend here, not a single continuous outing."
-            )
-
-            overall_location_mode = st.radio(
-                "Location view", ["Heat Map", "Individual Pitches"], horizontal=True, key="overall_location_mode",
-            )
-            st.plotly_chart(
-                location_chart(overall_pitches, mode="heatmap" if overall_location_mode == "Heat Map" else "individual"),
-                use_container_width=True,
-            )
-
-            overall_spin_axis_mode = st.radio(
-                "Spin axis view", ["Average by Pitch Type", "Individual Pitches"], horizontal=True,
-                key="overall_spin_axis_mode",
-            )
-            if overall_spin_axis_mode == "Average by Pitch Type":
-                st.plotly_chart(average_spin_axis_chart(overall_pitches), use_container_width=True)
-            else:
-                st.caption("Showing every pitch type at once gets busy across a full multi-session history.")
-                st.plotly_chart(
-                    individual_spin_axis_chart(overall_pitches, pitch_type_filter=None), use_container_width=True
-                )
+    # existing per-session view. Shared with pages/player_bullpens.py's
+    # "All Sessions (Combined)" picker option, see
+    # bullpen_dashboard_render.py. ---
+    render_overall_pitch_tracking(session, target_player, player_session_ids, section_start=1)
 
     st.write("")
 

@@ -1,28 +1,30 @@
 """
-GBO — Shared single-session Rapsodo Bullpen Dashboard rendering
-(session header/KPI cards, filters, pitch-type summary, and the five
-core charts). Pulled out of pages/bullpen_dashboard.py into its own
-module so the exact same rendering can be called from two different
-places, per Ryker's request:
+GBO — Shared Rapsodo Bullpen Dashboard rendering: a single session's
+full drill-down (session header/KPI cards, filters, pitch-type
+summary, and the five core charts), plus a combined "every session
+this pitcher has" view. Pulled out of pages/bullpen_dashboard.py into
+its own module so the exact same rendering can be called from two
+different places, per Ryker's request:
 
   - pages/bullpen_dashboard.py -- the standalone page (coaches' picker
     flow, and every existing direct ?bullpen_id= link from Bullpen
     Tracking / Import Rapsodo Data), unchanged in behavior.
-  - pages/player_bullpens.py -- inline, inside an expander per session,
-    so a player can open a session's full dashboard without leaving
-    My Bullpens or navigating to a separate tab.
+  - pages/player_bullpens.py -- inline, right on My Bullpens, behind a
+    "which session (or all combined)?" picker, so a player can see the
+    full dashboard without leaving My Bullpens or navigating to a
+    separate tab.
 
-Because this can now run more than once on the same page (My Bullpens
-loops over every Rapsodo session), every interactive widget's key is
-suffixed with the bullpen_id it belongs to -- the original single-page
-version used fixed keys ("dash_min_shading_pitches" etc.), which only
-worked because exactly one instance ever existed on a page at once.
+Because render_bullpen_session can now run more than once on the same
+page in principle, every interactive widget's key is suffixed with the
+bullpen_id it belongs to -- the original single-page version used
+fixed keys ("dash_min_shading_pitches" etc.), which only worked
+because exactly one instance ever existed on a page at once. Same
+pattern for render_overall_pitch_tracking, suffixed by player_id.
 
-Also, unlike the original inlined version, the "no pitches match the
-selected filters" case now does a plain `return` instead of
-`page_footer(); st.stop()` -- stopping the whole script would be wrong
-here, since My Bullpens has real content both above and below whichever
-session's expander this is running inside.
+Also, unlike the original inlined version, render_bullpen_session's
+"no pitches match the selected filters" case now does a plain `return`
+instead of `page_footer(); st.stop()` -- stopping the whole script
+would be wrong for a caller with other content above/below it.
 """
 
 import streamlit as st
@@ -187,3 +189,85 @@ def render_bullpen_session(session, target_bullpen_id, section_start=1):
             if selected_type == "All Pitches":
                 st.caption("Showing every pitch type at once gets busy -- filter to one type above for a cleaner view.")
             st.plotly_chart(individual_spin_axis_chart(filtered_pitches, pitch_type_filter=individual_type_filter), use_container_width=True)
+
+
+def render_overall_pitch_tracking(session, player, player_session_ids, section_start=1):
+    """Renders the combined "every one of this pitcher's Rapsodo
+    sessions" view: KPI cards, the pitch-type summary table, and all
+    five charts, fed every pitch across every session in
+    player_session_ids instead of just one. Shared by:
+
+      - pages/bullpen_dashboard.py -- as the Overall Pitch Tracking
+        section ahead of a single session's drill-down (coaches).
+      - pages/player_bullpens.py -- as the "All Sessions (Combined)"
+        option in its session picker (players), per Ryker's request
+        for that same combined view there too.
+
+    Caller is responsible for the SQLAlchemy session (already open),
+    for player being a Player ORM object, and for player_session_ids
+    being bullpen_ids this user is allowed to see -- same permission
+    split as render_bullpen_session."""
+    overall_pitches = (
+        session.query(RapsodoPitch)
+        .options(joinedload(RapsodoPitch.pitch_type))
+        .filter(RapsodoPitch.bullpen_id.in_(player_session_ids))
+        .order_by(RapsodoPitch.pitch_date)
+        .all()
+    )
+    with st.container(border=True):
+        section_label(section_start, f"Overall Pitch Tracking — {player.first_name} {player.last_name}")
+        overall_summary = session_summary(overall_pitches)
+        render_kpi_cards([
+            {"label": "Sessions", "value": str(len(player_session_ids))},
+            {"label": "Total Pitches", "value": str(overall_summary["total_pitches"])},
+            {"label": "Pitch Types", "value": str(len(overall_summary["pitch_type_names"]))},
+            {"label": "Avg Velocity", "value": f"{overall_summary['avg_velocity']:.1f} mph" if overall_summary["avg_velocity"] is not None else "—"},
+            {"label": "Avg Spin Rate", "value": f"{overall_summary['avg_spin_rate']:.0f} rpm" if overall_summary["avg_spin_rate"] is not None else "—"},
+        ])
+        overall_rows = pitch_type_summary(overall_pitches)
+        st.dataframe(overall_rows, use_container_width=True, hide_index=True)
+
+        if overall_pitches:
+            st.write("")
+            st.markdown("**Charts — every imported pitch for this pitcher, all sessions combined**")
+
+            overall_min_shading = st.slider(
+                "Minimum pitches to shade a pitch type's cluster", min_value=1, max_value=10, value=2,
+                key=f"overall_min_shading_pitches_{player.player_id}",
+                help="A pitch type with fewer pitches than this still shows its dots, just no shaded cluster region.",
+            )
+            st.plotly_chart(
+                movement_chart(overall_pitches, min_pitches_for_shading=overall_min_shading), use_container_width=True
+            )
+            pitch_type_legend(overall_rows, overall_summary["total_pitches"], color_for_pitch_label)
+            st.caption("Centered on release point; color-coded by pitch type. Hover a pitch for details.")
+
+            st.plotly_chart(release_point_chart(overall_pitches), use_container_width=True)
+            st.caption("Tighter clustering across pitch types suggests better tunneling out of the hand.")
+
+            st.plotly_chart(velocity_spin_trend_chart(overall_pitches), use_container_width=True)
+            st.caption(
+                "Showing every pitch across every session in throwing order -- a jump between sessions "
+                "will show up as a break in the trend here, not a single continuous outing."
+            )
+
+            overall_location_mode = st.radio(
+                "Location view", ["Heat Map", "Individual Pitches"], horizontal=True,
+                key=f"overall_location_mode_{player.player_id}",
+            )
+            st.plotly_chart(
+                location_chart(overall_pitches, mode="heatmap" if overall_location_mode == "Heat Map" else "individual"),
+                use_container_width=True,
+            )
+
+            overall_spin_axis_mode = st.radio(
+                "Spin axis view", ["Average by Pitch Type", "Individual Pitches"], horizontal=True,
+                key=f"overall_spin_axis_mode_{player.player_id}",
+            )
+            if overall_spin_axis_mode == "Average by Pitch Type":
+                st.plotly_chart(average_spin_axis_chart(overall_pitches), use_container_width=True)
+            else:
+                st.caption("Showing every pitch type at once gets busy across a full multi-session history.")
+                st.plotly_chart(
+                    individual_spin_axis_chart(overall_pitches, pitch_type_filter=None), use_container_width=True
+                )

@@ -6,14 +6,16 @@ the same type-adaptive summary shown to coaches on Bullpen Tracking,
 just without any editing/logging controls.
 
 Sessions with Rapsodo-imported data (Rapsodo Bullpen Analytics, Phase 2)
-get an expander at the top of the page that renders the full Bullpen
-Dashboard (filters, pitch-type summary, all five charts) inline, right
-here on My Bullpens -- per Ryker's request not to make a player leave
-this tab for a separate "Bullpen Dashboard" page. Uses the exact same
+get a "Bullpen Dashboard" section at the top of the page with a picker
+-- either a specific session, or "All Sessions (Combined)" for a
+career-to-date view -- and renders the full dashboard (filters,
+pitch-type summary, all five charts; or the combined KPI/summary/
+charts view) inline, right here on My Bullpens, per Ryker's request
+not to make a player leave this tab for a separate "Bullpen Dashboard"
+page, and to be able to pick one session at a time (or all of them
+combined) rather than see every session at once. Uses the exact same
 rendering as the standalone dashboard page (see
-bullpen_dashboard_render.py); the only difference is this runs inside
-an expander instead of on its own page, and there's no separate
-page/tab to navigate to anymore. This section is separate from the
+bullpen_dashboard_render.py). This section is separate from the
 legacy per-session view below -- the two read from different tables
 (RapsodoPitch vs. the older Assessment/BullpenPitch linkage) and a
 session could have either or both during the transition.
@@ -26,7 +28,7 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from models import Player, User, BullpenSession, HitterSwing, RapsodoPitch
 from ui_components import page_header, page_footer, empty_state
-from bullpen_dashboard_render import render_bullpen_session
+from bullpen_dashboard_render import render_bullpen_session, render_overall_pitch_tracking
 
 page_header("My Bullpens")
 
@@ -274,13 +276,31 @@ try:
     }
     if rapsodo_bullpen_ids:
         st.subheader("Bullpen Dashboard")
-        st.caption("Sessions with imported Rapsodo data -- expand one for its full pitch-type summary, filters, and charts.")
-        for b in sessions:
-            if b.bullpen_id not in rapsodo_bullpen_ids:
-                continue
+        st.caption("Pick a specific session for its full pitch-type summary, filters, and charts -- or view every session combined.")
+
+        rapsodo_sessions = [b for b in sessions if b.bullpen_id in rapsodo_bullpen_ids]  # already date-desc ordered
+
+        ALL_COMBINED = "__all__"
+
+        def _view_label(choice):
+            if choice == ALL_COMBINED:
+                return "All Sessions (Combined)"
+            b = next(s for s in rapsodo_sessions if s.bullpen_id == choice)
             type_label = b.bullpen_type.type_name if b.bullpen_type else "—"
-            with st.expander(f"{b.session_date.strftime('%Y-%m-%d (%a)')} — {type_label}"):
-                render_bullpen_session(session, b.bullpen_id, section_start=1)
+            return f"{b.session_date.strftime('%Y-%m-%d (%a)')} — {type_label}"
+
+        view_choice = st.selectbox(
+            "View", options=[ALL_COMBINED] + [b.bullpen_id for b in rapsodo_sessions],
+            format_func=_view_label, key="my_bullpens_view_choice",
+        )
+
+        if view_choice == ALL_COMBINED:
+            render_overall_pitch_tracking(
+                session, my_player, [b.bullpen_id for b in rapsodo_sessions], section_start=1
+            )
+        else:
+            render_bullpen_session(session, view_choice, section_start=1)
+
         st.divider()
 
     def _summarize(b):
