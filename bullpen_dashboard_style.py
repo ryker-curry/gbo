@@ -67,6 +67,42 @@ def inject_dashboard_theme():
     )
 
 
+def pitch_type_legend(summary_rows, total_pitches, color_for_label):
+    """Colored-pill legend row per pitch type -- Pitch Type / Usage% /
+    Avg MPH -- replacing the movement chart's in-plot Plotly legend
+    (turned off in movement_chart() itself) with the below-chart table
+    style from Ryker's reference image. Takes summary_rows in the same
+    shape analytics.bullpen_metrics.pitch_type_summary() already
+    returns (needs "Pitch Type", "#", "Avg Velo") -- no separate
+    usage/velo computation here, just formatting what's already
+    computed elsewhere for the Pitch Summary table above it.
+
+    color_for_label is passed in rather than imported, so this module
+    (page chrome, not a chart builder) doesn't need to depend on
+    visualizations/bullpen_charts.py."""
+    if not summary_rows or not total_pitches:
+        return
+    cells = []
+    for row in summary_rows:
+        label = row["Pitch Type"]
+        usage_pct = round(100 * row["#"] / total_pitches, 0)
+        avg_velo = f'{row["Avg Velo"]:.1f}' if row["Avg Velo"] is not None else "—"
+        color = color_for_label(label)
+        cells.append(
+            '<div style="text-align:center; min-width:90px;">'
+            f'<div style="width:28px; height:14px; border-radius:7px; background:{color}; margin:0 auto 6px auto;"></div>'
+            f'<div style="color:{TEXT_CREAM}; font-weight:700; font-size:0.85rem;">{label}</div>'
+            f'<div style="color:{GOLD}; font-size:0.8rem; margin-top:2px;">{usage_pct:g}%</div>'
+            f'<div style="color:#B8B8B8; font-size:0.75rem;">{avg_velo} mph</div>'
+            '</div>'
+        )
+    st.markdown(
+        '<div style="display:flex; justify-content:center; gap:22px; flex-wrap:wrap; margin:6px 0 14px 0;">'
+        + "".join(cells) + '</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def section_label(number, text):
     """Renders a Paradigm-style numbered section label: a short rule,
     then "01 · TEXT" in small-caps gold letter-spacing. Use in place of

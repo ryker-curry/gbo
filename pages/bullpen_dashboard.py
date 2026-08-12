@@ -42,12 +42,12 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from models import Player, StaffPlayerAssignment, User, BullpenSession, RapsodoPitch
 from ui_components import page_header, page_footer, empty_state, render_kpi_cards
-from bullpen_dashboard_style import inject_dashboard_theme, section_label
+from bullpen_dashboard_style import inject_dashboard_theme, section_label, pitch_type_legend
 from analytics.bullpen_metrics import (
     session_summary, pitch_type_summary, individual_pitch_rows, filter_pitches, pitch_type_label,
 )
 from visualizations.bullpen_charts import (
-    movement_chart, release_point_chart, velocity_spin_trend_chart, location_chart,
+    movement_chart, release_point_chart, velocity_spin_trend_chart, location_chart, color_for_pitch_label,
 )
 from visualizations.spin_axis_chart import individual_spin_axis_chart, average_spin_axis_chart
 
@@ -231,7 +231,13 @@ try:
 
         # Each chart gets its own full-width row -- no side-by-side
         # columns -- per Ryker's request.
-        st.plotly_chart(movement_chart(filtered_pitches), use_container_width=True)
+        min_shading_pitches = st.slider(
+            "Minimum pitches to shade a pitch type's cluster", min_value=1, max_value=10, value=2,
+            key="dash_min_shading_pitches",
+            help="A pitch type with fewer pitches than this still shows its dots, just no shaded cluster region.",
+        )
+        st.plotly_chart(movement_chart(filtered_pitches, min_pitches_for_shading=min_shading_pitches), use_container_width=True)
+        pitch_type_legend(summary_rows, len(filtered_pitches), color_for_pitch_label)
         st.caption("Centered on release point; color-coded by pitch type. Hover a pitch for details.")
 
         st.plotly_chart(release_point_chart(filtered_pitches), use_container_width=True)

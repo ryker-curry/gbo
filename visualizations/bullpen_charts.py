@@ -53,14 +53,112 @@ def color_for_pitch_label(label):
     return get_pitch_color(label)
 
 
-def movement_chart(pitches):
-    """Spec Section 7: Horizontal Break (x) vs. Induced Vertical Break (y),
-    centered on (0, 0) with quadrant reference lines, one dot per pitch,
-    colored by pitch type."""
+def _nice_ring_radii(max_extent):
+    """Pick 2-3 clean-looking ring radii (like Baseball Savant's
+    12"/18"/24" movement-plot rings) that fit inside max_extent, scaled
+    to whatever range this session's actual movement falls in -- a
+    single bullpen's spread is much smaller than a full season's, so a
+    fixed 12/18/24 wouldn't fit most outings. Rounds to the nearest
+    "nice" step (2, 5, or 10 inches) depending on scale."""
+    if max_extent <= 10:
+        step = 2
+    elif max_extent <= 25:
+        step = 5
+    else:
+        step = 10
+    radii = []
+    r = step
+    while r < max_extent:
+        radii.append(r)
+        r += step
+    return radii or [round(max_extent)]
+
+
+def movement_chart(pitches, min_pitches_for_shading=2):
+    """Horizontal Break (x) vs. Induced Vertical Break (y), styled after
+    a Baseball-Savant-style movement plot per Ryker's reference image:
+    concentric distance rings instead of a plain grid, a soft shaded
+    "cluster" region per pitch type behind the individual dots, and
+    MORE RISE / MORE DROP labels on the vertical axis. Centered on
+    (0, 0) with bold gold reference lines through the origin, one dot
+    per pitch, colored by pitch type.
+
+    min_pitches_for_shading: pitch types with fewer pitches than this
+    still get their dots plotted, just no shaded cluster region (a
+    shape drawn around 1-2 points isn't a meaningful "cluster," it's
+    just noise) -- the reference image's "100 pitch sample" toggle,
+    scaled down to bullpen-session sample sizes instead of a full season.
+
+    Deliberately NOT included, both because GBO doesn't have the data
+    to do them honestly:
+      - An MLB/league-average reference overlay (Ryker's image has a
+        hatched "MLB AVG." shape) -- would need a real external
+        benchmark dataset GBO doesn't have. Not faking one.
+      - The arm-angle indicator + pitcher silhouette -- computing a real
+        arm angle from release_side/release_height needs the same
+        physics review already deferred to Phase 4 (see the original
+        architecture review's caveat on release_angle/horizontal_angle).
+    Also not included yet, pending a quick fact-check: the reference
+    image labels the horizontal axis "1B (dot) MOVES TOWARD (dot) 3B"
+    instead of a plain break value -- which side is which depends on
+    the pitcher's throwing hand AND on which physical direction
+    Rapsodo's positive HB actually points, and that sign convention
+    isn't documented anywhere in this codebase. Rather than guess and
+    risk labeling a chart backwards, the horizontal axis keeps its
+    plain "Horizontal Break (in)" label for now -- tell me whether a
+    known right-handed pitcher's fastball in your data comes out
+    positive or negative HB and I'll wire up the real 1B/3B labels
+    correctly.
+    """
     fig = go.Figure()
 
     usable = [p for p in pitches if p.hb_spin is not None and p.vb_spin is not None]
     order, groups = _group_by_type(usable)
+
+    if xs_all := [v for group in groups.values() for p in group if (v := p.hb_spin) is not None]:
+        x_extent = max(4, max(abs(float(v)) for v in xs_all) * 1.15)
+    else:
+        x_extent = 20
+    if ys_all := [v for group in groups.values() for p in group if (v := p.vb_spin) is not None]:
+        y_extent = max(4, max(abs(float(v)) for v in ys_all) * 1.15)
+    else:
+        y_extent = 20
+    ring_extent = max(x_extent, y_extent)
+
+    # Concentric reference rings, drawn first (and pinned "below" the
+    # data traces) so they read as background texture, not clutter.
+    ring_radii = _nice_ring_radii(ring_extent)
+    for r in ring_radii:
+        fig.add_shape(
+            type="circle", xref="x", yref="y", x0=-r, x1=r, y0=-r, y1=r,
+            line=dict(color=GRID_GRAY, width=1, dash="dot"), layer="below",
+        )
+        fig.add_annotation(
+            x=0, y=r, text=f'{r:g}"', showarrow=False, yshift=10,
+            font=dict(color=GRID_GRAY, size=10), xref="x", yref="y",
+        )
+
+    # Soft shaded cluster region per pitch type -- a simple bounding
+    # circle around each type's own points (centered on its mean, sized
+    # to its own spread), not a real density/KDE contour. An honest,
+    # readable approximation rather than a statistically-fitted shape.
+    for label in order:
+        group = groups[label]
+        if len(group) < min_pitches_for_shading:
+            continue
+        xs = [float(p.hb_spin) for p in group]
+        ys = [float(p.vb_spin) for p in group]
+        cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
+        spread = max(max(xs) - min(xs), max(ys) - min(ys)) / 2 + 1.5
+        fig.add_shape(
+            type="circle", xref="x", yref="y",
+            x0=cx - spread, x1=cx + spread, y0=cy - spread, y1=cy + spread,
+            line=dict(width=0), fillcolor=color_for_pitch_label(label), opacity=0.18, layer="below",
+        )
+
+    # Bold gold reference lines through the origin.
+    fig.add_shape(type="line", x0=0, x1=0, y0=-y_extent, y1=y_extent, line=dict(color=GOLD, width=2.5))
+    fig.add_shape(type="line", x0=-x_extent, x1=x_extent, y0=0, y1=0, line=dict(color=GOLD, width=2.5))
 
     for label in order:
         group = groups[label]
@@ -74,7 +172,7 @@ def movement_chart(pitches):
         ]
         fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="markers", name=label,
-            marker=dict(color=color, size=10, opacity=0.85, line=dict(color="#1E1E1E", width=1)),
+            marker=dict(color=color, size=10, opacity=0.9, line=dict(color="#1E1E1E", width=1)),
             customdata=customdata,
             hovertemplate=(
                 f"{label}<br>Pitch #%{{customdata[0]}}<br>"
@@ -84,30 +182,18 @@ def movement_chart(pitches):
             ),
         ))
 
-    if xs_all := [v for group in groups.values() for p in group if (v := p.hb_spin) is not None]:
-        x_extent = max(4, max(abs(float(v)) for v in xs_all) * 1.15)
-    else:
-        x_extent = 20
-    if ys_all := [v for group in groups.values() for p in group if (v := p.vb_spin) is not None]:
-        y_extent = max(4, max(abs(float(v)) for v in ys_all) * 1.15)
-    else:
-        y_extent = 20
-
-    # Quadrant reference lines at 0/0 -- drawn bold and in the gold
-    # accent (rather than the muted grid color) per Ryker's request, so
-    # they read clearly as "glove-side vs. arm-side" / "rise vs. drop"
-    # dividers instead of blending into the regular gridlines.
-    fig.add_shape(type="line", x0=0, x1=0, y0=-y_extent, y1=y_extent, line=dict(color=GOLD, width=2.5))
-    fig.add_shape(type="line", x0=-x_extent, x1=x_extent, y0=0, y1=0, line=dict(color=GOLD, width=2.5))
+    fig.add_annotation(x=0, y=y_extent, text="▲ MORE RISE", showarrow=False, yshift=18, font=dict(color=TEXT_CREAM, size=11))
+    fig.add_annotation(x=0, y=-y_extent, text="▼ MORE DROP", showarrow=False, yshift=-18, font=dict(color=TEXT_CREAM, size=11))
 
     apply_gbo_theme(
-        fig, title="Pitch Movement", x_title="Horizontal Break (in)", y_title="Induced Vertical Break (in)",
-        # zeroline disabled on both axes -- the bold gold shapes above
-        # are the 0/0 reference lines now, so Plotly's own (fainter)
-        # zeroline would just double up on top of them.
-        xaxis=dict(range=[-x_extent, x_extent], gridcolor=GRID_GRAY, zeroline=False),
-        yaxis=dict(range=[-y_extent, y_extent], gridcolor=GRID_GRAY, zeroline=False, scaleanchor="x", scaleratio=1),
-        showlegend=True,
+        fig, title="Pitch Movement", x_title="Horizontal Break (in)", y_title=None,
+        # Ring labels replace tick numbers/gridlines -- the reference
+        # image has no conventional axis ticks either, just the ring
+        # radii.
+        xaxis=dict(range=[-x_extent, x_extent], showgrid=False, zeroline=False, showticklabels=False, ticks=""),
+        yaxis=dict(range=[-y_extent, y_extent], showgrid=False, zeroline=False, showticklabels=False, ticks="",
+                    scaleanchor="x", scaleratio=1),
+        showlegend=False,  # the pitch-type legend now lives in the usage/velo table below the chart
     )
     return fig
 
