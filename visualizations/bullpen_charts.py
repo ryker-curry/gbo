@@ -53,83 +53,65 @@ def color_for_pitch_label(label):
     return get_pitch_color(label)
 
 
-# Fixed ring radii, per Ryker's call -- 6"/12"/18"/24", rather than
-# scaling to each session's own movement range. A bullpen with a tight
-# spread just shows its dots clustered well inside the rings, same as
-# it would on a real Statcast movement plot.
-RING_RADII = (6, 12, 18, 24)
-
-
 def movement_chart(pitches, min_pitches_for_shading=2):
-    """Horizontal Break (x) vs. Induced Vertical Break (y), styled after
-    a Baseball-Savant-style movement plot per Ryker's reference image:
-    fixed 6"/12"/18"/24" concentric distance rings (see RING_RADII)
-    instead of a plain grid, a soft shaded "cluster" region per pitch type
-    behind the individual dots, and MORE RISE / MORE DROP labels on the
-    vertical axis. Centered on (0, 0) with bold gold reference lines
-    through the origin, one dot per pitch, colored by pitch type.
+    """Horizontal Break (x) vs. Induced Vertical Break (y) -- a plain
+    Cartesian grid with real tick labels on both axes, matching Rapsodo's
+    own native movement plot rather than a Baseball-Savant-style radial
+    (concentric ring) chart. Per Ryker's call: this is a coaching/
+    development tool, not a broadcast graphic, and reading an exact HB/
+    IVB number off the axes directly is more useful day-to-day than a
+    single "distance from center" read -- plus it matches the movement
+    plot pitchers already see in their own Rapsodo report, so there's no
+    translation between tools.
+
+    This replaces an earlier ring-based version (concentric 6"/12"/18"/
+    24" distance rings) that was built first per a Statcast-style
+    reference image Ryker provided, then explicitly walked back once it
+    became clear the rings encode total movement magnitude
+    (sqrt(HB^2+IVB^2)), not either axis individually -- a pitch can sit
+    outside an inner ring on total distance even when neither of its raw
+    HB or IVB numbers alone would suggest that, which is a legitimate but
+    non-obvious way to read a chart. A plain grid with real ticks avoids
+    that read entirely.
+
+    Kept from the ring version: the soft shaded "cluster" region per
+    pitch type (still a simple bounding circle around that type's own
+    points, not a real density/KDE contour), and the bold gold reference
+    lines through the origin (a standing, separate request of Ryker's,
+    independent of the rings-vs-grid decision).
 
     min_pitches_for_shading: pitch types with fewer pitches than this
-    still get their dots plotted, just no shaded cluster region (a
-    shape drawn around 1-2 points isn't a meaningful "cluster," it's
-    just noise) -- the reference image's "100 pitch sample" toggle,
-    scaled down to bullpen-session sample sizes instead of a full season.
+    still get their dots plotted, just no shaded cluster region (a shape
+    drawn around 1-2 points isn't a meaningful "cluster," it's just
+    noise).
 
-    Deliberately NOT included, both because GBO doesn't have the data
-    to do them honestly:
-      - An MLB/league-average reference overlay (Ryker's image has a
-        hatched "MLB AVG." shape) -- would need a real external
-        benchmark dataset GBO doesn't have. Not faking one.
-      - The arm-angle indicator + pitcher silhouette -- computing a real
-        arm angle from release_side/release_height needs the same
-        physics review already deferred to Phase 4 (see the original
-        architecture review's caveat on release_angle/horizontal_angle).
-    Also not included yet, pending a quick fact-check: the reference
-    image labels the horizontal axis "1B (dot) MOVES TOWARD (dot) 3B"
-    instead of a plain break value -- which side is which depends on
-    the pitcher's throwing hand AND on which physical direction
-    Rapsodo's positive HB actually points, and that sign convention
-    isn't documented anywhere in this codebase. Rather than guess and
-    risk labeling a chart backwards, the horizontal axis keeps its
-    plain "Horizontal Break (in)" label for now -- tell me whether a
-    known right-handed pitcher's fastball in your data comes out
-    positive or negative HB and I'll wire up the real 1B/3B labels
-    correctly.
+    Deliberately still not included, same as before: an MLB/league-
+    average reference overlay (no real external benchmark dataset to
+    draw from) and an arm-angle/pitcher-silhouette indicator (needs the
+    same physics review already deferred to Phase 4). The horizontal
+    axis also still keeps its plain "Horizontal Break (in)" label rather
+    than a hand-dependent "1B / 3B" label, pending Ryker confirming
+    Rapsodo's HB sign convention -- unaffected by this rings-to-grid
+    change.
     """
     fig = go.Figure()
 
     usable = [p for p in pitches if p.hb_spin is not None and p.vb_spin is not None]
     order, groups = _group_by_type(usable)
 
-    # Axis extent always shows the full 6"/12"/18"/24" ring set (with a
-    # little padding past the outermost ring), same as a real
-    # Statcast-style plot -- widened further only if an individual
-    # pitch's actual movement falls outside 24", so nothing gets
-    # clipped off the edge of the chart.
-    outer_ring = max(RING_RADII)
+    # Axis extent: symmetric around 0, sized to the real data with
+    # padding, floored at 20" so a small bullpen sample doesn't render
+    # as one zoomed-in cluster with no sense of scale. Equal aspect
+    # (scaleanchor/scaleratio below) so an inch of HB and an inch of IVB
+    # are the same visual distance, same as Rapsodo's own plot.
     if xs_all := [v for group in groups.values() for p in group if (v := p.hb_spin) is not None]:
-        x_extent = max(outer_ring * 1.1, max(abs(float(v)) for v in xs_all) * 1.15)
+        x_extent = max(20.0, max(abs(float(v)) for v in xs_all) * 1.15)
     else:
-        x_extent = outer_ring * 1.1
+        x_extent = 20.0
     if ys_all := [v for group in groups.values() for p in group if (v := p.vb_spin) is not None]:
-        y_extent = max(outer_ring * 1.1, max(abs(float(v)) for v in ys_all) * 1.15)
+        y_extent = max(20.0, max(abs(float(v)) for v in ys_all) * 1.15)
     else:
-        y_extent = outer_ring * 1.1
-
-    # Concentric reference rings, drawn first (and pinned "below" the
-    # data traces) so they read as background texture, not clutter.
-    for r in RING_RADII:
-        fig.add_shape(
-            type="circle", xref="x", yref="y", x0=-r, x1=r, y0=-r, y1=r,
-            line=dict(color=GRID_GRAY, width=1, dash="dot"), layer="below",
-        )
-        fig.add_annotation(
-            x=0, y=r, text=f'{r:g}"', showarrow=False, yshift=10,
-            # Gold, not the muted grid color -- the ring lines themselves
-            # stay subtle, but the radius labels need to actually be
-            # readable against the near-black background.
-            font=dict(color=GOLD, size=11), xref="x", yref="y",
-        )
+        y_extent = 20.0
 
     # Soft shaded cluster region per pitch type -- a simple bounding
     # circle around each type's own points (centered on its mean, sized
@@ -149,7 +131,9 @@ def movement_chart(pitches, min_pitches_for_shading=2):
             line=dict(width=0), fillcolor=color_for_pitch_label(label), opacity=0.18, layer="below",
         )
 
-    # Bold gold reference lines through the origin.
+    # Bold gold reference lines through the origin -- drawn after the
+    # cluster shading (so they sit on top of it) but before the data
+    # points, same layering as the ring version.
     fig.add_shape(type="line", x0=0, x1=0, y0=-y_extent, y1=y_extent, line=dict(color=GOLD, width=2.5))
     fig.add_shape(type="line", x0=-x_extent, x1=x_extent, y0=0, y1=0, line=dict(color=GOLD, width=2.5))
 
@@ -175,18 +159,16 @@ def movement_chart(pitches, min_pitches_for_shading=2):
             ),
         ))
 
-    fig.add_annotation(x=0, y=y_extent, text="▲ MORE RISE", showarrow=False, yshift=18, font=dict(color=TEXT_CREAM, size=11))
-    fig.add_annotation(x=0, y=-y_extent, text="▼ MORE DROP", showarrow=False, yshift=-18, font=dict(color=TEXT_CREAM, size=11))
-
     apply_gbo_theme(
-        fig, title="Pitch Movement", x_title="Horizontal Break (in)", y_title=None,
-        # Ring labels replace tick numbers/gridlines -- the reference
-        # image has no conventional axis ticks either, just the ring
-        # radii.
-        xaxis=dict(range=[-x_extent, x_extent], showgrid=False, zeroline=False, showticklabels=False, ticks=""),
-        yaxis=dict(range=[-y_extent, y_extent], showgrid=False, zeroline=False, showticklabels=False, ticks="",
+        fig, title="Pitch Movement", x_title="Horizontal Break (in)", y_title="Induced Vertical Break (in)",
+        # Real gridlines and tick labels -- the whole point of the
+        # switch away from the ring version -- with a fixed 5" tick
+        # spacing so the grid reads as clean, evenly-spaced inches
+        # rather than whatever irregular ticks autoscaling would pick.
+        xaxis=dict(range=[-x_extent, x_extent], gridcolor=GRID_GRAY, zeroline=False, dtick=5),
+        yaxis=dict(range=[-y_extent, y_extent], gridcolor=GRID_GRAY, zeroline=False, dtick=5,
                     scaleanchor="x", scaleratio=1),
-        showlegend=False,  # the pitch-type legend now lives in the usage/velo table below the chart
+        showlegend=False,  # the pitch-type legend lives in the usage/velo table below the chart
     )
     return fig
 
