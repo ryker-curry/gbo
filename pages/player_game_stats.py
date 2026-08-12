@@ -9,9 +9,11 @@ game_stats.py, so the two never drift apart. Read-only.
 
 Plate Discipline (Zone%/Swing%/Chase%/Whiff%/etc.) and Pitch Command/
 Usage are computed from the coordinate data captured in Phase 2 (see
-plate_discipline.py). Still not the full Baseball-Savant-style page --
-CSW%/Putaway%/splits by handedness/heat maps/spray charts are a
-deferred follow-up.
+plate_discipline.py). Pitch Type Breakdown (Strike%/Whiff%/CSW%/Chase%/
+Putaway%/GB-FB-LD%) is game_stats.py's compute_pitch_type_breakdown() --
+still not a full spray-chart/heat-map page, but the CSW%/Putaway% gap
+flagged here before is closed. No handedness-split tabs here (kept
+simpler than the coach-facing Analytics page) -- ask if that's wanted.
 """
 
 import streamlit as st
@@ -19,7 +21,10 @@ import streamlit as st
 from database import get_session
 from models import Player, User, Season
 from ui_components import page_header, page_footer, empty_state
-from game_stats import get_batting_pitches, get_pitching_pitches, compute_batting_line, compute_pitching_line
+from game_stats import (
+    get_batting_pitches, get_pitching_pitches, compute_batting_line, compute_pitching_line,
+    compute_pitch_type_breakdown,
+)
 from plate_discipline import compute_hitter_discipline, compute_pitcher_command
 
 page_header("My Stats")
@@ -130,6 +135,9 @@ try:
                 if command["Usage %"]:
                     usage_str = " · ".join(f"{name}: {_fmt_pct(pct)}" for name, pct in sorted(command["Usage %"].items(), key=lambda kv: -(kv[1] or 0)))
                     st.caption(f"Usage — {usage_str}")
+
+            st.markdown("**Pitch Type Breakdown**")
+            st.dataframe(compute_pitch_type_breakdown(pitching_pitches), use_container_width=True, hide_index=True)
 
 finally:
     session.close()

@@ -347,7 +347,28 @@ class IDPGoal(Base):
     Optional structured target (added when Ryker felt goals were too
     vague as pure free text): a specific test within the category,
     baseline value, target value, and target date -- turns "improve
-    shoulder mobility" into a measurable "85° -> 95° by Sept 1"."""
+    shoulder mobility" into a measurable "85° -> 95° by Sept 1".
+
+    Integrated Insights (spec Section 27) extension: for Pitcher-Specific
+    goals whose target_test_type has a Rapsodo Bullpen Analytics
+    equivalent (see analytics/rapsodo_goal_metrics.py -- most of them do,
+    since PITCHER_SPECIFIC_TESTS in seed_lookups.py was originally written
+    against Rapsodo's own vocabulary), baseline/current values are
+    computed live from RapsodoPitch instead of AssessmentResult, since
+    that's where pitch data actually lands now that the legacy
+    Assessment-based Rapsodo import has been retired. Two new optional
+    fields support this without disturbing the existing
+    source_assessment_id/target_test_type_id pair used by every other
+    category:
+      - target_pitch_type_id: Rapsodo metrics vary a lot by pitch type
+        (a fastball-velocity goal and a changeup-velocity goal are not
+        the same number), so a Rapsodo-linked goal can optionally scope
+        itself to one pitch type. Left null, it averages across every
+        pitch type thrown.
+      - source_bullpen_id: the bullpen session that motivated the goal,
+        the Rapsodo-data equivalent of source_assessment_id. Optional,
+        same "not freeform" spirit -- a real session, not typed-in text.
+    """
     __tablename__ = "idp_goals"
 
     goal_id = Column(Integer, primary_key=True)
@@ -355,6 +376,8 @@ class IDPGoal(Base):
     category_id = Column(Integer, ForeignKey("assessment_categories.category_id"), nullable=False)
     source_assessment_id = Column(Integer, ForeignKey("assessments.assessment_id"), nullable=True)
     target_test_type_id = Column(Integer, ForeignKey("assessment_test_types.test_type_id"), nullable=True)
+    target_pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=True)
+    source_bullpen_id = Column(Integer, ForeignKey("bullpen_sessions.bullpen_id"), nullable=True)
     baseline_value = Column(Numeric(10, 3), nullable=True)
     target_value = Column(Numeric(10, 3), nullable=True)
     target_date = Column(Date, nullable=True)
@@ -368,6 +391,8 @@ class IDPGoal(Base):
     category = relationship("AssessmentCategory")
     source_assessment = relationship("Assessment", back_populates="idp_goals")
     target_test_type = relationship("AssessmentTestType")
+    target_pitch_type = relationship("PitchType")
+    source_bullpen = relationship("BullpenSession", back_populates="idp_goals")
     status = relationship("IDPStatus")
     created_by = relationship("User")
     action_steps = relationship("IDPActionStep", back_populates="goal", cascade="all, delete-orphan")
@@ -687,6 +712,7 @@ class BullpenSession(Base):
     pitches = relationship("BullpenPitch", back_populates="bullpen", cascade="all, delete-orphan", order_by="BullpenPitch.pitch_number")
     rapsodo_imports = relationship("RapsodoImport", back_populates="bullpen")
     rapsodo_pitches = relationship("RapsodoPitch", back_populates="bullpen", cascade="all, delete-orphan", order_by="RapsodoPitch.pitch_number")
+    idp_goals = relationship("IDPGoal", back_populates="source_bullpen")
 
 
 class BullpenPitch(Base):
@@ -1238,6 +1264,14 @@ class GamePitch(Base):
     batted_ball_type = Column(String(20), nullable=True)  # "Ground Ball" / "Line Drive" / "Fly Ball" / "Pop Up"
     batted_ball_x = Column(Numeric(6, 1), nullable=True)  # feet, right of the CF line
     batted_ball_y = Column(Numeric(6, 1), nullable=True)  # feet, from home plate toward the outfield
+
+    # "Sword" -- broadcast slang for an ugly, off-balance checked swing
+    # (per Ryker's definition). Not derivable from pitch_outcome/contact
+    # quality -- it's a judgment call the coach makes live, so it's its
+    # own flag rather than a computed value. Only meaningful on a pitch
+    # that was actually swung at (Swinging Strike/Foul/In Play); left
+    # False on takes.
+    is_sword = Column(Boolean, default=False, nullable=False)
 
     ends_plate_appearance = Column(Boolean, default=False, nullable=False)
     ab_outcome = Column(String(30), nullable=True)  # only set when ends_plate_appearance -- "K", "BB", "1B", "2B", "3B", "HR", "HBP", "E", "FC", "Sac Bunt", "Sac Fly", "Groundout", "Flyout", "Lineout", etc.

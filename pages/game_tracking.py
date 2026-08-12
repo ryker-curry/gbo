@@ -739,8 +739,10 @@ try:
 
             pitch_outcome_choice = st.selectbox("Pitch outcome", PITCH_OUTCOMES, key="gt_pitch_outcome")
             contact_quality_choice = None
+            is_sword_choice = False
             if pitch_outcome_choice in ("In Play", "Foul", "Swinging Strike"):
                 contact_quality_choice = st.selectbox("Contact quality (optional)", ["-- N/A --"] + CONTACT_QUALITY_OPTIONS, key="gt_contact_quality")
+                is_sword_choice = st.checkbox("Sword (ugly, off-balance swing)", key="gt_is_sword")
 
             batted_ball_type_choice = None
             batted_ball_x = batted_ball_y = None
@@ -835,6 +837,7 @@ try:
                         intended_plate_z=intended_plate_z,
                         pitch_outcome=pitch_outcome_choice,
                         contact_quality=cq,
+                        is_sword=is_sword_choice,
                         batted_ball_type=bbt,
                         batted_ball_x=batted_ball_x,
                         batted_ball_y=batted_ball_y,
@@ -878,7 +881,7 @@ try:
                         "Opponent": (f"{p.opponent_our_player.first_name} {p.opponent_our_player.last_name}" if p.opponent_our_player else None) or (f"{p.opponent_player.player_name}" if p.opponent_player else None) or (f"#{p.opponent_batting_order} ({p.opponent_hand})" if p.opponent_batting_order else "—"),
                         "Pitch": p.pitch_type.type_name if p.pitch_type else "—",
                         "Location": f"{float(p.actual_plate_x):+.2f}, {float(p.actual_plate_z):.2f}" if p.actual_plate_x is not None else "—",
-                        "Outcome": p.pitch_outcome or "—",
+                        "Outcome": (p.pitch_outcome or "—") + (" (Sword)" if p.is_sword else ""),
                         "Batted Ball": (p.batted_ball_type or "") + (f" ({float(p.batted_ball_x):+.0f}, {float(p.batted_ball_y):.0f})" if p.batted_ball_x is not None else "") if (p.batted_ball_type or p.batted_ball_x is not None) else "—",
                         "AB Result": p.ab_outcome or "",
                         "Runs": p.runs_scored_on_play,

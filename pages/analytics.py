@@ -9,9 +9,12 @@ game_stats.py, so the two never drift apart.
 
 Plate Discipline (Zone%/Swing%/Chase%/Whiff%/etc.) and Pitch Command/
 Usage are computed from the coordinate data captured in Phase 2 (see
-plate_discipline.py). Still not the full Baseball-Savant-style page --
-CSW%/Putaway%/splits by handedness/heat maps/spray charts are a
-deferred follow-up.
+plate_discipline.py). Pitch Type Breakdown (Strike%/Whiff%/CSW%/Chase%/
+Putaway%/GB-FB-LD%, split overall and by opponent batter handedness) is
+the per-pitch-type rate-stat rollup from game_stats.py's
+compute_pitch_type_breakdown() -- still not a full spray-chart/heat-map
+page, but the CSW%/Putaway%/handedness-split gap flagged here before is
+closed.
 """
 
 import streamlit as st
@@ -19,7 +22,10 @@ import streamlit as st
 from database import get_session
 from models import Player, Season
 from ui_components import page_header, page_footer, empty_state
-from game_stats import get_batting_pitches, get_pitching_pitches, compute_batting_line, compute_pitching_line
+from game_stats import (
+    get_batting_pitches, get_pitching_pitches, compute_batting_line, compute_pitching_line,
+    compute_pitch_type_breakdown,
+)
 from plate_discipline import compute_hitter_discipline, compute_pitcher_command, compute_zone_performance, render_zone_performance_heatmap
 from bucket_system_display import render_percentage_rings
 
@@ -151,6 +157,27 @@ try:
                 if command["Usage %"]:
                     usage_str = " · ".join(f"{name}: {_fmt_pct(pct)}" for name, pct in sorted(command["Usage %"].items(), key=lambda kv: -(kv[1] or 0)))
                     st.caption(f"Usage — {usage_str}")
+
+            st.markdown("**Pitch Type Breakdown**")
+            st.caption(
+                "Rate stats per pitch type -- the same breakdown a game-tracking spreadsheet computes with "
+                "formulas, generated here from the same pitches already logged in Game Tracking."
+            )
+            breakdown_tab_all, breakdown_tab_rhh, breakdown_tab_lhh = st.tabs(["All Batters", "vs RHH", "vs LHH"])
+            with breakdown_tab_all:
+                st.dataframe(compute_pitch_type_breakdown(pitching_pitches), use_container_width=True, hide_index=True)
+            with breakdown_tab_rhh:
+                vs_rhh = [p for p in pitching_pitches if p.opponent_hand == "R"]
+                if not vs_rhh:
+                    st.caption("No pitches recorded against a right-handed batter yet.")
+                else:
+                    st.dataframe(compute_pitch_type_breakdown(vs_rhh), use_container_width=True, hide_index=True)
+            with breakdown_tab_lhh:
+                vs_lhh = [p for p in pitching_pitches if p.opponent_hand == "L"]
+                if not vs_lhh:
+                    st.caption("No pitches recorded against a left-handed batter yet.")
+                else:
+                    st.dataframe(compute_pitch_type_breakdown(vs_lhh), use_container_width=True, hide_index=True)
 
             st.markdown("**Zone Performance**")
             st.caption("How well his pitches perform in each part of the zone, from his own Game Tracking pitches (Run Value by location).")
