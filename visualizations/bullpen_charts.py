@@ -53,19 +53,18 @@ def color_for_pitch_label(label):
     return get_pitch_color(label)
 
 
-# Fixed ring radii, per Ryker's call -- matches the standard
-# Baseball-Savant-style movement plot exactly (12"/18"/24"), rather
-# than scaling to each session's own movement range. A bullpen with a
-# tight spread just shows its dots clustered well inside the rings,
-# same as it would on a real Statcast movement plot.
-RING_RADII = (12, 18, 24)
+# Fixed ring radii, per Ryker's call -- 6"/12"/18"/24", rather than
+# scaling to each session's own movement range. A bullpen with a tight
+# spread just shows its dots clustered well inside the rings, same as
+# it would on a real Statcast movement plot.
+RING_RADII = (6, 12, 18, 24)
 
 
 def movement_chart(pitches, min_pitches_for_shading=2):
     """Horizontal Break (x) vs. Induced Vertical Break (y), styled after
     a Baseball-Savant-style movement plot per Ryker's reference image:
-    fixed 12"/18"/24" concentric distance rings (see RING_RADII) instead
-    of a plain grid, a soft shaded "cluster" region per pitch type
+    fixed 6"/12"/18"/24" concentric distance rings (see RING_RADII)
+    instead of a plain grid, a soft shaded "cluster" region per pitch type
     behind the individual dots, and MORE RISE / MORE DROP labels on the
     vertical axis. Centered on (0, 0) with bold gold reference lines
     through the origin, one dot per pitch, colored by pitch type.
@@ -102,7 +101,7 @@ def movement_chart(pitches, min_pitches_for_shading=2):
     usable = [p for p in pitches if p.hb_spin is not None and p.vb_spin is not None]
     order, groups = _group_by_type(usable)
 
-    # Axis extent always shows the full 12"/18"/24" ring set (with a
+    # Axis extent always shows the full 6"/12"/18"/24" ring set (with a
     # little padding past the outermost ring), same as a real
     # Statcast-style plot -- widened further only if an individual
     # pitch's actual movement falls outside 24", so nothing gets
