@@ -262,41 +262,64 @@ def release_point_chart(pitches):
 
 
 def velocity_spin_trend_chart(pitches):
-    """Spec Section 9: dual-axis trend across the bullpen. Velocity solid
-    line (left axis), Spin Rate dotted line (right axis), x = chronological
-    pitch number.
+    """Spec Section 9: dual-axis trend. Velocity solid line (left axis),
+    Spin Rate dotted line (right axis).
 
     Assumption, documented per spec's instruction not to silently pick a
     convention: pitches here are plotted as ONE connected line in real
-    pitch_number order, whatever the caller passed in (all pitches, or
+    chronological order, whatever the caller passed in (all pitches, or
     already filtered to one pitch type). This means the "All Pitches"
     view intentionally shows the full session's raw velocity/spin
     sequence (the point of a fatigue/ramp-up trend), while filtering to
     a single pitch type on the dashboard's existing filter shows that
-    type's own trend with its real pitch_number gaps preserved (not
-    compressed to look artificially continuous) -- satisfying the spec's
-    "don't connect unrelated pitch types in a misleading way" instruction
-    by never re-indexing gaps away, rather than by refusing to connect
-    points at all."""
+    type's own trend with its real gaps preserved (not compressed to
+    look artificially continuous) -- satisfying the spec's "don't
+    connect unrelated pitch types in a misleading way" instruction by
+    never re-indexing gaps away, rather than by refusing to connect
+    points at all.
+
+    x-axis: pitch_number when every pitch passed in belongs to the same
+    bullpen session (the single-session Charts section) -- unchanged
+    from the original behavior, including the gap-preserving property
+    above. When pitches span more than one session (the Bullpen
+    Dashboard's Overall Pitch Tracking section, all of a pitcher's
+    sessions combined), pitch_number isn't usable as-is -- it legitimately
+    restarts at 1 for every session, so plotting it directly would stack
+    every session's pitch #1 (and #2, #3...) on top of each other instead
+    of advancing through time. Real pitch_date has no such collision and
+    is unique across sessions, so it's used as the x-axis instead
+    whenever more than one session is present."""
     fig = go.Figure()
 
     usable = sorted([p for p in pitches if p.velocity is not None or p.total_spin is not None], key=lambda p: p.pitch_number)
-    pitch_numbers = [p.pitch_number for p in usable]
 
-    velo_x = [p.pitch_number for p in usable if p.velocity is not None]
-    velo_y = [float(p.velocity) for p in usable if p.velocity is not None]
-    velo_labels = [pitch_type_label(p) for p in usable if p.velocity is not None]
+    multi_session = len({p.bullpen_id for p in usable}) > 1
+    if multi_session:
+        usable = sorted(usable, key=lambda p: p.pitch_date)
+        x_values = [p.pitch_date for p in usable]
+        x_title = "Date / Time"
+        hover_x_line = "Date: %{x|%b %d, %I:%M %p}"
+    else:
+        x_values = [p.pitch_number for p in usable]
+        x_title = "Pitch Number"
+        hover_x_line = "Pitch #%{x}"
 
-    spin_x = [p.pitch_number for p in usable if p.total_spin is not None]
-    spin_y = [float(p.total_spin) for p in usable if p.total_spin is not None]
-    spin_labels = [pitch_type_label(p) for p in usable if p.total_spin is not None]
+    velo_data = [(x, p) for x, p in zip(x_values, usable) if p.velocity is not None]
+    velo_x = [x for x, p in velo_data]
+    velo_y = [float(p.velocity) for x, p in velo_data]
+    velo_labels = [pitch_type_label(p) for x, p in velo_data]
+
+    spin_data = [(x, p) for x, p in zip(x_values, usable) if p.total_spin is not None]
+    spin_x = [x for x, p in spin_data]
+    spin_y = [float(p.total_spin) for x, p in spin_data]
+    spin_labels = [pitch_type_label(p) for x, p in spin_data]
 
     fig.add_trace(go.Scatter(
         x=velo_x, y=velo_y, mode="lines+markers", name="Velocity (mph)",
         line=dict(color="#BF1E2D", width=2, dash="solid"),
         marker=dict(size=6),
         customdata=velo_labels,
-        hovertemplate="Pitch #%{x}<br>%{customdata}<br>Velocity: %{y:.1f} mph<extra></extra>",
+        hovertemplate=f"{hover_x_line}<br>%{{customdata}}<br>Velocity: %{{y:.1f}} mph<extra></extra>",
         yaxis="y1",
     ))
     fig.add_trace(go.Scatter(
@@ -304,14 +327,14 @@ def velocity_spin_trend_chart(pitches):
         line=dict(color="#4C6EF5", width=2, dash="dot"),
         marker=dict(size=6),
         customdata=spin_labels,
-        hovertemplate="Pitch #%{x}<br>%{customdata}<br>Spin Rate: %{y:.0f} rpm<extra></extra>",
+        hovertemplate=f"{hover_x_line}<br>%{{customdata}}<br>Spin Rate: %{{y:.0f}} rpm<extra></extra>",
         yaxis="y2",
     ))
 
     apply_gbo_theme(
         fig, title="Velocity and Spin Rate Trend", height=420,
-        xaxis=dict(title="Pitch Number", gridcolor=GRID_GRAY, zerolinecolor=GRID_GRAY,
-                   tickmode="linear" if pitch_numbers else "auto"),
+        xaxis=dict(title=x_title, gridcolor=GRID_GRAY, zerolinecolor=GRID_GRAY,
+                   tickmode="linear" if (x_values and not multi_session) else "auto"),
         yaxis=dict(title="Velocity (mph)", gridcolor=GRID_GRAY, zerolinecolor=GRID_GRAY, title_font=dict(color="#BF1E2D")),
         yaxis2=dict(title="Spin Rate (rpm)", overlaying="y", side="right", showgrid=False, title_font=dict(color="#4C6EF5")),
         showlegend=True,
