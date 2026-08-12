@@ -93,6 +93,12 @@ def movement_chart(pitches, min_pitches_for_shading=2):
     than a hand-dependent "1B / 3B" label, pending Ryker confirming
     Rapsodo's HB sign convention -- unaffected by this rings-to-grid
     change.
+
+    Axis range is capped at 25" (see MAX_MOVEMENT_EXTENT) per Ryker's
+    call, replacing an earlier version that always reserved at least
+    20" of room regardless of how tight the session's actual movement
+    was -- this keeps the chart zoomed in on real data instead of
+    padding out to a rarely-needed extreme.
     """
     fig = go.Figure()
 
@@ -100,18 +106,22 @@ def movement_chart(pitches, min_pitches_for_shading=2):
     order, groups = _group_by_type(usable)
 
     # Axis extent: symmetric around 0, sized to the real data with
-    # padding, floored at 20" so a small bullpen sample doesn't render
-    # as one zoomed-in cluster with no sense of scale. Equal aspect
-    # (scaleanchor/scaleratio below) so an inch of HB and an inch of IVB
-    # are the same visual distance, same as Rapsodo's own plot.
+    # padding, capped at 25" per Ryker's call so the chart stays zoomed
+    # in on a typical bullpen's actual movement instead of always
+    # reserving room out to a rarely-used extreme. Floored at a small
+    # 5" minimum only so a session with almost no movement (or a single
+    # near-zero pitch) doesn't collapse to a razor-thin plot. Equal
+    # aspect (scaleanchor/scaleratio below) so an inch of HB and an inch
+    # of IVB are the same visual distance, same as Rapsodo's own plot.
+    MAX_MOVEMENT_EXTENT = 25.0
     if xs_all := [v for group in groups.values() for p in group if (v := p.hb_spin) is not None]:
-        x_extent = max(20.0, max(abs(float(v)) for v in xs_all) * 1.15)
+        x_extent = min(MAX_MOVEMENT_EXTENT, max(5.0, max(abs(float(v)) for v in xs_all) * 1.15))
     else:
-        x_extent = 20.0
+        x_extent = MAX_MOVEMENT_EXTENT
     if ys_all := [v for group in groups.values() for p in group if (v := p.vb_spin) is not None]:
-        y_extent = max(20.0, max(abs(float(v)) for v in ys_all) * 1.15)
+        y_extent = min(MAX_MOVEMENT_EXTENT, max(5.0, max(abs(float(v)) for v in ys_all) * 1.15))
     else:
-        y_extent = 20.0
+        y_extent = MAX_MOVEMENT_EXTENT
 
     # Soft shaded cluster region per pitch type -- a simple bounding
     # circle around each type's own points (centered on its mean, sized
@@ -175,17 +185,45 @@ def movement_chart(pitches, min_pitches_for_shading=2):
 
 def release_point_chart(pitches):
     """Spec Section 8: release-point consistency. X = Release Side (ft),
-    Y = Release Height (ft). Default vertical range 4-7 ft per the spec's
-    recommendation, expanded only if real data actually falls outside
-    that window (never silently clipping real release points off-canvas)."""
+    Y = Release Height (ft).
+
+    Zoomed out relative to the raw data on both axes, with a bold gold
+    crosshair at (0, 0) -- per Ryker's call, since the original version
+    auto-fit the x-axis exactly to the data's own tight range (typically
+    just a few inches of real arm-slot variation), which stretched that
+    small real variation across the whole chart width and made a
+    perfectly consistent release point look scattered. Fixed reference
+    points fix that: the y-axis always extends down to the ground (0 ft)
+    and the x-axis always includes the mound centerline (0 ft), both
+    with generous padding beyond the real data, so a session's actual
+    inches of variation now occupy a small, honest fraction of the
+    chart instead of the whole thing."""
     fig = go.Figure()
 
     usable = [p for p in pitches if p.release_side is not None and p.release_height is not None]
     order, groups = _group_by_type(usable)
 
-    all_heights = [float(p.release_height) for p in usable]
-    y_min = min(4.0, min(all_heights) - 0.3) if all_heights else 4.0
-    y_max = max(7.0, max(all_heights) + 0.3) if all_heights else 7.0
+    xs_all = [float(p.release_side) for p in usable]
+    ys_all = [float(p.release_height) for p in usable]
+
+    # X: always includes 0 (mound centerline) so the crosshair below is
+    # meaningful and on-screen, plus 1.5 ft of padding past the real
+    # extremes on each side -- the "zoom out" fix.
+    x_min = min(0.0, min(xs_all) - 1.5) if xs_all else -2.0
+    x_max = max(0.0, max(xs_all) + 1.5) if xs_all else 2.0
+
+    # Y: always extends down to true ground level (0 ft) for physical
+    # context on how high release point actually is, floored at an 8 ft
+    # ceiling (or higher if real data needs it) so it doesn't look like
+    # a razor-thin band at the top of the chart.
+    y_min = 0.0
+    y_max = max(8.0, max(ys_all) + 2.0) if ys_all else 8.0
+
+    # Bold gold crosshair at (0, 0) -- same visual convention as the
+    # movement chart's origin lines -- drawn first so it sits behind
+    # the data points.
+    fig.add_shape(type="line", x0=0, x1=0, y0=y_min, y1=y_max, line=dict(color=GOLD, width=2.5))
+    fig.add_shape(type="line", x0=x_min, x1=x_max, y0=0, y1=0, line=dict(color=GOLD, width=2.5))
 
     for label in order:
         group = groups[label]
@@ -215,7 +253,10 @@ def release_point_chart(pitches):
 
     apply_gbo_theme(
         fig, title="Release Point Consistency", x_title="Release Side (ft)", y_title="Release Height (ft)",
-        yaxis=dict(range=[y_min, y_max], gridcolor=GRID_GRAY, zerolinecolor=GRID_GRAY),
+        # zeroline off on both axes -- the bold gold crosshair drawn
+        # above replaces Plotly's default thin zeroline.
+        xaxis=dict(range=[x_min, x_max], gridcolor=GRID_GRAY, zeroline=False),
+        yaxis=dict(range=[y_min, y_max], gridcolor=GRID_GRAY, zeroline=False),
     )
     return fig
 
