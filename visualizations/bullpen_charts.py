@@ -264,7 +264,12 @@ def release_point_chart(pitches, mode="individual"):
         xaxis=dict(range=[X_MIN, X_MAX], gridcolor=GRID_GRAY, zeroline=False, dtick=1),
         yaxis=dict(range=[Y_MIN, Y_MAX], gridcolor=GRID_GRAY, zeroline=False, dtick=1),
         showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="left", x=0, bgcolor="rgba(0,0,0,0)"),
+        # y=1.03 sat right on top of the title text -- confirmed via a
+        # real screenshot Ryker sent. Push the legend further up and
+        # widen the top margin so the two don't compete for the same
+        # cramped default space.
+        legend=dict(orientation="h", yanchor="bottom", y=1.15, xanchor="left", x=0, bgcolor="rgba(0,0,0,0)"),
+        margin=dict(t=90, b=40, l=50, r=30),
     )
     return fig
 

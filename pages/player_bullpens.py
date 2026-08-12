@@ -9,7 +9,7 @@ Sessions with Rapsodo-imported data (Rapsodo Bullpen Analytics, Phase 2)
 get a "Bullpen Dashboard" section at the top of the page with a picker
 -- either a specific session, or "All Sessions (Combined)" for a
 career-to-date view -- and renders the full dashboard (filters,
-pitch-type summary, all five charts; or the combined KPI/summary/
+pitch-type summary, all four charts; or the combined KPI/summary/
 charts view) inline, right here on My Bullpens, per Ryker's request
 not to make a player leave this tab for a separate "Bullpen Dashboard"
 page, and to be able to pick one session at a time (or all of them
