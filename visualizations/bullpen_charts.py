@@ -126,7 +126,10 @@ def movement_chart(pitches, min_pitches_for_shading=2):
         )
         fig.add_annotation(
             x=0, y=r, text=f'{r:g}"', showarrow=False, yshift=10,
-            font=dict(color=GRID_GRAY, size=10), xref="x", yref="y",
+            # Gold, not the muted grid color -- the ring lines themselves
+            # stay subtle, but the radius labels need to actually be
+            # readable against the near-black background.
+            font=dict(color=GOLD, size=11), xref="x", yref="y",
         )
 
     # Soft shaded cluster region per pitch type -- a simple bounding
