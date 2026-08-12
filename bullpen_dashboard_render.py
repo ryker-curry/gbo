@@ -271,3 +271,4 @@ def render_overall_pitch_tracking(session, player, player_session_ids, section_s
                 st.plotly_chart(
                     individual_spin_axis_chart(overall_pitches, pitch_type_filter=None), use_container_width=True
                 )
+
