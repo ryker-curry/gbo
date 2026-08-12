@@ -46,7 +46,7 @@ from supabase_client import get_supabase_admin_client
 from models import (
     Player, StaffPlayerAssignment, BullpenType, BullpenSession, BullpenPitch,
     PitchType, Assessment, AssessmentCategory, AssessmentResult, PlayerAssignment,
-    BullpenScript,
+    BullpenScript, RapsodoPitch,
 )
 from ui_components import page_header, page_footer, empty_state
 
@@ -470,6 +470,19 @@ try:
         st.markdown(f"### {type_label} — {active_bullpen.session_date.strftime('%Y-%m-%d (%a)')}")
         if active_bullpen.overall_notes:
             st.caption(active_bullpen.overall_notes)
+
+        # Rapsodo Bullpen Analytics, Phase 2 -- if this session has
+        # Rapsodo-imported pitches (via Import Rapsodo Data, not this
+        # page's manual zone-tap logging), link into the real dashboard
+        # for pitch-type summaries and filtering.
+        has_rapsodo_data = (
+            session.query(RapsodoPitch).filter(RapsodoPitch.bullpen_id == active_bullpen.bullpen_id).first()
+            is not None
+        )
+        if has_rapsodo_data:
+            if st.button("Open Rapsodo Bullpen Dashboard for this session", key=f"open_dashboard_{active_bullpen.bullpen_id}"):
+                st.query_params["bullpen_id"] = str(active_bullpen.bullpen_id)
+                st.switch_page("pages/bullpen_dashboard.py")
 
         if can_edit_sessions:
             with st.expander("Delete this session"):

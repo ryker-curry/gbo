@@ -236,6 +236,12 @@ if role_name in ("Administrator", "Head Coach", "Coach", "Strength Coach", "Athl
         pages["Player Development"].extend([
             st.Page("pages/bullpen_tracking.py", title="Bullpen Tracking", url_path="bullpen-tracking", icon=":material/sports_baseball:"),
             st.Page("pages/bullpen_scripts.py", title="Bullpen Scripts", url_path="bullpen-scripts", icon=":material/edit_calendar:"),
+            # Rapsodo Bullpen Analytics, Phase 2 -- reads RapsodoPitch data
+            # (not the legacy Assessment/BullpenPitch linkage Bullpen
+            # Tracking uses). Must be registered here for st.switch_page()
+            # to be able to target it from Bullpen Tracking/Import Rapsodo
+            # Data's "view dashboard" links.
+            st.Page("pages/bullpen_dashboard.py", title="Bullpen Dashboard", url_path="bullpen-dashboard", icon=":material/bar_chart:"),
         ])
 
     # Hitter Tracking is hitting-side -- mirror-opposite exclusion from
@@ -302,6 +308,12 @@ if role_name == "Player":
     if is_pitcher_player:
         pages["My Development"].append(
             st.Page("pages/player_bullpens.py", title="My Bullpens", url_path="my-bullpens", icon=":material/sports_baseball:"),
+        )
+        # Registered here (not just linked to) so a player's "open
+        # dashboard" button on My Bullpens can st.switch_page() into it --
+        # the page itself already restricts a Player to their own data.
+        pages["My Development"].append(
+            st.Page("pages/bullpen_dashboard.py", title="Bullpen Dashboard", url_path="bullpen-dashboard-player", icon=":material/bar_chart:"),
         )
     else:
         pages["My Development"].append(

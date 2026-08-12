@@ -4,6 +4,12 @@ GBO — My Bullpens (Player role only).
 Read-only view of the player's own bullpen sessions -- pitch log and
 the same type-adaptive summary shown to coaches on Bullpen Tracking,
 just without any editing/logging controls.
+
+Sessions with Rapsodo-imported data (Rapsodo Bullpen Analytics, Phase 2)
+get a link into pages/bullpen_dashboard.py at the top of the page,
+separate from the legacy per-session view below -- the two read from
+different tables (RapsodoPitch vs. the older Assessment/BullpenPitch
+linkage) and a session could have either or both during the transition.
 """
 
 import streamlit as st
@@ -11,7 +17,7 @@ import plotly.graph_objects as go
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import Player, User, BullpenSession, HitterSwing
+from models import Player, User, BullpenSession, HitterSwing, RapsodoPitch
 from ui_components import page_header, page_footer, empty_state
 
 page_header("My Bullpens")
@@ -248,6 +254,29 @@ try:
         empty_state("No bullpen sessions recorded yet.")
         page_footer()
         st.stop()
+
+    # --- Rapsodo Bullpen Analytics (Phase 2): sessions with imported
+    # Rapsodo data get a link into the real dashboard (charts/filters/
+    # pitch-type summary) instead of the legacy per-session view below,
+    # which only knows about the older Assessment/BullpenPitch linkage. A
+    # session can appear in both places if it has both kinds of data. ---
+    rapsodo_bullpen_ids = {
+        row[0] for row in
+        session.query(RapsodoPitch.bullpen_id).filter(RapsodoPitch.player_id == my_player.player_id).distinct().all()
+    }
+    if rapsodo_bullpen_ids:
+        st.subheader("Bullpen Dashboard")
+        st.caption("Sessions with imported Rapsodo data -- open the full dashboard for pitch-type summaries and filtering.")
+        for b in sessions:
+            if b.bullpen_id not in rapsodo_bullpen_ids:
+                continue
+            type_label = b.bullpen_type.type_name if b.bullpen_type else "—"
+            col1, col2 = st.columns([3, 1])
+            col1.markdown(f"**{b.session_date.strftime('%Y-%m-%d (%a)')}** — {type_label}")
+            if col2.button("Open dashboard", key=f"open_dashboard_{b.bullpen_id}"):
+                st.query_params["bullpen_id"] = str(b.bullpen_id)
+                st.switch_page("pages/bullpen_dashboard.py")
+        st.divider()
 
     def _summarize(b):
         s_linked = 0

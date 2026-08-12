@@ -14,10 +14,10 @@ validation/insert logic lives in services/rapsodo_import.py, kept
 separate from this page per the spec's "keep database operations
 separate from UI code" instruction -- this file is UI only.
 
-No dashboard yet -- Phase 2 builds pages/bullpen_dashboard.py to browse
-imported sessions properly (charts, filters, summaries). This page shows
-a plain results table after a successful import so the data's
-immediately visible, not just a success message.
+A plain results table shows immediately after a successful import (not
+just a success message), plus a link into pages/bullpen_dashboard.py
+(Phase 2) for the full pitch-type summary and filters. Charts are
+Phase 3 -- not on the dashboard yet.
 """
 
 import streamlit as st
@@ -252,7 +252,11 @@ try:
                 use_container_width=True,
                 hide_index=True,
             )
-        st.caption("Full bullpen dashboard (charts, filters, session comparisons) is Phase 2 of the Rapsodo Bullpen Analytics build.")
+        st.divider()
+        if st.button("Open full Bullpen Dashboard for this session", type="primary", key="rapsodo_import_open_dashboard"):
+            st.query_params["bullpen_id"] = str(target_bullpen.bullpen_id)
+            st.switch_page("pages/bullpen_dashboard.py")
+        st.caption("Charts (movement, release point, velocity/spin trend, location, spin axis) are Phase 3 of the Rapsodo Bullpen Analytics build -- not yet on the dashboard.")
 
 finally:
     session.close()
