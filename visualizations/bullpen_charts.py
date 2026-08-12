@@ -25,7 +25,7 @@ import plotly.graph_objects as go
 
 from pitch_type_config import get_pitch_color
 from analytics.bullpen_metrics import pitch_type_label
-from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, TEXT_CREAM
+from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, TEXT_CREAM, GOLD
 from strike_zone import ZONE_HALF_WIDTH, ZONE_BOTTOM, ZONE_TOP
 
 
@@ -93,13 +93,20 @@ def movement_chart(pitches):
     else:
         y_extent = 20
 
-    fig.add_shape(type="line", x0=0, x1=0, y0=-y_extent, y1=y_extent, line=dict(color=GRID_GRAY, width=1))
-    fig.add_shape(type="line", x0=-x_extent, x1=x_extent, y0=0, y1=0, line=dict(color=GRID_GRAY, width=1))
+    # Quadrant reference lines at 0/0 -- drawn bold and in the gold
+    # accent (rather than the muted grid color) per Ryker's request, so
+    # they read clearly as "glove-side vs. arm-side" / "rise vs. drop"
+    # dividers instead of blending into the regular gridlines.
+    fig.add_shape(type="line", x0=0, x1=0, y0=-y_extent, y1=y_extent, line=dict(color=GOLD, width=2.5))
+    fig.add_shape(type="line", x0=-x_extent, x1=x_extent, y0=0, y1=0, line=dict(color=GOLD, width=2.5))
 
     apply_gbo_theme(
         fig, title="Pitch Movement", x_title="Horizontal Break (in)", y_title="Induced Vertical Break (in)",
-        xaxis=dict(range=[-x_extent, x_extent], gridcolor=GRID_GRAY, zerolinecolor=GRID_GRAY),
-        yaxis=dict(range=[-y_extent, y_extent], gridcolor=GRID_GRAY, zerolinecolor=GRID_GRAY, scaleanchor="x", scaleratio=1),
+        # zeroline disabled on both axes -- the bold gold shapes above
+        # are the 0/0 reference lines now, so Plotly's own (fainter)
+        # zeroline would just double up on top of them.
+        xaxis=dict(range=[-x_extent, x_extent], gridcolor=GRID_GRAY, zeroline=False),
+        yaxis=dict(range=[-y_extent, y_extent], gridcolor=GRID_GRAY, zeroline=False, scaleanchor="x", scaleratio=1),
         showlegend=True,
     )
     return fig

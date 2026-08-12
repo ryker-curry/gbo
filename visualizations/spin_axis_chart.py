@@ -28,7 +28,7 @@ import math
 import plotly.graph_objects as go
 
 from analytics.bullpen_metrics import pitch_type_label
-from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, TEXT_CREAM
+from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, TEXT_CREAM, BG_DARK
 from visualizations.bullpen_charts import color_for_pitch_label
 
 
@@ -73,7 +73,7 @@ def _base_polar_figure(title):
     apply_gbo_theme(
         fig, title=title, height=420,
         polar=dict(
-            bgcolor="#1E1E1E",
+            bgcolor=BG_DARK,
             radialaxis=dict(range=[0, 1], showticklabels=False, gridcolor=GRID_GRAY, ticks=""),
             angularaxis=dict(
                 rotation=90, direction="clockwise",

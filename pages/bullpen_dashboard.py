@@ -29,6 +29,11 @@ exactly -- no new authorization logic invented here. Players see only
 their own sessions; coaches see assigned players unless
 can_view_all_players; the page itself has no edit actions (Phase 2 is
 read-only review), so no can_edit_sessions gate is needed.
+
+Page chrome (near-black background, bordered card panels, numbered
+section labels) is styled after Paradigm Player Development's report
+layout -- see bullpen_dashboard_style.py for why that's its own module
+instead of a change to ui_components.py's shared styling.
 """
 
 import streamlit as st
@@ -37,6 +42,7 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from models import Player, StaffPlayerAssignment, User, BullpenSession, RapsodoPitch
 from ui_components import page_header, page_footer, empty_state, render_kpi_cards
+from bullpen_dashboard_style import inject_dashboard_theme, section_label
 from analytics.bullpen_metrics import (
     session_summary, pitch_type_summary, individual_pitch_rows, filter_pitches, pitch_type_label,
 )
@@ -46,6 +52,7 @@ from visualizations.bullpen_charts import (
 from visualizations.spin_axis_chart import individual_spin_axis_chart, average_spin_axis_chart
 
 page_header("Bullpen Dashboard")
+inject_dashboard_theme()
 
 current_user_id = st.session_state.get("gbo_user_id")
 role_name = st.session_state.get("gbo_role_name")
@@ -168,20 +175,21 @@ try:
         with st.expander("Session video"):
             st.video(active_bullpen.video_url)
 
-    st.divider()
+    st.write("")
 
     # --- Filters (spec Section 5): All Pitches / Pitch Type / Pitch Number Range ---
-    st.subheader("Filters")
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        type_options = ["All Pitches"] + summary["pitch_type_names"]
-        selected_type = st.selectbox("Pitch Type", options=type_options)
-    with col2:
-        max_pitch_number = max((p.pitch_number for p in all_pitches), default=1)
-        pitch_range = st.slider(
-            "Pitch Number Range", min_value=1, max_value=max_pitch_number,
-            value=(1, max_pitch_number), disabled=(max_pitch_number <= 1),
-        )
+    with st.container(border=True):
+        section_label(1, "Filters")
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            type_options = ["All Pitches"] + summary["pitch_type_names"]
+            selected_type = st.selectbox("Pitch Type", options=type_options)
+        with col2:
+            max_pitch_number = max((p.pitch_number for p in all_pitches), default=1)
+            pitch_range = st.slider(
+                "Pitch Number Range", min_value=1, max_value=max_pitch_number,
+                value=(1, max_pitch_number), disabled=(max_pitch_number <= 1),
+            )
 
     filtered_pitches = filter_pitches(
         all_pitches,
@@ -194,54 +202,54 @@ try:
         page_footer()
         st.stop()
 
-    st.divider()
+    st.write("")
 
     # --- Pitch-type summary table (spec Section 6) ---
-    st.subheader("Pitch Summary")
-    summary_rows = pitch_type_summary(filtered_pitches)
-    st.dataframe(summary_rows, use_container_width=True, hide_index=True)
+    with st.container(border=True):
+        section_label(2, "Pitch Summary")
+        summary_rows = pitch_type_summary(filtered_pitches)
+        st.dataframe(summary_rows, use_container_width=True, hide_index=True)
 
-    st.caption("Expand a pitch type below to see every individual pitch.")
-    pitches_by_type = {}
-    for p in filtered_pitches:
-        pitches_by_type.setdefault(pitch_type_label(p), []).append(p)
+        st.caption("Expand a pitch type below to see every individual pitch.")
+        pitches_by_type = {}
+        for p in filtered_pitches:
+            pitches_by_type.setdefault(pitch_type_label(p), []).append(p)
 
-    for row in summary_rows:
-        label = row["Pitch Type"]
-        with st.expander(f"{label} ({row['#']} pitches)"):
-            st.dataframe(individual_pitch_rows(pitches_by_type[label]), use_container_width=True, hide_index=True)
+        for row in summary_rows:
+            label = row["Pitch Type"]
+            with st.expander(f"{label} ({row['#']} pitches)"):
+                st.dataframe(individual_pitch_rows(pitches_by_type[label]), use_container_width=True, hide_index=True)
 
-    st.divider()
+    st.write("")
 
     # --- Charts (spec Sections 7-11, Phase 3) -- respect the same
     # filters as the summary table above (pitch type, pitch number
     # range), per spec Section 5's "charts should respond to the
     # filters whenever appropriate." ---
-    st.subheader("Charts")
+    with st.container(border=True):
+        section_label(3, "Charts")
 
-    col1, col2 = st.columns(2)
-    with col1:
+        # Each chart gets its own full-width row -- no side-by-side
+        # columns -- per Ryker's request.
         st.plotly_chart(movement_chart(filtered_pitches), use_container_width=True)
         st.caption("Centered on release point; color-coded by pitch type. Hover a pitch for details.")
-    with col2:
+
         st.plotly_chart(release_point_chart(filtered_pitches), use_container_width=True)
         st.caption("Tighter clustering across pitch types suggests better tunneling out of the hand.")
 
-    st.plotly_chart(velocity_spin_trend_chart(filtered_pitches), use_container_width=True)
-    if selected_type == "All Pitches":
-        st.caption(
-            "Showing every pitch in throwing order -- a fastball/offspeed mix will naturally zigzag here. "
-            "Filter to a single pitch type above for that type's own trend."
-        )
+        st.plotly_chart(velocity_spin_trend_chart(filtered_pitches), use_container_width=True)
+        if selected_type == "All Pitches":
+            st.caption(
+                "Showing every pitch in throwing order -- a fastball/offspeed mix will naturally zigzag here. "
+                "Filter to a single pitch type above for that type's own trend."
+            )
 
-    col3, col4 = st.columns(2)
-    with col3:
         location_mode = st.radio("Location view", ["Heat Map", "Individual Pitches"], horizontal=True, key="dash_location_mode")
         st.plotly_chart(
             location_chart(filtered_pitches, mode="heatmap" if location_mode == "Heat Map" else "individual"),
             use_container_width=True,
         )
-    with col4:
+
         spin_axis_mode = st.radio("Spin axis view", ["Average by Pitch Type", "Individual Pitches"], horizontal=True, key="dash_spin_axis_mode")
         if spin_axis_mode == "Average by Pitch Type":
             st.plotly_chart(average_spin_axis_chart(filtered_pitches), use_container_width=True)

@@ -10,18 +10,32 @@ Edit permissions are more granular than the single can_edit_idp flag:
     (create goals, add action steps, add progress notes)
   - Athletic Trainer: progress notes only, per Ryker's decision
   - Sports Scientist, Data Analyst: read-only
+
+Integrated Insights (spec Section 27) extension: Pitcher-Specific goals
+whose target metric has a Rapsodo Bullpen Analytics equivalent (see
+analytics/rapsodo_goal_metrics.py -- that's most of them) compute their
+baseline/current value live from RapsodoPitch instead of AssessmentResult,
+optionally scoped to one pitch type, and can optionally link back to a
+specific BullpenSession instead of an Assessment. This doesn't replace
+the Assessment-based path for every other category, or for the one
+Pitcher-Specific test (Spin Axis) that isn't mapped -- see that module's
+docstring for why. Coaches remain the ones deciding what a goal should
+be; this only makes the objective data underneath it easier to see --
+nothing here auto-generates a goal or a conclusion.
 """
 
 import streamlit as st
 from ui_components import page_header, page_footer, empty_state
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from sqlalchemy.orm import joinedload
 
 from database import get_session
 from models import (
     Player, StaffPlayerAssignment, AssessmentCategory, Assessment, AssessmentResult, AssessmentTestType,
     IDPGoal, IDPActionStep, IDPProgressNote, IDPStatus, TrainingSession, PlayerAssignment,
+    RapsodoPitch, BullpenSession, PitchType,
 )
+from analytics.rapsodo_goal_metrics import rapsodo_field_for_test_name, average_rapsodo_metric
 
 page_header("Individual Development Plan")
 
@@ -80,6 +94,8 @@ try:
             joinedload(IDPGoal.status),
             joinedload(IDPGoal.source_assessment),
             joinedload(IDPGoal.target_test_type),
+            joinedload(IDPGoal.target_pitch_type),
+            joinedload(IDPGoal.source_bullpen).joinedload(BullpenSession.bullpen_type),
             joinedload(IDPGoal.action_steps).joinedload(IDPActionStep.status),
             joinedload(IDPGoal.progress_notes),
             joinedload(IDPGoal.linked_sessions).joinedload(TrainingSession.session_type),
@@ -99,7 +115,8 @@ try:
                 st.write(goal.description)
                 if goal.target_test_type:
                     unit = f" {goal.target_test_type.unit}" if goal.target_test_type.unit else ""
-                    target_line = f"**Target: {goal.target_test_type.test_name}** — "
+                    pitch_type_suffix = f" ({goal.target_pitch_type.type_name})" if goal.target_pitch_type else ""
+                    target_line = f"**Target: {goal.target_test_type.test_name}{pitch_type_suffix}** — "
                     if goal.baseline_value is not None:
                         target_line += f"{float(goal.baseline_value):.2f}{unit} → "
                     if goal.target_value is not None:
@@ -108,11 +125,32 @@ try:
                         target_line += f" by {goal.target_date.strftime('%Y-%m-%d (%a)')}"
                     st.markdown(target_line)
 
-                    # Live "where are they now" -- rolling average for
-                    # Pitcher-Specific (continuous, per-pitch data), most
-                    # recent single value for other categories (periodic
-                    # snapshot testing).
-                    if goal.category.category_name == "Pitcher-Specific":
+                    # Live "where are they now": Rapsodo-mapped
+                    # Pitcher-Specific metrics pull a rolling average
+                    # straight from RapsodoPitch (that's where pitch data
+                    # actually lands now); the one unmapped Pitcher-Specific
+                    # test (Spin Axis) and every other category still use
+                    # the AssessmentResult path, unchanged.
+                    rapsodo_field = (
+                        rapsodo_field_for_test_name(goal.target_test_type.test_name)
+                        if goal.category.category_name == "Pitcher-Specific" else None
+                    )
+                    if rapsodo_field:
+                        cutoff = datetime.combine(date.today() - timedelta(days=30), time.min)
+                        recent_query = session.query(RapsodoPitch).filter(
+                            RapsodoPitch.player_id == goal.player_id,
+                            RapsodoPitch.pitch_date >= cutoff,
+                        )
+                        if goal.target_pitch_type_id:
+                            recent_query = recent_query.filter(RapsodoPitch.pitch_type_id == goal.target_pitch_type_id)
+                        recent_pitches = recent_query.all()
+                        avg = average_rapsodo_metric(recent_pitches, rapsodo_field)
+                        if avg is not None:
+                            pitch_note = f" of {goal.target_pitch_type.type_name}" if goal.target_pitch_type else ""
+                            st.caption(f"Current: {avg:.2f}{unit} (avg{pitch_note}, {len(recent_pitches)} pitch(es), last 30 days)")
+                        else:
+                            st.caption("Current: no Rapsodo pitches matching this metric/pitch type in the last 30 days.")
+                    elif goal.category.category_name == "Pitcher-Specific":
                         cutoff = date.today() - timedelta(days=30)
                         recent_results = (
                             session.query(AssessmentResult)
@@ -145,6 +183,11 @@ try:
                             st.caption("Current: no assessments recorded for this metric yet.")
                 if goal.source_assessment:
                     st.caption(f"Linked to assessment dated {goal.source_assessment.assessment_date.strftime('%Y-%m-%d (%a)')}")
+                if goal.source_bullpen:
+                    bp_type = goal.source_bullpen.bullpen_type.type_name if goal.source_bullpen.bullpen_type else "—"
+                    st.caption(
+                        f"Linked to bullpen session dated {goal.source_bullpen.session_date.strftime('%Y-%m-%d (%a)')} ({bp_type})"
+                    )
 
                 # --- Update status ---
                 if can_create_goals:
@@ -246,24 +289,122 @@ try:
     else:
         st.subheader("New development goal")
 
-        # Category, assessment link, and target metric live outside the
-        # form so each selection can react live and auto-fill the
-        # baseline value -- widgets inside st.form don't rerun until
-        # submit, so this couldn't work reactively in there.
+        # Category and target metric live outside the form so each
+        # selection can react live and auto-fill the baseline value --
+        # widgets inside st.form don't rerun until submit, so this
+        # couldn't work reactively in there.
         goal_categories = [c for c in categories if c.category_name != "Anthropometrics"]
         category_names = [c.category_name for c in goal_categories]
         category_choice = st.selectbox("Category", category_names, key="new_goal_category")
         linked_category_id = next(c.category_id for c in goal_categories if c.category_name == category_choice)
         is_pitcher_specific = category_choice == "Pitcher-Specific"
 
+        category_test_types = (
+            session.query(AssessmentTestType)
+            .filter(AssessmentTestType.category_id == linked_category_id)
+            .order_by(AssessmentTestType.display_order)
+            .all()
+        )
+        target_test_type_id = None
+        target_metric_choice = None
+        uses_rapsodo = False
+        if category_test_types:
+            test_types_by_name = {t.test_name: t for t in category_test_types}
+            target_metric_choice = st.selectbox(
+                "Target metric (optional)",
+                ["-- No specific metric --"] + list(test_types_by_name.keys()),
+                key="new_goal_target_metric",
+            )
+            if target_metric_choice != "-- No specific metric --":
+                target_test_type = test_types_by_name[target_metric_choice]
+                target_test_type_id = target_test_type.test_type_id
+                # Most Pitcher-Specific tests map straight onto a
+                # RapsodoPitch column (see analytics/rapsodo_goal_metrics.py)
+                # -- those pull their baseline from real pitch data. Spin
+                # Axis (unmapped, needs circular averaging) and every
+                # non-Pitcher-Specific category still use AssessmentResult.
+                uses_rapsodo = is_pitcher_specific and rapsodo_field_for_test_name(target_metric_choice) is not None
+        else:
+            st.caption("No specific tests defined yet for this category -- target metric isn't available until they are.")
+
         selected_assessment = None
+        selected_bullpen = None
+        target_pitch_type_id = None
         lookback_days = 30
-        if is_pitcher_specific:
+        baseline_value = None
+
+        if uses_rapsodo:
+            rapsodo_field = rapsodo_field_for_test_name(target_metric_choice)
             st.caption(
-                "Pitcher-Specific is continuous, per-pitch data (not a single testing-day measurement) -- "
-                "the baseline is calculated as an average over a recent window, not one specific pitch."
+                "This metric comes from Rapsodo Bullpen Analytics -- the baseline is an average over a "
+                "recent window of actual pitches, optionally scoped to one pitch type."
             )
             lookback_days = st.number_input("Lookback window (days)", min_value=1, max_value=365, value=30, step=1, key="new_goal_lookback")
+
+            all_pitch_types = session.query(PitchType).order_by(PitchType.display_order).all()
+            pitch_type_options = ["All Pitch Types"] + [pt.type_name for pt in all_pitch_types]
+            pitch_type_choice = st.selectbox("Pitch type (optional)", pitch_type_options, key="new_goal_pitch_type")
+            if pitch_type_choice != "All Pitch Types":
+                target_pitch_type_id = next(pt.pitch_type_id for pt in all_pitch_types if pt.type_name == pitch_type_choice)
+
+            player_rapsodo_bullpens = (
+                session.query(BullpenSession)
+                .join(RapsodoPitch, RapsodoPitch.bullpen_id == BullpenSession.bullpen_id)
+                .filter(BullpenSession.player_id == selected_player_id)
+                .distinct()
+                .order_by(BullpenSession.session_date.desc())
+                .all()
+            )
+            bullpens_by_key = {f"{b.session_date.strftime('%Y-%m-%d (%a)')} (#{b.bullpen_id})": b for b in player_rapsodo_bullpens}
+            bullpen_options = ["-- Not linked to a specific bullpen session --"] + list(bullpens_by_key.keys())
+            bullpen_choice = st.selectbox("Link to bullpen session (optional)", bullpen_options, key="new_goal_bullpen")
+            selected_bullpen = bullpens_by_key.get(bullpen_choice)
+
+            cutoff = datetime.combine(date.today() - timedelta(days=lookback_days), time.min)
+            recent_query = session.query(RapsodoPitch).filter(
+                RapsodoPitch.player_id == selected_player_id,
+                RapsodoPitch.pitch_date >= cutoff,
+            )
+            if target_pitch_type_id:
+                recent_query = recent_query.filter(RapsodoPitch.pitch_type_id == target_pitch_type_id)
+            recent_pitches = recent_query.all()
+            baseline_value = average_rapsodo_metric(recent_pitches, rapsodo_field)
+            unit = target_test_type.unit or ""
+            if baseline_value is not None:
+                pitch_note = f" of {pitch_type_choice}" if target_pitch_type_id else ""
+                st.caption(
+                    f"Baseline auto-filled: average{pitch_note} of {len(recent_pitches)} pitch(es) "
+                    f"over the last {lookback_days} days = {baseline_value:.2f} {unit}"
+                )
+            else:
+                st.caption(
+                    f"No Rapsodo pitches match this metric/pitch type in the last {lookback_days} days -- "
+                    "enter a baseline manually below, or widen the lookback window."
+                )
+        elif is_pitcher_specific:
+            st.caption(
+                "This metric doesn't have a Rapsodo equivalent yet, so it still uses the older "
+                "assessment-based baseline -- continuous, per-pitch averaging over a recent window."
+            )
+            lookback_days = st.number_input("Lookback window (days)", min_value=1, max_value=365, value=30, step=1, key="new_goal_lookback")
+            if target_test_type_id:
+                cutoff = date.today() - timedelta(days=lookback_days)
+                recent_results = (
+                    session.query(AssessmentResult)
+                    .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
+                    .filter(
+                        Assessment.player_id == selected_player_id,
+                        Assessment.category_id == linked_category_id,
+                        Assessment.assessment_date >= cutoff,
+                        AssessmentResult.test_type_id == target_test_type_id,
+                    )
+                    .all()
+                )
+                if recent_results:
+                    baseline_value = sum(float(r.value) for r in recent_results) / len(recent_results)
+                    st.caption(f"Baseline auto-filled: average of {len(recent_results)} pitches over the last {lookback_days} days = {baseline_value:.2f} {target_test_type.unit or ''}")
+                else:
+                    st.caption(f"No pitches with this metric in the last {lookback_days} days -- enter a baseline manually below, or widen the lookback window.")
         else:
             player_assessments = (
                 session.query(Assessment)
@@ -277,53 +418,15 @@ try:
             assessment_choice = st.selectbox("Link to assessment (optional)", assessment_options, key="new_goal_assessment")
             selected_assessment = assessments_by_key.get(assessment_choice)
 
-        category_test_types = (
-            session.query(AssessmentTestType)
-            .filter(AssessmentTestType.category_id == linked_category_id)
-            .order_by(AssessmentTestType.display_order)
-            .all()
-        )
-        target_test_type_id = None
-        baseline_value = None
-        if category_test_types:
-            test_types_by_name = {t.test_name: t for t in category_test_types}
-            target_metric_choice = st.selectbox(
-                "Target metric (optional)",
-                ["-- No specific metric --"] + list(test_types_by_name.keys()),
-                key="new_goal_target_metric",
-            )
-            if target_metric_choice != "-- No specific metric --":
-                target_test_type = test_types_by_name[target_metric_choice]
-                target_test_type_id = target_test_type.test_type_id
-                if is_pitcher_specific:
-                    cutoff = date.today() - timedelta(days=lookback_days)
-                    recent_results = (
-                        session.query(AssessmentResult)
-                        .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
-                        .filter(
-                            Assessment.player_id == selected_player_id,
-                            Assessment.category_id == linked_category_id,
-                            Assessment.assessment_date >= cutoff,
-                            AssessmentResult.test_type_id == target_test_type_id,
-                        )
-                        .all()
-                    )
-                    if recent_results:
-                        baseline_value = sum(float(r.value) for r in recent_results) / len(recent_results)
-                        st.caption(f"Baseline auto-filled: average of {len(recent_results)} pitches over the last {lookback_days} days = {baseline_value:.2f} {target_test_type.unit or ''}")
-                    else:
-                        st.caption(f"No pitches with this metric in the last {lookback_days} days -- enter a baseline manually below, or widen the lookback window.")
-                elif selected_assessment:
-                    matching_result = (
-                        session.query(AssessmentResult)
-                        .filter(AssessmentResult.assessment_id == selected_assessment.assessment_id, AssessmentResult.test_type_id == target_test_type_id)
-                        .first()
-                    )
-                    if matching_result:
-                        baseline_value = float(matching_result.value)
-                        st.caption(f"Baseline auto-filled from the linked assessment: {baseline_value} {target_test_type.unit or ''}")
-        else:
-            st.caption("No specific tests defined yet for this category -- target metric isn't available until they are.")
+            if target_test_type_id and selected_assessment:
+                matching_result = (
+                    session.query(AssessmentResult)
+                    .filter(AssessmentResult.assessment_id == selected_assessment.assessment_id, AssessmentResult.test_type_id == target_test_type_id)
+                    .first()
+                )
+                if matching_result:
+                    baseline_value = float(matching_result.value)
+                    st.caption(f"Baseline auto-filled from the linked assessment: {baseline_value} {target_test_type.unit or ''}")
 
         with st.form("new_goal_form"):
             if target_test_type_id:
@@ -341,12 +444,15 @@ try:
                 st.error("Goal description is required.")
             else:
                 source_assessment_id = selected_assessment.assessment_id if selected_assessment else None
+                source_bullpen_id = selected_bullpen.bullpen_id if selected_bullpen else None
 
                 new_goal = IDPGoal(
                     player_id=selected_player_id,
                     category_id=linked_category_id,
                     source_assessment_id=source_assessment_id,
+                    source_bullpen_id=source_bullpen_id,
                     target_test_type_id=target_test_type_id,
+                    target_pitch_type_id=target_pitch_type_id if target_test_type_id else None,
                     baseline_value=baseline_value if target_test_type_id else None,
                     target_value=target_value if target_test_type_id else None,
                     target_date=target_date if target_test_type_id else None,
