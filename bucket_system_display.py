@@ -12,24 +12,19 @@ import streamlit as st
 import plotly.graph_objects as go
 
 
-def _ordinal(n):
-    """45 -> '45th', 82 -> '82nd', 21 -> '21st', 13 -> '13th'."""
-    if 10 <= n % 100 <= 20:
-        suffix = "th"
-    else:
-        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-    return f"{n}{suffix}"
-
-
 def render_percentage_rings(metrics, key_prefix, show_ordinal=False):
     """Generic full-circle percentage ring display -- metrics is a list
     of (label, value) tuples, value 0-100 or None. show_ordinal=True
-    displays the value as an ordinal ("45th") with "Percentile" as the
-    sub-label, for percentile-style data (Physical Testing); False
-    (the default) displays it as a plain percentage ("45%") with the
-    metric's own label as the sub-label, for direct-percentage KPIs
-    (pitching command, etc.). Returns False (renders nothing) if every
-    value is None."""
+    displays just the plain rounded number ("45") centered in the ring
+    with no sub-label inside it -- the metric's own label is rendered
+    underneath the ring instead (see the block below the chart) -- for
+    percentile-style data (Physical Testing), per Ryker's call to drop
+    both the ordinal suffix ("45th") and the word "Percentile" entirely
+    and just show the number; False (the default) displays it as a
+    plain percentage ("45%") with the metric's own label as the
+    in-ring sub-label, for direct-percentage KPIs (pitching command,
+    etc.) -- unaffected by that change. Returns False (renders nothing)
+    if every value is None."""
     has_any_data = any(v is not None for _, v in metrics)
     if not has_any_data:
         return False
@@ -51,12 +46,14 @@ def render_percentage_rings(metrics, key_prefix, show_ordinal=False):
                 textinfo="none",
                 hoverinfo="skip",
             ))
-            center_text = _ordinal(round(value)) if show_ordinal else f"{value:.0f}%"
-            sub_text = "Percentile" if show_ordinal else label
+            if show_ordinal:
+                annotation_text = f"<b>{round(value)}</b>"
+            else:
+                annotation_text = f"<b>{value:.0f}%</b><br><span style='font-size:13px'>{label}</span>"
             fig.update_layout(
                 showlegend=False,
                 annotations=[dict(
-                    text=f"<b>{center_text}</b><br><span style='font-size:13px'>{sub_text}</span>",
+                    text=annotation_text,
                     x=0.5, y=0.5, font=dict(size=26, color="#FFFDE5"), showarrow=False,
                 )],
                 paper_bgcolor="#1E1E1E",
