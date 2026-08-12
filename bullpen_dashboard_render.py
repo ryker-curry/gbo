@@ -159,8 +159,12 @@ def render_bullpen_session(session, target_bullpen_id, section_start=1):
         pitch_type_legend(summary_rows, len(filtered_pitches), color_for_pitch_label)
         st.caption("Centered on release point; color-coded by pitch type. Hover a pitch for details.")
 
-        st.plotly_chart(release_point_chart(filtered_pitches), use_container_width=True)
-        st.caption("Tighter clustering across pitch types suggests better tunneling out of the hand.")
+        release_col_a, release_col_b = st.columns(2)
+        with release_col_a:
+            st.plotly_chart(release_point_chart(filtered_pitches, mode="individual"), use_container_width=True)
+        with release_col_b:
+            st.plotly_chart(release_point_chart(filtered_pitches, mode="average"), use_container_width=True)
+        st.caption("Left: every pitch's release point. Right: each pitch type's average -- tighter clustering across types suggests better tunneling out of the hand.")
 
         st.plotly_chart(velocity_spin_trend_chart(filtered_pitches), use_container_width=True)
         if selected_type == "All Pitches":
@@ -242,8 +246,12 @@ def render_overall_pitch_tracking(session, player, player_session_ids, section_s
             pitch_type_legend(overall_rows, overall_summary["total_pitches"], color_for_pitch_label)
             st.caption("Centered on release point; color-coded by pitch type. Hover a pitch for details.")
 
-            st.plotly_chart(release_point_chart(overall_pitches), use_container_width=True)
-            st.caption("Tighter clustering across pitch types suggests better tunneling out of the hand.")
+            overall_release_col_a, overall_release_col_b = st.columns(2)
+            with overall_release_col_a:
+                st.plotly_chart(release_point_chart(overall_pitches, mode="individual"), use_container_width=True)
+            with overall_release_col_b:
+                st.plotly_chart(release_point_chart(overall_pitches, mode="average"), use_container_width=True)
+            st.caption("Left: every pitch's release point. Right: each pitch type's average -- tighter clustering across types suggests better tunneling out of the hand.")
 
             st.plotly_chart(velocity_spin_trend_chart(overall_pitches), use_container_width=True)
             st.caption(
@@ -271,4 +279,3 @@ def render_overall_pitch_tracking(session, player, player_session_ids, section_s
                 st.plotly_chart(
                     individual_spin_axis_chart(overall_pitches, pitch_type_filter=None), use_container_width=True
                 )
-

@@ -183,80 +183,83 @@ def movement_chart(pitches, min_pitches_for_shading=2):
     return fig
 
 
-def release_point_chart(pitches):
+def release_point_chart(pitches, mode="individual"):
     """Spec Section 8: release-point consistency. X = Release Side (ft),
-    Y = Release Height (ft).
+    Y = Release Height (ft). Two modes, meant to be shown side by side
+    per Ryker's reference image:
 
-    Zoomed out relative to the raw data on both axes, with a bold gold
-    crosshair at (0, 0) -- per Ryker's call, since the original version
-    auto-fit the x-axis exactly to the data's own tight range (typically
-    just a few inches of real arm-slot variation), which stretched that
-    small real variation across the whole chart width and made a
-    perfectly consistent release point look scattered. Fixed reference
-    points fix that: the y-axis always extends down to the ground (0 ft)
-    and the x-axis always includes the mound centerline (0 ft), both
-    with generous padding beyond the real data, so a session's actual
-    inches of variation now occupy a small, honest fraction of the
-    chart instead of the whole thing."""
+      - mode="individual": every pitch plotted as its own dot, colored
+        by pitch type.
+      - mode="average": one bold dot per pitch type, at that type's
+        average release side/height -- makes cross-type tunneling
+        (tight clustering across types = harder to read out of the
+        hand) visible at a glance without the individual-pitch noise.
+
+    Axis range is fixed at Release Side [-4, 4] ft and Release Height
+    [0, 8] ft on both modes, matching Ryker's reference image exactly,
+    rather than the earlier version's dynamic zoom-to-data-plus-padding
+    formula -- a fixed range also makes the two side-by-side panels
+    directly comparable at a glance (same scale in both), and makes a
+    session's real inches of arm-slot variation read as a small,
+    honest fraction of a consistent frame instead of shifting frame to
+    frame. Bold gold crosshair at (0, 0), same visual convention as the
+    movement chart's origin lines, drawn behind the data.
+
+    In-plot horizontal legend at the top (colored dot + pitch type
+    name) per the reference image, unlike movement_chart's legend
+    (which lives in the separate below-chart pitch_type_legend()
+    component instead) -- this chart has no matching below-chart
+    table to borrow a legend from, so Plotly's own legend is used
+    directly here."""
     fig = go.Figure()
 
     usable = [p for p in pitches if p.release_side is not None and p.release_height is not None]
     order, groups = _group_by_type(usable)
 
-    xs_all = [float(p.release_side) for p in usable]
-    ys_all = [float(p.release_height) for p in usable]
+    X_MIN, X_MAX = -4.0, 4.0
+    Y_MIN, Y_MAX = 0.0, 8.0
 
-    # X: always includes 0 (mound centerline) so the crosshair below is
-    # meaningful and on-screen, plus 1.5 ft of padding past the real
-    # extremes on each side -- the "zoom out" fix.
-    x_min = min(0.0, min(xs_all) - 1.5) if xs_all else -2.0
-    x_max = max(0.0, max(xs_all) + 1.5) if xs_all else 2.0
-
-    # Y: always extends down to true ground level (0 ft) for physical
-    # context on how high release point actually is, floored at an 8 ft
-    # ceiling (or higher if real data needs it) so it doesn't look like
-    # a razor-thin band at the top of the chart.
-    y_min = 0.0
-    y_max = max(8.0, max(ys_all) + 2.0) if ys_all else 8.0
-
-    # Bold gold crosshair at (0, 0) -- same visual convention as the
-    # movement chart's origin lines -- drawn first so it sits behind
+    # Bold gold crosshair at (0, 0) -- drawn first so it sits behind
     # the data points.
-    fig.add_shape(type="line", x0=0, x1=0, y0=y_min, y1=y_max, line=dict(color=GOLD, width=2.5))
-    fig.add_shape(type="line", x0=x_min, x1=x_max, y0=0, y1=0, line=dict(color=GOLD, width=2.5))
+    fig.add_shape(type="line", x0=0, x1=0, y0=Y_MIN, y1=Y_MAX, line=dict(color=GOLD, width=2.5))
+    fig.add_shape(type="line", x0=X_MIN, x1=X_MAX, y0=0, y1=0, line=dict(color=GOLD, width=2.5))
 
-    for label in order:
-        group = groups[label]
-        color = color_for_pitch_label(label)
-        xs = [float(p.release_side) for p in group]
-        ys = [float(p.release_height) for p in group]
-        customdata = [[p.pitch_number, float(p.velocity) if p.velocity is not None else None] for p in group]
-        fig.add_trace(go.Scatter(
-            x=xs, y=ys, mode="markers", name=label,
-            marker=dict(color=color, size=9, opacity=0.5),
-            customdata=customdata,
-            hovertemplate=f"{label}<br>Pitch #%{{customdata[0]}}<br>Velocity: %{{customdata[1]:.1f}} mph<br>Side: %{{x:.2f}} ft<br>Height: %{{y:.2f}} ft<extra></extra>",
-            showlegend=False,
-        ))
-        # Bold centroid marker per pitch type -- makes cross-type tunneling
-        # (tight clustering across types = harder to read out of the hand)
-        # visible at a glance, same pattern already proven in the legacy
-        # Bullpen Tracking release-point chart.
-        avg_x, avg_y = sum(xs) / len(xs), sum(ys) / len(ys)
-        fig.add_trace(go.Scatter(
-            x=[avg_x], y=[avg_y], mode="markers+text", name=label,
-            marker=dict(color=color, size=16, line=dict(color=TEXT_CREAM, width=2)),
-            text=[label], textposition="top center", textfont=dict(color=TEXT_CREAM, size=11),
-            hovertemplate=f"{label} average<br>Side: %{{x:.2f}} ft<br>Height: %{{y:.2f}} ft<extra></extra>",
-            showlegend=False,
-        ))
+    if mode == "average":
+        for label in order:
+            group = groups[label]
+            color = color_for_pitch_label(label)
+            xs = [float(p.release_side) for p in group]
+            ys = [float(p.release_height) for p in group]
+            avg_x, avg_y = sum(xs) / len(xs), sum(ys) / len(ys)
+            fig.add_trace(go.Scatter(
+                x=[avg_x], y=[avg_y], mode="markers", name=label,
+                marker=dict(color=color, size=20, line=dict(color="#1E1E1E", width=1.5)),
+                hovertemplate=f"{label} average ({len(group)} pitches)<br>Side: %{{x:.2f}} ft<br>Height: %{{y:.2f}} ft<extra></extra>",
+            ))
+        title = "Release Point — Average by Pitch Type"
+    else:
+        for label in order:
+            group = groups[label]
+            color = color_for_pitch_label(label)
+            xs = [float(p.release_side) for p in group]
+            ys = [float(p.release_height) for p in group]
+            customdata = [[p.pitch_number, float(p.velocity) if p.velocity is not None else None] for p in group]
+            fig.add_trace(go.Scatter(
+                x=xs, y=ys, mode="markers", name=label,
+                marker=dict(color=color, size=10, opacity=0.75, line=dict(color="#1E1E1E", width=1)),
+                customdata=customdata,
+                hovertemplate=f"{label}<br>Pitch #%{{customdata[0]}}<br>Velocity: %{{customdata[1]:.1f}} mph<br>Side: %{{x:.2f}} ft<br>Height: %{{y:.2f}} ft<extra></extra>",
+            ))
+        title = "Release Point — All Pitches"
 
     apply_gbo_theme(
-        fig, title="Release Point Consistency", x_title="Release Side (ft)", y_title="Release Height (ft)",
+        fig, title=title, x_title="Release Side (ft)", y_title="Release Height (ft)",
         # zeroline off on both axes -- the bold gold crosshair drawn
         # above replaces Plotly's default thin zeroline.
-        xaxis=dict(range=[x_min, x_max], gridcolor=GRID_GRAY, zeroline=False),
-        yaxis=dict(range=[y_min, y_max], gridcolor=GRID_GRAY, zeroline=False),
+        xaxis=dict(range=[X_MIN, X_MAX], gridcolor=GRID_GRAY, zeroline=False, dtick=1),
+        yaxis=dict(range=[Y_MIN, Y_MAX], gridcolor=GRID_GRAY, zeroline=False, dtick=1),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="left", x=0, bgcolor="rgba(0,0,0,0)"),
     )
     return fig
 
