@@ -6,10 +6,17 @@ the same type-adaptive summary shown to coaches on Bullpen Tracking,
 just without any editing/logging controls.
 
 Sessions with Rapsodo-imported data (Rapsodo Bullpen Analytics, Phase 2)
-get a link into pages/bullpen_dashboard.py at the top of the page,
-separate from the legacy per-session view below -- the two read from
-different tables (RapsodoPitch vs. the older Assessment/BullpenPitch
-linkage) and a session could have either or both during the transition.
+get an expander at the top of the page that renders the full Bullpen
+Dashboard (filters, pitch-type summary, all five charts) inline, right
+here on My Bullpens -- per Ryker's request not to make a player leave
+this tab for a separate "Bullpen Dashboard" page. Uses the exact same
+rendering as the standalone dashboard page (see
+bullpen_dashboard_render.py); the only difference is this runs inside
+an expander instead of on its own page, and there's no separate
+page/tab to navigate to anymore. This section is separate from the
+legacy per-session view below -- the two read from different tables
+(RapsodoPitch vs. the older Assessment/BullpenPitch linkage) and a
+session could have either or both during the transition.
 """
 
 import streamlit as st
@@ -19,6 +26,7 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from models import Player, User, BullpenSession, HitterSwing, RapsodoPitch
 from ui_components import page_header, page_footer, empty_state
+from bullpen_dashboard_render import render_bullpen_session
 
 page_header("My Bullpens")
 
@@ -266,16 +274,13 @@ try:
     }
     if rapsodo_bullpen_ids:
         st.subheader("Bullpen Dashboard")
-        st.caption("Sessions with imported Rapsodo data -- open the full dashboard for pitch-type summaries and filtering.")
+        st.caption("Sessions with imported Rapsodo data -- expand one for its full pitch-type summary, filters, and charts.")
         for b in sessions:
             if b.bullpen_id not in rapsodo_bullpen_ids:
                 continue
             type_label = b.bullpen_type.type_name if b.bullpen_type else "—"
-            col1, col2 = st.columns([3, 1])
-            col1.markdown(f"**{b.session_date.strftime('%Y-%m-%d (%a)')}** — {type_label}")
-            if col2.button("Open dashboard", key=f"open_dashboard_{b.bullpen_id}"):
-                st.query_params["bullpen_id"] = str(b.bullpen_id)
-                st.switch_page("pages/bullpen_dashboard.py")
+            with st.expander(f"{b.session_date.strftime('%Y-%m-%d (%a)')} — {type_label}"):
+                render_bullpen_session(session, b.bullpen_id, section_start=1)
         st.divider()
 
     def _summarize(b):

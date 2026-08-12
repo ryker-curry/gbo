@@ -309,12 +309,12 @@ if role_name == "Player":
         pages["My Development"].append(
             st.Page("pages/player_bullpens.py", title="My Bullpens", url_path="my-bullpens", icon=":material/sports_baseball:"),
         )
-        # Registered here (not just linked to) so a player's "open
-        # dashboard" button on My Bullpens can st.switch_page() into it --
-        # the page itself already restricts a Player to their own data.
-        pages["My Development"].append(
-            st.Page("pages/bullpen_dashboard.py", title="Bullpen Dashboard", url_path="bullpen-dashboard-player", icon=":material/bar_chart:"),
-        )
+        # No separate "Bullpen Dashboard" page/tab for players anymore --
+        # per Ryker's request, My Bullpens now renders that same content
+        # inline in an expander per session (bullpen_dashboard_render.py),
+        # so there's nothing left for a player to st.switch_page() into.
+        # The standalone pages/bullpen_dashboard.py page still exists for
+        # coaches (registered separately above under Player Development).
     else:
         pages["My Development"].append(
             st.Page("pages/player_hitting.py", title="My Hitting", url_path="my-hitting", icon=":material/sports_baseball:"),
