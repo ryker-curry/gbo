@@ -231,9 +231,15 @@ def seed_assessment_categories_and_tests(session):
 
 
 def seed_pitch_types(session):
+    """"Fastball" (generic/undifferentiated) is its own type, distinct
+    from "4-Seam Fastball" -- Rapsodo's auto-classifier often doesn't
+    distinguish 2-seam from 4-seam and just reports "Fastball". See
+    pitch_type_config.py for the full raw-label -> canonical-type mapping
+    used at Rapsodo import time."""
     if session.query(PitchType).count() > 0:
         return
     types = [
+        PitchType(type_name="Fastball", display_order=0),
         PitchType(type_name="4-Seam Fastball", display_order=1),
         PitchType(type_name="2-Seam Fastball", display_order=2),
         PitchType(type_name="Cutter", display_order=3),
@@ -355,14 +361,22 @@ def seed_team_event_types(session):
 
 
 def seed_bullpen_types(session):
+    """8-value list per the Rapsodo Bullpen Analytics spec (replaces the
+    original 5-value list: High Intent Velo, Pitch Design, Execution
+    Focused, Touch and Feel, Short Box -- see migrate_rapsodo_bullpen.py
+    for the data migration that remaps any EXISTING database's rows onto
+    these new names; this function only seeds a brand-new database)."""
     if session.query(BullpenType).count() > 0:
         return
     types = [
-        BullpenType(type_name="High Intent Velo", display_order=1),
+        BullpenType(type_name="Standard Bullpen", display_order=1),
         BullpenType(type_name="Pitch Design", display_order=2),
-        BullpenType(type_name="Execution Focused", display_order=3),
-        BullpenType(type_name="Touch and Feel", display_order=4),
-        BullpenType(type_name="Short Box", display_order=5),
+        BullpenType(type_name="Command", display_order=3),
+        BullpenType(type_name="Velocity", display_order=4),
+        BullpenType(type_name="Recovery", display_order=5),
+        BullpenType(type_name="Live BP", display_order=6),
+        BullpenType(type_name="Assessment", display_order=7),
+        BullpenType(type_name="Other", display_order=8),
     ]
     session.add_all(types)
     session.commit()

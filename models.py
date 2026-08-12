@@ -23,7 +23,7 @@ from datetime import datetime, date
 
 from sqlalchemy import (
     Column, Integer, String, Text, Boolean, Date, DateTime,
-    ForeignKey, Numeric, UniqueConstraint
+    ForeignKey, Numeric, UniqueConstraint, JSON
 )
 from sqlalchemy.orm import relationship
 
@@ -637,8 +637,13 @@ class ScoutingReport(Base):
 
 
 class BullpenType(Base):
-    """Lookup for bullpen session type (High Intent Velo, Pitch Design,
-    Execution Focused, Touch and Feel, Short Box)."""
+    """Lookup for bullpen session type. Replaced (migrate_rapsodo_bullpen.py)
+    from the original 5 values (High Intent Velo, Pitch Design, Execution
+    Focused, Touch and Feel, Short Box) with the Rapsodo Bullpen Analytics
+    spec's 8-value list: Standard Bullpen, Pitch Design, Command, Velocity,
+    Recovery, Live BP, Assessment, Other. Existing BullpenSession rows are
+    remapped onto the closest new name by the same migration -- see that
+    file for the exact old->new mapping and rationale."""
     __tablename__ = "bullpen_types"
 
     bullpen_type_id = Column(Integer, primary_key=True)
@@ -648,12 +653,21 @@ class BullpenType(Base):
 
 class BullpenSession(Base):
     """One bullpen outing for a pitcher on a given date -- the tracking
-    sheet header. Individual pitches live in BullpenPitch.
+    sheet header. Individual pitches live in BullpenPitch (manual zone-tap
+    tracking, being phased out) or RapsodoPitch (Rapsodo-imported data,
+    the primary path going forward) -- a session can have either or both,
+    since a bullpen might be tracked live with no device, imported from
+    Rapsodo with no live tap tracking, or (during the transition) both.
 
     source_assignment_id optionally links back to the PlayerAssignment
     that prescribed this bullpen (Type=Bullpen), so starting a session
     from that assignment carries over its date/type automatically, and
-    the assignment can be marked completed once the bullpen is tracked."""
+    the assignment can be marked completed once the bullpen is tracked.
+
+    video_url is session-level video (Rapsodo Bullpen Analytics spec
+    Section 16) -- the whole bullpen's footage, distinct from any
+    pitch-level clips on BullpenPitch.video_url or the future
+    pitch-level sync in BullpenPitchVideo."""
     __tablename__ = "bullpen_sessions"
 
     bullpen_id = Column(Integer, primary_key=True)
@@ -662,6 +676,7 @@ class BullpenSession(Base):
     source_assignment_id = Column(Integer, ForeignKey("player_assignments.assignment_id"), nullable=True)
     session_date = Column(Date, default=date.today, nullable=False)
     overall_notes = Column(Text, nullable=True)
+    video_url = Column(String(500), nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -670,6 +685,8 @@ class BullpenSession(Base):
     source_assignment = relationship("PlayerAssignment")
     created_by = relationship("User")
     pitches = relationship("BullpenPitch", back_populates="bullpen", cascade="all, delete-orphan", order_by="BullpenPitch.pitch_number")
+    rapsodo_imports = relationship("RapsodoImport", back_populates="bullpen")
+    rapsodo_pitches = relationship("RapsodoPitch", back_populates="bullpen", cascade="all, delete-orphan", order_by="RapsodoPitch.pitch_number")
 
 
 class BullpenPitch(Base):
@@ -730,6 +747,148 @@ class BullpenScriptPitch(Base):
 
     script = relationship("BullpenScript", back_populates="pitches")
     pitch_type = relationship("PitchType")
+
+
+# ---------------------------------------------------------------------------
+# RAPSODO BULLPEN ANALYTICS
+#
+# Rapsodo-native pitch storage, replacing the old pattern of importing
+# pitches as Assessment/AssessmentResult rows (see pages/import_rapsodo.py --
+# kept working for now, but no longer the destination for new imports).
+# Three layers per the architecture review (GBO_Rapsodo_Module_Architecture_
+# Review.md): raw (exactly as exported), derived (GBO-calculated, kept in
+# separate columns so it's always clear what came from the device), and a
+# raw_extra JSON catch-all for fields with no dedicated column yet.
+#
+# Column comments reference the actual CSV header text seen in the real
+# export reviewed (a Rapsodo "Pitching" report) -- nothing here is a
+# guessed/invented field name.
+# ---------------------------------------------------------------------------
+
+class RapsodoImport(Base):
+    """One uploaded Rapsodo export file -- the audit/dedup log Section 21
+    of the spec calls for. file_hash (sha256 of the raw file bytes) is the
+    actual duplicate-import guard -- re-uploading the same file for the
+    same player is rejected before anything is inserted, closing the known
+    limitation flagged in the old import_rapsodo.py docstring ("re-
+    importing the same file twice will create duplicates").
+
+    Scoped to one player per import, matching the real export format
+    reviewed (a single "Player ID:"/"Player Name:" header, no per-row
+    player column) -- this is a per-pitcher, per-outing device export, not
+    a multi-player team file."""
+    __tablename__ = "rapsodo_imports"
+    __table_args__ = (UniqueConstraint("player_id", "file_hash", name="uq_rapsodo_import_player_hash"),)
+
+    import_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)
+    bullpen_id = Column(Integer, ForeignKey("bullpen_sessions.bullpen_id"), nullable=True)
+    original_filename = Column(String(255), nullable=False)
+    file_hash = Column(String(64), nullable=False)  # sha256 hex digest of the raw uploaded bytes
+    uploaded_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    row_count = Column(Integer, nullable=False)  # total data rows found in the file
+    imported_row_count = Column(Integer, default=0, nullable=False)
+    rejected_row_count = Column(Integer, default=0, nullable=False)
+    status = Column(String(20), nullable=False)  # "success" / "partial" / "failed"
+    error_summary = Column(Text, nullable=True)  # human-readable reasons for any rejected rows / failure
+
+    player = relationship("Player")
+    bullpen = relationship("BullpenSession", back_populates="rapsodo_imports")
+    uploaded_by = relationship("User")
+    pitches = relationship("RapsodoPitch", back_populates="import_record")
+
+
+class RapsodoPitch(Base):
+    """One pitch from a Rapsodo bullpen export.
+
+    pitch_number is chronological within the session, assigned by GBO from
+    the parsed pitch Date/timestamp -- NOT copied from the file's own "No"
+    column. The real export reviewed lists pitches most-recent-first (No=1
+    had the latest timestamp, No=13 the earliest) -- using "No" directly
+    would silently invert every chronological trend chart (Section 9's
+    velocity/spin fatigue trend depends entirely on true throwing order).
+
+    rapsodo_unique_id (CSV "Unique ID", e.g. "1502926@1786212209") plus the
+    player_id unique constraint below is a second, DB-level dedup guard on
+    top of RapsodoImport.file_hash.
+    """
+    __tablename__ = "rapsodo_pitches"
+    __table_args__ = (UniqueConstraint("player_id", "rapsodo_unique_id", name="uq_rapsodo_pitch_player_unique_id"),)
+
+    rapsodo_pitch_id = Column(Integer, primary_key=True)
+    bullpen_id = Column(Integer, ForeignKey("bullpen_sessions.bullpen_id"), nullable=False)
+    player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)
+    import_id = Column(Integer, ForeignKey("rapsodo_imports.import_id"), nullable=False)
+    pitch_number = Column(Integer, nullable=False)  # chronological within the session -- see docstring above
+
+    # --- Raw layer: exactly as imported, never overwritten by recalculation ---
+    rapsodo_pitch_id_raw = Column(String(50), nullable=True)  # CSV "Pitch ID"
+    rapsodo_unique_id = Column(String(100), nullable=True)  # CSV "Unique ID"
+    pitch_date = Column(DateTime, nullable=True)  # parsed CSV "Date"
+    raw_pitch_type = Column(String(50), nullable=True)  # CSV "Pitch Type", pre-normalization ("-" if Rapsodo couldn't classify it)
+    is_strike = Column(Boolean, nullable=True)  # CSV "Is Strike" (Y/N)
+    strike_zone_side = Column(Numeric(7, 3), nullable=True)  # CSV "Strike Zone Side", inches, zone-relative
+    strike_zone_height = Column(Numeric(7, 3), nullable=True)  # CSV "Strike Zone Height", inches
+    velocity = Column(Numeric(6, 2), nullable=True)  # CSV "Velocity", mph
+    total_spin = Column(Numeric(7, 2), nullable=True)  # CSV "Total Spin", rpm
+    true_spin = Column(Numeric(7, 2), nullable=True)  # CSV "True Spin (release)", rpm
+    spin_efficiency = Column(Numeric(6, 2), nullable=True)  # CSV "Spin Efficiency (release)", %
+    spin_direction_clock = Column(String(10), nullable=True)  # CSV "Spin Direction", clock format e.g. "12:18"
+    spin_confidence = Column(Numeric(5, 3), nullable=True)  # CSV "Spin Confidence"
+    vb_trajectory = Column(Numeric(6, 2), nullable=True)  # CSV "VB (trajectory)", in
+    hb_trajectory = Column(Numeric(6, 2), nullable=True)  # CSV "HB (trajectory)", in
+    ssw_vb = Column(Numeric(6, 2), nullable=True)  # CSV "SSW VB" -- seam-shifted-wake component, often blank
+    ssw_hb = Column(Numeric(6, 2), nullable=True)  # CSV "SSW HB"
+    vb_spin = Column(Numeric(6, 2), nullable=True)  # CSV "VB (spin)" -- spin-induced vertical break, in (this is what Section 7's Movement Chart / IVB uses)
+    hb_spin = Column(Numeric(6, 2), nullable=True)  # CSV "HB (spin)" -- spin-induced horizontal break, in
+    horizontal_angle = Column(Numeric(6, 2), nullable=True)  # CSV "Horizontal Angle" -- appears to be release-point launch angle, pending confirmation before trajectory-engine use (see architecture review)
+    release_angle = Column(Numeric(6, 2), nullable=True)  # CSV "Release Angle" -- same caveat as above
+    release_height = Column(Numeric(6, 3), nullable=True)  # CSV "Release Height", ft
+    release_side = Column(Numeric(6, 3), nullable=True)  # CSV "Release Side", ft
+    gyro_degree = Column(Numeric(6, 2), nullable=True)  # CSV "Gyro Degree (deg)"
+    device_serial_number = Column(String(50), nullable=True)  # CSV "Device Serial Number"
+    horizontal_approach_angle = Column(Numeric(6, 2), nullable=True)  # CSV "Horizontal Approach Angle" -- at plate crossing
+    vertical_approach_angle = Column(Numeric(6, 2), nullable=True)  # CSV "Vertical Approach Angle"
+    rapsodo_session_name = Column(String(150), nullable=True)  # CSV "Session Name" -- the device's own session label, NOT GBO's BullpenSession
+    intent_type = Column(String(50), nullable=True)  # CSV "Intent Type" -- blank/"-" in every real export seen so far
+    release_extension = Column(Numeric(6, 3), nullable=True)  # CSV "Release Extension (ft)"
+    raw_extra = Column(JSON, nullable=True)  # catch-all: "No" (file row order), "SO - *" sensor-orientation fields, and any future unmapped column
+
+    # --- Derived layer: GBO-calculated, kept separate from raw values ---
+    pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=True)  # normalized via pitch_type_config.py
+    spin_axis_degrees = Column(Numeric(5, 1), nullable=True)  # converted from spin_direction_clock, see rapsodo_conventions.py
+    plate_x_ft = Column(Numeric(6, 3), nullable=True)  # converted from strike_zone_side (GBO plate-center-at-0 convention, matches strike_zone.py)
+    plate_z_ft = Column(Numeric(6, 3), nullable=True)  # converted from strike_zone_height (0 = ground)
+    perceived_velocity = Column(Numeric(6, 2), nullable=True)  # experimental extension-adjusted formula -- NULL until Phase 4, labeled unvalidated in the UI once populated
+    trajectory_json = Column(JSON, nullable=True)  # cached pitch_trajectory.py output -- NULL until Phase 4
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    bullpen = relationship("BullpenSession", back_populates="rapsodo_pitches")
+    player = relationship("Player")
+    import_record = relationship("RapsodoImport", back_populates="pitches")
+    pitch_type = relationship("PitchType")
+    pitch_videos = relationship("BullpenPitchVideo", back_populates="pitch", cascade="all, delete-orphan")
+
+
+class BullpenPitchVideo(Base):
+    """Pitch-level video timestamp -- maps one RapsodoPitch to an offset
+    into a bullpen video, so a player/coach can jump straight to that
+    pitch's delivery (Rapsodo Bullpen Analytics spec Section 16's
+    long-term architecture). Table created now (Phase 1) since it's purely
+    additive with no dependency on anything undecided, but not wired into
+    any UI until Phase 5 -- pitch-level sync needs its own scrubbing/
+    tagging UI, not something to half-build alongside the importer."""
+    __tablename__ = "bullpen_pitch_videos"
+
+    bullpen_pitch_video_id = Column(Integer, primary_key=True)
+    rapsodo_pitch_id = Column(Integer, ForeignKey("rapsodo_pitches.rapsodo_pitch_id"), nullable=False)
+    video_url = Column(String(500), nullable=False)
+    timestamp_seconds = Column(Numeric(8, 2), nullable=True)  # offset into the video where this pitch's delivery starts
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    pitch = relationship("RapsodoPitch", back_populates="pitch_videos")
 
 
 class HitterSessionType(Base):

@@ -1,14 +1,20 @@
 """
-GBO — Bullpen Tracking.
+GBO — Bullpen Tracking (manual zone-tap workflow).
 
 A real bullpen tracking sheet: pick a pitcher, start a session (typed by
-bullpen type -- High Intent Velo, Pitch Design, Execution Focused, Touch
-and Feel, Short Box), then log each pitch live with a tap-friendly 3x3
-target-zone grid (catcher's-eye view) -- fast enough to use mound-side,
-no device needed in the moment.
+bullpen type -- Standard Bullpen, Pitch Design, Command, Velocity,
+Recovery, Live BP, Assessment, Other), then log each pitch live with a
+tap-friendly 3x3 target-zone grid (catcher's-eye view) -- fast enough to
+use mound-side, no device needed in the moment.
 
-Once the bullpen's Rapsodo CSV is imported separately (Import Rapsodo
-Data page), a pitch here can optionally be linked to its matching
+Per the Rapsodo Bullpen Analytics architecture review, this manual-tap
+workflow is planned to be retired once Rapsodo import (pages/
+rapsodo_import.py) is the standard path for every tracked bullpen -- kept
+running as-is for now for bullpens run without a Rapsodo unit present,
+but not a target for further feature investment.
+
+Once the bullpen's Rapsodo CSV is imported separately (the legacy Import
+Rapsodo Data page), a pitch here can optionally be linked to its matching
 Rapsodo-imported record -- the ACTUAL zone and hit/miss are then computed
 from the real Plate Height/Plate Side coordinates, compared against the
 intended zone the coach called in real time, rather than a second manual
@@ -16,10 +22,12 @@ entry. Logging a pitch only records intent -- Rapsodo determines what
 actually happened once linked.
 
 The summary at the bottom adapts to the bullpen type, since different
-bullpens are about different things: Execution Focused/Short Box show
-zone hit-rate %, High Intent Velo shows a velocity summary, Pitch Design
-shows movement/spin metrics, Touch and Feel just shows a simple pitch
-count (no grading -- it's lower-intent, feel-focused work).
+bullpens are about different things: Command shows zone hit-rate %,
+Velocity shows a velocity summary, Pitch Design shows movement/spin
+metrics, Recovery just shows a simple pitch count (no grading -- it's
+lower-intent, feel-focused work). Standard Bullpen/Live BP/Assessment/
+Other fall through to a plain pitch-count summary (see the final `else`
+branch below).
 
 Zone numbering (catcher's/TV view): 1-2-3 top row, 4-5-6 middle row,
 7-8-9 bottom row, left-to-right. Zone boundaries are fixed generic
@@ -777,8 +785,8 @@ try:
             bp_type_name = active_bullpen.bullpen_type.type_name if active_bullpen.bullpen_type else ""
 
             # Most recent PRIOR session of the same type for this pitcher,
-            # for a same-type-to-same-type comparison (an Execution Focused
-            # session isn't a fair comparison against a Touch and Feel one).
+            # for a same-type-to-same-type comparison (a Command session
+            # isn't a fair comparison against a Recovery one).
             previous_session = (
                 session.query(BullpenSession)
                 .options(
@@ -798,7 +806,14 @@ try:
             prev_date_label = previous_session.session_date.strftime("%Y-%m-%d (%a)") if previous_session else None
             current_summary = _summarize_session(active_bullpen)
 
-            if bp_type_name in ("Execution Focused", "Short Box"):
+            # Bullpen type names updated by migrate_rapsodo_bullpen.py:
+            # Execution Focused -> Command, High Intent Velo -> Velocity,
+            # Touch and Feel -> Recovery, Short Box -> Standard Bullpen
+            # (Standard Bullpen now falls through to the generic default
+            # summary below rather than being execution-graded, since
+            # it's meant as a catch-all type, not specifically a
+            # proximity/command drill the way Short Box was).
+            if bp_type_name == "Command":
                 st.subheader("Execution summary")
                 if linked_count == 0:
                     st.caption("Link pitches to their Rapsodo data (once imported) to see execution %.")
@@ -817,7 +832,7 @@ try:
                     by_type_lines = [f"{pt}: {hits_by_type.get(pt, 0)}/{count}" for pt, count in counts_by_type.items()]
                     c2.markdown("**By pitch type**\n\n" + "\n\n".join(by_type_lines))
 
-            elif bp_type_name == "High Intent Velo":
+            elif bp_type_name == "Velocity":
                 st.subheader("Velocity summary")
                 if linked_count == 0:
                     st.caption("Link pitches to their Rapsodo data (once imported) to see velocity.")
@@ -893,9 +908,9 @@ try:
                         if previous_session:
                             st.caption(f"\"vs last\" compares to the previous {bp_type_name} session on {prev_date_label}.")
 
-            elif bp_type_name == "Touch and Feel":
+            elif bp_type_name == "Recovery":
                 st.subheader("Session summary")
-                st.caption("Touch and Feel bullpens are lower-intent, feel-focused work -- no grading here, just a pitch count.")
+                st.caption("Recovery bullpens are lower-intent, feel-focused work -- no grading here, just a pitch count.")
                 c1, c2 = st.columns(2)
                 delta = len(active_bullpen.pitches) - prev_summary["total_pitches"] if prev_summary else None
                 c1.metric("Total pitches", len(active_bullpen.pitches), f"{delta:+d} vs {prev_date_label}" if delta is not None else None)

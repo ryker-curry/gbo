@@ -213,10 +213,17 @@ if role_name in ("Administrator", "Head Coach", "Coach", "Strength Coach", "Athl
 
     # Import Rapsodo Data is Rapsodo/pitching-side data -- same
     # Hitting-specialty exclusion as Bullpen Tracking/Scripts below.
+    # pages/rapsodo_import.py (Rapsodo Bullpen Analytics, Phase 1) is now
+    # the primary upload path -- writes to the dedicated RapsodoImport/
+    # RapsodoPitch tables instead of Assessment/AssessmentResult. The old
+    # pages/import_rapsodo.py is kept reachable (relabeled, not deleted)
+    # since any of its previously-imported data still lives under the
+    # "Pitcher-Specific" assessment category and may still need review.
     if show_bullpen_pages := (role_name in ("Administrator", "Head Coach") or (
         role_name == "Coach" and current_user.coach_specialty != "Hitting"
     )):
-        pages["Player Development"].insert(2, st.Page("pages/import_rapsodo.py", title="Import Rapsodo Data", url_path="import-rapsodo", icon=":material/upload_file:"))
+        pages["Player Development"].insert(2, st.Page("pages/rapsodo_import.py", title="Import Rapsodo Data", url_path="import-rapsodo", icon=":material/upload_file:"))
+        pages["Player Development"].insert(3, st.Page("pages/import_rapsodo.py", title="Import Rapsodo Data (Legacy)", url_path="import-rapsodo-legacy", icon=":material/history:"))
 
     # Bullpen Tracking/Scripts are pitching-side tools -- not relevant to
     # Strength Coach, Athletic Trainer, or a Coach specifically tagged

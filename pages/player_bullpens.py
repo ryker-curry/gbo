@@ -311,7 +311,9 @@ try:
                 prev_date_label = previous_session.session_date.strftime("%Y-%m-%d (%a)") if previous_session else None
 
                 st.markdown("**Summary**")
-                if bp_type_name == "High Intent Velo":
+                # Bullpen type names updated by migrate_rapsodo_bullpen.py --
+                # see the matching comment in bullpen_tracking.py.
+                if bp_type_name == "Velocity":
                     all_velos = [v for vs in velos_by_type.values() for v in vs]
                     if not all_velos:
                         st.caption("No velocity data linked yet for this session.")
@@ -356,7 +358,7 @@ try:
                         st.dataframe(summary_rows, use_container_width=True, hide_index=True)
                         if previous_session:
                             st.caption(f"\"vs last\" compares to the previous {bp_type_name} session on {prev_date_label}.")
-                elif bp_type_name in ("Execution Focused", "Short Box"):
+                elif bp_type_name == "Command":
                     if linked_count == 0:
                         st.caption("No pitches linked to Rapsodo data yet for this session.")
                     else:
