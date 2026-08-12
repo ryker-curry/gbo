@@ -1,13 +1,15 @@
 """
 GBO — Bullpen Dashboard (Rapsodo Bullpen Analytics, Phase 2 + Phase 3).
 
-Opens a single bullpen session's Rapsodo-imported data: session header/
-KPI cards, filters (pitch type, pitch number range), the pitch-type
-summary table with an expandable individual-pitch view (spec Sections
-5-6), and the core visualizations -- movement, release point, velocity/
-spin trend, location, and spin axis (spec Sections 7-11, Phase 3).
-Regenerates entirely from stored RapsodoPitch rows -- never needs the
-original file re-uploaded, per spec Section 3 Step 7.
+Two layers: an Overall Pitch Tracking table (section 1) combining every
+one of the selected pitcher's Rapsodo sessions, sitting above a single
+session's full drill-down -- session header/KPI cards, filters (pitch
+type, pitch number range), the pitch-type summary table with an
+expandable individual-pitch view (spec Sections 5-6), and the core
+visualizations -- movement, release point, velocity/spin trend,
+location, and spin axis (spec Sections 7-11, Phase 3). Regenerates
+entirely from stored RapsodoPitch rows -- never needs the original
+file re-uploaded, per spec Section 3 Step 7.
 
 Chart layout follows spec Section 25's grouping: Movement | Release
 Point, then Velocity + Spin, then Location | Spin Axis. All charts
@@ -19,10 +21,16 @@ type selector.
 Reached two ways:
   - With ?bullpen_id=<id> in the URL (e.g. linked from Bullpen Tracking's
     session list, or the "view full dashboard" link after a fresh
-    import) -- opens that session directly.
-  - With no bullpen_id -- shows a player + session picker scoped to
-    whatever the logged-in user is allowed to see (same permission
-    pattern as Bullpen Tracking/My Bullpens).
+    import) -- the pitcher is implied by that session, so both picker
+    steps below are skipped and the page opens straight into the
+    Overall table (for that pitcher) plus that specific session's
+    drill-down.
+  - With no bullpen_id -- a two-step picker, per Ryker's request:
+    first pick a pitcher (scoped to whatever the logged-in user is
+    allowed to see, same permission pattern as Bullpen Tracking/My
+    Bullpens), which immediately reveals that pitcher's Overall Pitch
+    Tracking table, then pick one of that specific pitcher's sessions
+    to open its full drill-down below.
 
 Permissions mirror pages/bullpen_tracking.py and pages/player_bullpens.py
 exactly -- no new authorization logic invented here. Players see only
@@ -92,7 +100,8 @@ try:
         page_footer()
         st.stop()
 
-    # --- Resolve the target bullpen session: from URL, or from a picker ---
+    # --- Resolve the target bullpen session: from URL, or from a
+    # pitcher-then-session picker ---
     query_bullpen_id_raw = st.query_params.get("bullpen_id")
     try:
         target_bullpen_id = int(query_bullpen_id_raw) if query_bullpen_id_raw is not None else None
@@ -111,29 +120,84 @@ try:
         .all()
     )
 
-    if target_bullpen_id is not None and target_bullpen_id not in {b.bullpen_id for b in sessions_with_rapsodo_data}:
+    if not sessions_with_rapsodo_data:
+        empty_state(
+            "No bullpen sessions with imported Rapsodo data yet. Upload one from the "
+            "\"Import Rapsodo Data\" page first."
+        )
+        page_footer()
+        st.stop()
+
+    sessions_by_id = {b.bullpen_id: b for b in sessions_with_rapsodo_data}
+    if target_bullpen_id is not None and target_bullpen_id not in sessions_by_id:
         st.warning("That session either doesn't exist, has no Rapsodo data yet, or you don't have access to it.")
         target_bullpen_id = None
 
-    if target_bullpen_id is None:
-        if not sessions_with_rapsodo_data:
-            empty_state(
-                "No bullpen sessions with imported Rapsodo data yet. Upload one from the "
-                "\"Import Rapsodo Data\" page first."
-            )
-            page_footer()
-            st.stop()
+    # Pitchers who actually have Rapsodo session data, scoped to what this
+    # user is allowed to see -- the picker's first step. Ordered by name,
+    # not session-recency, since this is "pick a person" not "pick a date."
+    pitchers_by_id = {}
+    for b in sessions_with_rapsodo_data:
+        if b.player and b.player_id not in pitchers_by_id:
+            pitchers_by_id[b.player_id] = b.player
+    sorted_pitcher_ids = sorted(
+        pitchers_by_id, key=lambda pid: (pitchers_by_id[pid].last_name, pitchers_by_id[pid].first_name)
+    )
 
+    if target_bullpen_id is not None:
+        # Direct-link entry point (e.g. from Bullpen Tracking's session
+        # list) -- the pitcher is already implied by the session, no
+        # picker needed.
+        target_player_id = sessions_by_id[target_bullpen_id].player_id
+    else:
+        # --- Step 1: pick a pitcher ---
+        st.subheader("Select a pitcher")
+        target_player_id = st.selectbox(
+            "Pitcher", options=sorted_pitcher_ids,
+            format_func=lambda pid: f"{pitchers_by_id[pid].first_name} {pitchers_by_id[pid].last_name}",
+        )
+
+    target_player = pitchers_by_id.get(target_player_id) or sessions_by_id[target_bullpen_id].player
+    player_session_ids = [b.bullpen_id for b in sessions_with_rapsodo_data if b.player_id == target_player_id]
+
+    # --- Overall Pitch Tracking: every one of this pitcher's Rapsodo
+    # sessions combined, ahead of the single-session drill-down below --
+    # per Ryker's request for a career/overall total table before the
+    # existing per-session view. Reuses the exact same pitch_type_summary()
+    # table shape as the per-session Pitch Summary further down, just fed
+    # every pitch across every session instead of one. ---
+    overall_pitches = (
+        session.query(RapsodoPitch)
+        .options(joinedload(RapsodoPitch.pitch_type))
+        .filter(RapsodoPitch.bullpen_id.in_(player_session_ids))
+        .order_by(RapsodoPitch.pitch_date)
+        .all()
+    )
+    with st.container(border=True):
+        section_label(1, f"Overall Pitch Tracking — {target_player.first_name} {target_player.last_name}")
+        overall_summary = session_summary(overall_pitches)
+        render_kpi_cards([
+            {"label": "Sessions", "value": str(len(player_session_ids))},
+            {"label": "Total Pitches", "value": str(overall_summary["total_pitches"])},
+            {"label": "Pitch Types", "value": str(len(overall_summary["pitch_type_names"]))},
+            {"label": "Avg Velocity", "value": f"{overall_summary['avg_velocity']:.1f} mph" if overall_summary["avg_velocity"] is not None else "—"},
+            {"label": "Avg Spin Rate", "value": f"{overall_summary['avg_spin_rate']:.0f} rpm" if overall_summary["avg_spin_rate"] is not None else "—"},
+        ])
+        st.dataframe(pitch_type_summary(overall_pitches), use_container_width=True, hide_index=True)
+
+    st.write("")
+
+    if target_bullpen_id is None:
+        # --- Step 2: pick one of that pitcher's sessions ---
         st.subheader("Select a session")
-        sessions_by_id = {b.bullpen_id: b for b in sessions_with_rapsodo_data}
+        pitcher_sessions_by_id = {bid: sessions_by_id[bid] for bid in player_session_ids}
 
         def _label(bid):
-            b = sessions_by_id[bid]
-            name = f"{b.player.first_name} {b.player.last_name}" if b.player else "—"
+            b = pitcher_sessions_by_id[bid]
             type_label = b.bullpen_type.type_name if b.bullpen_type else "—"
-            return f"{b.session_date.strftime('%Y-%m-%d (%a)')} — {name} — {type_label}"
+            return f"{b.session_date.strftime('%Y-%m-%d (%a)')} — {type_label}"
 
-        chosen = st.selectbox("Bullpen session", options=list(sessions_by_id.keys()), format_func=_label)
+        chosen = st.selectbox("Bullpen session", options=list(pitcher_sessions_by_id.keys()), format_func=_label)
         if st.button("Open dashboard", type="primary"):
             st.query_params["bullpen_id"] = str(chosen)
             st.rerun()
@@ -179,7 +243,7 @@ try:
 
     # --- Filters (spec Section 5): All Pitches / Pitch Type / Pitch Number Range ---
     with st.container(border=True):
-        section_label(1, "Filters")
+        section_label(2, "Filters")
         col1, col2 = st.columns([1, 2])
         with col1:
             type_options = ["All Pitches"] + summary["pitch_type_names"]
@@ -206,7 +270,7 @@ try:
 
     # --- Pitch-type summary table (spec Section 6) ---
     with st.container(border=True):
-        section_label(2, "Pitch Summary")
+        section_label(3, "Pitch Summary")
         summary_rows = pitch_type_summary(filtered_pitches)
         st.dataframe(summary_rows, use_container_width=True, hide_index=True)
 
@@ -227,7 +291,7 @@ try:
     # range), per spec Section 5's "charts should respond to the
     # filters whenever appropriate." ---
     with st.container(border=True):
-        section_label(3, "Charts")
+        section_label(4, "Charts")
 
         # Each chart gets its own full-width row -- no side-by-side
         # columns -- per Ryker's request.
