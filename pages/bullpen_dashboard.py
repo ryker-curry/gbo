@@ -6,17 +6,21 @@ one of the selected pitcher's Rapsodo sessions, sitting above a single
 session's full drill-down -- session header/KPI cards, filters (pitch
 type, pitch number range), the pitch-type summary table with an
 expandable individual-pitch view (spec Sections 5-6), and the core
-visualizations -- movement, release point, velocity/spin trend,
-location, and spin axis (spec Sections 7-11, Phase 3). Regenerates
-entirely from stored RapsodoPitch rows -- never needs the original
-file re-uploaded, per spec Section 3 Step 7.
+visualizations -- movement, release point (individual pitches and
+average-by-type, side by side), location, and spin axis (spec Sections
+7, 8, 11, Phase 3). Regenerates entirely from stored RapsodoPitch
+rows -- never needs the original file re-uploaded, per spec Section 3
+Step 7.
 
-Chart layout follows spec Section 25's grouping: Movement | Release
-Point, then Velocity + Spin, then Location | Spin Axis. All charts
-respect the same pitch-type/pitch-number filters as the summary table
-above them, except the individual-pitch spin-axis view (busy at "All
-Pitches" scale by design, per its own docstring) which gets its own
-type selector.
+Chart layout: Movement, then Release Point (two panels), then
+Location | Spin Axis -- adapted from spec Section 25's original
+Movement | Release Point, then Velocity + Spin, then Location | Spin
+Axis grouping, since the Velocity and Spin Rate Trend chart (Section
+9) was removed per Ryker's call. All charts respect the same
+pitch-type/pitch-number filters as the summary table above them,
+except the individual-pitch spin-axis view (busy at "All Pitches"
+scale by design, per its own docstring) which gets its own type
+selector.
 
 Reached two ways:
   - With ?bullpen_id=<id> in the URL (e.g. linked from Bullpen Tracking's

@@ -832,8 +832,9 @@ class RapsodoPitch(Base):
     the parsed pitch Date/timestamp -- NOT copied from the file's own "No"
     column. The real export reviewed lists pitches most-recent-first (No=1
     had the latest timestamp, No=13 the earliest) -- using "No" directly
-    would silently invert every chronological trend chart (Section 9's
-    velocity/spin fatigue trend depends entirely on true throwing order).
+    would silently invert true throwing order everywhere it matters: the
+    Pitch Number Range filter, the individual-pitch table, and (for a
+    combined multi-session view) the chronological ordering by pitch_date.
 
     rapsodo_unique_id (CSV "Unique ID", e.g. "1502926@1786212209") plus the
     player_id unique constraint below is a second, DB-level dedup guard on

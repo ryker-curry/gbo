@@ -1,7 +1,7 @@
 """
 GBO — Shared Rapsodo Bullpen Dashboard rendering: a single session's
 full drill-down (session header/KPI cards, filters, pitch-type
-summary, and the five core charts), plus a combined "every session
+summary, and the four core charts), plus a combined "every session
 this pitcher has" view. Pulled out of pages/bullpen_dashboard.py into
 its own module so the exact same rendering can be called from two
 different places, per Ryker's request:
@@ -25,6 +25,13 @@ Also, unlike the original inlined version, render_bullpen_session's
 "no pitches match the selected filters" case now does a plain `return`
 instead of `page_footer(); st.stop()` -- stopping the whole script
 would be wrong for a caller with other content above/below it.
+
+The Velocity and Spin Rate Trend chart (spec Section 9) was removed
+from both the single-session and Overall Pitch Tracking Charts
+sections per Ryker's call -- unclear what it was communicating in
+practice, and nothing else in GBO depends on it. velocity_spin_trend_
+chart() itself was deleted from visualizations/bullpen_charts.py too,
+since nothing calls it anymore.
 """
 
 import streamlit as st
@@ -37,7 +44,7 @@ from analytics.bullpen_metrics import (
     session_summary, pitch_type_summary, individual_pitch_rows, filter_pitches, pitch_type_label,
 )
 from visualizations.bullpen_charts import (
-    movement_chart, release_point_chart, velocity_spin_trend_chart, location_chart, color_for_pitch_label,
+    movement_chart, release_point_chart, location_chart, color_for_pitch_label,
 )
 from visualizations.spin_axis_chart import individual_spin_axis_chart, average_spin_axis_chart
 
@@ -166,13 +173,6 @@ def render_bullpen_session(session, target_bullpen_id, section_start=1):
             st.plotly_chart(release_point_chart(filtered_pitches, mode="average"), use_container_width=True)
         st.caption("Left: every pitch's release point. Right: each pitch type's average -- tighter clustering across types suggests better tunneling out of the hand.")
 
-        st.plotly_chart(velocity_spin_trend_chart(filtered_pitches), use_container_width=True)
-        if selected_type == "All Pitches":
-            st.caption(
-                "Showing every pitch in throwing order -- a fastball/offspeed mix will naturally zigzag here. "
-                "Filter to a single pitch type above for that type's own trend."
-            )
-
         location_mode = st.radio(
             "Location view", ["Heat Map", "Individual Pitches"], horizontal=True,
             key=f"dash_location_mode_{target_bullpen_id}",
@@ -198,7 +198,7 @@ def render_bullpen_session(session, target_bullpen_id, section_start=1):
 def render_overall_pitch_tracking(session, player, player_session_ids, section_start=1):
     """Renders the combined "every one of this pitcher's Rapsodo
     sessions" view: KPI cards, the pitch-type summary table, and all
-    five charts, fed every pitch across every session in
+    four charts, fed every pitch across every session in
     player_session_ids instead of just one. Shared by:
 
       - pages/bullpen_dashboard.py -- as the Overall Pitch Tracking
@@ -252,12 +252,6 @@ def render_overall_pitch_tracking(session, player, player_session_ids, section_s
             with overall_release_col_b:
                 st.plotly_chart(release_point_chart(overall_pitches, mode="average"), use_container_width=True)
             st.caption("Left: every pitch's release point. Right: each pitch type's average -- tighter clustering across types suggests better tunneling out of the hand.")
-
-            st.plotly_chart(velocity_spin_trend_chart(overall_pitches), use_container_width=True)
-            st.caption(
-                "Showing every pitch across every session in throwing order -- a jump between sessions "
-                "will show up as a break in the trend here, not a single continuous outing."
-            )
 
             overall_location_mode = st.radio(
                 "Location view", ["Heat Map", "Individual Pitches"], horizontal=True,
