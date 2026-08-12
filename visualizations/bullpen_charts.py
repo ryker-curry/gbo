@@ -53,35 +53,22 @@ def color_for_pitch_label(label):
     return get_pitch_color(label)
 
 
-def _nice_ring_radii(max_extent):
-    """Pick 2-3 clean-looking ring radii (like Baseball Savant's
-    12"/18"/24" movement-plot rings) that fit inside max_extent, scaled
-    to whatever range this session's actual movement falls in -- a
-    single bullpen's spread is much smaller than a full season's, so a
-    fixed 12/18/24 wouldn't fit most outings. Rounds to the nearest
-    "nice" step (2, 5, or 10 inches) depending on scale."""
-    if max_extent <= 10:
-        step = 2
-    elif max_extent <= 25:
-        step = 5
-    else:
-        step = 10
-    radii = []
-    r = step
-    while r < max_extent:
-        radii.append(r)
-        r += step
-    return radii or [round(max_extent)]
+# Fixed ring radii, per Ryker's call -- matches the standard
+# Baseball-Savant-style movement plot exactly (12"/18"/24"), rather
+# than scaling to each session's own movement range. A bullpen with a
+# tight spread just shows its dots clustered well inside the rings,
+# same as it would on a real Statcast movement plot.
+RING_RADII = (12, 18, 24)
 
 
 def movement_chart(pitches, min_pitches_for_shading=2):
     """Horizontal Break (x) vs. Induced Vertical Break (y), styled after
     a Baseball-Savant-style movement plot per Ryker's reference image:
-    concentric distance rings instead of a plain grid, a soft shaded
-    "cluster" region per pitch type behind the individual dots, and
-    MORE RISE / MORE DROP labels on the vertical axis. Centered on
-    (0, 0) with bold gold reference lines through the origin, one dot
-    per pitch, colored by pitch type.
+    fixed 12"/18"/24" concentric distance rings (see RING_RADII) instead
+    of a plain grid, a soft shaded "cluster" region per pitch type
+    behind the individual dots, and MORE RISE / MORE DROP labels on the
+    vertical axis. Centered on (0, 0) with bold gold reference lines
+    through the origin, one dot per pitch, colored by pitch type.
 
     min_pitches_for_shading: pitch types with fewer pitches than this
     still get their dots plotted, just no shaded cluster region (a
@@ -115,20 +102,24 @@ def movement_chart(pitches, min_pitches_for_shading=2):
     usable = [p for p in pitches if p.hb_spin is not None and p.vb_spin is not None]
     order, groups = _group_by_type(usable)
 
+    # Axis extent always shows the full 12"/18"/24" ring set (with a
+    # little padding past the outermost ring), same as a real
+    # Statcast-style plot -- widened further only if an individual
+    # pitch's actual movement falls outside 24", so nothing gets
+    # clipped off the edge of the chart.
+    outer_ring = max(RING_RADII)
     if xs_all := [v for group in groups.values() for p in group if (v := p.hb_spin) is not None]:
-        x_extent = max(4, max(abs(float(v)) for v in xs_all) * 1.15)
+        x_extent = max(outer_ring * 1.1, max(abs(float(v)) for v in xs_all) * 1.15)
     else:
-        x_extent = 20
+        x_extent = outer_ring * 1.1
     if ys_all := [v for group in groups.values() for p in group if (v := p.vb_spin) is not None]:
-        y_extent = max(4, max(abs(float(v)) for v in ys_all) * 1.15)
+        y_extent = max(outer_ring * 1.1, max(abs(float(v)) for v in ys_all) * 1.15)
     else:
-        y_extent = 20
-    ring_extent = max(x_extent, y_extent)
+        y_extent = outer_ring * 1.1
 
     # Concentric reference rings, drawn first (and pinned "below" the
     # data traces) so they read as background texture, not clutter.
-    ring_radii = _nice_ring_radii(ring_extent)
-    for r in ring_radii:
+    for r in RING_RADII:
         fig.add_shape(
             type="circle", xref="x", yref="y", x0=-r, x1=r, y0=-r, y1=r,
             line=dict(color=GRID_GRAY, width=1, dash="dot"), layer="below",
