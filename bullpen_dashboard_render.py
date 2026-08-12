@@ -1,8 +1,10 @@
 """
 GBO — Shared Rapsodo Bullpen Dashboard rendering: a single session's
 full drill-down (session header/KPI cards, filters, pitch-type
-summary, and the four core charts), plus a combined "every session
-this pitcher has" view. Pulled out of pages/bullpen_dashboard.py into
+summary, and the five core charts: movement, release point,
+trajectory flight path, location, and spin axis), plus a combined
+"every session this pitcher has" view. Pulled out of
+pages/bullpen_dashboard.py into
 its own module so the exact same rendering can be called from two
 different places, per Ryker's request:
 
@@ -47,6 +49,7 @@ from visualizations.bullpen_charts import (
     movement_chart, release_point_chart, location_chart, color_for_pitch_label,
 )
 from visualizations.spin_axis_chart import individual_spin_axis_chart, average_spin_axis_chart
+from visualizations.trajectory_chart import trajectory_chart
 
 
 def render_bullpen_session(session, target_bullpen_id, section_start=1):
@@ -173,6 +176,23 @@ def render_bullpen_session(session, target_bullpen_id, section_start=1):
             st.plotly_chart(release_point_chart(filtered_pitches, mode="average"), use_container_width=True)
         st.caption("Left: every pitch's release point. Right: each pitch type's average -- tighter clustering across types suggests better tunneling out of the hand.")
 
+        pitches_with_trajectory = [p for p in filtered_pitches if getattr(p, "trajectory_json", None) is not None]
+        if pitches_with_trajectory:
+            traj_col_a, traj_col_b = st.columns(2)
+            with traj_col_a:
+                st.plotly_chart(trajectory_chart(filtered_pitches, view="side"), use_container_width=True)
+            with traj_col_b:
+                st.plotly_chart(trajectory_chart(filtered_pitches, view="top"), use_container_width=True)
+            st.caption(
+                "Modeled flight path from release to the plate (gravity + drag physics, curved to match each "
+                "pitch's own measured movement) -- left is the view from the dugout, right is from above."
+            )
+        else:
+            st.caption(
+                "No flight-path data yet for these pitches -- imported before this feature shipped. "
+                "Run migrate_pitch_trajectory.py once to backfill it."
+            )
+
         location_mode = st.radio(
             "Location view", ["Heat Map", "Individual Pitches"], horizontal=True,
             key=f"dash_location_mode_{target_bullpen_id}",
@@ -198,7 +218,7 @@ def render_bullpen_session(session, target_bullpen_id, section_start=1):
 def render_overall_pitch_tracking(session, player, player_session_ids, section_start=1):
     """Renders the combined "every one of this pitcher's Rapsodo
     sessions" view: KPI cards, the pitch-type summary table, and all
-    four charts, fed every pitch across every session in
+    five charts, fed every pitch across every session in
     player_session_ids instead of just one. Shared by:
 
       - pages/bullpen_dashboard.py -- as the Overall Pitch Tracking
@@ -252,6 +272,23 @@ def render_overall_pitch_tracking(session, player, player_session_ids, section_s
             with overall_release_col_b:
                 st.plotly_chart(release_point_chart(overall_pitches, mode="average"), use_container_width=True)
             st.caption("Left: every pitch's release point. Right: each pitch type's average -- tighter clustering across types suggests better tunneling out of the hand.")
+
+            overall_pitches_with_trajectory = [p for p in overall_pitches if getattr(p, "trajectory_json", None) is not None]
+            if overall_pitches_with_trajectory:
+                overall_traj_col_a, overall_traj_col_b = st.columns(2)
+                with overall_traj_col_a:
+                    st.plotly_chart(trajectory_chart(overall_pitches, view="side"), use_container_width=True)
+                with overall_traj_col_b:
+                    st.plotly_chart(trajectory_chart(overall_pitches, view="top"), use_container_width=True)
+                st.caption(
+                    "Modeled flight path from release to the plate (gravity + drag physics, curved to match each "
+                    "pitch's own measured movement) -- left is the view from the dugout, right is from above."
+                )
+            else:
+                st.caption(
+                    "No flight-path data yet for these pitches -- imported before this feature shipped. "
+                    "Run migrate_pitch_trajectory.py once to backfill it."
+                )
 
             overall_location_mode = st.radio(
                 "Location view", ["Heat Map", "Individual Pitches"], horizontal=True,

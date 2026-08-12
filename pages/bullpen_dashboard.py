@@ -1,5 +1,5 @@
 """
-GBO — Bullpen Dashboard (Rapsodo Bullpen Analytics, Phase 2 + Phase 3).
+GBO — Bullpen Dashboard (Rapsodo Bullpen Analytics, Phase 2 + Phase 3 + Phase 4).
 
 Two layers: an Overall Pitch Tracking table (section 1) combining every
 one of the selected pitcher's Rapsodo sessions, sitting above a single
@@ -7,19 +7,21 @@ session's full drill-down -- session header/KPI cards, filters (pitch
 type, pitch number range), the pitch-type summary table with an
 expandable individual-pitch view (spec Sections 5-6), and the core
 visualizations -- movement, release point (individual pitches and
-average-by-type, side by side), location, and spin axis (spec Sections
-7, 8, 11, Phase 3). Regenerates entirely from stored RapsodoPitch
-rows -- never needs the original file re-uploaded, per spec Section 3
-Step 7.
+average-by-type, side by side), modeled trajectory flight path (side
+view and top view, side by side, Phase 4 -- see pitch_trajectory.py),
+location, and spin axis (spec Sections 7, 8, 11, Phase 3). Regenerates
+entirely from stored RapsodoPitch rows -- never needs the original
+file re-uploaded, per spec Section 3 Step 7.
 
 Chart layout: Movement, then Release Point (two panels), then
-Location | Spin Axis -- adapted from spec Section 25's original
-Movement | Release Point, then Velocity + Spin, then Location | Spin
-Axis grouping, since the Velocity and Spin Rate Trend chart (Section
-9) was removed per Ryker's call. All charts respect the same
-pitch-type/pitch-number filters as the summary table above them,
-except the individual-pitch spin-axis view (busy at "All Pitches"
-scale by design, per its own docstring) which gets its own type
+Trajectory (two panels), then Location | Spin Axis -- adapted from
+spec Section 25's original Movement | Release Point, then Velocity +
+Spin, then Location | Spin Axis grouping, since the Velocity and Spin
+Rate Trend chart (Section 9) was removed per Ryker's call and the
+Trajectory panels were added in its place (Phase 4). All charts
+respect the same pitch-type/pitch-number filters as the summary table
+above them, except the individual-pitch spin-axis view (busy at "All
+Pitches" scale by design, per its own docstring) which gets its own type
 selector.
 
 Reached two ways:

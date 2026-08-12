@@ -887,8 +887,8 @@ class RapsodoPitch(Base):
     spin_axis_degrees = Column(Numeric(5, 1), nullable=True)  # converted from spin_direction_clock, see rapsodo_conventions.py
     plate_x_ft = Column(Numeric(6, 3), nullable=True)  # converted from strike_zone_side (GBO plate-center-at-0 convention, matches strike_zone.py)
     plate_z_ft = Column(Numeric(6, 3), nullable=True)  # converted from strike_zone_height (0 = ground)
-    perceived_velocity = Column(Numeric(6, 2), nullable=True)  # experimental extension-adjusted formula -- NULL until Phase 4, labeled unvalidated in the UI once populated
-    trajectory_json = Column(JSON, nullable=True)  # cached pitch_trajectory.py output -- NULL until Phase 4
+    perceived_velocity = Column(Numeric(6, 2), nullable=True)  # extension-adjusted formula -- deferred indefinitely per Ryker's Phase 4 call (no agreed-on reference baseline), still NULL
+    trajectory_json = Column(JSON, nullable=True)  # cached pitch_trajectory.py output (Phase 4) -- computed at import time by services/rapsodo_import.py; NULL for pitches imported before Phase 4 until migrate_pitch_trajectory.py backfills them, or for any pitch missing a required physics input (see pitch_trajectory.py)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
