@@ -656,14 +656,24 @@ try:
                     our_player_choice = st.selectbox("Our batter", options=lineup_player_ids, format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}", key="gt_our_batter")
 
                     if active_game.is_intrasquad:
-                        opp_our_player_choice = st.selectbox(
-                            "Opposing pitcher (Squad B)",
-                            options=list(players_by_id.keys()),
-                            format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
-                            key="gt_opp_our_pitcher",
-                        )
-                        default_hand = players_by_id[opp_our_player_choice].throws or "R"
-                        opp_hand_choice = st.radio("Their hand", ["R", "L"], index=0 if default_hand == "R" else 1, horizontal=True, key="gt_opp_pitcher_hand")
+                        # Pitchers only -- recomputed here rather than
+                        # reused from the "Set lineup" section above,
+                        # since that section only runs the first time
+                        # (before a lineup exists) and its local
+                        # pitcher_candidate_ids wouldn't be defined on
+                        # this run once a lineup is already saved.
+                        opp_pitcher_candidate_ids = [pid for pid, p in players_by_id.items() if p.is_pitcher]
+                        if not opp_pitcher_candidate_ids:
+                            st.warning("No active players are marked as pitchers yet -- flag at least one on the Players page.")
+                        else:
+                            opp_our_player_choice = st.selectbox(
+                                "Opposing pitcher (Squad B)",
+                                options=opp_pitcher_candidate_ids,
+                                format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
+                                key="gt_opp_our_pitcher",
+                            )
+                            default_hand = players_by_id[opp_our_player_choice].throws or "R"
+                            opp_hand_choice = st.radio("Their hand", ["R", "L"], index=0 if default_hand == "R" else 1, horizontal=True, key="gt_opp_pitcher_hand")
                     else:
                         opp_hand_choice = st.radio("Opposing pitcher's hand", ["R", "L"], horizontal=True, key="gt_opp_pitcher_hand")
                 else:
