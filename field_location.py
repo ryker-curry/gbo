@@ -102,7 +102,7 @@ def render_field_selector(key, marker_x=None, marker_y=None):
     fig.add_trace(go.Scatter(
         x=xs, y=ys, mode="markers",
         marker=dict(size=14, opacity=0.001, color=GBO_CREAM),
-        showlegend=False, hoverinfo="skip", name="grid",
+        showlegend=False, hoverinfo="none", name="grid",
     ))
 
     line_dist = 400
@@ -146,12 +146,19 @@ def render_field_selector(key, marker_x=None, marker_y=None):
 
     result = st.plotly_chart(fig, on_select="rerun", key=key, config={"displayModeBar": False})
 
-    # TEMPORARY DEBUG -- remove once click selection is confirmed working.
+    # TEMPORARY DEBUG -- remove once click selection is confirmed working
+    # live (was previously never actually confirmed, since the build
+    # sandbox has no browser to click-test against -- kept in for one
+    # more round after fixing the hoverinfo bug below, so a screenshot
+    # of this can confirm the fix if anything's still off).
     with st.expander("Debug: raw click result", expanded=False):
         st.write(result)
 
     if result:
-        selection_data = result.get("selection") or result.get("select") or {}
+        # Confirmed against Streamlit's official st.plotly_chart docs
+        # (PlotlyState/PlotlySelectionState schema): the selection dict
+        # is always under "selection" -> "points", never "select".
+        selection_data = result.get("selection") or {}
         points = selection_data.get("points")
         if points:
             pt = points[0]

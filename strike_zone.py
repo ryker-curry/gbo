@@ -141,7 +141,7 @@ def render_zone_selector(key, marker_x=None, marker_z=None):
     fig.add_trace(go.Scatter(
         x=xs, y=zs, mode="markers",
         marker=dict(size=16, opacity=0.001, color=GBO_CREAM),
-        showlegend=False, hoverinfo="skip", name="grid",
+        showlegend=False, hoverinfo="none", name="grid",
     ))
 
     fig.add_shape(type="line", x0=X_MIN, x1=X_MAX, y0=0, y1=0, line=dict(color=GRID_GRAY, width=2))
@@ -172,17 +172,19 @@ def render_zone_selector(key, marker_x=None, marker_z=None):
 
     result = st.plotly_chart(fig, on_select="rerun", key=key, config={"displayModeBar": False})
 
-    # TEMPORARY DEBUG -- remove once click selection is confirmed working.
-    # Shows exactly what Streamlit returns, so we can see the real
-    # structure instead of continuing to guess at it.
+    # TEMPORARY DEBUG -- remove once click selection is confirmed working
+    # live (was previously never actually confirmed, since the build
+    # sandbox has no browser to click-test against -- kept in for one
+    # more round after fixing the hoverinfo bug below, so a screenshot
+    # of this can confirm the fix if anything's still off).
     with st.expander("Debug: raw click result", expanded=False):
         st.write(result)
 
     if result:
-        # Defensive: checking both "selection" and "select" since the
-        # exact key couldn't be verified without live testing (no
-        # network access to install/run plotly in the build sandbox).
-        selection_data = result.get("selection") or result.get("select") or {}
+        # Confirmed against Streamlit's official st.plotly_chart docs
+        # (PlotlyState/PlotlySelectionState schema): the selection dict
+        # is always under "selection" -> "points", never "select".
+        selection_data = result.get("selection") or {}
         points = selection_data.get("points")
         if points:
             pt = points[0]
