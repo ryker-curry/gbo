@@ -26,9 +26,13 @@ from plate_discipline import SWING_OUTCOMES, WHIFF_OUTCOMES
 from strike_zone import is_in_zone
 
 
-def get_batting_pitches(session, player_id, season_id=None):
+def get_batting_pitches(session, player_id, season_id=None, game_id=None):
     """Every pitch where this player was the one batting -- our side,
-    or (intrasquad only) the opponent side."""
+    or (intrasquad only) the opponent side. game_id narrows to a single
+    game (for the single-game report); season_id narrows to a season
+    (for the season-aggregate Analytics/My Stats views). The two are
+    independent filters -- pass whichever one is relevant, or neither
+    for all-time."""
     query = (
         session.query(GamePitch)
         .join(Game, GamePitch.game_id == Game.game_id)
@@ -40,12 +44,15 @@ def get_batting_pitches(session, player_id, season_id=None):
     )
     if season_id is not None:
         query = query.filter(Game.season_id == season_id)
+    if game_id is not None:
+        query = query.filter(GamePitch.game_id == game_id)
     return query.all()
 
 
-def get_pitching_pitches(session, player_id, season_id=None):
+def get_pitching_pitches(session, player_id, season_id=None, game_id=None):
     """Every pitch where this player was the one pitching -- our side,
-    or (intrasquad only) the opponent side."""
+    or (intrasquad only) the opponent side. game_id/season_id: see
+    get_batting_pitches' docstring, same convention."""
     query = (
         session.query(GamePitch)
         .join(Game, GamePitch.game_id == Game.game_id)
@@ -57,6 +64,8 @@ def get_pitching_pitches(session, player_id, season_id=None):
     )
     if season_id is not None:
         query = query.filter(Game.season_id == season_id)
+    if game_id is not None:
+        query = query.filter(GamePitch.game_id == game_id)
     return query.all()
 
 
@@ -88,23 +97,143 @@ def compute_batting_line(pitches):
     }
 
 
+# Generic, commonly-cited linear weights for wOBA -- NOT season/park-
+# adjusted for a specific year or league. Good enough for a relative
+# read within one team's own games, not a claim of MLB-exact wOBA.
+# IBB is always 0 in this formula -- GamePitch.ab_outcome has no
+# separate intentional-walk value (see compute_pitch_type_breakdown's
+# docstring), so every BB is treated as unintentional here too.
+WOBA_WEIGHTS = {"uBB": 0.69, "HBP": 0.72, "1B": 0.89, "2B": 1.27, "3B": 1.62, "HR": 2.10}
+# Commonly-cited recent-MLB-average constant -- swap for a real
+# league-specific value once Ryker has one he trusts more.
+FIP_CONSTANT = 3.10
+
+
+def _innings_pitched(pa_pitches):
+    """Outs recorded on this pitcher's own PA-ending pitches, converted
+    to the X.Y innings-pitched display convention (Y = outs past the
+    last full inning, 0-2, NOT a true decimal third). Each ending
+    pitch's outs_after/outs_before is the real recorded delta for that
+    specific play (0-3), stored before any inning-transition display
+    normalization -- game_tracking.py's compute_current_state() does
+    that normalization only for the live display, never on the stored
+    row, so summing the raw deltas here is exact, not an approximation.
+    Returns (display_string, decimal_value) -- decimal_value is the
+    real fractional innings (outs/3), used for rate stats (ERA, WHIP,
+    K/9) where X.Y would silently be wrong (X.2 innings is NOT X + 0.2
+    innings)."""
+    total_outs = sum(
+        (p.outs_after - p.outs_before) for p in pa_pitches
+        if p.outs_after is not None and p.outs_before is not None
+    )
+    whole, partial = divmod(total_outs, 3)
+    return f"{whole}.{partial}", whole + partial / 3.0
+
+
+def _is_leadoff_pa(pa_pitches_for_this_pa_first_pitch):
+    p = pa_pitches_for_this_pa_first_pitch
+    return p.pa_pitch_number == 1 and p.outs_before == 0 and (p.bases_before or "000") == "000"
+
+
 def compute_pitching_line(pitches):
+    """The box-score-style header line for a pitcher -- either for a
+    single game (pass pitches from get_pitching_pitches(..., game_id=))
+    or aggregated across a season/all-time, same function either way.
+
+    Early/Ahead here use Ryker's exact per-plate-appearance definitions
+    (confirmed directly with him, see compute_pitch_type_breakdown's
+    docstring for the full explanation) -- NOT the looser "Ahead
+    Pitches" per-pitch-thrown count in the pitch-type breakdown table,
+    which predates this and is a coarser proxy. E+A% here is the real
+    stat Ryker described: (Early PAs + Ahead PAs) / Batters Faced.
+
+    ER is NOT distinguished from total runs allowed -- GBO has no
+    earned/unearned run model (no formal error-attribution), so "ERA"
+    here is really runs-allowed average. FIP and wOBA use generic,
+    documented linear-weight constants, not a season/league-specific
+    set. See this module's WOBA_WEIGHTS/FIP_CONSTANT for exactly what's
+    used and why."""
     pa_pitches = [p for p in pitches if p.ends_plate_appearance]
     batters_faced = len(pa_pitches)
     k = sum(1 for p in pa_pitches if p.ab_outcome == "K")
     bb = sum(1 for p in pa_pitches if p.ab_outcome == "BB")
+    hbp = sum(1 for p in pa_pitches if p.ab_outcome == "HBP")
     hits_allowed = sum(1 for p in pa_pitches if p.ab_outcome in HIT_OUTCOMES)
     hr_allowed = sum(1 for p in pa_pitches if p.ab_outcome == "HR")
+    xbh_allowed = sum(1 for p in pa_pitches if p.ab_outcome in ("2B", "3B", "HR"))
     runs_allowed = sum(p.runs_scored_on_play or 0 for p in pitches)
+    sac = sum(1 for p in pa_pitches if p.ab_outcome in ("Sac Bunt", "Sac Fly"))
+    sf = sum(1 for p in pa_pitches if p.ab_outcome == "Sac Fly")
+    ab = batters_faced - bb - hbp - sac
+
     exec_attempts = [p for p in pitches if p.intended_zone is not None and p.pitch_zone is not None]
     exec_hits = sum(1 for p in exec_attempts if p.intended_zone == p.pitch_zone)
     rv_values = [float(p.run_value) for p in pitches if p.run_value is not None]
+
+    strikes = sum(1 for p in pitches if p.pitch_outcome in STRIKE_OUTCOMES)
+    balls_thrown = sum(1 for p in pitches if p.pitch_outcome == "Ball")
+    ip_display, ip_decimal = _innings_pitched(pa_pitches)
+
+    # PA groups, needed for Early/Ahead/Leadoff/situational-count stats
+    # below -- reconstructed the same way compute_pitch_type_breakdown
+    # does (see _group_into_plate_appearances), since this function
+    # doesn't currently receive pre-grouped PAs.
+    all_pas = _group_into_plate_appearances(pitches)
+    completed_pas = [pa for pa in all_pas if pa[-1].ends_plate_appearance]
+
+    early_pas = 0
+    ahead_pas = 0
+    for pa in completed_pas:
+        last = pa[-1]
+        is_early = last.pitch_outcome == "In Play" and (last.balls_before, last.strikes_before) in {(0, 0), (1, 0), (0, 1), (1, 1)}
+        is_ahead = any((p.balls_before, p.strikes_before) in {(0, 2), (1, 2)} for p in pa)
+        if is_early:
+            early_pas += 1
+        elif is_ahead:
+            ahead_pas += 1
+
+    leadoff_pas = [pa for pa in completed_pas if _is_leadoff_pa(pa[0])]
+    leadoff_outs = sum(1 for pa in leadoff_pas if pa[-1].ab_outcome in ("K", "Groundout", "Flyout", "Lineout", "Double Play", "Sac Bunt", "Sac Fly"))
+    leadoff_bb = sum(1 for pa in leadoff_pas if pa[-1].ab_outcome == "BB")
+    two_out_bb = sum(1 for pa in completed_pas if pa[-1].ab_outcome == "BB" and pa[-1].outs_before == 2)
+    zero_two_hits = sum(1 for pa in completed_pas if pa[-1].ab_outcome in HIT_OUTCOMES and pa[-1].balls_before == 0 and pa[-1].strikes_before == 2)
+    zero_two_barrel = sum(1 for pa in completed_pas if pa[-1].contact_quality == "Barrel" and pa[-1].balls_before == 0 and pa[-1].strikes_before == 2)
+    one_two_barrel = sum(1 for pa in completed_pas if pa[-1].contact_quality == "Barrel" and pa[-1].balls_before == 1 and pa[-1].strikes_before == 2)
+
+    singles = sum(1 for pa in completed_pas if pa[-1].ab_outcome == "1B")
+    doubles = sum(1 for pa in completed_pas if pa[-1].ab_outcome == "2B")
+    triples = sum(1 for pa in completed_pas if pa[-1].ab_outcome == "3B")
+    woba_num = (
+        WOBA_WEIGHTS["uBB"] * bb + WOBA_WEIGHTS["HBP"] * hbp + WOBA_WEIGHTS["1B"] * singles
+        + WOBA_WEIGHTS["2B"] * doubles + WOBA_WEIGHTS["3B"] * triples + WOBA_WEIGHTS["HR"] * hr_allowed
+    )
+    woba_den = ab + bb + sf + hbp
+
     return {
         "Batters Faced": batters_faced, "Pitches": len(pitches), "K": k, "BB": bb,
         "H Allowed": hits_allowed, "HR Allowed": hr_allowed, "Runs Allowed": runs_allowed,
         "Execution %": round(100 * exec_hits / len(exec_attempts), 1) if exec_attempts else None,
         "Total RV Allowed": round(sum(rv_values), 3) if rv_values else None,
         "Avg RV Allowed/Pitch": round(sum(rv_values) / len(rv_values), 3) if rv_values else None,
+        # New box-score-style stats, added to match Ryker's Game Stat Sheet:
+        "IP": ip_display, "IP (decimal)": round(ip_decimal, 3),
+        "Strikes": strikes, "Strike %": _rate(strikes, len(pitches)),
+        "Balls": balls_thrown, "Ball %": _rate(balls_thrown, len(pitches)),
+        "Pitches/Inning": round(len(pitches) / ip_decimal, 1) if ip_decimal else None,
+        "AB": ab, "Hits": hits_allowed, "HBP": hbp, "XBH": xbh_allowed,
+        "WHIP": round((bb + hits_allowed) / ip_decimal, 2) if ip_decimal else None,
+        "K/BB": round(k / bb, 2) if bb else None,
+        "K %": _rate(k, batters_faced), "K/9": round(k * 9 / ip_decimal, 2) if ip_decimal else None,
+        "ERA (runs-allowed avg -- ER not tracked)": round(runs_allowed * 9 / ip_decimal, 2) if ip_decimal else None,
+        "FIP": round((13 * hr_allowed + 3 * (bb + hbp) - 2 * k) / ip_decimal + FIP_CONSTANT, 2) if ip_decimal else None,
+        "OBA (opponent AVG)": round(hits_allowed / ab, 3) if ab else None,
+        "wOBA": round(woba_num / woba_den, 3) if woba_den else None,
+        "Leadoff PAs": len(leadoff_pas), "Leadoff Outs": leadoff_outs,
+        "Leadoff Out %": _rate(leadoff_outs, len(leadoff_pas)),
+        "Leadoff BB": leadoff_bb, "2 Out BB": two_out_bb,
+        "0-2 Hits": zero_two_hits, "0-2 Barrel": zero_two_barrel, "1-2 Barrel": one_two_barrel,
+        "Early": early_pas, "Ahead (PA)": ahead_pas,
+        "E+A %": _rate(early_pas + ahead_pas, batters_faced),
     }
 
 
@@ -140,24 +269,52 @@ def compute_pitch_type_breakdown(pitches):
     but still count toward "Total"), plus a final "Total" row across
     every pitch. Sorted by pitch count, most-thrown first.
 
-    A3P ("ahead after 3 pitches") is inherently a plate-appearance-level
-    fact, not a per-pitch one, so it's attributed to whichever pitch
-    type was thrown as the PA's 3rd pitch -- same convention already
-    used for hits/BB/K attributing to the pitch that ended the PA. See
-    _compute_a3p_attribution() for exactly which PAs count and why.
+    A3P ("ahead after 3 pitches") and Early/Ahead are all inherently
+    plate-appearance-level facts, not per-pitch ones, so each is
+    attributed to whichever pitch type was thrown as the relevant pitch
+    of that PA (A3P -> the PA's 3rd pitch, Early/Ahead -> the PA's
+    final/ending pitch) -- same convention already used for hits/BB/K
+    attributing to the pitch that ended the PA. See
+    _compute_a3p_attribution() and _compute_early_ahead_attribution()
+    for exactly which PAs count and why.
+
+    Early/Ahead here use Ryker's exact definitions, confirmed directly
+    with him (previously this table used a looser "strikes_before >
+    balls_before, per pitch thrown" proxy for "Ahead" -- that's been
+    replaced, since it counted a different, coarser thing than what
+    Ryker actually meant):
+      - Early: the PA ended in a ball in play (pitch_outcome ==
+        "In Play" on the PA's final pitch) with the count AT THAT PITCH
+        being 0-0, 1-0, 0-1, or 1-1 -- contact within the first 3
+        pitches at a count that hasn't gone 2-0. The eventual result
+        (hit, out, error) doesn't change the credit.
+      - Ahead: the PA reaches an 0-2 or 1-2 count AT ANY POINT (checked
+        across every pitch in the PA, not just the last one). At most
+        one Ahead credit per PA. By construction this can never also be
+        Early (Early's four counts don't include 0-2/1-2) -- every
+        completed PA is Early, Ahead, or neither, never both, matching
+        Ryker's "only one outcome counted per batter" rule.
+      - E+A % = (Early + Ahead) / Batters Faced -- see
+        compute_pitching_line() for the game-level version of this same
+        stat; this table's version is the same PAs, broken out by which
+        pitch type ended each one.
 
     Still deliberately NOT included, because the raw data doesn't make
     their definition unambiguous:
-      - The rest of the count-leverage cluster beyond Ahead/A3P --
-        "Early", "E+A%", "Early Ball in Play" -- still needs a real
-        definition from Ryker before guessing further.
-      - "Execution Score" -- Ryker's sheet implies a per-pitch
-        coach-graded score; GBO keeps its existing, different
-        objective "Execution %" in compute_pitching_line()
-        (intended-vs-actual zone match) instead, per Ryker's decision.
+      - "Execution Score" -- Ryker's sheet implies a per-pitch score;
+        confirmed with him this IS an intended-vs-actual zone match,
+        matching GBO's existing "Execution %" in compute_pitching_line()
+        exactly -- see this table's own "Execution %" column, which now
+        reuses that same logic per pitch type.
       - "IBB" as distinct from "BB" -- GamePitch.ab_outcome's
         documented vocabulary doesn't include a separate intentional-
         walk value, so it's counted under "BB".
+      - "2 Out BB Score" / "Leadoff BB Score" (did that SPECIFIC walked
+        runner later score) -- GBO's bases_before/bases_after model
+        tracks base occupancy, not runner identity, so there's no way
+        to trace one particular runner through the rest of the inning
+        without a real schema change. Only the raw counts are available
+        (compute_pitching_line()'s "Leadoff BB" / "2 Out BB").
     """
     total_all = len(pitches)
 
@@ -167,15 +324,42 @@ def compute_pitch_type_breakdown(pitches):
             by_type.setdefault(p.pitch_type.type_name, []).append(p)
 
     a3p_attempts, a3p_ahead = _compute_a3p_attribution(pitches)
+    early_by_type, ahead_by_type, bf_by_type = _compute_early_ahead_attribution(pitches)
 
     rows = [
-        _pitch_type_row(label, type_pitches, total_all, a3p_attempts.get(label, 0), a3p_ahead.get(label, 0))
+        _pitch_type_row(
+            label, type_pitches, total_all, a3p_attempts.get(label, 0), a3p_ahead.get(label, 0),
+            early_by_type.get(label, 0), ahead_by_type.get(label, 0), bf_by_type.get(label, 0),
+        )
         for label, type_pitches in sorted(by_type.items(), key=lambda kv: -len(kv[1]))
     ]
     rows.append(_pitch_type_row(
         "Total", pitches, total_all, sum(a3p_attempts.values()), sum(a3p_ahead.values()),
+        sum(early_by_type.values()), sum(ahead_by_type.values()), sum(bf_by_type.values()),
     ))
     return rows
+
+
+def _compute_early_ahead_attribution(pitches):
+    """Early/Ahead PA counts (see compute_pitch_type_breakdown's
+    docstring for the exact definitions), attributed to whichever pitch
+    type ended each plate appearance. Also returns batters-faced per
+    pitch type (the denominator for E+A %), since it's the same PA
+    grouping work -- no need to recompute it separately."""
+    early, ahead, bf = {}, {}, {}
+    for pa in _group_into_plate_appearances(pitches):
+        last = pa[-1]
+        if not last.ends_plate_appearance or last.pitch_type is None:
+            continue
+        label = last.pitch_type.type_name
+        bf[label] = bf.get(label, 0) + 1
+        is_early = last.pitch_outcome == "In Play" and (last.balls_before, last.strikes_before) in {(0, 0), (1, 0), (0, 1), (1, 1)}
+        is_ahead = any((p.balls_before, p.strikes_before) in {(0, 2), (1, 2)} for p in pa)
+        if is_early:
+            early[label] = early.get(label, 0) + 1
+        elif is_ahead:
+            ahead[label] = ahead.get(label, 0) + 1
+    return early, ahead, bf
 
 
 def _group_into_plate_appearances(pitches):
@@ -236,7 +420,7 @@ def _compute_a3p_attribution(pitches):
     return attempts, ahead
 
 
-def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0):
+def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0, early_pas=0, ahead_pas=0, bf_for_early=0):
     n = len(pitches)
     strikes = [p for p in pitches if p.pitch_outcome in STRIKE_OUTCOMES]
     balls = [p for p in pitches if p.pitch_outcome == "Ball"]
@@ -244,8 +428,14 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
     swings = [p for p in pitches if p.pitch_outcome in SWING_OUTCOMES]
     whiffs = [p for p in pitches if p.pitch_outcome in WHIFF_OUTCOMES]
     dominant = [p for p in pitches if p.pitch_outcome in DOMINANT_OUTCOMES]
-    ahead = [p for p in pitches if p.strikes_before is not None and p.balls_before is not None and p.strikes_before > p.balls_before]
     swords = [p for p in pitches if getattr(p, "is_sword", False)]
+
+    # Execution %: intended-vs-actual zone match, same logic as
+    # compute_pitching_line()'s game-level version, just scoped to this
+    # pitch type -- confirmed with Ryker this IS what "Execution Score"
+    # means in his sheet (see compute_pitch_type_breakdown's docstring).
+    exec_attempts = [p for p in pitches if p.intended_zone is not None and p.pitch_zone is not None]
+    exec_hits = sum(1 for p in exec_attempts if p.intended_zone == p.pitch_zone)
 
     located = [p for p in pitches if p.actual_plate_x is not None and p.actual_plate_z is not None]
     in_zone = [p for p in located if is_in_zone(float(p.actual_plate_x), float(p.actual_plate_z))]
@@ -302,9 +492,10 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
         "Putaway Opportunities": len(two_strike_pitches), "Putaway Pitch": len(putaway_pitches),
         "Putaway %": _rate(len(putaway_pitches), len(two_strike_pitches)),
         "Dominant Pitches": len(dominant), "Dominance %": _rate(len(dominant), n),
-        "Ahead Pitches": len(ahead), "Ahead %": _rate(len(ahead), n),
+        "Early": early_pas, "Ahead": ahead_pas, "E+A %": _rate(early_pas + ahead_pas, bf_for_early),
         "A3P Opportunities": a3p_attempts, "A3P": a3p_ahead, "A3P %": _rate(a3p_ahead, a3p_attempts),
         "Swords": len(swords), "Sword %": _rate(len(swords), len(swings)),
+        "Execution": exec_hits, "Execution Reviewed": len(exec_attempts), "Execution %": _rate(exec_hits, len(exec_attempts)),
         "Balls in Play": len(balls_in_play),
         "GroundBalls": batted_ball_counts["Ground Ball"], "Ground Ball %": _rate(batted_ball_counts["Ground Ball"], len(balls_in_play)),
         "FlyBalls": batted_ball_counts["Fly Ball"], "Fly Ball %": _rate(batted_ball_counts["Fly Ball"], len(balls_in_play)),

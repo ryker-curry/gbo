@@ -274,6 +274,7 @@ if role_name in ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Da
     ]
     pages["Analytics"] = [
         st.Page("pages/analytics.py", title="Player Stats", url_path="analytics", icon=":material/query_stats:"),
+        st.Page("pages/pitcher_game_report.py", title="Pitcher Game Report", url_path="pitcher-game-report", icon=":material/summarize:"),
     ]
 
 if role_name == "Administrator":
