@@ -765,23 +765,14 @@ try:
                 intended_plate_x, intended_plate_z = st.session_state[intended_state_key]
                 st.caption(f"Intended: {intended_plate_x:+.2f} ft, {intended_plate_z:.2f} ft high" if intended_plate_x is not None else "Not yet set -- click the image above.")
 
-            st.caption("Actual location -- click where the pitch actually crossed the plate")
-            actual_state_key = f"gt_actual_plate_{pitch_count_for_key}"
-            if actual_state_key not in st.session_state:
-                st.session_state[actual_state_key] = (None, None)
-            cur_ax, cur_az = st.session_state[actual_state_key]
-            new_ax, new_az = strike_zone.render_zone_selector(
-                key=f"gt_actual_click_{pitch_count_for_key}", marker_x=cur_ax, marker_z=cur_az,
-            )
-            if new_ax is not None and (new_ax, new_az) != (cur_ax, cur_az):
-                st.session_state[actual_state_key] = (new_ax, new_az)
-                st.rerun()
-            actual_plate_x, actual_plate_z = st.session_state[actual_state_key]
-            if actual_plate_x is not None:
-                located = strike_zone.is_in_zone(actual_plate_x, actual_plate_z)
-                st.caption(f"Actual: {actual_plate_x:+.2f} ft, {actual_plate_z:.2f} ft high — {'In zone' if located else 'Out of zone'}")
-            else:
-                st.caption("Not yet set -- click the image above. Optional, but needed for location-based reports later.")
+            # Actual location isn't captured live -- pitches are called
+            # from the dugout with no angle on where the ball actually
+            # crossed, so there's nothing real to click in the moment.
+            # It's filled in afterward from center-field game video via
+            # the Video Review section below (per Ryker's call), which
+            # is also where command/execution tracking (intended vs.
+            # actual) actually gets used.
+            actual_plate_x = actual_plate_z = None
 
             pitch_outcome_choice = st.selectbox("Pitch outcome", PITCH_OUTCOMES, key="gt_pitch_outcome")
             contact_quality_choice = None
@@ -909,6 +900,128 @@ try:
             st.info("This game hasn't started yet -- click \"Start game\" below to begin live tracking.")
         elif can_edit_sessions and active_game.status == "Paused":
             st.info("This game is paused -- click \"Resume game\" below to continue tracking.")
+
+        # --- Video Review: fill in actual pitch locations from game
+        # film -- the other half of command/execution tracking, now that
+        # actual location is never captured live (see the note above the
+        # removed live click block). Scoped to pitches WE threw
+        # (is_our_team_batting is False) -- same scoping the live
+        # intended-location capture already used, since there's no call
+        # (and so no intended location) to grade for pitches we didn't
+        # throw. Works at any game status, since this is done after the
+        # fact from film, not during live entry. ---
+        pitches_we_threw = sorted(
+            (p for p in active_game.pitches if not p.is_our_team_batting),
+            key=lambda p: p.pitch_sequence,
+        )
+        if can_edit_sessions and pitches_we_threw:
+            st.divider()
+            st.subheader("Video Review — Actual Pitch Locations")
+            st.caption(
+                "Step through the pitches we threw and mark where each one actually crossed, "
+                "watching the center-field angle. Paired with the call/intended location from "
+                "the dugout, this is what drives command/execution tracking."
+            )
+
+            review_pitch_ids = [p.game_pitch_id for p in pitches_we_threw]
+            missing_ids = [p.game_pitch_id for p in pitches_we_threw if p.actual_plate_x is None]
+
+            # Reset to the first un-reviewed pitch whenever a different
+            # game becomes active (including the very first time this
+            # section renders) -- avoids picking up a stale pitch id left
+            # over from a previously-reviewed game.
+            if st.session_state.get("vr_active_game_id") != active_game.game_id:
+                st.session_state["vr_active_game_id"] = active_game.game_id
+                st.session_state["vr_current_pitch_id"] = missing_ids[0] if missing_ids else review_pitch_ids[0]
+
+            current_pitch_id = st.session_state.get("vr_current_pitch_id")
+            if current_pitch_id not in review_pitch_ids:
+                current_pitch_id = review_pitch_ids[0]
+                st.session_state["vr_current_pitch_id"] = current_pitch_id
+            current_idx = review_pitch_ids.index(current_pitch_id)
+            current_pitch = pitches_we_threw[current_idx]
+
+            def _vr_pitch_label(gpid):
+                p = next(pp for pp in pitches_we_threw if pp.game_pitch_id == gpid)
+                mark = "✓" if p.actual_plate_x is not None else "•"
+                pt_name = p.pitch_type.type_name if p.pitch_type else "?"
+                return f"{mark} #{p.pitch_sequence} — Inn {p.inning}, {p.balls_before}-{p.strikes_before}, {pt_name}"
+
+            st.caption(f"{len(missing_ids)} of {len(pitches_we_threw)} pitch(es) we threw still need an actual location.")
+            jump_choice = st.selectbox(
+                "Jump to pitch", options=review_pitch_ids, index=current_idx,
+                format_func=_vr_pitch_label, key="vr_jump_select",
+            )
+            if jump_choice != current_pitch_id:
+                st.session_state["vr_current_pitch_id"] = jump_choice
+                st.rerun()
+
+            batter_label = (
+                (f"{current_pitch.opponent_our_player.first_name} {current_pitch.opponent_our_player.last_name}" if current_pitch.opponent_our_player else None)
+                or (current_pitch.opponent_player.player_name if current_pitch.opponent_player else None)
+                or (f"batting order #{current_pitch.opponent_batting_order}" if current_pitch.opponent_batting_order else "unknown batter")
+            )
+            hand_label = f" ({current_pitch.opponent_hand}HB)" if current_pitch.opponent_hand else ""
+            st.markdown(
+                f"**Pitch #{current_pitch.pitch_sequence}** — Inning {current_pitch.inning}, "
+                f"{current_pitch.balls_before}-{current_pitch.strikes_before} count, "
+                f"vs. {batter_label}{hand_label}"
+            )
+            st.caption(
+                f"Called: {current_pitch.pitch_type.type_name if current_pitch.pitch_type else 'unknown pitch'}"
+                + (
+                    f" — intended {float(current_pitch.intended_plate_x):+.2f} ft, {float(current_pitch.intended_plate_z):.2f} ft high"
+                    if current_pitch.intended_plate_x is not None else " — no intended location was logged live"
+                )
+                + f". Outcome: {current_pitch.pitch_outcome or '—'}" + (f", {current_pitch.ab_outcome}" if current_pitch.ab_outcome else "")
+            )
+
+            vr_state_key = f"vr_actual_state_{current_pitch.game_pitch_id}"
+            if vr_state_key not in st.session_state:
+                st.session_state[vr_state_key] = (
+                    float(current_pitch.actual_plate_x) if current_pitch.actual_plate_x is not None else None,
+                    float(current_pitch.actual_plate_z) if current_pitch.actual_plate_z is not None else None,
+                )
+            cur_vx, cur_vz = st.session_state[vr_state_key]
+            new_vx, new_vz = strike_zone.render_zone_selector(
+                key=f"vr_actual_click_{current_pitch.game_pitch_id}", marker_x=cur_vx, marker_z=cur_vz,
+            )
+            if new_vx is not None and (new_vx, new_vz) != (cur_vx, cur_vz):
+                st.session_state[vr_state_key] = (new_vx, new_vz)
+                st.rerun()
+            review_x, review_z = st.session_state[vr_state_key]
+            if review_x is not None:
+                located = strike_zone.is_in_zone(review_x, review_z)
+                st.caption(f"Marked: {review_x:+.2f} ft, {review_z:.2f} ft high — {'In zone' if located else 'Out of zone'}")
+            else:
+                st.caption("Not yet marked -- click the image above.")
+
+            nav_cols = st.columns(3)
+            if nav_cols[0].button("◀ Previous", key="vr_prev_btn", disabled=current_idx == 0):
+                st.session_state["vr_current_pitch_id"] = review_pitch_ids[current_idx - 1]
+                st.rerun()
+            if nav_cols[2].button("Next ▶", key="vr_next_btn", disabled=current_idx == len(review_pitch_ids) - 1):
+                st.session_state["vr_current_pitch_id"] = review_pitch_ids[current_idx + 1]
+                st.rerun()
+            if nav_cols[1].button("Save actual location", type="primary", key="vr_save_btn", disabled=review_x is None):
+                current_pitch.actual_plate_x = review_x
+                current_pitch.actual_plate_z = review_z
+                current_pitch.pitch_zone = strike_zone.derive_old_zone(review_x, review_z)
+                session.commit()
+                st.session_state.pop(vr_state_key, None)
+                # Advance to the next still-missing pitch after this one
+                # in sequence (wrapping back to the first remaining one),
+                # or just the next pitch overall once nothing's missing.
+                still_missing = [p.game_pitch_id for p in pitches_we_threw if p.actual_plate_x is None]
+                later_missing = [gpid for gpid in still_missing if review_pitch_ids.index(gpid) > current_idx]
+                if later_missing:
+                    st.session_state["vr_current_pitch_id"] = later_missing[0]
+                elif still_missing:
+                    st.session_state["vr_current_pitch_id"] = still_missing[0]
+                else:
+                    st.session_state["vr_current_pitch_id"] = review_pitch_ids[min(current_idx + 1, len(review_pitch_ids) - 1)]
+                st.success(f"Saved actual location for pitch #{current_pitch.pitch_sequence}.")
+                st.rerun()
 
         # --- Pitch log ---
         st.divider()
