@@ -166,6 +166,32 @@ def suggest_next_our_batter(game, lineup_slots):
     return next((s.player_id for s in lineup_slots if s.batting_order == next_order), lineup_slots[0].player_id)
 
 
+def suggest_next_squad_b_batter(game, squad_b_slots):
+    """Who should bat next for Squad B in an intrasquad game -- same
+    logic as suggest_next_our_batter (Squad A), mirrored onto Squad B's
+    own saved lineup. Squad B bats when is_our_team_batting is False
+    (Squad A is pitching), and their batter is stored as
+    opponent_our_player_id rather than our_player_id. Returns None if
+    no Squad B lineup is set up for this game (coach picks manually in
+    that case, same as before Squad B lineups existed)."""
+    if not squad_b_slots:
+        return None
+    squad_b_pa_endings = sorted(
+        [p for p in game.pitches if not p.is_our_team_batting and p.ends_plate_appearance and p.opponent_our_player_id],
+        key=lambda p: p.pitch_sequence,
+    )
+    if not squad_b_pa_endings:
+        return squad_b_slots[0].player_id  # leadoff hitter, first time up
+    last_batter_id = squad_b_pa_endings[-1].opponent_our_player_id
+    last_slot = next((s for s in squad_b_slots if s.player_id == last_batter_id), None)
+    if last_slot is None:
+        return squad_b_slots[0].player_id
+    slot_orders = sorted(s.batting_order for s in squad_b_slots)
+    current_idx = slot_orders.index(last_slot.batting_order)
+    next_order = slot_orders[(current_idx + 1) % len(slot_orders)]
+    return next((s.player_id for s in squad_b_slots if s.batting_order == next_order), squad_b_slots[0].player_id)
+
+
 def suggest_next_opponent_order(game):
     """Next opponent batting-order NUMBER (1-9, wrapping) -- external
     games only, since there's no formal per-game opponent lineup yet
@@ -497,18 +523,31 @@ try:
         ])
 
         lineup_slots = session.query(GameLineupSlot).options(joinedload(GameLineupSlot.player)).filter(GameLineupSlot.game_id == active_game.game_id).order_by(GameLineupSlot.batting_order).all()
+        squad_a_slots = [s for s in lineup_slots if (s.squad or "A") == "A"]
+        squad_b_slots = [s for s in lineup_slots if s.squad == "B"]
 
         tab_live, tab_setup, tab_video, tab_log, tab_manage = st.tabs(
             ["Live Tracking", "Lineup & Setup", "Video Review", "Pitch Log", "Manage Game"]
         )
 
         with tab_setup:
-            # --- Lineup setup ---
-            if not lineup_slots and can_edit_sessions:
-                st.subheader("Set lineup")
 
-                include_pitchers_in_lineup = st.checkbox("Include pitchers in the batting order (two-way players)")
-                batter_candidate_ids = list(players_by_id.keys()) if include_pitchers_in_lineup else [pid for pid, p in players_by_id.items() if not p.is_pitcher]
+            def _render_squad_lineup_setup(squad, squad_slots, other_squad_slots, label):
+                """Shared 'Set lineup' form for Squad A (every game) or
+                Squad B (intrasquad only) -- same shape, just scoped to
+                one squad's batting order via the squad column, and
+                excluding whoever's already claimed by the OTHER squad
+                (a player can't be on both sides of an intrasquad game
+                at once)."""
+                st.subheader(f"Set {label}" if label != "Lineup" else "Set lineup")
+
+                other_squad_taken_ids = {s.player_id for s in other_squad_slots}
+                include_pitchers_key = f"include_pitchers_in_lineup_{squad}"
+                include_pitchers_in_lineup = st.checkbox("Include pitchers in the batting order (two-way players)", key=include_pitchers_key)
+                batter_candidate_ids = [
+                    pid for pid in (list(players_by_id.keys()) if include_pitchers_in_lineup else [pid for pid, p in players_by_id.items() if not p.is_pitcher])
+                    if pid not in other_squad_taken_ids
+                ]
                 pitcher_candidate_ids = [pid for pid, p in players_by_id.items() if p.is_pitcher]
 
                 # Adjustable spot count -- intrasquad scrimmages sometimes
@@ -516,7 +555,7 @@ try:
                 # ceiling the way it effectively is for a real defense.
                 num_lineup_spots = st.number_input(
                     "Number of batting order spots", min_value=9, max_value=20, value=9, step=1,
-                    key="lineup_num_spots",
+                    key=f"lineup_num_spots_{squad}",
                     help="9 covers a standard lineup. Raise this for intrasquad games running extra hitters through the order.",
                 )
                 st.caption(
@@ -533,7 +572,7 @@ try:
                 slot_choices = {}
                 for i in range(1, num_lineup_spots + 1):
                     already_taken = {
-                        st.session_state.get(f"lineup_player_{j}")
+                        st.session_state.get(f"lineup_player_{squad}_{j}")
                         for j in range(1, num_lineup_spots + 1) if j != i
                     }
                     already_taken.discard(None)
@@ -544,84 +583,162 @@ try:
                     player_choice = cols[1].selectbox(
                         f"Batter {i}", options=options_for_slot,
                         format_func=lambda pid: "-- Select --" if pid is None else f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
-                        key=f"lineup_player_{i}", label_visibility="collapsed",
+                        key=f"lineup_player_{squad}_{i}", label_visibility="collapsed",
                     )
                     position_choice = cols[2].selectbox(
                         f"Position {i}", options=[None] + [p.position_id for p in positions],
                         format_func=lambda pid: "-- Position --" if pid is None else next(p.position_name for p in positions if p.position_id == pid),
-                        key=f"lineup_pos_{i}", label_visibility="collapsed",
+                        key=f"lineup_pos_{squad}_{i}", label_visibility="collapsed",
                     )
                     slot_choices[i] = (player_choice, position_choice)
 
-                starting_pitcher_choice = st.selectbox(
-                    "Starting pitcher", options=[None] + pitcher_candidate_ids,
-                    format_func=lambda pid: "-- Select --" if pid is None else f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
-                    key="lineup_starting_pitcher",
-                )
+                starting_pitcher_choice = None
+                if squad == "A":
+                    # Squad A's starting pitcher/pitching changes are the
+                    # game's formal pitching-staff tracking (starting_pitcher_id
+                    # + PitchingChange). Squad B's pitcher intentionally stays
+                    # a per-at-bat pick, same as before Squad B lineups existed
+                    # -- not covered by this form.
+                    starting_pitcher_choice = st.selectbox(
+                        "Starting pitcher", options=[None] + pitcher_candidate_ids,
+                        format_func=lambda pid: "-- Select --" if pid is None else f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
+                        key="lineup_starting_pitcher",
+                    )
 
-                if st.button("Save lineup", type="primary", key="lineup_save_button"):
+                if st.button("Save lineup", type="primary", key=f"lineup_save_button_{squad}"):
                     added = 0
                     for i, (player_choice, position_choice) in slot_choices.items():
                         if player_choice is not None:
-                            session.add(GameLineupSlot(game_id=active_game.game_id, batting_order=i, player_id=player_choice, starting_position_id=position_choice))
+                            session.add(GameLineupSlot(game_id=active_game.game_id, squad=squad, batting_order=i, player_id=player_choice, starting_position_id=position_choice))
                             added += 1
-                    active_game.starting_pitcher_id = starting_pitcher_choice
+                    if squad == "A":
+                        active_game.starting_pitcher_id = starting_pitcher_choice
                     session.commit()
-                    st.success(f"Saved lineup ({added} batters).")
+                    st.success(f"Saved {label.lower()} ({added} batters).")
                     st.rerun()
 
-            elif lineup_slots:
-                with st.expander("Lineup", expanded=True):
+            def _render_squad_lineup_display(squad_slots, label, show_pitcher):
+                with st.expander(label, expanded=True):
                     st.dataframe(
                         [
                             {"#": s.batting_order, "Player": f"{s.player.first_name} {s.player.last_name}" if s.player else "—", "Position": s.starting_position.position_name if s.starting_position else "—"}
-                            for s in lineup_slots
+                            for s in squad_slots
                         ],
                         use_container_width=True, hide_index=True,
                     )
-                    if active_game.starting_pitcher_id and active_game.starting_pitcher_id in players_by_id:
+                    if show_pitcher and active_game.starting_pitcher_id and active_game.starting_pitcher_id in players_by_id:
                         p = players_by_id[active_game.starting_pitcher_id]
                         st.caption(f"Starting pitcher: {p.first_name} {p.last_name}")
 
-            # --- Opponent Lineup setup (Phase 2) -- only for external games
-            # with a real OpponentTeam linked and a built-out roster.
-            # Intrasquad games don't need this (they use real Player
-            # records directly via opponent_our_player_id); a one-off typed
-            # opponent name has no roster to build a lineup from. Optional
-            # -- Game Tracking works fine without it, same as before. ---
+            # --- Lineup setup (Squad A -- "our" lineup for every game type) ---
+            squad_a_label = "Squad A Lineup" if active_game.is_intrasquad else "Lineup"
+            if not squad_a_slots and can_edit_sessions:
+                _render_squad_lineup_setup("A", squad_a_slots, squad_b_slots, squad_a_label)
+            elif squad_a_slots:
+                _render_squad_lineup_display(squad_a_slots, squad_a_label, show_pitcher=True)
+
+            # --- Squad B lineup setup (intrasquad games only) -- same shape
+            # as Squad A's, so Squad B also gets a real batting order that
+            # auto-suggests in Live Tracking instead of being picked ad hoc
+            # every at-bat. Squad B's PITCHER stays a per-at-bat pick --
+            # deliberately not covered here (see _render_squad_lineup_setup). ---
+            if active_game.is_intrasquad:
+                if not squad_b_slots and can_edit_sessions:
+                    _render_squad_lineup_setup("B", squad_b_slots, squad_a_slots, "Squad B Lineup")
+                elif squad_b_slots:
+                    _render_squad_lineup_display(squad_b_slots, "Squad B Lineup", show_pitcher=False)
+
+            # --- Opponent Lineup setup -- external games only (not
+            # intrasquad, which uses Squad A/B above instead). Works
+            # whether or not this opponent already has a built-out
+            # OpponentTeam roster: pick an existing roster player, or just
+            # type a new name -- typing a name adds them to a reusable
+            # roster for this opponent (creating the OpponentTeam itself
+            # first if this game started as a one-off typed name), so next
+            # time you play them you can pick from a list instead of
+            # retyping. Optional -- Game Tracking works fine without it,
+            # same as before. ---
             opponent_lineup_slots = session.query(OpponentLineupSlot).options(joinedload(OpponentLineupSlot.opponent_player)).filter(OpponentLineupSlot.game_id == active_game.game_id).order_by(OpponentLineupSlot.batting_order).all()
-            opp_team_roster = active_game.opponent_team.roster if (active_game.opponent_team and not active_game.is_intrasquad) else []
-            if opp_team_roster and not opponent_lineup_slots and can_edit_sessions:
-                st.subheader(f"Set {active_game.opponent_team.team_name}'s lineup (optional)")
-                st.caption("9 batting order slots + starting pitcher, from their roster. Skip this and Game Tracking still works -- you'll just pick the batter manually each at-bat instead of it being suggested automatically.")
-                opp_roster_candidate_ids = [p.opponent_player_id for p in opp_team_roster]
+            if not active_game.is_intrasquad and not opponent_lineup_slots and can_edit_sessions:
+                opp_display_label = active_game.opponent_team.team_name if active_game.opponent_team else (active_game.opponent_name or "the opponent")
+                opp_existing_roster = active_game.opponent_team.roster if active_game.opponent_team else []
+                st.subheader(f"Set {opp_display_label}'s lineup (optional)")
+                st.caption(
+                    "9 batting order slots + starting pitcher. Pick a name from their roster if you've "
+                    "got one built out, or just type a new name -- typing a name adds them to a reusable "
+                    "roster for this opponent, so next time you play them you can pick from a list instead "
+                    "of retyping. Skip this and Game Tracking still works -- you'll just pick the batter "
+                    "manually each at-bat instead of it being suggested automatically."
+                )
+                opp_roster_candidate_ids = [p.opponent_player_id for p in opp_existing_roster]
+
+                def _opp_roster_format(pid):
+                    return "-- Existing roster --" if pid is None else next(p.player_name for p in opp_existing_roster if p.opponent_player_id == pid)
 
                 with st.form("opponent_lineup_form"):
                     opp_slot_choices = {}
                     for i in range(1, 10):
-                        cols = st.columns([1, 4])
+                        cols = st.columns([1, 3, 3, 1])
                         cols[0].markdown(f"**{i}.**")
-                        opp_player_pick = cols[1].selectbox(
-                            f"Opponent batter {i}", options=[None] + opp_roster_candidate_ids,
-                            format_func=lambda pid: "-- Select --" if pid is None else next(p.player_name for p in opp_team_roster if p.opponent_player_id == pid),
-                            key=f"opp_lineup_player_{i}", label_visibility="collapsed",
+                        existing_pick = cols[1].selectbox(
+                            f"Existing opponent batter {i}", options=[None] + opp_roster_candidate_ids,
+                            format_func=_opp_roster_format,
+                            key=f"opp_lineup_existing_{i}", label_visibility="collapsed",
                         )
-                        opp_slot_choices[i] = opp_player_pick
-                    opp_starting_pitcher_choice = st.selectbox(
-                        "Their starting pitcher", options=[None] + opp_roster_candidate_ids,
-                        format_func=lambda pid: "-- Select --" if pid is None else next(p.player_name for p in opp_team_roster if p.opponent_player_id == pid),
+                        new_name = cols[2].text_input(f"Or type a new name {i}", placeholder="...or type a new name", key=f"opp_lineup_new_{i}", label_visibility="collapsed")
+                        new_jersey = cols[3].text_input(f"# {i}", placeholder="#", key=f"opp_lineup_jersey_{i}", label_visibility="collapsed")
+                        opp_slot_choices[i] = (existing_pick, new_name, new_jersey)
+
+                    st.markdown("**Their starting pitcher**")
+                    pcols = st.columns([3, 3, 1])
+                    opp_pitcher_existing = pcols[0].selectbox(
+                        "Existing opponent pitcher", options=[None] + opp_roster_candidate_ids,
+                        format_func=_opp_roster_format,
+                        key="opp_pitcher_existing", label_visibility="collapsed",
                     )
+                    opp_pitcher_new_name = pcols[1].text_input("Or type a new name (pitcher)", placeholder="...or type a new name", key="opp_pitcher_new_name", label_visibility="collapsed")
+                    opp_pitcher_new_jersey = pcols[2].text_input("# (pitcher)", placeholder="#", key="opp_pitcher_new_jersey", label_visibility="collapsed")
+
                     opp_lineup_submitted = st.form_submit_button("Save opponent lineup", type="primary")
 
                 if opp_lineup_submitted:
+                    # Resolve (or create) a reusable OpponentTeam for this
+                    # opponent, so typed names build up a real roster for
+                    # next time -- same "create once, reuse later"
+                    # principle as the rest of Opponent Teams, even when
+                    # the game started as just a one-off typed name.
+                    opp_team = active_game.opponent_team
+                    if opp_team is None:
+                        lookup_name = (active_game.opponent_name or "").strip()
+                        if lookup_name:
+                            opp_team = session.query(OpponentTeam).filter(OpponentTeam.team_name == lookup_name).first()
+                        if opp_team is None:
+                            opp_team = OpponentTeam(team_name=lookup_name or f"Opponent (Game #{active_game.game_id})", created_by_user_id=current_user_id)
+                            session.add(opp_team)
+                            session.flush()
+                        active_game.opponent_team_id = opp_team.team_id
+
+                    def _resolve_opponent_player(existing_pick, new_name, new_jersey):
+                        if existing_pick is not None:
+                            return existing_pick
+                        name = (new_name or "").strip()
+                        if not name:
+                            return None
+                        new_player = OpponentPlayer(team_id=opp_team.team_id, player_name=name, jersey_number=(new_jersey or "").strip() or None)
+                        session.add(new_player)
+                        session.flush()
+                        return new_player.opponent_player_id
+
                     opp_added = 0
-                    for i, player_pick in opp_slot_choices.items():
-                        if player_pick is not None:
-                            session.add(OpponentLineupSlot(game_id=active_game.game_id, batting_order=i, opponent_player_id=player_pick))
+                    for i, (existing_pick, new_name, new_jersey) in opp_slot_choices.items():
+                        resolved_id = _resolve_opponent_player(existing_pick, new_name, new_jersey)
+                        if resolved_id is not None:
+                            session.add(OpponentLineupSlot(game_id=active_game.game_id, batting_order=i, opponent_player_id=resolved_id))
                             opp_added += 1
-                    active_game.opponent_starting_pitcher_id = opp_starting_pitcher_choice
+
+                    active_game.opponent_starting_pitcher_id = _resolve_opponent_player(opp_pitcher_existing, opp_pitcher_new_name, opp_pitcher_new_jersey)
                     session.commit()
-                    st.success(f"Saved opponent lineup ({opp_added} batters).")
+                    st.success(f"Saved {opp_team.team_name}'s lineup ({opp_added} batters).")
                     st.rerun()
 
             elif opponent_lineup_slots:
@@ -636,7 +753,7 @@ try:
         with tab_live:
             # --- Live pitch entry ---
             if can_edit_sessions and active_game.status == "In Progress":
-                state = compute_current_state(active_game, lineup_slots)
+                state = compute_current_state(active_game, squad_a_slots)
 
                 # Auto-suggest who's up next, applied exactly once per new PA
                 # transition (detected via pitch count changing) so a manual
@@ -645,10 +762,14 @@ try:
                 current_pitch_count = len(active_game.pitches)
                 if state["new_pa"] and st.session_state.get("gt_suggestion_applied_for_count", -1) != current_pitch_count:
                     if state["is_our_batting"]:
-                        suggested_batter = suggest_next_our_batter(active_game, lineup_slots)
+                        suggested_batter = suggest_next_our_batter(active_game, squad_a_slots)
                         if suggested_batter is not None:
                             st.session_state["gt_our_batter"] = suggested_batter
-                    elif not active_game.is_intrasquad:
+                    elif active_game.is_intrasquad:
+                        suggested_squad_b_batter = suggest_next_squad_b_batter(active_game, squad_b_slots)
+                        if suggested_squad_b_batter is not None:
+                            st.session_state["gt_opp_our_batter"] = suggested_squad_b_batter
+                    else:
                         st.session_state["gt_opp_order"] = suggest_next_opponent_order(active_game)
                         suggested_opp_player = suggest_next_opponent_lineup_player(active_game, opponent_lineup_slots)
                         if suggested_opp_player is not None:
@@ -677,7 +798,7 @@ try:
                     if state["new_pa"]:
                         st.caption("New plate appearance -- who's up? (auto-suggested from the lineup order, override if needed)")
                         if state["is_our_batting"]:
-                            lineup_player_ids = [s.player_id for s in lineup_slots] if lineup_slots else [pid for pid, p in players_by_id.items() if not p.is_pitcher]
+                            lineup_player_ids = [s.player_id for s in squad_a_slots] if squad_a_slots else [pid for pid, p in players_by_id.items() if not p.is_pitcher]
                             our_player_choice = st.selectbox("Our batter", options=lineup_player_ids, format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}", key="gt_our_batter")
 
                             if active_game.is_intrasquad:
@@ -705,9 +826,16 @@ try:
                             our_player_choice = get_current_pitcher_id(active_game)
                             default_hand = "R"
                             if active_game.is_intrasquad:
+                                # Restricted to Squad B's saved lineup (and
+                                # auto-suggested from it) once one's been set
+                                # up -- same pattern as "Our batter" above.
+                                # Falls back to the full roster, unchanged
+                                # from before Squad B lineups existed, if no
+                                # Squad B lineup has been saved for this game.
+                                squad_b_batter_ids = [s.player_id for s in squad_b_slots] if squad_b_slots else list(players_by_id.keys())
                                 opp_our_player_choice = st.selectbox(
                                     "Opposing batter (Squad B)",
-                                    options=list(players_by_id.keys()),
+                                    options=squad_b_batter_ids,
                                     format_func=lambda pid: f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
                                     key="gt_opp_our_batter",
                                 )

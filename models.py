@@ -1101,15 +1101,26 @@ class Game(Base):
 
 
 class GameLineupSlot(Base):
-    """One batting-order slot for OUR lineup in a given game -- who's
+    """One batting-order slot for a lineup in a given game -- who's
     hitting where, and their starting defensive position. Pitching
     changes aren't tracked as a separate list in this first version --
     who pitched is simply whatever's on the GamePitch records
-    (pitcher_player_id), derived rather than pre-declared."""
+    (pitcher_player_id), derived rather than pre-declared.
+
+    squad: 'A' (default) or 'B'. For every external game this is always
+    'A' -- the "OUR lineup" this table was originally built for. For
+    intrasquad games (Squad A vs Squad B, both sides drawn from our own
+    roster), the same table now also holds Squad B's batting order,
+    distinguished by this column, so both squads get a real saved
+    lineup instead of only Squad A having one and Squad B being picked
+    ad hoc every at-bat. Squad B's PITCHING staff (starting
+    pitcher/pitching changes) is intentionally NOT covered by this --
+    that stays a per-at-bat pick, same as before this column existed."""
     __tablename__ = "game_lineup_slots"
 
     lineup_slot_id = Column(Integer, primary_key=True)
     game_id = Column(Integer, ForeignKey("games.game_id"), nullable=False)
+    squad = Column(String(1), nullable=False, default="A")  # 'A' or 'B' -- see class docstring
     batting_order = Column(Integer, nullable=False)  # 1-9 (or more, extra hitters/re-entry not handled in v1)
     player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)
     starting_position_id = Column(Integer, ForeignKey("positions.position_id"), nullable=True)
