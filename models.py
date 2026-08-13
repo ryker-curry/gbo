@@ -1098,6 +1098,7 @@ class Game(Base):
     opponent_starting_pitcher = relationship("OpponentPlayer", foreign_keys=[opponent_starting_pitcher_id])
     pitches = relationship("GamePitch", back_populates="game", cascade="all, delete-orphan", order_by="GamePitch.pitch_sequence")
     pitching_changes = relationship("PitchingChange", back_populates="game", cascade="all, delete-orphan", order_by="PitchingChange.pitch_sequence_at_entry")
+    video_clips = relationship("GameVideoClip", back_populates="game", cascade="all, delete-orphan", order_by="GameVideoClip.uploaded_at")
 
 
 class GameLineupSlot(Base):
@@ -1312,3 +1313,29 @@ class GamePitch(Base):
     opponent_our_player = relationship("Player", foreign_keys=[opponent_our_player_id])
     pitch_type = relationship("PitchType")
     opponent_player = relationship("OpponentPlayer")
+
+
+class GameVideoClip(Base):
+    """One uploaded video clip for a game -- "upload now, match to the
+    actual pitch later" (same pattern already proven on Video Review's
+    pitcher bulk-upload against the Assessment/Video tables). Kept as
+    its own table rather than writing straight to GamePitch.video_url
+    on upload, so an uploaded-but-not-yet-matched clip has somewhere
+    to live and survives across sessions until someone matches it --
+    matching just copies this row's video_url onto the chosen
+    GamePitch and sets matched_game_pitch_id, so GamePitch.video_url
+    stays the one source of truth every other page/report reads from.
+
+    Reuses the same "pitch-videos" Storage bucket as everywhere else
+    video is uploaded in GBO -- no new bucket needed."""
+    __tablename__ = "game_video_clips"
+
+    game_video_clip_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id"), nullable=False)
+    video_url = Column(String(500), nullable=False)
+    original_filename = Column(String(255), nullable=True)
+    uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    matched_game_pitch_id = Column(Integer, ForeignKey("game_pitches.game_pitch_id"), nullable=True)
+
+    game = relationship("Game", back_populates="video_clips")
+    matched_game_pitch = relationship("GamePitch")

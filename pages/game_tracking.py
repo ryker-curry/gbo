@@ -35,6 +35,7 @@ functional logic, session-state keys, or field behavior changed from
 before this reorganization."""
 
 import streamlit as st
+import uuid
 from datetime import date
 from sqlalchemy.orm import joinedload
 
@@ -44,8 +45,10 @@ import field_location
 from models import (
     Player, Position, PitchType, Game, GameLineupSlot, GamePitch, RunExpectancy,
     OpponentTeam, OpponentPlayer, Season, PitchingChange, PlayerPitchArsenal, OpponentLineupSlot,
+    GameVideoClip,
 )
 from ui_components import page_header, page_footer, empty_state, render_kpi_cards
+from supabase_client import get_supabase_admin_client
 
 page_header("Game Tracking")
 
@@ -69,6 +72,31 @@ AB_OUTCOMES = [
     "Sac Bunt", "Sac Fly", "Groundout", "Flyout", "Lineout", "Double Play",
 ]
 CONTACT_QUALITY_OPTIONS = ["Barrel", "Solid", "Weak", "Miss"]
+
+GAME_VIDEO_BUCKET = "pitch-videos"  # same Storage bucket Video Review already uploads pitcher/hitter clips to
+
+
+def upload_game_video_clip(uploaded_file, identifier: str):
+    """Upload one clip to Supabase Storage and return its public URL, or
+    None (with an st.error already shown) if the upload failed -- same
+    helper pattern as pitch_video.py's upload_pitch_video, reusing the
+    same bucket."""
+    try:
+        admin_client = get_supabase_admin_client()
+        ext = uploaded_file.name.split(".")[-1].lower()
+        path = f"{identifier}.{ext}"
+        file_bytes = uploaded_file.getvalue()
+        admin_client.storage.from_(GAME_VIDEO_BUCKET).upload(
+            path, file_bytes, {"content-type": uploaded_file.type}
+        )
+        return admin_client.storage.from_(GAME_VIDEO_BUCKET).get_public_url(path)
+    except Exception as e:
+        st.error(
+            f"Video upload failed: {e}. "
+            f"Make sure a public Storage bucket named '{GAME_VIDEO_BUCKET}' exists in your Supabase project "
+            f"(Supabase dashboard -> Storage -> New bucket -> name it '{GAME_VIDEO_BUCKET}' -> make it Public)."
+        )
+        return None
 
 
 def build_re_lookup(session):
@@ -1084,6 +1112,109 @@ try:
                 st.caption("Live tracking status is only shown for edit-enabled roles today.")
 
         with tab_video:
+            if can_edit_sessions:
+                # --- Pitch Video: bulk-upload clips downloaded from a
+                # camera (e.g. one clip per pitch) and match each one to
+                # the actual pitch it belongs to. "Upload now, match
+                # later" -- same pattern already proven on Video Review's
+                # pitcher bulk-upload (Assessment/Video tables), here
+                # against GameVideoClip/GamePitch instead. Matching just
+                # copies the clip's video_url onto the chosen GamePitch
+                # and records the match, so GamePitch.video_url stays the
+                # one field every other page/report reads from. Covers
+                # BOTH sides of the ball (our batting and our pitching) --
+                # not scoped to pitches we threw, unlike the
+                # location-marking section below. ---
+                all_game_pitches_sorted = sorted(active_game.pitches, key=lambda p: p.pitch_sequence)
+                if all_game_pitches_sorted:
+                    st.subheader("Pitch Video")
+                    st.caption(
+                        "Upload clips downloaded from your camera -- if it already exports one clip per "
+                        "pitch, upload them together and GBO will suggest a match to this game's pitches "
+                        "in order below, which you can review and adjust before confirming."
+                    )
+                    with st.form(f"gt_video_upload_{active_game.game_id}"):
+                        video_files = st.file_uploader(
+                            "Video files", type=["mp4", "mov", "m4v"], accept_multiple_files=True,
+                            key="gt_video_upload_files",
+                        )
+                        video_upload_submitted = st.form_submit_button("Upload", type="primary")
+
+                    if video_upload_submitted:
+                        if not video_files:
+                            st.error("Choose at least one video file first.")
+                        else:
+                            progress = st.progress(0.0, text="Uploading...")
+                            uploaded_count = 0
+                            for i, f in enumerate(video_files):
+                                identifier = f"game-{active_game.game_id}-{uuid.uuid4().hex[:8]}"
+                                url = upload_game_video_clip(f, identifier)
+                                if url:
+                                    session.add(GameVideoClip(game_id=active_game.game_id, video_url=url, original_filename=f.name))
+                                    uploaded_count += 1
+                                progress.progress((i + 1) / len(video_files), text=f"Uploading... {i + 1}/{len(video_files)}")
+                            session.commit()
+                            progress.empty()
+                            st.success(f"Uploaded {uploaded_count} clip(s). Match them to pitches below.")
+                            st.rerun()
+
+                    unmatched_clips = (
+                        session.query(GameVideoClip)
+                        .filter(GameVideoClip.game_id == active_game.game_id, GameVideoClip.matched_game_pitch_id.is_(None))
+                        .order_by(GameVideoClip.uploaded_at, GameVideoClip.game_video_clip_id)
+                        .all()
+                    )
+                    matched_clip_count = (
+                        session.query(GameVideoClip)
+                        .filter(GameVideoClip.game_id == active_game.game_id, GameVideoClip.matched_game_pitch_id.isnot(None))
+                        .count()
+                    )
+                    if matched_clip_count or unmatched_clips:
+                        st.caption(f"{matched_clip_count} clip(s) matched, {len(unmatched_clips)} still need matching.")
+
+                    if unmatched_clips:
+                        with st.expander(f"Match uploaded clips to pitches ({len(unmatched_clips)} pending)", expanded=True):
+                            # Candidate pitches: this game's pitches that don't
+                            # already have video, in pitch order -- since the
+                            # camera already exports one clip per pitch,
+                            # sequential order is the natural default match,
+                            # always reviewed/adjustable per clip below rather
+                            # than assumed blindly.
+                            candidate_pitches = [p for p in all_game_pitches_sorted if p.video_url is None]
+                            if not candidate_pitches:
+                                st.caption("Every pitch in this game already has video -- nothing left to match these clips to.")
+                            else:
+                                candidates_by_id = {p.game_pitch_id: p for p in candidate_pitches}
+
+                                def _pitch_match_label(gpid):
+                                    p = candidates_by_id[gpid]
+                                    side = "Us pitching" if not p.is_our_team_batting else "Us batting"
+                                    pt_name = p.pitch_type.type_name if p.pitch_type else "?"
+                                    return f"#{p.pitch_sequence} — Inn {p.inning}, {side}, {p.balls_before}-{p.strikes_before}, {pt_name}, {p.pitch_outcome or '—'}"
+
+                                for idx, clip in enumerate(unmatched_clips):
+                                    suggested_gpid = candidate_pitches[idx].game_pitch_id if idx < len(candidate_pitches) else candidate_pitches[0].game_pitch_id
+                                    match_options = list(candidates_by_id.keys())
+                                    default_index = match_options.index(suggested_gpid) if suggested_gpid in match_options else 0
+                                    mcol1, mcol2, mcol3 = st.columns([2, 4, 1])
+                                    mcol1.markdown(clip.original_filename or "Clip")
+                                    match_choice = mcol2.selectbox(
+                                        f"Match clip {clip.game_video_clip_id}", options=match_options, index=default_index,
+                                        format_func=_pitch_match_label,
+                                        key=f"gt_match_clip_{clip.game_video_clip_id}", label_visibility="collapsed",
+                                    )
+                                    if mcol3.button("Link", key=f"gt_match_clip_btn_{clip.game_video_clip_id}"):
+                                        matched_pitch = candidates_by_id[match_choice]
+                                        clip.matched_game_pitch_id = match_choice
+                                        matched_pitch.video_url = clip.video_url
+                                        session.commit()
+                                        st.success(f"Linked {clip.original_filename or 'clip'} to pitch #{matched_pitch.pitch_sequence}.")
+                                        st.rerun()
+                else:
+                    empty_state("No pitches logged yet in this game to attach video to.")
+
+                st.divider()
+
             # --- Video Review: fill in actual pitch locations from game
             # film -- the other half of command/execution tracking, now that
             # actual location is never captured live (see the note above the
@@ -1101,8 +1232,9 @@ try:
                 st.subheader("Video Review — Actual Pitch Locations")
                 st.caption(
                     "Step through the pitches we threw and mark where each one actually crossed, "
-                    "watching the center-field angle. Paired with the call/intended location from "
-                    "the dugout, this is what drives command/execution tracking."
+                    "watching the center-field angle (or the matched clip below, if there is one). "
+                    "Paired with the call/intended location from the dugout, this is what drives "
+                    "command/execution tracking."
                 )
 
                 review_pitch_ids = [p.game_pitch_id for p in pitches_we_threw]
@@ -1127,7 +1259,8 @@ try:
                     p = next(pp for pp in pitches_we_threw if pp.game_pitch_id == gpid)
                     mark = "✓" if p.actual_plate_x is not None else "•"
                     pt_name = p.pitch_type.type_name if p.pitch_type else "?"
-                    return f"{mark} #{p.pitch_sequence} — Inn {p.inning}, {p.balls_before}-{p.strikes_before}, {pt_name}"
+                    video_tag = " [video]" if p.video_url else ""
+                    return f"{mark} #{p.pitch_sequence} — Inn {p.inning}, {p.balls_before}-{p.strikes_before}, {pt_name}{video_tag}"
 
                 st.caption(f"{len(missing_ids)} of {len(pitches_we_threw)} pitch(es) we threw still need an actual location.")
                 jump_choice = st.selectbox(
@@ -1157,6 +1290,9 @@ try:
                     )
                     + f". Outcome: {current_pitch.pitch_outcome or '—'}" + (f", {current_pitch.ab_outcome}" if current_pitch.ab_outcome else "")
                 )
+
+                if current_pitch.video_url:
+                    st.video(current_pitch.video_url)
 
                 vr_state_key = f"vr_actual_state_{current_pitch.game_pitch_id}"
                 if vr_state_key not in st.session_state:
@@ -1226,6 +1362,7 @@ try:
                             "Opponent": (f"{p.opponent_our_player.first_name} {p.opponent_our_player.last_name}" if p.opponent_our_player else None) or (f"{p.opponent_player.player_name}" if p.opponent_player else None) or (f"#{p.opponent_batting_order} ({p.opponent_hand})" if p.opponent_batting_order else "—"),
                             "Pitch": p.pitch_type.type_name if p.pitch_type else "—",
                             "Location": f"{float(p.actual_plate_x):+.2f}, {float(p.actual_plate_z):.2f}" if p.actual_plate_x is not None else "—",
+                            "Video": "✓" if p.video_url else "—",
                             "Outcome": (p.pitch_outcome or "—") + (" (Sword)" if p.is_sword else ""),
                             "Batted Ball": (p.batted_ball_type or "") + (f" ({float(p.batted_ball_x):+.0f}, {float(p.batted_ball_y):.0f})" if p.batted_ball_x is not None else "") if (p.batted_ball_type or p.batted_ball_x is not None) else "—",
                             "AB Result": p.ab_outcome or "",
