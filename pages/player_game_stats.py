@@ -14,6 +14,13 @@ Putaway%/GB-FB-LD%) is game_stats.py's compute_pitch_type_breakdown() --
 still not a full spray-chart/heat-map page, but the CSW%/Putaway% gap
 flagged here before is closed. No handedness-split tabs here (kept
 simpler than the coach-facing Analytics page) -- ask if that's wanted.
+
+Pitching line/situational stats and Command Precision/Attack Zones
+(pitch_location_stats.py) match pages/analytics.py's Pitching section
+exactly -- same compute_pitching_line()/compute_command_precision()/
+compute_attack_zones() calls, just scoped to the logged-in player's own
+data instead of a coach's player picker, so a player's own "My Stats"
+never shows a different number than what their coach sees for them.
 """
 
 import streamlit as st
@@ -26,12 +33,21 @@ from game_stats import (
     compute_pitch_type_breakdown,
 )
 from plate_discipline import compute_hitter_discipline, compute_pitcher_command
+from pitch_location_stats import compute_command_precision, compute_attack_zones
 
 page_header("My Stats")
 
 
 def _fmt_pct(value):
     return f"{value:.0f}%" if value is not None else "—"
+
+
+def _fmt_pct1(value):
+    return f"{value:.1f}%" if value is not None else "—"
+
+
+def _fmt_num(value, decimals=2):
+    return f"{value:.{decimals}f}" if value is not None else "—"
 
 current_user_id = st.session_state.get("gbo_user_id")
 role_name = st.session_state.get("gbo_role_name")
@@ -110,17 +126,56 @@ try:
             empty_state("No pitching data recorded yet for you in Game Tracking.")
         else:
             pitching_line = compute_pitching_line(pitching_pitches)
+
+            st.markdown("**Line**" + (f" — {seasons_by_id[season_choice].season_name}" if season_choice is not None else " — All seasons"))
             cols = st.columns(6)
-            cols[0].metric("Batters Faced", pitching_line["Batters Faced"])
+            cols[0].metric("IP", pitching_line["IP"])
             cols[1].metric("Pitches", pitching_line["Pitches"])
             cols[2].metric("K", pitching_line["K"])
             cols[3].metric("BB", pitching_line["BB"])
-            cols[4].metric("H Allowed", pitching_line["H Allowed"])
-            cols[5].metric("Execution %", f"{pitching_line['Execution %']:.1f}%" if pitching_line["Execution %"] is not None else "—")
+            cols[4].metric("H", pitching_line["H Allowed"])
+            cols[5].metric("R", pitching_line["Runs Allowed"])
+
+            cols2 = st.columns(6)
+            cols2[0].metric("WHIP", _fmt_num(pitching_line["WHIP"]))
+            cols2[1].metric("K/BB", _fmt_num(pitching_line["K/BB"]))
+            cols2[2].metric("K %", _fmt_pct1(pitching_line["K %"]))
+            cols2[3].metric("ERA*", _fmt_num(pitching_line["ERA (runs-allowed avg -- ER not tracked)"]))
+            cols2[4].metric("FIP", _fmt_num(pitching_line["FIP"]))
+            cols2[5].metric("Execution %", _fmt_pct1(pitching_line["Execution %"]))
             st.caption(
-                f"HR Allowed: {pitching_line['HR Allowed']} · Runs Allowed: {pitching_line['Runs Allowed']} · "
+                f"*ERA here is runs-allowed average, not true ERA -- GBO doesn't distinguish earned from unearned runs yet. "
                 f"Total RV Allowed: {pitching_line['Total RV Allowed']} · Avg RV Allowed/Pitch: {pitching_line['Avg RV Allowed/Pitch']}"
             )
+
+            st.markdown("**Count Control**")
+            ccols = st.columns(4)
+            ccols[0].metric("Strike %", _fmt_pct1(pitching_line["Strike %"]))
+            ccols[1].metric("Early", pitching_line["Early"])
+            ccols[2].metric("Ahead", pitching_line["Ahead (PA)"])
+            ccols[3].metric("E+A %", _fmt_pct1(pitching_line["E+A %"]))
+            st.caption(
+                f"Pitches/Inning: {_fmt_num(pitching_line['Pitches/Inning'], 1)} · "
+                f"Balls: {pitching_line['Balls']} ({_fmt_pct1(pitching_line['Ball %'])})"
+            )
+
+            st.markdown("**Situational**")
+            scols = st.columns(4)
+            scols[0].metric("Leadoff Out %", _fmt_pct1(pitching_line["Leadoff Out %"]))
+            scols[1].metric("Leadoff BB", pitching_line["Leadoff BB"])
+            scols[2].metric("2 Out BB", pitching_line["2 Out BB"])
+            scols[3].metric("XBH Allowed", pitching_line["XBH"])
+            st.caption(
+                f"0-2 Hits: {pitching_line['0-2 Hits']} · 0-2 Barrel: {pitching_line['0-2 Barrel']} · "
+                f"1-2 Barrel: {pitching_line['1-2 Barrel']}"
+            )
+
+            st.markdown("**Against**")
+            acols = st.columns(3)
+            acols[0].metric("OBA", _fmt_num(pitching_line["OBA (opponent AVG)"], 3))
+            acols[1].metric("wOBA*", _fmt_num(pitching_line["wOBA"], 3))
+            acols[2].metric("AB", pitching_line["AB"])
+            st.caption("*wOBA uses generic linear weights, not a season/league-specific set.")
 
             st.markdown("**Pitch Command / Usage**")
             command = compute_pitcher_command(pitching_pitches)
@@ -138,6 +193,35 @@ try:
 
             st.markdown("**Pitch Type Breakdown**")
             st.dataframe(compute_pitch_type_breakdown(pitching_pitches), use_container_width=True, hide_index=True)
+
+            st.markdown("**Command Precision**")
+            st.caption(
+                "Real distance between where you aimed and where it actually crossed the plate -- only counts "
+                "pitches reviewed in Video Review (both an intended and an actual location on file)."
+            )
+            cp_overall, cp_by_type = compute_command_precision(pitching_pitches, throws=my_player.throws)
+            if cp_overall["Reviewed"] == 0:
+                st.caption("No reviewed pitches yet (needs Video Review).")
+            else:
+                cp1, cp2, cp3, cp4 = st.columns(4)
+                cp1.metric("Avg Miss", f"{cp_overall['Avg Miss (in)']}\"")
+                cp2.metric("Reviewed", cp_overall["Reviewed"])
+                cp3.metric("Horizontal Bias", f"{cp_overall['Horizontal Bias (in)']}\" {cp_overall['Horizontal Label']}")
+                cp4.metric("Vertical Bias", f"{cp_overall['Vertical Bias (in)']}\" {cp_overall['Vertical Label']}")
+                st.dataframe(cp_by_type, use_container_width=True, hide_index=True)
+
+            st.markdown("**Attack Zones**")
+            st.caption("Heart = down the middle, Shadow = straddles the zone edge, Chase = tempting but outside, Waste = nowhere near.")
+            az_overall, az_by_type = compute_attack_zones(pitching_pitches)
+            if az_overall["Located"] == 0:
+                st.caption("No located pitches yet.")
+            else:
+                az1, az2, az3, az4 = st.columns(4)
+                az1.metric("Heart %", _fmt_pct(az_overall["Heart %"]))
+                az2.metric("Shadow %", _fmt_pct(az_overall["Shadow %"]))
+                az3.metric("Chase Zone %", _fmt_pct(az_overall["Chase Zone %"]))
+                az4.metric("Waste %", _fmt_pct(az_overall["Waste %"]))
+                st.dataframe(az_by_type, use_container_width=True, hide_index=True)
 
 finally:
     session.close()

@@ -6,7 +6,12 @@ game and one pitcher, see the full box-score-style line (IP, WHIP,
 K/BB, K%, ERA/FIP/wOBA/OBA, Leadoff/2-Out/0-2 situational stats, E+A%)
 plus the pitch-type breakdown (Usage%, Strike%, Dominance%/CSW%,
 Whiff%, Chase%, Putaway%, GB/FB/LD%, Execution%, RV), split overall and
-by opponent batter handedness.
+by opponent batter handedness, plus two location-based sections built
+from the real plate_x/z coordinates Game Tracking captures (see
+pitch_location_stats.py): Command Precision (Miss Distance + Arm-side/
+Glove-side and High/Low bias, per pitch type) and Attack Zones (Heart/
+Shadow/Chase/Waste rates, a GBO approximation of Statcast's own
+four-tier system).
 
 Deliberately its own page rather than a tab bolted onto the existing
 Analytics page -- Analytics is season/all-time aggregate by design
@@ -33,6 +38,7 @@ from database import get_session
 from models import Player, Game, GamePitch
 from ui_components import page_header, page_footer, empty_state
 from game_stats import get_pitching_pitches, compute_pitching_line, compute_pitch_type_breakdown
+from pitch_location_stats import compute_command_precision, compute_attack_zones
 
 page_header("Pitcher Game Report")
 
@@ -183,6 +189,38 @@ try:
             st.caption("No pitches recorded against a left-handed batter yet.")
         else:
             st.dataframe(compute_pitch_type_breakdown(vs_lhh), use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.markdown("**Command Precision**")
+    st.caption(
+        "Real distance between where he aimed and where it actually crossed the plate -- only counts "
+        "pitches reviewed in Video Review (both an intended and an actual location on file)."
+    )
+    cp_overall, cp_by_type = compute_command_precision(pitches, throws=selected_pitcher.throws)
+    if cp_overall["Reviewed"] == 0:
+        st.caption("No reviewed pitches yet (needs Video Review).")
+    else:
+        cp1, cp2, cp3, cp4 = st.columns(4)
+        cp1.metric("Avg Miss", f"{cp_overall['Avg Miss (in)']}\"")
+        cp2.metric("Reviewed", cp_overall["Reviewed"])
+        cp3.metric("Horizontal Bias", f"{cp_overall['Horizontal Bias (in)']}\" {cp_overall['Horizontal Label']}")
+        cp4.metric("Vertical Bias", f"{cp_overall['Vertical Bias (in)']}\" {cp_overall['Vertical Label']}")
+        if selected_pitcher.throws not in ("R", "L"):
+            st.caption("Pitcher's throwing hand isn't on file, so horizontal bias shows raw 3B-side/1B-side instead of Arm-side/Glove-side.")
+        st.dataframe(cp_by_type, use_container_width=True, hide_index=True)
+
+    st.markdown("**Attack Zones**")
+    st.caption("Heart = down the middle, Shadow = straddles the zone edge, Chase = tempting but outside, Waste = nowhere near. GBO approximation of Statcast's own tiers -- see pitch_location_stats.py for exact boundaries.")
+    az_overall, az_by_type = compute_attack_zones(pitches)
+    if az_overall["Located"] == 0:
+        st.caption("No located pitches yet.")
+    else:
+        az1, az2, az3, az4 = st.columns(4)
+        az1.metric("Heart %", _fmt_pct(az_overall["Heart %"]))
+        az2.metric("Shadow %", _fmt_pct(az_overall["Shadow %"]))
+        az3.metric("Chase Zone %", _fmt_pct(az_overall["Chase Zone %"]))
+        az4.metric("Waste %", _fmt_pct(az_overall["Waste %"]))
+        st.dataframe(az_by_type, use_container_width=True, hide_index=True)
 
 finally:
     session.close()

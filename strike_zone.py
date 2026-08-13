@@ -85,6 +85,49 @@ def is_in_zone(plate_x, plate_z):
     return (-ZONE_HALF_WIDTH <= plate_x <= ZONE_HALF_WIDTH) and (ZONE_BOTTOM <= plate_z <= ZONE_TOP)
 
 
+# Attack zone tiers (Heart/Shadow/Chase/Waste) -- a GBO approximation of
+# Baseball Savant's own four-tier zone classification, built from the
+# publicly reported shadow-zone padding (roughly 3.3in horizontal / 4in
+# vertical straddling the real zone edge -- "within one baseball
+# diameter of the outside of the strike zone") and a chase box sized at
+# 2x this app's zone width/height, both centered on the same fixed zone
+# used everywhere else in GBO (ZONE_HALF_WIDTH/BOTTOM/TOP above).
+# Savant's own exact proprietary boundaries aren't fully published, so
+# this is NOT claimed to reproduce Savant's Heart%/Shadow% numbers
+# exactly -- it's a consistent, documented GBO version, comparable
+# game-to-game and pitcher-to-pitcher within this app.
+_SHADOW_PAD_X = 3.3 / 12  # ft
+_SHADOW_PAD_Z = 4.0 / 12  # ft
+_ZONE_CENTER_Z = (ZONE_BOTTOM + ZONE_TOP) / 2
+_ZONE_HALF_HEIGHT = (ZONE_TOP - ZONE_BOTTOM) / 2
+
+HEART_HALF_WIDTH = ZONE_HALF_WIDTH - _SHADOW_PAD_X
+HEART_BOTTOM, HEART_TOP = ZONE_BOTTOM + _SHADOW_PAD_Z, ZONE_TOP - _SHADOW_PAD_Z
+SHADOW_HALF_WIDTH = ZONE_HALF_WIDTH + _SHADOW_PAD_X
+SHADOW_BOTTOM, SHADOW_TOP = ZONE_BOTTOM - _SHADOW_PAD_Z, ZONE_TOP + _SHADOW_PAD_Z
+CHASE_HALF_WIDTH = ZONE_HALF_WIDTH * 2
+CHASE_BOTTOM = _ZONE_CENTER_Z - _ZONE_HALF_HEIGHT * 2
+CHASE_TOP = _ZONE_CENTER_Z + _ZONE_HALF_HEIGHT * 2
+
+
+def classify_attack_zone(plate_x, plate_z):
+    """Nested-box classification: Heart (innermost) -> Shadow -> Chase
+    -> Waste (everything else). Returns None if either coordinate is
+    missing. Uses nested rectangles rather than a true straddling band
+    at the corners -- a standard, documented simplification for this
+    kind of tiering (see module-level comment above for the boundary
+    sourcing)."""
+    if plate_x is None or plate_z is None:
+        return None
+    if -HEART_HALF_WIDTH <= plate_x <= HEART_HALF_WIDTH and HEART_BOTTOM <= plate_z <= HEART_TOP:
+        return "Heart"
+    if -SHADOW_HALF_WIDTH <= plate_x <= SHADOW_HALF_WIDTH and SHADOW_BOTTOM <= plate_z <= SHADOW_TOP:
+        return "Shadow"
+    if -CHASE_HALF_WIDTH <= plate_x <= CHASE_HALF_WIDTH and CHASE_BOTTOM <= plate_z <= CHASE_TOP:
+        return "Chase"
+    return "Waste"
+
+
 def render_zone_selector(key, marker_x=None, marker_z=None):
     """Renders the clickable strike-zone graphic and returns whatever
     was clicked THIS run as (plate_x, plate_z), or (None, None) if
