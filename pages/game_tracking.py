@@ -484,24 +484,60 @@ try:
         # --- Lineup setup ---
         if not lineup_slots and can_edit_sessions:
             st.subheader("Set lineup")
-            st.caption("9 batting order slots + starting pitcher. You can still track the game without a full lineup -- this just makes the batter picker faster.")
 
             include_pitchers_in_lineup = st.checkbox("Include pitchers in the batting order (two-way players)")
             batter_candidate_ids = list(players_by_id.keys()) if include_pitchers_in_lineup else [pid for pid, p in players_by_id.items() if not p.is_pitcher]
             pitcher_candidate_ids = [pid for pid, p in players_by_id.items() if p.is_pitcher]
 
-            with st.form("lineup_form"):
-                slot_choices = {}
-                for i in range(1, 10):
-                    cols = st.columns([1, 3, 2])
-                    cols[0].markdown(f"**{i}.**")
-                    player_choice = cols[1].selectbox(f"Batter {i}", options=[None] + batter_candidate_ids, format_func=lambda pid: "-- Select --" if pid is None else f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}", key=f"lineup_player_{i}", label_visibility="collapsed")
-                    position_choice = cols[2].selectbox(f"Position {i}", options=[None] + [p.position_id for p in positions], format_func=lambda pid: "-- Position --" if pid is None else next(p.position_name for p in positions if p.position_id == pid), key=f"lineup_pos_{i}", label_visibility="collapsed")
-                    slot_choices[i] = (player_choice, position_choice)
-                starting_pitcher_choice = st.selectbox("Starting pitcher", options=[None] + pitcher_candidate_ids, format_func=lambda pid: "-- Select --" if pid is None else f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}")
-                lineup_submitted = st.form_submit_button("Save lineup", type="primary")
+            # Adjustable spot count -- intrasquad scrimmages sometimes
+            # run extra hitters through the order, so 9 can't be a hard
+            # ceiling the way it effectively is for a real defense.
+            num_lineup_spots = st.number_input(
+                "Number of batting order spots", min_value=9, max_value=20, value=9, step=1,
+                key="lineup_num_spots",
+                help="9 covers a standard lineup. Raise this for intrasquad games running extra hitters through the order.",
+            )
+            st.caption(
+                f"{num_lineup_spots} batting order slots + starting pitcher. Each player can only fill "
+                "one slot -- once picked, he drops out of the other dropdowns. You can still track the "
+                "game without a full lineup -- this just makes the batter picker faster."
+            )
 
-            if lineup_submitted:
+            # Deliberately not an st.form(): each pick needs to trigger an
+            # immediate rerun so the OTHER slots' dropdowns can drop that
+            # player from their own options right away -- a form only
+            # reruns once, on submit, which is too late to filter live as
+            # the coach works down the list.
+            slot_choices = {}
+            for i in range(1, num_lineup_spots + 1):
+                already_taken = {
+                    st.session_state.get(f"lineup_player_{j}")
+                    for j in range(1, num_lineup_spots + 1) if j != i
+                }
+                already_taken.discard(None)
+                options_for_slot = [None] + [pid for pid in batter_candidate_ids if pid not in already_taken]
+
+                cols = st.columns([1, 3, 2])
+                cols[0].markdown(f"**{i}.**")
+                player_choice = cols[1].selectbox(
+                    f"Batter {i}", options=options_for_slot,
+                    format_func=lambda pid: "-- Select --" if pid is None else f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
+                    key=f"lineup_player_{i}", label_visibility="collapsed",
+                )
+                position_choice = cols[2].selectbox(
+                    f"Position {i}", options=[None] + [p.position_id for p in positions],
+                    format_func=lambda pid: "-- Position --" if pid is None else next(p.position_name for p in positions if p.position_id == pid),
+                    key=f"lineup_pos_{i}", label_visibility="collapsed",
+                )
+                slot_choices[i] = (player_choice, position_choice)
+
+            starting_pitcher_choice = st.selectbox(
+                "Starting pitcher", options=[None] + pitcher_candidate_ids,
+                format_func=lambda pid: "-- Select --" if pid is None else f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}",
+                key="lineup_starting_pitcher",
+            )
+
+            if st.button("Save lineup", type="primary", key="lineup_save_button"):
                 added = 0
                 for i, (player_choice, position_choice) in slot_choices.items():
                     if player_choice is not None:
