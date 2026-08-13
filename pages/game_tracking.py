@@ -1049,6 +1049,29 @@ try:
                             else:
                                 active_game.opponent_score += final_runs
                         session.commit()
+
+                        # Clear this pitch's Pitch Details/Result/notes
+                        # widgets so the next pitch starts blank instead of
+                        # carrying over the last one's selections -- easy to
+                        # misread as "still recording the same pitch" mid-AB
+                        # otherwise. Deliberately NOT touching who's up/who's
+                        # pitching (gt_our_batter, gt_opp_our_pitcher,
+                        # gt_opp_pitcher_hand, gt_opp_batter_hand,
+                        # gt_opp_roster_player, gt_opp_order,
+                        # gt_opp_our_batter, gt_pitching_change_choice) --
+                        # those should keep remembering the same batter/
+                        # pitcher pitch to pitch, and (for our own pitcher)
+                        # already do automatically since who's pitching is
+                        # derived from PitchingChange/starting_pitcher_id,
+                        # not a widget, so it only changes via an explicit
+                        # pitching change.
+                        for stale_key in (
+                            "gt_pitch_type", "gt_pitch_outcome", "gt_contact_quality",
+                            "gt_is_sword", "gt_batted_ball_type", "gt_pitch_notes",
+                            "gt_ab_outcome", "gt_final_outs", "gt_final_bases", "gt_final_runs",
+                        ):
+                            st.session_state.pop(stale_key, None)
+
                         st.success("Pitch recorded.")
                         st.rerun()
             elif can_edit_sessions and active_game.status == "Scheduled":
