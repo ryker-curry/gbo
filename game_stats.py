@@ -24,6 +24,7 @@ from sqlalchemy.orm import joinedload
 from models import GamePitch, Game
 from plate_discipline import SWING_OUTCOMES, WHIFF_OUTCOMES
 from strike_zone import is_in_zone
+from field_location import classify_spray_direction
 
 
 def get_batting_pitches(session, player_id, season_id=None, game_id=None):
@@ -73,28 +74,172 @@ HIT_OUTCOMES = {"1B", "2B", "3B", "HR"}
 NON_AB_OUTCOMES = {"BB", "HBP", "Sac Bunt", "Sac Fly"}
 
 
-def compute_batting_line(pitches):
-    pa_pitches = [p for p in pitches if p.ends_plate_appearance]
-    pa = len(pa_pitches)
-    bb = sum(1 for p in pa_pitches if p.ab_outcome == "BB")
-    hbp = sum(1 for p in pa_pitches if p.ab_outcome == "HBP")
-    sac = sum(1 for p in pa_pitches if p.ab_outcome in ("Sac Bunt", "Sac Fly"))
+def _has_risp(first_pitch_of_pa):
+    """Runner in scoring position (2nd or 3rd) at the START of this PA
+    -- same convention as _is_leadoff_pa: the situation is read off the
+    PA's first pitch, not re-checked pitch-by-pitch, since a mid-PA
+    stolen base changing the situation is rare and "RISP AVG" is
+    conventionally credited based on the state when the PA began."""
+    bases = first_pitch_of_pa.bases_before or "000"
+    return len(bases) == 3 and (bases[1] == "1" or bases[2] == "1")
+
+
+def _reached_two_strikes(pa):
+    return any(p.strikes_before == 2 for p in pa)
+
+
+def _batting_slice(completed_pas):
+    """PA/AB/H/BB/HBP/K/1B-2B-3B-HR counts + AVG/OBP/SLG for a list of
+    already-filtered completed PAs -- shared by the overall line and
+    every situational split (RISP/2-Strike/Leadoff) below so the same
+    counting logic isn't repeated per split."""
+    pa = len(completed_pas)
+    endings = [p[-1] for p in completed_pas]
+    bb = sum(1 for p in endings if p.ab_outcome == "BB")
+    hbp = sum(1 for p in endings if p.ab_outcome == "HBP")
+    sf = sum(1 for p in endings if p.ab_outcome == "Sac Fly")
+    sac = sum(1 for p in endings if p.ab_outcome in ("Sac Bunt", "Sac Fly"))
     ab = pa - bb - hbp - sac
-    singles = sum(1 for p in pa_pitches if p.ab_outcome == "1B")
-    doubles = sum(1 for p in pa_pitches if p.ab_outcome == "2B")
-    triples = sum(1 for p in pa_pitches if p.ab_outcome == "3B")
-    hr = sum(1 for p in pa_pitches if p.ab_outcome == "HR")
+    singles = sum(1 for p in endings if p.ab_outcome == "1B")
+    doubles = sum(1 for p in endings if p.ab_outcome == "2B")
+    triples = sum(1 for p in endings if p.ab_outcome == "3B")
+    hr = sum(1 for p in endings if p.ab_outcome == "HR")
     hits = singles + doubles + triples + hr
-    k = sum(1 for p in pa_pitches if p.ab_outcome == "K")
-    rv_values = [float(p.run_value) for p in pitches if p.run_value is not None]
+    k = sum(1 for p in endings if p.ab_outcome == "K")
+    total_bases = singles + 2 * doubles + 3 * triples + 4 * hr
+    avg = round(hits / ab, 3) if ab else None
+    obp = round((hits + bb + hbp) / (ab + bb + hbp + sf), 3) if (ab + bb + hbp + sf) else None
+    slg = round(total_bases / ab, 3) if ab else None
     return {
         "PA": pa, "AB": ab, "H": hits, "1B": singles, "2B": doubles, "3B": triples, "HR": hr,
+        "BB": bb, "HBP": hbp, "K": k, "SF": sf,
+        "AVG": avg, "OBP": obp, "SLG": slg,
+        "OPS": round(obp + slg, 3) if obp is not None and slg is not None else None,
+        "ISO": round(slg - avg, 3) if slg is not None and avg is not None else None,
+    }
+
+
+def compute_batting_line(pitches):
+    """The slash-line/box-score-style header line for a hitter -- same
+    function for a single game (get_batting_pitches(..., game_id=)) or
+    aggregated across a season/all-time, exactly like
+    compute_pitching_line()'s equivalent split.
+
+    wOBA uses the same generic, documented linear weights as the
+    pitching-against side (WOBA_WEIGHTS above) -- not season/park-
+    adjusted, a relative read within GBO's own games only.
+
+    RISP/2-Strike/Leadoff are situational splits, each using
+    _batting_slice() on a filtered subset of completed PAs:
+      - RISP: a runner on 2nd or 3rd AT THE START of the PA (see
+        _has_risp) -- the standard "AVG with runners in scoring
+        position" convention.
+      - 2-Strike: the PA reached a 2-strike count at ANY point (see
+        _reached_two_strikes) -- how he performs once the pitcher's
+        put him in a defensive count, mirroring the Putaway-side logic
+        already used for pitchers.
+      - Leadoff: the PA was the first batter of an inning (reuses
+        _is_leadoff_pa, the same helper compute_pitching_line() uses
+        from the pitcher's side of the exact same PAs)."""
+    all_pas = _group_into_plate_appearances(pitches)
+    completed_pas = [pa for pa in all_pas if pa[-1].ends_plate_appearance]
+
+    base = _batting_slice(completed_pas)
+    pa, ab, bb, hbp, sf = base["PA"], base["AB"], base["BB"], base["HBP"], base["SF"]
+    singles, doubles, triples, hr = base["1B"], base["2B"], base["3B"], base["HR"]
+    k = base["K"]
+
+    woba_num = (
+        WOBA_WEIGHTS["uBB"] * bb + WOBA_WEIGHTS["HBP"] * hbp + WOBA_WEIGHTS["1B"] * singles
+        + WOBA_WEIGHTS["2B"] * doubles + WOBA_WEIGHTS["3B"] * triples + WOBA_WEIGHTS["HR"] * hr
+    )
+    woba_den = ab + bb + sf + hbp
+
+    risp_pas = [p for p in completed_pas if _has_risp(p[0])]
+    two_strike_pas = [p for p in completed_pas if _reached_two_strikes(p)]
+    two_strike_k = sum(1 for p in two_strike_pas if p[-1].ab_outcome == "K")
+    leadoff_pas = [p for p in completed_pas if _is_leadoff_pa(p[0])]
+
+    rv_values = [float(p.run_value) for p in pitches if p.run_value is not None]
+
+    return {
+        "PA": pa, "AB": ab, "H": base["H"], "1B": singles, "2B": doubles, "3B": triples, "HR": hr,
         "BB": bb, "HBP": hbp, "K": k,
-        "AVG": round(hits / ab, 3) if ab > 0 else None,
+        "AVG": base["AVG"],
         "Total RV": round(sum(rv_values), 3) if rv_values else None,
         "Avg RV/PA": round(sum(rv_values) / len(rv_values), 3) if rv_values else None,
         "pitch_count": len(pitches),
+        # Slash line & rate stats
+        "OBP": base["OBP"], "SLG": base["SLG"], "OPS": base["OPS"], "ISO": base["ISO"],
+        "wOBA": round(woba_num / woba_den, 3) if woba_den else None,
+        "BB %": _rate(bb, pa), "K %": _rate(k, pa),
+        "BB/K": round(bb / k, 2) if k else None,
+        # Situational splits
+        "RISP AVG": _batting_slice(risp_pas)["AVG"], "RISP OBP": _batting_slice(risp_pas)["OBP"],
+        "RISP PA": len(risp_pas), "RISP AB": _batting_slice(risp_pas)["AB"],
+        "2-Strike AVG": _batting_slice(two_strike_pas)["AVG"], "2-Strike PA": len(two_strike_pas),
+        "2-Strike K %": _rate(two_strike_k, len(two_strike_pas)),
+        "Leadoff AVG": _batting_slice(leadoff_pas)["AVG"], "Leadoff PA": len(leadoff_pas),
     }
+
+
+def compute_batted_ball_profile(pitches, bats=None):
+    """Batted-ball breakdown for a hitter's own balls in play (pitch_
+    outcome == "In Play"): GB%/FB%/LD%/Pop-Up% (from batted_ball_type,
+    already captured live -- see BATTED_BALL_TYPES above), Pull%/
+    Center%/Oppo% (a genuinely new derived stat -- field_location.py's
+    own docstring explains why this classification deliberately isn't
+    computed/stored at entry time, and belongs here instead), and
+    Barrel%/Hard-Contact% from the recorded contact_quality (no exit
+    velocity in GBO, so this is the coach's own live "Barrel/Solid/
+    Weak/Miss" call, not a measured Statcast Barrel).
+
+    bats is the hitter's Player.bats ('R'/'L'/'S') -- pass None or 'S'
+    (switch) to get side-neutral Left/Center/Right-Field % instead of
+    batter-relative Pull/Center/Oppo, since GBO doesn't track which
+    side a switch-hitter actually batted from on a given PA.
+    """
+    balls_in_play = [p for p in pitches if p.pitch_outcome == "In Play"]
+    n = len(balls_in_play)
+
+    type_counts = {
+        bb_type: sum(1 for p in balls_in_play if p.batted_ball_type == bb_type)
+        for bb_type in BATTED_BALL_TYPES
+    }
+
+    located = [p for p in balls_in_play if p.batted_ball_x is not None and p.batted_ball_y is not None]
+    spray_counts = {"Pull": 0, "Center": 0, "Oppo": 0, "Left Field": 0, "Right Field": 0}
+    for p in located:
+        label = classify_spray_direction(float(p.batted_ball_x), float(p.batted_ball_y), bats)
+        if label is not None:
+            spray_counts[label] = spray_counts.get(label, 0) + 1
+    use_side_neutral = bats not in ("R", "L")
+
+    barrels = sum(1 for p in balls_in_play if p.contact_quality == "Barrel")
+    solid = sum(1 for p in balls_in_play if p.contact_quality == "Solid")
+    hard_contact = barrels + solid
+
+    result = {
+        "Balls in Play": n, "Located": len(located),
+        "Ground Ball %": _rate(type_counts["Ground Ball"], n), "Fly Ball %": _rate(type_counts["Fly Ball"], n),
+        "Line Drive %": _rate(type_counts["Line Drive"], n), "Pop Up %": _rate(type_counts["Pop Up"], n),
+        "Barrel": barrels, "Barrel %": _rate(barrels, n),
+        "Hard Contact": hard_contact, "Hard Contact %": _rate(hard_contact, n),
+        "Spray Mode": "Left/Center/Right Field" if use_side_neutral else "Pull/Center/Oppo",
+    }
+    if use_side_neutral:
+        result.update({
+            "Left Field %": _rate(spray_counts["Left Field"], len(located)),
+            "Center %": _rate(spray_counts["Center"], len(located)),
+            "Right Field %": _rate(spray_counts["Right Field"], len(located)),
+        })
+    else:
+        result.update({
+            "Pull %": _rate(spray_counts["Pull"], len(located)),
+            "Center %": _rate(spray_counts["Center"], len(located)),
+            "Oppo %": _rate(spray_counts["Oppo"], len(located)),
+        })
+    return result
 
 
 # Generic, commonly-cited linear weights for wOBA -- NOT season/park-
@@ -242,7 +387,11 @@ def compute_pitching_line(pitches):
 # thrown, including a foul with 2 strikes already (which doesn't
 # advance the count but is still a "strike" in a pitch-count sense).
 STRIKE_OUTCOMES = {"Called Strike", "Swinging Strike", "Foul", "In Play"}
-BATTED_BALL_TYPES = ("Ground Ball", "Fly Ball", "Line Drive")
+# Fixed to include Pop Up -- previously missing here (GamePitch.batted_ball_type
+# has always allowed "Pop Up", see game_tracking.py, but this tuple only had
+# the other three, so pop-ups were silently excluded from every GB/FB/LD %
+# computed from it, on both the pitching and hitting sides).
+BATTED_BALL_TYPES = ("Ground Ball", "Fly Ball", "Line Drive", "Pop Up")
 
 # Ryker's definition: a pitch the pitcher fully won -- a swing and
 # miss, a called strike, or a foul ball (the hitter had to defend it).
@@ -500,6 +649,7 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
         "GroundBalls": batted_ball_counts["Ground Ball"], "Ground Ball %": _rate(batted_ball_counts["Ground Ball"], len(balls_in_play)),
         "FlyBalls": batted_ball_counts["Fly Ball"], "Fly Ball %": _rate(batted_ball_counts["Fly Ball"], len(balls_in_play)),
         "LineDrives": batted_ball_counts["Line Drive"], "Line Drive %": _rate(batted_ball_counts["Line Drive"], len(balls_in_play)),
+        "PopUps": batted_ball_counts["Pop Up"], "Pop Up %": _rate(batted_ball_counts["Pop Up"], len(balls_in_play)),
         "BB": bb, "HBP": hbp, "SF": sf, "K's": k,
         "Hits": hits, "1B": singles, "2B": doubles, "3B": triples, "HR": hr,
         "At Bats": ab, "BF": bf,

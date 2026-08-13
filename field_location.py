@@ -48,6 +48,47 @@ def distance_from_plate(x, y):
     return round(math.hypot(x, y), 1)
 
 
+# Spray-angle Pull/Center/Oppo classification -- the analysis-time
+# derivation this module's own docstring said belonged elsewhere
+# ("better computed later at analysis time than resolved live during
+# entry"). Standard sabermetric convention (matching Baseball Savant's
+# own Pull%/Straight%/Oppo% split): the 90-degree fair-territory arc
+# (45 degrees each side of the CF line) is divided into three equal
+# 30-degree bands -- the middle 30 degrees (+-15 from dead center) is
+# Center, the two outer 30-degree bands are Pull/Oppo depending on
+# which side of the plate the batter stands on.
+_SPRAY_HALF_ANGLE = 15  # degrees each side of dead-center = "Center"
+
+
+def classify_spray_direction(x, y, bats=None):
+    """x/y in this module's own feet-from-plate convention (see module
+    docstring). bats is the hitter's Player.bats -- 'R' or 'L' gives a
+    batter-relative Pull/Center/Oppo label; anything else (None, or 'S'
+    for switch-hitters, since GBO doesn't record which side a switch-
+    hitter actually batted from on a given PA) falls back to raw
+    Left Field/Center/Right Field instead of guessing a side."""
+    if x is None or y is None or y <= 0:
+        return None
+    angle = math.degrees(math.atan2(x, y))  # 0 = dead center, + = right field side, - = left field side
+    if bats == "R":
+        if angle < -_SPRAY_HALF_ANGLE:
+            return "Pull"
+        if angle > _SPRAY_HALF_ANGLE:
+            return "Oppo"
+        return "Center"
+    if bats == "L":
+        if angle > _SPRAY_HALF_ANGLE:
+            return "Pull"
+        if angle < -_SPRAY_HALF_ANGLE:
+            return "Oppo"
+        return "Center"
+    if angle < -_SPRAY_HALF_ANGLE:
+        return "Left Field"
+    if angle > _SPRAY_HALF_ANGLE:
+        return "Right Field"
+    return "Center"
+
+
 def render_field_selector(key, marker_x=None, marker_y=None):
     """Renders the clickable field graphic (foul lines, outfield arc,
     infield reference dots) and returns whatever was clicked THIS run

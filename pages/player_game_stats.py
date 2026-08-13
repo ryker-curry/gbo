@@ -21,6 +21,9 @@ exactly -- same compute_pitching_line()/compute_command_precision()/
 compute_attack_zones() calls, just scoped to the logged-in player's own
 data instead of a coach's player picker, so a player's own "My Stats"
 never shows a different number than what their coach sees for them.
+Same for Hitting's Slash Line/Situational/Zone-Tier Discipline/Batted-
+Ball Profile sections -- match pages/analytics.py's Hitting section
+exactly.
 """
 
 import streamlit as st
@@ -30,9 +33,9 @@ from models import Player, User, Season
 from ui_components import page_header, page_footer, empty_state
 from game_stats import (
     get_batting_pitches, get_pitching_pitches, compute_batting_line, compute_pitching_line,
-    compute_pitch_type_breakdown,
+    compute_pitch_type_breakdown, compute_batted_ball_profile,
 )
-from plate_discipline import compute_hitter_discipline, compute_pitcher_command
+from plate_discipline import compute_hitter_discipline, compute_pitcher_command, compute_zone_tier_discipline
 from pitch_location_stats import compute_command_precision, compute_attack_zones
 
 page_header("My Stats")
@@ -91,6 +94,7 @@ try:
             empty_state("No hitting data recorded yet for you in Game Tracking.")
         else:
             batting_line = compute_batting_line(batting_pitches)
+            st.markdown("**Line**" + (f" — {seasons_by_id[season_choice].season_name}" if season_choice is not None else " — All seasons"))
             cols = st.columns(6)
             cols[0].metric("PA", batting_line["PA"])
             cols[1].metric("AB", batting_line["AB"])
@@ -101,6 +105,30 @@ try:
             st.caption(
                 f"1B: {batting_line['1B']} · 2B: {batting_line['2B']} · 3B: {batting_line['3B']} · HR: {batting_line['HR']} · "
                 f"HBP: {batting_line['HBP']} · Total RV: {batting_line['Total RV']} · Avg RV/PA: {batting_line['Avg RV/PA']}"
+            )
+
+            st.markdown("**Slash Line**")
+            scols = st.columns(5)
+            scols[0].metric("OBP", _fmt_num(batting_line["OBP"], 3))
+            scols[1].metric("SLG", _fmt_num(batting_line["SLG"], 3))
+            scols[2].metric("OPS", _fmt_num(batting_line["OPS"], 3))
+            scols[3].metric("ISO", _fmt_num(batting_line["ISO"], 3))
+            scols[4].metric("wOBA*", _fmt_num(batting_line["wOBA"], 3))
+            st.caption("*wOBA uses generic linear weights, not a season/league-specific set.")
+
+            dcols = st.columns(3)
+            dcols[0].metric("BB %", _fmt_pct1(batting_line["BB %"]))
+            dcols[1].metric("K %", _fmt_pct1(batting_line["K %"]))
+            dcols[2].metric("BB/K", _fmt_num(batting_line["BB/K"], 2))
+
+            st.markdown("**Situational**")
+            sitcols = st.columns(3)
+            sitcols[0].metric("RISP AVG", _fmt_num(batting_line["RISP AVG"], 3))
+            sitcols[1].metric("2-Strike AVG", _fmt_num(batting_line["2-Strike AVG"], 3))
+            sitcols[2].metric("Leadoff AVG", _fmt_num(batting_line["Leadoff AVG"], 3))
+            st.caption(
+                f"RISP: {batting_line['RISP PA']} PA ({batting_line['RISP AB']} AB) · 2-Strike: {batting_line['2-Strike PA']} PA "
+                f"({_fmt_pct1(batting_line['2-Strike K %'])} ended in a K) · Leadoff: {batting_line['Leadoff PA']} PA"
             )
 
             st.markdown("**Plate Discipline**")
@@ -119,6 +147,37 @@ try:
                     f"Chase Contact %: {_fmt_pct(discipline['Chase Contact %'])} · Pitches Seen: {discipline['Pitches Seen']} "
                     f"({discipline['Located Pitches']} with a recorded location)"
                 )
+
+            st.markdown("**Zone-Tier Discipline**")
+            st.caption("Heart = down the middle, Shadow = straddles the zone edge, Chase = tempting but outside, Waste = nowhere near.")
+            st.dataframe(compute_zone_tier_discipline(batting_pitches), use_container_width=True, hide_index=True)
+
+            st.markdown("**Batted-Ball Profile**")
+            profile = compute_batted_ball_profile(batting_pitches, bats=my_player.bats)
+            if profile["Balls in Play"] == 0:
+                st.caption("No balls in play yet.")
+            else:
+                bcols = st.columns(4)
+                bcols[0].metric("Ground Ball %", _fmt_pct1(profile["Ground Ball %"]))
+                bcols[1].metric("Fly Ball %", _fmt_pct1(profile["Fly Ball %"]))
+                bcols[2].metric("Line Drive %", _fmt_pct1(profile["Line Drive %"]))
+                bcols[3].metric("Pop Up %", _fmt_pct1(profile["Pop Up %"]))
+
+                bcols2 = st.columns(3)
+                if profile["Spray Mode"] == "Pull/Center/Oppo":
+                    bcols2[0].metric("Pull %", _fmt_pct1(profile["Pull %"]))
+                    bcols2[1].metric("Center %", _fmt_pct1(profile["Center %"]))
+                    bcols2[2].metric("Oppo %", _fmt_pct1(profile["Oppo %"]))
+                else:
+                    bcols2[0].metric("Left Field %", _fmt_pct1(profile["Left Field %"]))
+                    bcols2[1].metric("Center %", _fmt_pct1(profile["Center %"]))
+                    bcols2[2].metric("Right Field %", _fmt_pct1(profile["Right Field %"]))
+                    st.caption("Your bats hand isn't on file (or switch-hitter), so this shows raw field side instead of Pull/Oppo.")
+
+                bcols3 = st.columns(2)
+                bcols3[0].metric("Barrel %", _fmt_pct1(profile["Barrel %"]))
+                bcols3[1].metric("Hard Contact %", _fmt_pct1(profile["Hard Contact %"]))
+                st.caption(f"Balls in Play: {profile['Balls in Play']} ({profile['Located']} with a recorded field location).")
         st.divider()
     if my_player.is_pitcher:
         st.markdown("### Pitching")

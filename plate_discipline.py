@@ -23,7 +23,7 @@ pitch count, rather than silently treated as in-zone or out.
 import streamlit as st
 import plotly.graph_objects as go
 
-from strike_zone import is_in_zone, derive_old_zone
+from strike_zone import is_in_zone, derive_old_zone, classify_attack_zone
 
 SWING_OUTCOMES = {"Swinging Strike", "Foul", "In Play"}
 WHIFF_OUTCOMES = {"Swinging Strike"}
@@ -64,6 +64,39 @@ def compute_hitter_discipline(pitches):
         "Chase Contact %": _pct(len(chase_contacts), len(chase_swings)),
         "First-Pitch Swing %": _pct(len(first_pitch_swings), len(first_pitches)),
     }
+
+
+def compute_zone_tier_discipline(pitches):
+    """Swing decisions broken down by attack-zone tier (Heart/Shadow/
+    Chase/Waste, see strike_zone.classify_attack_zone) instead of the
+    single binary Zone %/Chase % above -- e.g. "swings at 78% of
+    Heart-zone pitches but only 22% of Waste-zone pitches" is a much
+    finer read on approach than one overall Swing %/Chase % number.
+    Works for either a hitter's get_batting_pitches() list (the
+    intended use) or a pitcher's own list (how often each zone tier
+    gets swung at against him) -- same "located pitches only" rule as
+    the rest of this module. Returns a list of row dicts, one per
+    tier, in Heart->Shadow->Chase->Waste order."""
+    located = [p for p in pitches if p.actual_plate_x is not None and p.actual_plate_z is not None]
+    by_tier = {"Heart": [], "Shadow": [], "Chase": [], "Waste": []}
+    for p in located:
+        tier = classify_attack_zone(float(p.actual_plate_x), float(p.actual_plate_z))
+        by_tier[tier].append(p)
+
+    rows = []
+    for tier in ("Heart", "Shadow", "Chase", "Waste"):
+        tier_pitches = by_tier[tier]
+        n = len(tier_pitches)
+        swings = [p for p in tier_pitches if p.pitch_outcome in SWING_OUTCOMES]
+        whiffs = [p for p in tier_pitches if p.pitch_outcome in WHIFF_OUTCOMES]
+        contacts = [p for p in swings if p.pitch_outcome in CONTACT_OUTCOMES]
+        rows.append({
+            "Zone Tier": tier, "Pitches Seen": n,
+            "Swing %": _pct(len(swings), n), "Swings": len(swings),
+            "Whiff %": _pct(len(whiffs), len(swings)),
+            "Contact %": _pct(len(contacts), len(swings)),
+        })
+    return rows
 
 
 def compute_pitcher_command(pitches):
