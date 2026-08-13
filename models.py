@@ -1261,11 +1261,11 @@ class GamePitch(Base):
     actual_plate_z = Column(Numeric(5, 3), nullable=True)
     intended_plate_x = Column(Numeric(5, 3), nullable=True)
     intended_plate_z = Column(Numeric(5, 3), nullable=True)
-    pitch_outcome = Column(String(20), nullable=True)  # "Ball" / "Called Strike" / "Swinging Strike" / "Foul" / "In Play" / "HBP"
+    pitch_outcome = Column(String(20), nullable=True)  # "Ball" / "Called Strike" / "Swing and Miss" / "Foul" / "In Play" / "HBP"
     contact_quality = Column(String(20), nullable=True)  # "Barrel" / "Solid" / "Weak" / "Miss" -- same categories as Hitter Tracking
     # Only meaningful when pitch_outcome == "In Play". Swing/take itself
     # isn't a separate field -- it's already fully derivable from
-    # pitch_outcome (Swinging Strike/Foul/In Play = swung; Ball/Called
+    # pitch_outcome (Swing and Miss/Foul/In Play = swung; Ball/Called
     # Strike/HBP = didn't), so storing it again here would just be
     # redundant data that could drift out of sync. batted_ball_x/y are
     # raw field coordinates (see field_location.py) -- Pull/Straight/
@@ -1281,7 +1281,7 @@ class GamePitch(Base):
     # (per Ryker's definition). Not derivable from pitch_outcome/contact
     # quality -- it's a judgment call the coach makes live, so it's its
     # own flag rather than a computed value. Only meaningful on a pitch
-    # that was actually swung at (Swinging Strike/Foul/In Play); left
+    # that was actually swung at (Swing and Miss/Foul/In Play); left
     # False on takes.
     is_sword = Column(Boolean, default=False, nullable=False)
 

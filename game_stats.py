@@ -386,7 +386,7 @@ def compute_pitching_line(pitches):
 # convention: every pitch that isn't a Ball or HBP counts as a strike
 # thrown, including a foul with 2 strikes already (which doesn't
 # advance the count but is still a "strike" in a pitch-count sense).
-STRIKE_OUTCOMES = {"Called Strike", "Swinging Strike", "Foul", "In Play"}
+STRIKE_OUTCOMES = {"Called Strike", "Swing and Miss", "Foul", "In Play"}
 # Fixed to include Pop Up -- previously missing here (GamePitch.batted_ball_type
 # has always allowed "Pop Up", see game_tracking.py, but this tuple only had
 # the other three, so pop-ups were silently excluded from every GB/FB/LD %
@@ -395,7 +395,7 @@ BATTED_BALL_TYPES = ("Ground Ball", "Fly Ball", "Line Drive", "Pop Up")
 
 # Ryker's definition: a pitch the pitcher fully won -- a swing and
 # miss, a called strike, or a foul ball (the hitter had to defend it).
-DOMINANT_OUTCOMES = {"Swinging Strike", "Called Strike", "Foul"}
+DOMINANT_OUTCOMES = {"Swing and Miss", "Called Strike", "Foul"}
 
 
 def _rate(numerator, denominator):

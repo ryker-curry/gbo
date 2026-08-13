@@ -63,7 +63,7 @@ if role_name not in ("Administrator", "Head Coach", "Coach", "Sports Scientist",
     page_footer()
     st.stop()
 
-PITCH_OUTCOMES = ["Ball", "Called Strike", "Swinging Strike", "Foul", "In Play", "HBP"]
+PITCH_OUTCOMES = ["Ball", "Called Strike", "Swing and Miss", "Foul", "In Play", "HBP"]
 AB_OUTCOMES = [
     "K", "BB", "HBP", "1B", "2B", "3B", "HR", "E", "FC",
     "Sac Bunt", "Sac Fly", "Groundout", "Flyout", "Lineout", "Double Play",
@@ -92,7 +92,7 @@ def compute_re_and_rv(re_lookup, outs_before, bases_before, balls_before, strike
         changed (outs/bases stayed the same), so look up the same
         outs/bases with the ACTUAL new count (new_balls/new_strikes,
         passed in by the caller -- this function doesn't re-derive it,
-        since a Ball, Called Strike, Swinging Strike, and Foul all
+        since a Ball, Called Strike, Swing and Miss, and Foul all
         change the count differently).
       - run_value = (re_after + runs_scored) - re_before.
     Returns (re_before, re_after, run_value) -- any of these can be
@@ -330,7 +330,7 @@ def compute_current_state(game, lineup_slots):
     if not last.ends_plate_appearance:
         balls = (last.balls_before or 0) + (1 if last.pitch_outcome == "Ball" else 0)
         strikes = (last.strikes_before or 0)
-        if last.pitch_outcome in ("Called Strike", "Swinging Strike"):
+        if last.pitch_outcome in ("Called Strike", "Swing and Miss"):
             strikes += 1
         elif last.pitch_outcome == "Foul" and strikes < 2:
             strikes += 1
@@ -931,7 +931,7 @@ try:
                     pitch_outcome_choice = st.selectbox("Pitch outcome", PITCH_OUTCOMES, key="gt_pitch_outcome")
                     contact_quality_choice = None
                     is_sword_choice = False
-                    if pitch_outcome_choice in ("In Play", "Foul", "Swinging Strike"):
+                    if pitch_outcome_choice in ("In Play", "Foul", "Swing and Miss"):
                         contact_quality_choice = st.selectbox("Contact quality (optional)", ["-- N/A --"] + CONTACT_QUALITY_OPTIONS, key="gt_contact_quality")
                         is_sword_choice = st.checkbox("Sword (ugly, off-balance swing)", key="gt_is_sword")
 
@@ -964,7 +964,7 @@ try:
                 # Determine if this pitch ends the PA
                 new_balls = state["balls"] + (1 if pitch_outcome_choice == "Ball" else 0)
                 new_strikes = state["strikes"]
-                if pitch_outcome_choice in ("Called Strike", "Swinging Strike"):
+                if pitch_outcome_choice in ("Called Strike", "Swing and Miss"):
                     new_strikes += 1
                 elif pitch_outcome_choice == "Foul" and new_strikes < 2:
                     new_strikes += 1
