@@ -673,7 +673,7 @@ try:
                                 key="gt_opp_our_pitcher",
                             )
                             default_hand = players_by_id[opp_our_player_choice].throws or "R"
-                            opp_hand_choice = st.radio("Their hand", ["R", "L"], index=0 if default_hand == "R" else 1, horizontal=True, key="gt_opp_pitcher_hand")
+                            opp_hand_choice = st.radio("Opposing pitcher's throwing hand", ["R", "L"], index=0 if default_hand == "R" else 1, horizontal=True, key="gt_opp_pitcher_hand")
                     else:
                         opp_hand_choice = st.radio("Opposing pitcher's hand", ["R", "L"], horizontal=True, key="gt_opp_pitcher_hand")
                 else:
