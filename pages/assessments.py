@@ -26,7 +26,7 @@ from models import (
     Assessment, AssessmentResult, PitchType, IDPGoal, IDPStatus, BullpenPitch,
 )
 from bucket_system import BUCKET_RELEVANT_CATEGORIES, get_bucket_test_names_for_category, compute_bucket_system
-from bucket_system_display import render_score_rings, render_full_breakdown
+from bucket_system_display import render_score_rings, render_full_breakdown, render_development_profile
 
 page_header("Assessments")
 
@@ -79,6 +79,7 @@ try:
     # player sees on their own My Assessments page. ---
     bucket_data = compute_bucket_system(session, selected_player_id)
     if render_score_rings(bucket_data, key_prefix="assess"):
+        render_development_profile(bucket_data, key_prefix="assess")
         st.subheader("Physical Testing Breakdown")
         render_full_breakdown(bucket_data, key_prefix="assess_detail")
         st.divider()

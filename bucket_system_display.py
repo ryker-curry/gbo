@@ -134,3 +134,67 @@ def render_full_breakdown(bucket_data, key_prefix):
     if bucket_data["speed_metrics"]:
         st.markdown(f"**Speed** (reference only, not in Total) — {bucket_data['speed_score'] if bucket_data['speed_score'] is not None else '—'}")
         render_metric_bars(bucket_data["speed_metrics"], f"{key_prefix}_speed")
+
+    capacity_metrics_present = any(bucket_data.get("capacity_subgroup_metrics", {}).values())
+    if capacity_metrics_present:
+        st.markdown(f"**Capacity** (reference only, not in Total) — {bucket_data['capacity_score'] if bucket_data['capacity_score'] is not None else '—'}")
+        for sub_name, sub_score in bucket_data["capacity_subgroup_scores"].items():
+            metrics = bucket_data["capacity_subgroup_metrics"][sub_name]
+            if not metrics:
+                continue
+            st.markdown(f"*{sub_name}* — {sub_score if sub_score is not None else '—'}")
+            render_metric_bars(metrics, f"{key_prefix}_capacity_{sub_name}")
+
+
+def render_development_profile(bucket_data, key_prefix):
+    """Output vs. Capacity rings + a Balance bar, per the Physical
+    Assessment & IDP design brief -- deliberately its own section, not
+    folded into the Physical Testing rings above (Total/Body Comp/
+    Power/Strength), since Output/Capacity/Balance answer a different
+    question (development profile, not overall physical testing
+    standing) and mixing them into one row of rings would blur that.
+    Renders nothing if there's not enough data to classify a profile
+    yet (matches render_score_rings' same "show nothing" behavior)."""
+    output_score = bucket_data.get("output_score")
+    capacity_score = bucket_data.get("capacity_score")
+    balance_pct = bucket_data.get("balance_pct")
+    profile = bucket_data.get("development_profile")
+
+    if output_score is None or capacity_score is None:
+        return False
+
+    st.markdown(f"**Development Profile: {profile or '—'}**")
+    render_percentage_rings(
+        [("Physical Output", output_score), ("Physical Capacity", capacity_score)],
+        f"{key_prefix}_dev_profile", show_ordinal=True,
+    )
+
+    if balance_pct is not None:
+        # Horizontal balance bar: a fixed -50/+50 scale (well past any
+        # realistic balance_pct), a center reference line at 0, and a
+        # marker at the athlete's actual balance_pct, clamped to the
+        # display range so an extreme outlier doesn't fly off the
+        # chart. Capacity-dominant reads left, Output-dominant reads
+        # right, matching the "Output <-> Capacity" sketch in the brief.
+        display_pct = max(-50, min(50, balance_pct))
+        fig = go.Figure()
+        fig.add_shape(type="line", x0=-50, x1=50, y0=0, y1=0, line=dict(color="#3A3A3A", width=4))
+        fig.add_shape(type="line", x0=0, x1=0, y0=-0.3, y1=0.3, line=dict(color="#FFFDE5", width=2))
+        fig.add_trace(go.Scatter(
+            x=[display_pct], y=[0], mode="markers",
+            marker=dict(size=22, color="#BF1E2D", line=dict(color="#FFFDE5", width=2)),
+            showlegend=False, hoverinfo="skip",
+        ))
+        fig.update_layout(
+            xaxis=dict(range=[-55, 55], visible=False, fixedrange=True),
+            yaxis=dict(range=[-1, 1], visible=False, fixedrange=True),
+            paper_bgcolor="#1E1E1E", plot_bgcolor="#1E1E1E",
+            height=90, margin=dict(l=10, r=10, t=10, b=10),
+            annotations=[
+                dict(x=-50, y=-0.7, text="Capacity-Dominant", showarrow=False, font=dict(color="#FFFDE5", size=12), xanchor="left"),
+                dict(x=50, y=-0.7, text="Output-Dominant", showarrow=False, font=dict(color="#FFFDE5", size=12), xanchor="right"),
+            ],
+        )
+        st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_balance_bar")
+        st.caption(f"Balance: {balance_pct:+.1f}% (provisional bands -- not a validated threshold yet)")
+    return True

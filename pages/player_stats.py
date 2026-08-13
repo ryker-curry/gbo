@@ -17,7 +17,7 @@ from database import get_session
 from models import Player, User, AssessmentCategory, Assessment, AssessmentResult, AssessmentTestType, PitchType, IDPGoal, IDPStatus, BullpenPitch
 from ui_components import page_header, page_footer, empty_state
 from bucket_system import compute_bucket_system
-from bucket_system_display import render_full_breakdown, render_score_rings
+from bucket_system_display import render_full_breakdown, render_score_rings, render_development_profile
 
 page_header("My Assessments")
 
@@ -47,6 +47,7 @@ try:
     # --- Overall/Strength/Power rings, right at the top of the page. ---
     top_bucket_data = compute_bucket_system(session, my_player.player_id)
     if render_score_rings(top_bucket_data, key_prefix="myassess_top"):
+        render_development_profile(top_bucket_data, key_prefix="myassess_top")
         st.divider()
 
     # --- Goals in progress: baseline vs. current for any metric tied to

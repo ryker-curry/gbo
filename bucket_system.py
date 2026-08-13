@@ -22,6 +22,37 @@ spreadsheet's actual data (not guessed):
 at least one result for that test type, using each player's most recent value per
 metric (an ongoing system, not a one-time snapshot like the original
 spreadsheet).
+
+---
+
+Physical Development / Capacity extension (added after the Physical
+Assessment & IDP design brief, per Ryker's explicit sign-off on 3
+specific decisions):
+  1. Arm Health feeds a new Capacity score -- previously excluded
+     entirely from the bucket system (GIRD wasn't part of the
+     professor's original spreadsheet at all, not a data-quality call).
+  2. Physical Output is NOT a new composite -- it's the average of the
+     EXISTING power_score and strength_score above, reused as-is.
+     Deliberately does not touch Total (which also includes Body Comp)
+     -- Output is Ryker's brief's definition (force/power production
+     only), a narrower thing than Total.
+  3. Balance/Development Profile is computed live against the CURRENT
+     team-best every time, exactly like every other score in this
+     module -- no snapshot-at-test-time mechanism. Same tradeoff the
+     existing Total score already has (a teammate's new PR can nudge
+     another athlete's percentile), left consistent rather than adding
+     a second, different computation model into one file.
+
+Capacity scoring only pulls from Arm Health tests that cleanly fit the
+higher-is-better percentile model -- strength values. ROM/GIRD/pain/
+workload rows stay excluded from the composite math, same reasoning
+Ryker already applied to GIRD (a joint's mobility isn't a "the more the
+better" quantity the way force output is -- see the movement_chart.py
+history for the same lesson learned about a different metric). Scoped
+to the THROWING arm only (this is a pitching-development profile, not
+a general fitness score) -- non-throwing-arm strength stays available
+as raw bilateral-comparison reference data, same treatment Body Fat %
+gets in Body Comp.
 """
 
 from sqlalchemy.orm import joinedload
@@ -101,6 +132,47 @@ SPEED_METRICS = [
     ("Acceleration: 10-Yard Sprint Time", "lower"),
     ("Top Speed: Flying 10 Sprint Time", "lower"),
 ]
+
+# Feeds the new Capacity score (Physical Development extension) --
+# throwing-arm strength/stability metrics only, matching the
+# higher-is-better shape every other bucket in this file already
+# requires. Non-throwing-arm strength, all ROM/GIRD, ER:IR ratio, pain,
+# and workload rows are deliberately NOT here -- they either don't fit
+# a clean higher-is-better model (ROM, ratios) or aren't a physical
+# quality at all (pain, workload counts). Those stay visible as raw
+# reference data on the assessment entry/history views, same as Body
+# Fat % already is for Body Comp.
+CAPACITY_SUBGROUPS = {
+    "Shoulder Strength": [
+        ("Shoulder Strength: Throwing Arm ER Peak Force", "higher"),
+        ("Shoulder Strength: Throwing Arm IR Peak Force", "higher"),
+    ],
+    "Scapular Strength": [
+        ("Shoulder Strength: I Position Peak Force", "higher"),
+        ("Shoulder Strength: Y Position Peak Force", "higher"),
+        ("Shoulder Strength: T Position Peak Force", "higher"),
+    ],
+    "Grip Strength": [
+        ("Grip Strength: Throwing Hand Grip Strength", "higher"),
+    ],
+    "Forearm/Elbow Capacity": [
+        ("Forearm/Elbow Capacity: FCU Isometric Strength (Throwing Arm)", "higher"),
+        ("Forearm/Elbow Capacity: FDS Isometric Strength (Throwing Arm)", "higher"),
+    ],
+}
+
+# Provisional Development Profile bands, expressed as a percentage
+# imbalance between Output and Capacity (see compute_balance_pct below)
+# -- NOT validated thresholds. Flagged in the design brief as a
+# placeholder until there's enough DevelopmentProfileSnapshot-style
+# history to set real cutoffs from the team's own distribution. Deliberately
+# plain module constants, not a database config table -- matches how
+# every other threshold in this file (subgroup membership, metric
+# direction) is already just Python data, not DB-driven.
+DEVELOPMENT_PROFILE_BANDS = {
+    "balanced_max_abs_pct": 10,     # |balance_pct| <= this -> Balanced/Optimized (if not also Developing)
+    "developing_score_floor": 60,   # both output_score AND capacity_score below this -> Developing, regardless of balance_pct
+}
 
 # Categories where data entry should be limited to ONLY the metrics in
 # the bucket spreadsheet -- Ryker's explicit rule, so a coach entering
@@ -212,11 +284,58 @@ def average_percentiles(metric_dict):
     return round(sum(values) / len(values))
 
 
+def compute_balance_pct(output_score, capacity_score):
+    """Percentage imbalance between Output and Capacity, NOT a flat
+    difference -- (Output - Capacity) / midpoint * 100. A flat
+    difference treats a 95/85 athlete and a 55/45 athlete as equally
+    "imbalanced" (both are a 10-point gap) even though those are very
+    different situations; expressing the gap as a percentage of the
+    athlete's own overall level (the mean of the two scores) tells them
+    apart. Positive = Output-dominant, negative = Capacity-dominant.
+    Precedent: Samozino & Morin's force-velocity imbalance (FVimb) uses
+    the same relative-percentage shape to compare two already-normalized
+    physical qualities, for the same reason. Returns None if either
+    input is None (nothing to compare)."""
+    if output_score is None or capacity_score is None:
+        return None
+    midpoint = (output_score + capacity_score) / 2
+    if midpoint == 0:
+        return None
+    return round((output_score - capacity_score) / midpoint * 100, 1)
+
+
+def classify_development_profile(output_score, capacity_score, balance_pct):
+    """Development Profile label from the Output/Capacity/Balance
+    numbers -- provisional bands (DEVELOPMENT_PROFILE_BANDS), not
+    validated thresholds. "Developing" takes priority over the balance
+    bands: an athlete who's low on BOTH qualities isn't "Balanced" in
+    the sense that term is meant to convey (strong AND proportionate),
+    so that case is checked first. Returns None if there's not enough
+    data to classify at all."""
+    if output_score is None or capacity_score is None or balance_pct is None:
+        return None
+    floor = DEVELOPMENT_PROFILE_BANDS["developing_score_floor"]
+    if output_score < floor and capacity_score < floor:
+        return "Developing"
+    balanced_max = DEVELOPMENT_PROFILE_BANDS["balanced_max_abs_pct"]
+    if abs(balance_pct) <= balanced_max:
+        return "Balanced/Optimized"
+    return "Output-Dominant" if balance_pct > 0 else "Capacity-Dominant"
+
+
 def compute_bucket_system(session, player_id):
     """The full rollup for one player: raw values + percentiles per
     metric, sub-group percentiles (Breakdown 1), bucket percentiles
     (Breakdown 2: Body Comp/Power/Strength/Speed), and the final Total
-    (Breakdown 3, Body Comp + Power + Strength only)."""
+    (Breakdown 3, Body Comp + Power + Strength only).
+
+    Also returns the Physical Development extension: capacity_score
+    (new), output_score (= power_score/strength_score averaged, not a
+    new composite), balance_pct, and development_profile. These are
+    NEW keys appended to this same dict rather than a second function
+    with a second round of queries -- existing callers (Player
+    Dashboard, My Assessments, Analytics) are unaffected since they
+    only read the keys they already know about."""
     # Body Comp
     body_comp_metrics = compute_metric_percentiles(session, player_id, BODY_COMP_METRICS)
     body_comp_score = average_percentiles(body_comp_metrics)
@@ -247,6 +366,23 @@ def compute_bucket_system(session, player_id):
     total_inputs = [v for v in [body_comp_score, power_score, strength_score] if v is not None]
     total_score = round(sum(total_inputs) / len(total_inputs)) if total_inputs else None
 
+    # Capacity (Physical Development extension, throwing-arm strength only -- see module docstring)
+    capacity_subgroup_scores = {}
+    capacity_subgroup_metrics = {}
+    for sub_name, metrics in CAPACITY_SUBGROUPS.items():
+        m = compute_metric_percentiles(session, player_id, metrics)
+        capacity_subgroup_metrics[sub_name] = m
+        capacity_subgroup_scores[sub_name] = average_percentiles(m)
+    capacity_score = round(sum(v for v in capacity_subgroup_scores.values() if v is not None) / len([v for v in capacity_subgroup_scores.values() if v is not None])) if any(v is not None for v in capacity_subgroup_scores.values()) else None
+
+    # Output = power_score/strength_score averaged, reusing the
+    # existing verified numbers above rather than a new composite.
+    output_inputs = [v for v in [power_score, strength_score] if v is not None]
+    output_score = round(sum(output_inputs) / len(output_inputs)) if output_inputs else None
+
+    balance_pct = compute_balance_pct(output_score, capacity_score)
+    development_profile = classify_development_profile(output_score, capacity_score, balance_pct)
+
     return {
         "body_comp_score": body_comp_score,
         "body_comp_metrics": body_comp_metrics,
@@ -259,4 +395,10 @@ def compute_bucket_system(session, player_id):
         "speed_score": speed_score,
         "speed_metrics": speed_metrics,
         "total_score": total_score,
+        "capacity_score": capacity_score,
+        "capacity_subgroup_scores": capacity_subgroup_scores,
+        "capacity_subgroup_metrics": capacity_subgroup_metrics,
+        "output_score": output_score,
+        "balance_pct": balance_pct,
+        "development_profile": development_profile,
     }

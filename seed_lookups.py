@@ -118,6 +118,17 @@ ARM_HEALTH_TESTS = [
     ("Shoulder Strength: T Position Peak Force", "lbs"),
     ("Elbow ROM: Flexion", "°"), ("Elbow ROM: Extension", "°"), ("Elbow ROM: Pronation", "°"), ("Elbow ROM: Supination", "°"),
     ("Grip Strength: Throwing Hand Grip Strength", "lbs"), ("Grip Strength: Non-Throwing Hand Grip Strength", "lbs"),
+    # New for the Physical Development / Capacity work -- isolated
+    # wrist-flexion/ulnar-deviation dynamometry, distinct from the
+    # compound Grip Strength tests above. Framed as forearm/elbow
+    # capacity metrics, not an injury predictor, per Ryker's explicit
+    # call (see the design brief) -- current research shows FCU/FDS
+    # contribute to varus stress-shielding of the UCL mechanistically,
+    # but there's no validated individual risk threshold yet.
+    ("Forearm/Elbow Capacity: FCU Isometric Strength (Throwing Arm)", "lbs"),
+    ("Forearm/Elbow Capacity: FDS Isometric Strength (Throwing Arm)", "lbs"),
+    ("Forearm/Elbow Capacity: FCU Isometric Strength (Non-Throwing Arm)", "lbs"),
+    ("Forearm/Elbow Capacity: FDS Isometric Strength (Non-Throwing Arm)", "lbs"),
     ("Pain & Readiness: Shoulder Pain", "0-10"), ("Pain & Readiness: Elbow Pain", "0-10"),
     ("Pain & Readiness: Overall Arm Readiness", "0-10"),
     ("Throwing Workload: Daily Throw Count", "throws"), ("Throwing Workload: Bullpen Pitch Count", "pitches"),
