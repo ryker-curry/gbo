@@ -12,11 +12,15 @@ spreadsheet's actual data (not guessed):
   - Body Comp composite = average of ONLY Body Weight % and Skeletal
     Muscle Mass % (Fat Mass/Body Fat % are raw reference data only, not
     in the composite) -- matches his professor's email exactly.
-  - Shoulder Health (GIRD) is excluded entirely, not computed at all
-    (Ryker's explicit call).
-  - Speed is computed (for reference/display) but excluded from the
-    final Total, along with Shoulder Health.
-  - Total = ROUND(AVERAGE(Body Comp, Power, Strength), 0).
+  - Speed, Capacity, Mobility, and Shoulder Health are all computed
+    (for reference/display) but excluded from the final Total -- see
+    the Mobility/Shoulder Health section further down for why those
+    two exist despite Shoulder Health (GIRD) originally having been
+    excluded entirely from this file.
+  - Total = ROUND(AVERAGE(Body Comp, Power, Strength), 0). Unchanged by
+    every extension below -- still exactly the professor's original 3
+    inputs, per Ryker's explicit call each time a new bucket's been
+    added (Capacity, now Mobility/Shoulder Health) not to touch it.
 
 "Team" comparison population = every player (active and inactive) with
 at least one result for that test type, using each player's most recent value per
@@ -53,6 +57,33 @@ to the THROWING arm only (this is a pitching-development profile, not
 a general fitness score) -- non-throwing-arm strength stays available
 as raw bilateral-comparison reference data, same treatment Body Fat %
 gets in Body Comp.
+
+---
+
+Mobility + Shoulder Health buckets (added per Ryker's explicit call,
+reversing the "Shoulder Health (GIRD) is excluded entirely" line
+above -- that original call was about not building a composite at
+all, not a permanent decision):
+
+  - Mobility: "higher is better" for every field, same simplification
+    most S&C mobility screens use -- more range generally supports
+    better movement quality. See MOBILITY_SUBGROUPS for exactly which
+    fields (deliberately scoped to only what's actively tested right
+    now, not the full ~30-field Mobility & ROM sheet).
+  - Shoulder Health: GIRD only for now, "lower is better" (smaller
+    deficit = healthier), reusing this file's existing lower-is-better
+    formula. See SHOULDER_HEALTH_METRICS for the full reasoning,
+    including why a GIRD of 0 isn't literally the clinical target.
+  - Named "Shoulder Health" rather than "Arm Health" (which is already
+    an AssessmentCategory name, a different thing) since nothing here
+    measures the elbow yet -- Ryker's explicit call is to rename this
+    to Arm Health and fold in elbow metrics once that data exists.
+  - Both are reference-only for now, same treatment as Speed and
+    Capacity -- Total stays exactly Body Comp + Power + Strength.
+    Ryker's stated intent is to eventually fold Mobility and Shoulder
+    Health into Total once there's real confidence in the scoring, but
+    that hasn't happened yet -- don't add them to total_inputs below
+    without an explicit, separate go-ahead.
 """
 
 from sqlalchemy.orm import joinedload
@@ -176,6 +207,70 @@ CAPACITY_SUBGROUPS = {
         ("Forearm/Elbow Capacity: FDS Isometric Strength (Throwing Arm)", "higher"),
     ],
 }
+
+# Range of Motion / Mobility bucket (Physical Development extension,
+# reference only -- not in Total yet, see module docstring below).
+# "Higher is better" per Ryker's call -- the standard simplification
+# most S&C mobility screens use (more range generally supports better
+# movement quality), same direction convention as Power/Strength/
+# Capacity above.
+#
+# Scoped to ONLY what's actually being tested right now, per Ryker's
+# explicit correction: Shoulder ER/IR (both arms) + Flexion/Extension,
+# and the full Hip block. The rest of the Mobility & ROM sheet
+# (Cervical Spine, Elbow, T-Spine, Lumbar Spine, Ankle, Shoulder Total
+# Arc) is already in the data model and entry form (see
+# MOBILITY_ROM_TESTS in seed_lookups.py) but isn't real data yet --
+# add those sub-groups here once the team actually starts collecting
+# them, rather than scoring a bunch of always-empty fields now.
+#
+# "Shoulder: GIRD" (also on the Mobility sheet) is deliberately NOT
+# included here even though it's a Shoulder field -- it's a deficit
+# score, not a raw ROM angle, so "higher is better" would score it
+# backwards (rewarding a bigger injury-risk deficit). See
+# SHOULDER_HEALTH_METRICS below for how GIRD is actually scored.
+MOBILITY_SUBGROUPS = {
+    "Shoulder": [
+        ("Shoulder: Throwing Arm External Rotation", "higher"),
+        ("Shoulder: Throwing Arm Internal Rotation", "higher"),
+        ("Shoulder: Non-Throwing Arm External Rotation", "higher"),
+        ("Shoulder: Non-Throwing Arm Internal Rotation", "higher"),
+        ("Shoulder: Flexion", "higher"),
+        ("Shoulder: Extension", "higher"),
+    ],
+    "Hip": [
+        ("Hip: Drive Leg Internal Rotation", "higher"),
+        ("Hip: Drive Leg External Rotation", "higher"),
+        ("Hip: Stride Leg Internal Rotation", "higher"),
+        ("Hip: Stride Leg External Rotation", "higher"),
+        ("Hip: Drive Leg Abduction", "higher"),
+        ("Hip: Stride Leg Abduction", "higher"),
+        ("Hip: Drive Leg Adduction", "higher"),
+        ("Hip: Stride Leg Adduction", "higher"),
+        ("Hip: Flexion", "higher"),
+        ("Hip: Extension", "higher"),
+    ],
+}
+
+# Shoulder Health bucket (Physical Development extension, reference
+# only -- not in Total yet). Named "Shoulder Health" rather than "Arm
+# Health" since nothing here measures the elbow yet -- rename (and
+# fold in elbow metrics) once that's actually being tested, per
+# Ryker's call.
+#
+# GIRD only for now, per Ryker's call -- the other Arm Health ROM/
+# ratio fields (ER/IR degrees, Total Arc, ER:IR Ratio) are collected
+# but not included in this score yet. "Lower is better" -- a smaller
+# deficit (closer to symmetric with the non-throwing arm) is
+# healthier, reusing this file's existing lower-is-better formula
+# (team_min / value * 100, same as sprint times) rather than inventing
+# threshold-based scoring. Note: a GIRD of exactly 0 isn't the literal
+# clinical ideal -- a small deficit is a normal throwing-arm adaptation
+# -- like every bucket in this system, this is a team-relative
+# ranking, not an absolute medical verdict.
+SHOULDER_HEALTH_METRICS = [
+    ("Shoulder ROM: GIRD", "lower"),
+]
 
 # Provisional Development Profile bands, expressed as a percentage
 # imbalance between Output and Capacity (see compute_balance_pct below)
@@ -405,6 +500,21 @@ def compute_bucket_system(session, player_id):
     balance_pct = compute_balance_pct(output_score, capacity_score)
     development_profile = classify_development_profile(output_score, capacity_score, balance_pct)
 
+    # Mobility (2 sub-groups currently -- see MOBILITY_SUBGROUPS' note
+    # on scope). Reference only, not in Total -- see module docstring.
+    mobility_subgroup_scores = {}
+    mobility_subgroup_metrics = {}
+    for sub_name, metrics in MOBILITY_SUBGROUPS.items():
+        m = compute_metric_percentiles(session, player_id, metrics)
+        mobility_subgroup_metrics[sub_name] = m
+        mobility_subgroup_scores[sub_name] = average_percentiles(m)
+    mobility_score = round(sum(v for v in mobility_subgroup_scores.values() if v is not None) / len([v for v in mobility_subgroup_scores.values() if v is not None])) if any(v is not None for v in mobility_subgroup_scores.values()) else None
+
+    # Shoulder Health (GIRD only for now -- see SHOULDER_HEALTH_METRICS'
+    # note on scope). Reference only, not in Total -- see module docstring.
+    shoulder_health_metrics = compute_metric_percentiles(session, player_id, SHOULDER_HEALTH_METRICS)
+    shoulder_health_score = average_percentiles(shoulder_health_metrics)
+
     return {
         "body_comp_score": body_comp_score,
         "body_comp_metrics": body_comp_metrics,
@@ -423,4 +533,9 @@ def compute_bucket_system(session, player_id):
         "output_score": output_score,
         "balance_pct": balance_pct,
         "development_profile": development_profile,
+        "mobility_score": mobility_score,
+        "mobility_subgroup_scores": mobility_subgroup_scores,
+        "mobility_subgroup_metrics": mobility_subgroup_metrics,
+        "shoulder_health_score": shoulder_health_score,
+        "shoulder_health_metrics": shoulder_health_metrics,
     }

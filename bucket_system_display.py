@@ -176,6 +176,20 @@ def render_full_breakdown(bucket_data, key_prefix):
             st.markdown(f"*{sub_name}* — {sub_score if sub_score is not None else '—'}")
             render_metric_bars(metrics, f"{key_prefix}_capacity_{sub_name}")
 
+    mobility_metrics_present = any(bucket_data.get("mobility_subgroup_metrics", {}).values())
+    if mobility_metrics_present:
+        st.markdown(f"**Mobility** (reference only, not in Total) — {bucket_data['mobility_score'] if bucket_data['mobility_score'] is not None else '—'}")
+        for sub_name, sub_score in bucket_data["mobility_subgroup_scores"].items():
+            metrics = bucket_data["mobility_subgroup_metrics"][sub_name]
+            if not metrics:
+                continue
+            st.markdown(f"*{sub_name}* — {sub_score if sub_score is not None else '—'}")
+            render_metric_bars(metrics, f"{key_prefix}_mobility_{sub_name}")
+
+    if bucket_data.get("shoulder_health_metrics"):
+        st.markdown(f"**Shoulder Health** (reference only, not in Total) — {bucket_data['shoulder_health_score'] if bucket_data['shoulder_health_score'] is not None else '—'}")
+        render_metric_bars(bucket_data["shoulder_health_metrics"], f"{key_prefix}_shoulder_health")
+
 
 def render_development_profile(bucket_data, key_prefix):
     """Output vs. Capacity rings + a Balance bar, per the Physical
