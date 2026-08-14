@@ -171,9 +171,18 @@ def movement_chart(pitches, min_pitches_for_shading=2):
         # switch away from the ring version -- with a fixed 5" tick
         # spacing so the grid reads as clean, evenly-spaced inches
         # rather than whatever irregular ticks autoscaling would pick.
-        xaxis=dict(range=[-x_extent, x_extent], gridcolor=GRID_GRAY, zeroline=False, dtick=5),
+        # constrain="domain" on both axes keeps the requested -25/+25
+        # ranges exactly as specified -- without it, Plotly's equal-
+        # aspect scaleanchor below stretches the x-axis range to fill
+        # the (wider-than-tall) plot container instead of respecting
+        # the range we set, which is what caused the x-axis to show
+        # -65/65 instead of -25/25. With constrain="domain", the plot's
+        # width shrinks to preserve the aspect ratio instead of the
+        # range expanding.
+        xaxis=dict(range=[-x_extent, x_extent], gridcolor=GRID_GRAY, zeroline=False, dtick=5,
+                    constrain="domain"),
         yaxis=dict(range=[-y_extent, y_extent], gridcolor=GRID_GRAY, zeroline=False, dtick=5,
-                    scaleanchor="x", scaleratio=1),
+                    scaleanchor="x", scaleratio=1, constrain="domain"),
         showlegend=False,  # the pitch-type legend lives in the usage/velo table below the chart
     )
     return fig
