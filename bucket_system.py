@@ -72,8 +72,11 @@ all, not a permanent decision):
     now, not the full ~30-field Mobility & ROM sheet).
   - Shoulder Health: GIRD only for now, "lower is better" (smaller
     deficit = healthier), reusing this file's existing lower-is-better
-    formula. See SHOULDER_HEALTH_METRICS for the full reasoning,
-    including why a GIRD of 0 isn't literally the clinical target.
+    formula. Auto-calculated live from the two Mobility sheet Internal
+    Rotation fields (non-throwing IR - throwing IR), not a separately
+    entered value -- see compute_gird_percentiles for the full
+    reasoning, including why a GIRD of 0 isn't literally the clinical
+    target.
   - Named "Shoulder Health" rather than "Arm Health" (which is already
     an AssessmentCategory name, a different thing) since nothing here
     measures the elbow yet -- Ryker's explicit call is to rename this
@@ -224,11 +227,12 @@ CAPACITY_SUBGROUPS = {
 # add those sub-groups here once the team actually starts collecting
 # them, rather than scoring a bunch of always-empty fields now.
 #
-# "Shoulder: GIRD" (also on the Mobility sheet) is deliberately NOT
-# included here even though it's a Shoulder field -- it's a deficit
-# score, not a raw ROM angle, so "higher is better" would score it
-# backwards (rewarding a bigger injury-risk deficit). See
-# SHOULDER_HEALTH_METRICS below for how GIRD is actually scored.
+# "Shoulder: GIRD" (also on the Mobility sheet, a leftover manual-entry
+# field) is deliberately NOT included here even though it's a Shoulder
+# field -- it's a deficit score, not a raw ROM angle, so "higher is
+# better" would score it backwards (rewarding a bigger injury-risk
+# deficit). GIRD is instead auto-computed from the throwing/non-
+# throwing IR fields just below -- see compute_gird_percentiles.
 MOBILITY_SUBGROUPS = {
     "Shoulder": [
         ("Shoulder: Throwing Arm External Rotation", "higher"),
@@ -258,19 +262,37 @@ MOBILITY_SUBGROUPS = {
 # fold in elbow metrics) once that's actually being tested, per
 # Ryker's call.
 #
-# GIRD only for now, per Ryker's call -- the other Arm Health ROM/
-# ratio fields (ER/IR degrees, Total Arc, ER:IR Ratio) are collected
-# but not included in this score yet. "Lower is better" -- a smaller
-# deficit (closer to symmetric with the non-throwing arm) is
-# healthier, reusing this file's existing lower-is-better formula
-# (team_min / value * 100, same as sprint times) rather than inventing
-# threshold-based scoring. Note: a GIRD of exactly 0 isn't the literal
-# clinical ideal -- a small deficit is a normal throwing-arm adaptation
-# -- like every bucket in this system, this is a team-relative
-# ranking, not an absolute medical verdict.
-SHOULDER_HEALTH_METRICS = [
-    ("Shoulder ROM: GIRD", "lower"),
-]
+# GIRD only for now, per Ryker's call. GIRD (Glenohumeral Internal
+# Rotation Deficit) = non-throwing arm IR - throwing arm IR, in
+# degrees -- the standard formula from the sports-medicine literature
+# (Wilk et al./Burkhart's "disabled throwing shoulder" work): how much
+# internal rotation the throwing shoulder has lost relative to the
+# other side.
+#
+# Auto-calculated live from the two raw Internal Rotation fields on
+# the Mobility & ROM sheet (see compute_gird_percentiles below) --
+# NOT a separately, manually-entered value. Per Ryker's explicit call:
+# he wants GIRD derived automatically once both IR measurements are
+# collected, not typed in as its own number. Sourced from the Mobility
+# sheet's "Shoulder: Throwing/Non-Throwing Arm Internal Rotation"
+# fields specifically (the ones he confirmed are actually being
+# tested), NOT the parallel "Shoulder ROM: Throwing/Non-Throwing Arm
+# Internal Rotation" fields on the separate Arm Health sheet -- same
+# two raw fields MOBILITY_SUBGROUPS["Shoulder"] above already scores
+# individually for the Mobility bucket; reusing them here for a
+# second, different derived score (a bilateral deficit, not a raw
+# angle) is intentional, not duplication.
+#
+# "Lower is better" -- a smaller deficit (closer to symmetric with the
+# non-throwing arm) is healthier, reusing this file's existing
+# lower-is-better formula (team_min / value * 100, same as sprint
+# times) rather than inventing threshold-based scoring. Note: a GIRD
+# of exactly 0 isn't the literal clinical ideal -- a small deficit is
+# a normal throwing-arm adaptation -- like every bucket in this
+# system, this is a team-relative ranking, not an absolute medical
+# verdict.
+GIRD_THROWING_ARM_IR_TEST = "Shoulder: Throwing Arm Internal Rotation"
+GIRD_NON_THROWING_ARM_IR_TEST = "Shoulder: Non-Throwing Arm Internal Rotation"
 
 # Provisional Development Profile bands, expressed as a percentage
 # imbalance between Output and Capacity (see compute_balance_pct below)
@@ -288,9 +310,14 @@ DEVELOPMENT_PROFILE_BANDS = {
 # Categories where data entry should be limited to ONLY the metrics in
 # the bucket spreadsheet -- Ryker's explicit rule, so a coach entering
 # e.g. Body Composition data isn't shown 15 extra InBody fields that
-# have nothing to do with the bucket system. Arm Health is NOT included
-# here even though GIRD lives there -- GIRD is excluded from the bucket
-# system entirely, so nothing in Arm Health is bucket-relevant anymore.
+# have nothing to do with the bucket system. Arm Health is deliberately
+# NOT included here -- Capacity draws from several of its fields, but
+# it's meant to stay a broader, unrestricted clinical entry form (not
+# narrowed to just bucket inputs), unlike Body Comp/Power/Strength/
+# Speed which get filtered down to exactly the spreadsheet's fields.
+# GIRD is no longer entered on Arm Health at all -- see
+# compute_gird_percentiles below, it's now auto-calculated from the
+# Mobility sheet's Internal Rotation fields instead.
 BUCKET_RELEVANT_CATEGORIES = {
     "Body Composition", "Explosive Power", "Rotational Power",
     "Lower Body Strength", "Upper Body Strength", "Speed",
@@ -384,6 +411,43 @@ def compute_metric_percentiles(session, player_id, metrics):
         test_type = session.query(AssessmentTestType).filter(AssessmentTestType.test_name == test_name).first()
         out[test_name] = {"raw": value, "percentile": pct, "unit": test_type.unit if test_type else None}
     return out
+
+
+def compute_gird_percentiles(session, player_id):
+    """GIRD (Glenohumeral Internal Rotation Deficit), computed live --
+    non-throwing arm IR minus throwing arm IR, in degrees -- from the
+    two raw Mobility & ROM Internal Rotation fields
+    (GIRD_THROWING_ARM_IR_TEST / GIRD_NON_THROWING_ARM_IR_TEST above),
+    NOT a separately-entered value. Per Ryker's explicit call: enter
+    both IR measurements once, GIRD derives automatically, no manual
+    GIRD entry step needed at all.
+
+    "Lower is better" -- team_min / value * 100, same formula and
+    convention as every other lower-is-better metric in this file (see
+    compute_percentile). Only includes players who have BOTH raw IR
+    values on file -- same "skip if incomplete" behavior
+    compute_metric_percentiles already has for a plain single-field
+    metric, just checked against two fields here instead of one.
+
+    Returns {"Shoulder ROM: GIRD": {"raw": ..., "percentile": ...,
+    "unit": "°"}} (empty dict if this player has fewer than both raw
+    IR values) -- same shape compute_metric_percentiles returns, so
+    render_metric_bars and the rest of the display layer don't need to
+    know GIRD is computed differently under the hood. Kept the
+    "Shoulder ROM: GIRD" label (its old Arm Health field name) purely
+    for display continuity -- it's no longer read from that stored
+    field."""
+    throwing_ir = get_latest_values_by_player(session, GIRD_THROWING_ARM_IR_TEST)
+    non_throwing_ir = get_latest_values_by_player(session, GIRD_NON_THROWING_ARM_IR_TEST)
+    gird_by_player = {
+        pid: non_throwing_ir[pid] - throwing_ir[pid]
+        for pid in throwing_ir
+        if pid in non_throwing_ir
+    }
+    if player_id not in gird_by_player:
+        return {}
+    pct = compute_percentile(gird_by_player[player_id], list(gird_by_player.values()), "lower")
+    return {"Shoulder ROM: GIRD": {"raw": gird_by_player[player_id], "percentile": pct, "unit": "°"}}
 
 
 def average_percentiles(metric_dict):
@@ -510,9 +574,10 @@ def compute_bucket_system(session, player_id):
         mobility_subgroup_scores[sub_name] = average_percentiles(m)
     mobility_score = round(sum(v for v in mobility_subgroup_scores.values() if v is not None) / len([v for v in mobility_subgroup_scores.values() if v is not None])) if any(v is not None for v in mobility_subgroup_scores.values()) else None
 
-    # Shoulder Health (GIRD only for now -- see SHOULDER_HEALTH_METRICS'
-    # note on scope). Reference only, not in Total -- see module docstring.
-    shoulder_health_metrics = compute_metric_percentiles(session, player_id, SHOULDER_HEALTH_METRICS)
+    # Shoulder Health (GIRD only for now, auto-computed -- see
+    # compute_gird_percentiles' docstring). Reference only, not in
+    # Total -- see module docstring.
+    shoulder_health_metrics = compute_gird_percentiles(session, player_id)
     shoulder_health_score = average_percentiles(shoulder_health_metrics)
 
     return {
