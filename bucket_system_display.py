@@ -11,6 +11,20 @@ explicit call. Always labeled "Physical Testing" instead.
 import streamlit as st
 import plotly.graph_objects as go
 
+from bucket_system import BODY_COMP_METRICS
+
+# Body Comp fields that get a percentile bar (the same 2 that feed
+# body_comp_score). Body Fat Mass / Percent Body Fat are reference-only
+# (see BODY_COMP_DISPLAY_METRICS in bucket_system.py) -- Ryker's call,
+# after the "lower is better" percentile ratio produced a confusing-
+# looking result (16% body fat showing as "42nd percentile") that was
+# really just one lean teammate's value dominating the min/value ratio.
+# Beyond the math being unintuitive here, ranking players against each
+# other on body fat specifically -- even implicitly via a bar chart --
+# isn't something this system should do. Raw value only for those two,
+# no team comparison at all.
+BODY_COMP_BAR_NAMES = {name for name, _ in BODY_COMP_METRICS}
+
 
 def render_percentage_rings(metrics, key_prefix, show_ordinal=False):
     """Generic full-circle percentage ring display -- metrics is a list
@@ -109,11 +123,28 @@ def render_metric_bars(metrics_dict, chart_key):
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
 
+def render_raw_metrics(metrics_dict):
+    """Plain raw-value line, no percentile bar and no team comparison
+    -- for Body Comp fields that are reference-only (Body Fat Mass,
+    Percent Body Fat). Ignores the "percentile" key entirely, even
+    though it's present in the dict (bucket_system.py still computes
+    it) -- deliberately never shown, see BODY_COMP_BAR_NAMES above for
+    why. Renders nothing if empty."""
+    if not metrics_dict:
+        return
+    parts = [f"{name}: {d['raw']:.1f}{d['unit'] or ''}" for name, d in metrics_dict.items()]
+    st.caption("Reference only, not scored — " + "  •  ".join(parts))
+
+
 def render_full_breakdown(bucket_data, key_prefix):
     """Sub-group score headers + a bar chart per sub-group, for Body
     Comp, Power, Strength, and Speed (reference only)."""
     st.markdown(f"**Body Comp** — {bucket_data['body_comp_score'] if bucket_data['body_comp_score'] is not None else '—'}")
-    render_metric_bars(bucket_data["body_comp_metrics"], f"{key_prefix}_body_comp")
+    body_comp_metrics = bucket_data["body_comp_metrics"]
+    bar_metrics = {name: v for name, v in body_comp_metrics.items() if name in BODY_COMP_BAR_NAMES}
+    raw_only_metrics = {name: v for name, v in body_comp_metrics.items() if name not in BODY_COMP_BAR_NAMES}
+    render_metric_bars(bar_metrics, f"{key_prefix}_body_comp")
+    render_raw_metrics(raw_only_metrics)
 
     st.markdown(f"**Power** — {bucket_data['power_score'] if bucket_data['power_score'] is not None else '—'}")
     for sub_name, sub_score in bucket_data["power_subgroup_scores"].items():
