@@ -75,6 +75,22 @@ BODY_COMP_METRICS = [
 # all 4 enterable, even though only 2 feed the calculation above).
 BODY_COMP_ENTRY_FIELDS = {"Body Weight", "Body Fat Mass", "Skeletal Muscle Mass", "Percent Body Fat"}
 
+# Same 4 fields as BODY_COMP_ENTRY_FIELDS, but as (test_name, direction)
+# pairs for DISPLAY (percentile bars in the Body Comp breakdown, per
+# Ryker's call) -- players see percentile bars for all 4, even though
+# body_comp_score above still only averages the first 2. Body Fat Mass/
+# Percent Body Fat use "lower" (less body fat scores toward 100), per
+# Ryker's call -- the professor's original scoring never assigned them
+# a direction at all since they were never part of the composite math,
+# so this is a new, display-only decision, not a re-derivation of his
+# spreadsheet. Order here is the order the bars render in.
+BODY_COMP_DISPLAY_METRICS = [
+    ("Body Weight", "higher"),
+    ("Skeletal Muscle Mass", "higher"),
+    ("Body Fat Mass", "lower"),
+    ("Percent Body Fat", "lower"),
+]
+
 # sub_group_name -> [(test_name, direction), ...]
 POWER_SUBGROUPS = {
     "Med Ball Throw": [
@@ -336,9 +352,15 @@ def compute_bucket_system(session, player_id):
     with a second round of queries -- existing callers (Player
     Dashboard, My Assessments, Analytics) are unaffected since they
     only read the keys they already know about."""
-    # Body Comp
-    body_comp_metrics = compute_metric_percentiles(session, player_id, BODY_COMP_METRICS)
-    body_comp_score = average_percentiles(body_comp_metrics)
+    # Body Comp -- score is averaged from ONLY the 2 scoring metrics
+    # (BODY_COMP_METRICS), but the metrics dict returned for display
+    # (body_comp_metrics, rendered as percentile bars) uses all 4
+    # entered fields (BODY_COMP_DISPLAY_METRICS), so players see Body
+    # Fat Mass and Percent Body Fat too even though those 2 don't
+    # affect body_comp_score.
+    body_comp_score_metrics = compute_metric_percentiles(session, player_id, BODY_COMP_METRICS)
+    body_comp_score = average_percentiles(body_comp_score_metrics)
+    body_comp_metrics = compute_metric_percentiles(session, player_id, BODY_COMP_DISPLAY_METRICS)
 
     # Power (5 sub-groups)
     power_subgroup_scores = {}
