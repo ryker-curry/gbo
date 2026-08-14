@@ -21,9 +21,9 @@ import pandas as pd
 from database import get_session
 from models import SessionType, TrainingRoutine, RoutineExercise
 from ui_components import page_header, page_footer, empty_state
-from supabase_client import get_supabase_admin_client
+from r2_client import upload_video_to_r2
 
-ROUTINE_VIDEO_BUCKET = "routine-videos"
+ROUTINE_VIDEO_SUBFOLDER = "routine-videos/"
 
 # Which session types belong to which coaching specialty -- used to filter
 # Training Routines so a Hitting Coach doesn't see pitcher-only routines
@@ -60,19 +60,12 @@ def filter_session_types_for_specialty(all_types):
 
 def upload_routine_video(uploaded_file, identifier: str):
     try:
-        admin_client = get_supabase_admin_client()
-        ext = uploaded_file.name.split(".")[-1].lower()
-        path = f"{identifier}_{uuid.uuid4().hex[:8]}.{ext}"
-        file_bytes = uploaded_file.getvalue()
-        admin_client.storage.from_(ROUTINE_VIDEO_BUCKET).upload(
-            path, file_bytes, {"content-type": uploaded_file.type}
-        )
-        return admin_client.storage.from_(ROUTINE_VIDEO_BUCKET).get_public_url(path)
+        return upload_video_to_r2(uploaded_file, identifier, bucket_subfolder=ROUTINE_VIDEO_SUBFOLDER)
     except Exception as e:
         st.error(
             f"Video upload failed: {e}. "
-            f"Make sure a public Storage bucket named '{ROUTINE_VIDEO_BUCKET}' exists in your Supabase project "
-            f"(Supabase dashboard -> Storage -> New bucket -> name it '{ROUTINE_VIDEO_BUCKET}' -> make it Public)."
+            f"Make sure Cloudflare R2 is configured (R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/"
+            f"R2_BUCKET_NAME/R2_PUBLIC_URL_BASE in .env -- see r2_client.py's docstring for setup steps)."
         )
         return None
 

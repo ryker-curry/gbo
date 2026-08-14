@@ -30,7 +30,7 @@ from datetime import date, datetime
 from database import get_session
 from models import Player, StaffPlayerAssignment, PitchType, HitterTrackingSession, HitterSwing, HitterSessionType
 from ui_components import page_header, page_footer, empty_state
-from supabase_client import get_supabase_admin_client
+from r2_client import upload_video_to_r2
 
 page_header("Hitter Tracking")
 
@@ -54,23 +54,17 @@ if role_name == "Coach" and st.session_state.get("gbo_coach_specialty") == "Pitc
     page_footer()
     st.stop()
 
-PITCH_VIDEO_BUCKET = "pitch-videos"  # reuses the same bucket Bullpen Tracking/Pitch Video Review already use
+PITCH_VIDEO_SUBFOLDER = "pitch-videos/"  # reuses the same R2 folder Bullpen Tracking/Pitch Video Review already use
 
 
 def upload_swing_video(uploaded_file, identifier: str):
     try:
-        admin_client = get_supabase_admin_client()
-        ext = uploaded_file.name.split(".")[-1].lower()
-        path = f"{identifier}_{uuid.uuid4().hex[:8]}.{ext}"
-        file_bytes = uploaded_file.getvalue()
-        admin_client.storage.from_(PITCH_VIDEO_BUCKET).upload(
-            path, file_bytes, {"content-type": uploaded_file.type}
-        )
-        return admin_client.storage.from_(PITCH_VIDEO_BUCKET).get_public_url(path)
+        return upload_video_to_r2(uploaded_file, identifier, bucket_subfolder=PITCH_VIDEO_SUBFOLDER)
     except Exception as e:
         st.error(
             f"Video upload failed: {e}. "
-            f"Make sure a public Storage bucket named '{PITCH_VIDEO_BUCKET}' exists in your Supabase project."
+            f"Make sure Cloudflare R2 is configured (R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/"
+            f"R2_BUCKET_NAME/R2_PUBLIC_URL_BASE in .env -- see r2_client.py's docstring for setup steps)."
         )
         return None
 

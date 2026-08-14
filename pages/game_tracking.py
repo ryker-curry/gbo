@@ -48,7 +48,7 @@ from models import (
     GameVideoClip,
 )
 from ui_components import page_header, page_footer, empty_state, render_kpi_cards
-from supabase_client import get_supabase_admin_client
+from r2_client import upload_video_to_r2
 
 page_header("Game Tracking")
 
@@ -73,28 +73,21 @@ AB_OUTCOMES = [
 ]
 CONTACT_QUALITY_OPTIONS = ["Barrel", "Solid", "Weak", "Miss"]
 
-GAME_VIDEO_BUCKET = "pitch-videos"  # same Storage bucket Video Review already uploads pitcher/hitter clips to
+GAME_VIDEO_SUBFOLDER = "pitch-videos/"  # same folder Video Review's pitcher/hitter clips upload into, inside the one shared R2 bucket
 
 
 def upload_game_video_clip(uploaded_file, identifier: str):
-    """Upload one clip to Supabase Storage and return its public URL, or
+    """Upload one clip to Cloudflare R2 and return its public URL, or
     None (with an st.error already shown) if the upload failed -- same
-    helper pattern as pitch_video.py's upload_pitch_video, reusing the
-    same bucket."""
+    helper pattern as pitch_video.py's upload_pitch_video, uploading
+    into the same folder."""
     try:
-        admin_client = get_supabase_admin_client()
-        ext = uploaded_file.name.split(".")[-1].lower()
-        path = f"{identifier}.{ext}"
-        file_bytes = uploaded_file.getvalue()
-        admin_client.storage.from_(GAME_VIDEO_BUCKET).upload(
-            path, file_bytes, {"content-type": uploaded_file.type}
-        )
-        return admin_client.storage.from_(GAME_VIDEO_BUCKET).get_public_url(path)
+        return upload_video_to_r2(uploaded_file, identifier, bucket_subfolder=GAME_VIDEO_SUBFOLDER)
     except Exception as e:
         st.error(
             f"Video upload failed: {e}. "
-            f"Make sure a public Storage bucket named '{GAME_VIDEO_BUCKET}' exists in your Supabase project "
-            f"(Supabase dashboard -> Storage -> New bucket -> name it '{GAME_VIDEO_BUCKET}' -> make it Public)."
+            f"Make sure Cloudflare R2 is configured (R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/"
+            f"R2_BUCKET_NAME/R2_PUBLIC_URL_BASE in .env -- see r2_client.py's docstring for setup steps)."
         )
         return None
 
