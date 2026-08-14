@@ -99,34 +99,25 @@ def movement_chart(pitches, min_pitches_for_shading=2):
     Rapsodo's HB sign convention -- unaffected by this rings-to-grid
     change.
 
-    Axis range is capped at 25" (see MAX_MOVEMENT_EXTENT) per Ryker's
-    call, replacing an earlier version that always reserved at least
-    20" of room regardless of how tight the session's actual movement
-    was -- this keeps the chart zoomed in on real data instead of
-    padding out to a rarely-needed extreme.
+    Axis range is fixed at -25"/+25" on both axes (see MOVEMENT_EXTENT)
+    per Ryker's call -- every movement chart shows the same boundaries
+    regardless of how tight or wide a given session's actual movement
+    is, so charts are directly comparable session to session instead of
+    each one auto-zooming to its own data.
     """
     fig = go.Figure()
 
     usable = [p for p in pitches if p.hb_spin is not None and p.vb_spin is not None]
     order, groups = _group_by_type(usable)
 
-    # Axis extent: symmetric around 0, sized to the real data with
-    # padding, capped at 25" per Ryker's call so the chart stays zoomed
-    # in on a typical bullpen's actual movement instead of always
-    # reserving room out to a rarely-used extreme. Floored at a small
-    # 5" minimum only so a session with almost no movement (or a single
-    # near-zero pitch) doesn't collapse to a razor-thin plot. Equal
-    # aspect (scaleanchor/scaleratio below) so an inch of HB and an inch
-    # of IVB are the same visual distance, same as Rapsodo's own plot.
-    MAX_MOVEMENT_EXTENT = 25.0
-    if xs_all := [v for group in groups.values() for p in group if (v := p.hb_spin) is not None]:
-        x_extent = min(MAX_MOVEMENT_EXTENT, max(5.0, max(abs(float(v)) for v in xs_all) * 1.15))
-    else:
-        x_extent = MAX_MOVEMENT_EXTENT
-    if ys_all := [v for group in groups.values() for p in group if (v := p.vb_spin) is not None]:
-        y_extent = min(MAX_MOVEMENT_EXTENT, max(5.0, max(abs(float(v)) for v in ys_all) * 1.15))
-    else:
-        y_extent = MAX_MOVEMENT_EXTENT
+    # Axis extent: fixed at -25"/+25" on both axes per Ryker's call, not
+    # sized to the session's actual data -- keeps every chart on the
+    # same scale so they're comparable across sessions. Equal aspect
+    # (scaleanchor/scaleratio below) so an inch of HB and an inch of IVB
+    # are the same visual distance, same as Rapsodo's own plot.
+    MOVEMENT_EXTENT = 25.0
+    x_extent = MOVEMENT_EXTENT
+    y_extent = MOVEMENT_EXTENT
 
     # Soft shaded cluster region per pitch type -- a simple bounding
     # circle around each type's own points (centered on its mean, sized
