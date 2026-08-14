@@ -67,16 +67,20 @@ all, not a permanent decision):
 
   - Mobility: "higher is better" for every field, same simplification
     most S&C mobility screens use -- more range generally supports
-    better movement quality. See MOBILITY_SUBGROUPS for exactly which
-    fields (deliberately scoped to only what's actively tested right
-    now, not the full ~30-field Mobility & ROM sheet).
+    better movement quality. See MOBILITY_SUBGROUPS (Hip) and
+    MOBILITY_SHOULDER_SIDED_FIELDS (Shoulder) for exactly which fields
+    (deliberately scoped to only what's actively tested right now, not
+    the full ~30-field Mobility & ROM sheet). Shoulder fields are
+    entered anatomically (Right/Left) and resolved to Throwing Arm/
+    Non-Throwing Arm per player from Player.throws at scoring time --
+    see resolve_side_by_throws.
   - Shoulder Health: GIRD only for now, "lower is better" (smaller
     deficit = healthier), reusing this file's existing lower-is-better
-    formula. Auto-calculated live from the two Mobility sheet Internal
-    Rotation fields (non-throwing IR - throwing IR), not a separately
-    entered value -- see compute_gird_percentiles for the full
-    reasoning, including why a GIRD of 0 isn't literally the clinical
-    target.
+    formula. Auto-calculated live from the Right/Left Internal
+    Rotation fields (resolved to non-throwing IR - throwing IR via
+    resolve_side_by_throws), not a separately entered value -- see
+    compute_gird_percentiles for the full reasoning, including why a
+    GIRD of 0 isn't literally the clinical target.
   - Named "Shoulder Health" rather than "Arm Health" (which is already
     an AssessmentCategory name, a different thing) since nothing here
     measures the elbow yet -- Ryker's explicit call is to rename this
@@ -219,42 +223,69 @@ CAPACITY_SUBGROUPS = {
 # Capacity above.
 #
 # Scoped to ONLY what's actually being tested right now, per Ryker's
-# explicit correction: Shoulder ER/IR (both arms) + Flexion/Extension,
-# and the full Hip block. The rest of the Mobility & ROM sheet
-# (Cervical Spine, Elbow, T-Spine, Lumbar Spine, Ankle, Shoulder Total
-# Arc) is already in the data model and entry form (see
-# MOBILITY_ROM_TESTS in seed_lookups.py) but isn't real data yet --
-# add those sub-groups here once the team actually starts collecting
-# them, rather than scoring a bunch of always-empty fields now.
+# explicit correction: Shoulder ER/IR/Flexion/Extension, and the full
+# Hip block. The rest of the Mobility & ROM sheet (Cervical Spine,
+# Elbow, T-Spine, Lumbar Spine, Ankle, Shoulder Total Arc) is already
+# in the data model and entry form (see MOBILITY_ROM_TESTS in
+# seed_lookups.py) but isn't real data yet -- add those sub-groups
+# here once the team actually starts collecting them, rather than
+# scoring a bunch of always-empty fields now.
+#
+# Shoulder fields are entered anatomically -- Right/Left, per Ryker's
+# explicit call, so a coach measuring a player doesn't have to think
+# about that player's handedness while testing -- rather than by role
+# (Throwing/Non-Throwing Arm, the old convention). The system resolves
+# which raw column ("Right" or "Left") is a given player's throwing
+# arm using Player.throws, at SCORING time, in resolve_side_by_throws
+# below. This means the raw entry form and the composite score use two
+# different vocabularies on purpose: anatomical for data entry,
+# role-based for the score everyone actually reads.
+#
+# Hip fields stay role-based (Drive Leg / Plant Leg, not Right/Left)
+# -- unlike the shoulder, "which leg is which" is unambiguous from the
+# pitching motion itself (drive leg = push-off/back leg, same side as
+# the throwing arm; plant leg = front/landing leg, the glove side), so
+# there's no anatomical-vs-role translation needed there. ("Plant Leg"
+# per Ryker's call -- was "Stride Leg" in an earlier round of this
+# file; renamed here, not a new concept.)
 #
 # "Shoulder: GIRD" (also on the Mobility sheet, a leftover manual-entry
 # field) is deliberately NOT included here even though it's a Shoulder
 # field -- it's a deficit score, not a raw ROM angle, so "higher is
 # better" would score it backwards (rewarding a bigger injury-risk
-# deficit). GIRD is instead auto-computed from the throwing/non-
-# throwing IR fields just below -- see compute_gird_percentiles.
+# deficit). GIRD is instead auto-computed from the Right/Left Internal
+# Rotation fields below -- see compute_gird_percentiles.
 MOBILITY_SUBGROUPS = {
-    "Shoulder": [
-        ("Shoulder: Throwing Arm External Rotation", "higher"),
-        ("Shoulder: Throwing Arm Internal Rotation", "higher"),
-        ("Shoulder: Non-Throwing Arm External Rotation", "higher"),
-        ("Shoulder: Non-Throwing Arm Internal Rotation", "higher"),
-        ("Shoulder: Flexion", "higher"),
-        ("Shoulder: Extension", "higher"),
-    ],
     "Hip": [
         ("Hip: Drive Leg Internal Rotation", "higher"),
         ("Hip: Drive Leg External Rotation", "higher"),
-        ("Hip: Stride Leg Internal Rotation", "higher"),
-        ("Hip: Stride Leg External Rotation", "higher"),
+        ("Hip: Plant Leg Internal Rotation", "higher"),
+        ("Hip: Plant Leg External Rotation", "higher"),
         ("Hip: Drive Leg Abduction", "higher"),
-        ("Hip: Stride Leg Abduction", "higher"),
+        ("Hip: Plant Leg Abduction", "higher"),
         ("Hip: Drive Leg Adduction", "higher"),
-        ("Hip: Stride Leg Adduction", "higher"),
+        ("Hip: Plant Leg Adduction", "higher"),
         ("Hip: Flexion", "higher"),
         ("Hip: Extension", "higher"),
     ],
 }
+
+# The Mobility bucket's "Shoulder" sub-group is NOT a plain
+# (test_name, direction) list like MOBILITY_SUBGROUPS above -- each of
+# these 4 measured quantities is entered as a Right/Left pair (see
+# comment above), and needs to be resolved into a "Throwing Arm X" /
+# "Non-Throwing Arm X" pair PER PLAYER via resolve_side_by_throws
+# before it can be percentile-ranked against the team. See
+# compute_mobility_shoulder_metrics below for how this list gets
+# turned into 8 derived metrics (4 quantities x 2 sides).
+#
+# (display_name, right_test_name, left_test_name, direction, unit)
+MOBILITY_SHOULDER_SIDED_FIELDS = [
+    ("External Rotation", "Shoulder: Right External Rotation", "Shoulder: Left External Rotation", "higher", "°"),
+    ("Internal Rotation", "Shoulder: Right Internal Rotation", "Shoulder: Left Internal Rotation", "higher", "°"),
+    ("Flexion", "Shoulder: Right Flexion", "Shoulder: Left Flexion", "higher", "°"),
+    ("Extension", "Shoulder: Right Extension", "Shoulder: Left Extension", "higher", "°"),
+]
 
 # Shoulder Health bucket (Physical Development extension, reference
 # only -- not in Total yet). Named "Shoulder Health" rather than "Arm
@@ -273,15 +304,13 @@ MOBILITY_SUBGROUPS = {
 # the Mobility & ROM sheet (see compute_gird_percentiles below) --
 # NOT a separately, manually-entered value. Per Ryker's explicit call:
 # he wants GIRD derived automatically once both IR measurements are
-# collected, not typed in as its own number. Sourced from the Mobility
-# sheet's "Shoulder: Throwing/Non-Throwing Arm Internal Rotation"
-# fields specifically (the ones he confirmed are actually being
-# tested), NOT the parallel "Shoulder ROM: Throwing/Non-Throwing Arm
-# Internal Rotation" fields on the separate Arm Health sheet -- same
-# two raw fields MOBILITY_SUBGROUPS["Shoulder"] above already scores
-# individually for the Mobility bucket; reusing them here for a
-# second, different derived score (a bilateral deficit, not a raw
-# angle) is intentional, not duplication.
+# collected, not typed in as its own number. Sourced from the same
+# Right/Left Internal Rotation raw fields MOBILITY_SHOULDER_SIDED_
+# FIELDS above already uses for the Mobility bucket, resolved to
+# throwing/non-throwing per player the same way (resolve_side_by_
+# throws) -- reusing them here for a second, different derived score
+# (a bilateral deficit, not a raw angle) is intentional, not
+# duplication.
 #
 # "Lower is better" -- a smaller deficit (closer to symmetric with the
 # non-throwing arm) is healthier, reusing this file's existing
@@ -291,8 +320,8 @@ MOBILITY_SUBGROUPS = {
 # a normal throwing-arm adaptation -- like every bucket in this
 # system, this is a team-relative ranking, not an absolute medical
 # verdict.
-GIRD_THROWING_ARM_IR_TEST = "Shoulder: Throwing Arm Internal Rotation"
-GIRD_NON_THROWING_ARM_IR_TEST = "Shoulder: Non-Throwing Arm Internal Rotation"
+GIRD_RIGHT_IR_TEST = "Shoulder: Right Internal Rotation"
+GIRD_LEFT_IR_TEST = "Shoulder: Left Internal Rotation"
 
 # Provisional Development Profile bands, expressed as a percentage
 # imbalance between Output and Capacity (see compute_balance_pct below)
@@ -413,32 +442,109 @@ def compute_metric_percentiles(session, player_id, metrics):
     return out
 
 
+def get_player_throws_map(session):
+    """{player_id: 'R'/'L'/None} for every player -- active and
+    inactive, matching get_latest_values_by_player's scope. Used to
+    resolve anatomical Right/Left mobility entries to throwing/
+    non-throwing arm per player."""
+    return {p.player_id: p.throws for p in session.query(Player).all()}
+
+
+def resolve_side_by_throws(session, right_test_name, left_test_name):
+    """Takes a raw Right/Left pair of AssessmentTestType names (e.g.
+    "Shoulder: Right External Rotation" / "...Left...") and resolves
+    each player's own THROWING-ARM value and NON-THROWING-ARM value
+    from the correct raw column based on that player's Player.throws
+    ('R' or 'L').
+
+    This is the core of the Right/Left -> Throwing/Non-Throwing
+    translation described in the MOBILITY_SHOULDER_SIDED_FIELDS
+    comment above: a right-handed pitcher's throwing arm is his Right
+    column, a left-handed pitcher's throwing arm is his Left column --
+    so the "Throwing Arm X" comparison pool is a mix of different raw
+    columns depending on each player's own handedness.
+
+    Players with no Player.throws on file are skipped entirely (can't
+    resolve a side without knowing handedness) -- not defaulted to
+    either side, since guessing would silently mis-score them.
+
+    Returns (throwing_by_player, non_throwing_by_player), each a plain
+    {player_id: value} dict, only including players who have both a
+    known throws side AND a raw value for the appropriate column."""
+    right_by_player = get_latest_values_by_player(session, right_test_name)
+    left_by_player = get_latest_values_by_player(session, left_test_name)
+    throws_map = get_player_throws_map(session)
+
+    throwing_by_player = {}
+    non_throwing_by_player = {}
+    for pid, throws in throws_map.items():
+        if throws == "R":
+            throwing_side, non_throwing_side = right_by_player, left_by_player
+        elif throws == "L":
+            throwing_side, non_throwing_side = left_by_player, right_by_player
+        else:
+            continue
+        if pid in throwing_side:
+            throwing_by_player[pid] = throwing_side[pid]
+        if pid in non_throwing_side:
+            non_throwing_by_player[pid] = non_throwing_side[pid]
+    return throwing_by_player, non_throwing_by_player
+
+
+def compute_mobility_shoulder_metrics(session, player_id):
+    """Builds the Mobility bucket's "Shoulder" sub-group scores from
+    MOBILITY_SHOULDER_SIDED_FIELDS -- 4 measured quantities x 2 derived
+    labels (Throwing Arm / Non-Throwing Arm) = up to 8 metrics, each
+    resolved per-player via resolve_side_by_throws rather than read
+    directly off a single raw test_name the way compute_metric_
+    percentiles handles every other bucket.
+
+    Returns {label: {"raw":, "percentile":, "unit":}}, e.g.
+    {"Throwing Arm External Rotation": {...}, "Non-Throwing Arm
+    External Rotation": {...}, ...} -- same flat shape
+    compute_metric_percentiles returns, so render_metric_bars doesn't
+    need to know this sub-group is computed differently under the
+    hood. A player missing Player.throws, or missing a given side's
+    raw value, simply doesn't get that label -- no partial/garbage
+    entries."""
+    out = {}
+    for display_name, right_test, left_test, direction, unit in MOBILITY_SHOULDER_SIDED_FIELDS:
+        throwing_by_player, non_throwing_by_player = resolve_side_by_throws(session, right_test, left_test)
+        if player_id in throwing_by_player:
+            value = throwing_by_player[player_id]
+            pct = compute_percentile(value, list(throwing_by_player.values()), direction)
+            out[f"Throwing Arm {display_name}"] = {"raw": value, "percentile": pct, "unit": unit}
+        if player_id in non_throwing_by_player:
+            value = non_throwing_by_player[player_id]
+            pct = compute_percentile(value, list(non_throwing_by_player.values()), direction)
+            out[f"Non-Throwing Arm {display_name}"] = {"raw": value, "percentile": pct, "unit": unit}
+    return out
+
+
 def compute_gird_percentiles(session, player_id):
     """GIRD (Glenohumeral Internal Rotation Deficit), computed live --
     non-throwing arm IR minus throwing arm IR, in degrees -- from the
-    two raw Mobility & ROM Internal Rotation fields
-    (GIRD_THROWING_ARM_IR_TEST / GIRD_NON_THROWING_ARM_IR_TEST above),
-    NOT a separately-entered value. Per Ryker's explicit call: enter
-    both IR measurements once, GIRD derives automatically, no manual
-    GIRD entry step needed at all.
+    Right/Left Internal Rotation fields (GIRD_RIGHT_IR_TEST /
+    GIRD_LEFT_IR_TEST above), resolved to throwing/non-throwing per
+    player via resolve_side_by_throws. NOT a separately-entered value.
+    Per Ryker's explicit call: enter both IR measurements once, GIRD
+    derives automatically, no manual GIRD entry step needed at all.
 
     "Lower is better" -- team_min / value * 100, same formula and
     convention as every other lower-is-better metric in this file (see
-    compute_percentile). Only includes players who have BOTH raw IR
-    values on file -- same "skip if incomplete" behavior
-    compute_metric_percentiles already has for a plain single-field
-    metric, just checked against two fields here instead of one.
+    compute_percentile). Only includes players who have a known
+    Player.throws AND both raw IR values on file -- same "skip if
+    incomplete" behavior compute_metric_percentiles already has for a
+    plain single-field metric.
 
     Returns {"Shoulder ROM: GIRD": {"raw": ..., "percentile": ...,
-    "unit": "°"}} (empty dict if this player has fewer than both raw
-    IR values) -- same shape compute_metric_percentiles returns, so
-    render_metric_bars and the rest of the display layer don't need to
-    know GIRD is computed differently under the hood. Kept the
-    "Shoulder ROM: GIRD" label (its old Arm Health field name) purely
-    for display continuity -- it's no longer read from that stored
-    field."""
-    throwing_ir = get_latest_values_by_player(session, GIRD_THROWING_ARM_IR_TEST)
-    non_throwing_ir = get_latest_values_by_player(session, GIRD_NON_THROWING_ARM_IR_TEST)
+    "unit": "°"}} (empty dict if this player can't be resolved) --
+    same shape compute_metric_percentiles returns, so render_metric_bars
+    and the rest of the display layer don't need to know GIRD is
+    computed differently under the hood. Kept the "Shoulder ROM: GIRD"
+    label (its old Arm Health field name) purely for display
+    continuity -- it's no longer read from that stored field."""
+    throwing_ir, non_throwing_ir = resolve_side_by_throws(session, GIRD_RIGHT_IR_TEST, GIRD_LEFT_IR_TEST)
     gird_by_player = {
         pid: non_throwing_ir[pid] - throwing_ir[pid]
         for pid in throwing_ir
@@ -564,10 +670,18 @@ def compute_bucket_system(session, player_id):
     balance_pct = compute_balance_pct(output_score, capacity_score)
     development_profile = classify_development_profile(output_score, capacity_score, balance_pct)
 
-    # Mobility (2 sub-groups currently -- see MOBILITY_SUBGROUPS' note
-    # on scope). Reference only, not in Total -- see module docstring.
+    # Mobility (Shoulder + Hip sub-groups -- see MOBILITY_SUBGROUPS'/
+    # MOBILITY_SHOULDER_SIDED_FIELDS' notes on scope). Reference only,
+    # not in Total -- see module docstring. Shoulder is computed
+    # separately from Hip since it needs the Right/Left ->
+    # Throwing/Non-Throwing resolution (compute_mobility_shoulder_
+    # metrics) rather than the plain compute_metric_percentiles loop
+    # every other sub-group in this file uses.
     mobility_subgroup_scores = {}
     mobility_subgroup_metrics = {}
+    shoulder_m = compute_mobility_shoulder_metrics(session, player_id)
+    mobility_subgroup_metrics["Shoulder"] = shoulder_m
+    mobility_subgroup_scores["Shoulder"] = average_percentiles(shoulder_m)
     for sub_name, metrics in MOBILITY_SUBGROUPS.items():
         m = compute_metric_percentiles(session, player_id, metrics)
         mobility_subgroup_metrics[sub_name] = m
