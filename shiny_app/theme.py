@@ -1,0 +1,282 @@
+"""
+GBO -- centralized brand palette + Shiny/bslib theme + shared plotly
+chart color sets, for both dark and light mode.
+
+Single source of truth for styling. Before this file, colors were
+hardcoded hex strings duplicated across ui_helpers.py, bucket_display.py,
+and repeated inline <style> blocks re-injected on every single
+component render (a pattern carried over from Streamlit, which has no
+persistent app-wide stylesheet mechanism -- Shiny does, so GLOBAL_CSS
+below is included exactly once, in the outer page shell, instead).
+
+Style direction: "Bold Athletic" (Option A, chosen from three mocked-up
+directions -- gbo-theme-preview.html) -- a crimson/crimson-dark
+gradient navbar and profile card, gold as a genuine second accent
+(section titles, badges, table row keys), cream text on the colored
+surfaces. This is a more saturated, team-branded look than the
+"Clean Professional" alternative; the tradeoff is more colored
+surfaces to individually contrast-check, done below.
+
+Accessibility notes (WCAG, computed -- see the dataviz skill's "run
+the checks, don't eyeball them" rule; every ratio below was computed
+with the standard sRGB-relative-luminance formula, not judged by eye):
+
+- Crimson (#BF1E2D) as small TEXT directly on a dark card surface
+  measures 2.73-2.90:1 -- fails even the 3:1 large-text minimum (this
+  was true of the original Streamlit app's KPI numbers too, which
+  colored the value text itself crimson). So in DARK mode, crimson
+  never appears as text -- only as a background, border, or a
+  text-shadow glow behind cream text (a glow doesn't affect the actual
+  glyph fill color, so it costs nothing on contrast).
+- In LIGHT mode, crimson-on-white/near-white measures 5.55-6.11:1 --
+  comfortably passes -- so light mode CAN use literal crimson text for
+  the same "accent" role dark mode fakes with a glow. --gbo-accent-ink
+  below switches between the two per mode.
+- Gold (#D4AF37) on a dark surface measures 7.93-8.76:1 -- passes
+  easily, used as literal text in dark mode (section titles, table
+  key column, role badge background paired with dark ink). But gold
+  directly on the crimson gradient (profile card, navbar) measures
+  only 2.90:1 (crimson) / 5.13:1 (crimson-dark) -- inconsistent across
+  a gradient -- so gold is never used as TEXT on the crimson gradient;
+  cream is (5.94:1 on crimson, 10.49:1 on crimson-dark, both pass).
+  Gold's non-text uses (badge background, border) don't have this
+  problem since ink-on-gold (#1A1A1A on #D4AF37) is 8.28:1 regardless
+  of mode.
+- Gold on a LIGHT surface fails outright (2.10:1 on white) -- same
+  issue as before -- --gbo-gold-text (#8A6A1A, 4.59-5.05:1) is the
+  darkened stand-in used anywhere gold would otherwise be light-mode
+  text (e.g. the gold-family table/section accents).
+"""
+
+from pathlib import Path
+
+from shiny import ui
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+ASSETS_DIR = REPO_ROOT / "assets"
+LOGO_URL = "/assets/GBO_logo-06.png"
+
+FONT_STACK = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+
+# NOTE: this used to be a ui.Theme(preset="shiny").add_defaults(...)
+# Sass theme, applied via App(..., theme=...). Dropped that approach --
+# ui.Theme compiles Sass at runtime via the `libsass` package (a
+# compiled C extension), and libsass-python has a long history of
+# lagging behind new CPython releases with prebuilt wheels (see
+# https://github.com/sass/libsass-python/issues/448), which is exactly
+# what broke for Ryker on Python 3.14: no wheel, and building it from
+# source needs a C toolchain most people don't have set up. Since
+# almost every custom component here (KPI cards, profile cards,
+# navbar, tables, page header) was ALREADY plain CSS in GLOBAL_CSS
+# below rather than Sass, the only things the Sass theme was actually
+# buying were native-Bootstrap component colors (buttons, form
+# inputs) and the global border-radius/font -- all fully achievable
+# with plain CSS overrides instead (see the "Native Bootstrap
+# component overrides" section of GLOBAL_CSS below). Zero native
+# dependencies, zero compile step, same visual result.
+GBO_THEME = None
+
+# --- Chart color sets (plotly figures render server-side as static
+# PNGs -- see bucket_display.py -- so they can't respond to the
+# client-side dark-mode toggle via CSS the way the rest of the UI does;
+# callers read AppState.dark_mode() and pass "dark"/"light" through). ---
+_CHART_COLORS = {
+    "dark": dict(
+        crimson="#BF1E2D", track="#3A3A3A", text="#FFFDE5", muted="#B8B8B8",
+        surface="#1E1E1E", grid="#3A3A3A", gold="#D4AF37",
+    ),
+    "light": dict(
+        crimson="#BF1E2D", track="#E3E1DC", text="#1A1A1A", muted="#6B6B6B",
+        surface="#FFFFFF", grid="#E3E1DC", gold="#8A6A1A",
+    ),
+}
+
+
+def chart_colors(mode: str = "dark") -> dict:
+    return _CHART_COLORS.get(mode, _CHART_COLORS["dark"])
+
+
+# --- GLOBAL_CSS: GBO's own component classes (not native Bootstrap
+# components), as CSS custom properties keyed off Bootstrap 5.3's
+# [data-bs-theme] attribute -- ui.input_dark_mode() toggles that
+# attribute, so every --gbo-* token below updates automatically with
+# no Python-side re-render needed. Included ONCE, in the outer page
+# shell (shiny_app/app.py), not per-component. -----------------------------
+GLOBAL_CSS = """
+:root[data-bs-theme="dark"] {
+  --gbo-bg-page: #141414;
+  --gbo-bg-card: #1E1E1E;
+  --gbo-bg-card-grad: #241414;
+  --gbo-border: #3A3A3A;
+  --gbo-border-input: #4A4A4A;
+  --gbo-text: #FFFDE5;
+  --gbo-text-muted: #B8B8B8;
+  --gbo-crimson: #BF1E2D;
+  --gbo-crimson-dark: #7A1420;
+  --gbo-gold: #D4AF37;
+  /* Gold reads as literal TEXT in dark mode (7.93-8.76:1 on dark
+     surfaces) -- see module docstring. */
+  --gbo-gold-text: #D4AF37;
+  /* Crimson fails as text on a dark surface (2.7-2.9:1) -- the "bold
+     accent" value color is cream instead, paired with a crimson glow
+     (see .gbo-kpi-accent below) so the bold/saturated look survives
+     without failing contrast. */
+  --gbo-accent-ink: var(--gbo-text);
+  --gbo-text-on-crimson: #FFFDE5;
+  --gbo-positive: #4CAF50;
+  --gbo-negative: #E05252;
+}
+:root[data-bs-theme="light"] {
+  --gbo-bg-page: #F5F4F1;
+  --gbo-bg-card: #FFFFFF;
+  --gbo-bg-card-grad: #FFFFFF;
+  --gbo-border: #E3E1DC;
+  --gbo-border-input: #C9C6C0;
+  --gbo-text: #1A1A1A;
+  --gbo-text-muted: #6B6B6B;
+  --gbo-crimson: #BF1E2D;
+  --gbo-crimson-dark: #7A1420;
+  --gbo-gold: #D4AF37;
+  /* Gold fails as text on a light surface (2.10:1) -- darkened
+     variant, 4.59-5.05:1, passes. */
+  --gbo-gold-text: #8A6A1A;
+  /* Crimson-on-white/near-white passes (5.55-6.11:1) in light mode,
+     so the accent value color CAN be literal crimson here -- no glow
+     trick needed. */
+  --gbo-accent-ink: var(--gbo-crimson);
+  --gbo-text-on-crimson: #FFFDE5;
+  --gbo-positive: #2E7D32;
+  --gbo-negative: #C62828;
+}
+
+body { background: var(--gbo-bg-page); color: var(--gbo-text); font-family: {FONT_STACK}; }
+a { color: var(--gbo-crimson); }
+
+/* --- Native Bootstrap component overrides (plain CSS, no Sass/libsass
+   build step -- see GBO_THEME's comment above for why). Bootstrap 5.3
+   bakes each component's own colors into LOCAL --bs-btn-*/--bs-*
+   custom properties at its own Sass-compile time (not references to a
+   global --bs-primary), so a global "--bs-primary: crimson" override
+   would NOT reach .btn-primary -- these override each component's
+   local variables directly instead, which does work purely in CSS. */
+:root { --bs-border-radius: 0.65rem; --bs-border-radius-sm: 0.5rem; --bs-border-radius-lg: 0.85rem; }
+
+.btn-primary {
+  --bs-btn-bg: var(--gbo-crimson);
+  --bs-btn-border-color: var(--gbo-crimson);
+  --bs-btn-hover-bg: var(--gbo-crimson-dark);
+  --bs-btn-hover-border-color: var(--gbo-crimson-dark);
+  --bs-btn-active-bg: var(--gbo-crimson-dark);
+  --bs-btn-active-border-color: var(--gbo-crimson-dark);
+  --bs-btn-disabled-bg: var(--gbo-crimson);
+  --bs-btn-disabled-border-color: var(--gbo-crimson);
+  --bs-btn-color: var(--gbo-text-on-crimson);
+  --bs-btn-hover-color: var(--gbo-text-on-crimson);
+  --bs-btn-active-color: var(--gbo-text-on-crimson);
+  --bs-btn-focus-shadow-rgb: 191, 30, 45;
+}
+.btn-outline-light { --bs-btn-color: var(--gbo-text); --bs-btn-border-color: var(--gbo-border-input); --bs-btn-hover-bg: var(--gbo-crimson); --bs-btn-hover-border-color: var(--gbo-crimson); }
+
+.form-control, .form-select {
+  background-color: var(--gbo-bg-card);
+  border-color: var(--gbo-border-input);
+  color: var(--gbo-text);
+}
+.form-control:focus, .form-select:focus {
+  background-color: var(--gbo-bg-card);
+  color: var(--gbo-text);
+  border-color: var(--gbo-crimson);
+  box-shadow: 0 0 0 0.25rem rgba(191, 30, 45, 0.25);
+}
+.form-check-input:checked { background-color: var(--gbo-crimson); border-color: var(--gbo-crimson); }
+
+.card { background-color: var(--gbo-bg-card); border-color: var(--gbo-border); }
+.accordion-item, .accordion-button { background-color: var(--gbo-bg-card); color: var(--gbo-text); }
+.accordion-button:not(.collapsed) { background-color: var(--gbo-bg-card); color: var(--gbo-crimson); }
+
+/* Dark-mode toggle, fixed corner, present on every screen (login,
+   guest, authenticated app alike) -- see app.py's outer shell. */
+.gbo-mode-toggle { position: fixed; top: 10px; right: 14px; z-index: 1050; }
+
+/* Page header -- "Bold Athletic": gold, uppercase, letter-spaced,
+   crimson underline -- replaces a plain <h1>/st.title() on every page. */
+.gbo-page-header { font-size: 1.5rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; color: var(--gbo-gold-text); margin-bottom: 6px; }
+.gbo-page-header-underline { width: 42px; height: 3px; background: var(--gbo-crimson); border-radius: 2px; margin-bottom: 18px; }
+
+/* Footer wordmark. */
+.gbo-footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--gbo-border); color: var(--gbo-text-muted); font-size: 0.78rem; text-align: center; }
+
+/* Empty state. */
+.gbo-empty-state { text-align: center; padding: 22px 16px; color: var(--gbo-text-muted); }
+.gbo-empty-state .icon { font-size: 1.4rem; margin-bottom: 6px; }
+
+/* KPI row -- Bold Athletic: gradient card with a crimson border, gold
+   uppercase label, cream value. The value's "accent" span (see
+   ui_helpers.render_kpi_cards) carries the bold look: cream text with
+   a crimson glow in dark mode, literal crimson in light mode (see
+   --gbo-accent-ink above for why the split). */
+.gbo-kpi-row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
+.gbo-kpi-card { background: linear-gradient(160deg, var(--gbo-bg-card-grad) 0%, var(--gbo-bg-card) 100%); border: 1px solid var(--gbo-crimson); border-radius: 10px; padding: 14px 18px; flex: 1; min-width: 150px; }
+.gbo-kpi-label { color: var(--gbo-gold-text); font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
+.gbo-kpi-value { color: var(--gbo-text); font-size: 1.8rem; font-weight: 800; line-height: 1.1; display: flex; align-items: center; gap: 8px; }
+.gbo-kpi-value .gbo-kpi-accent { color: var(--gbo-accent-ink); }
+:root[data-bs-theme="dark"] .gbo-kpi-value .gbo-kpi-accent { text-shadow: 0 0 18px rgba(191, 30, 45, 0.55); }
+.gbo-kpi-delta { font-size: 0.8rem; font-weight: 600; margin-top: 4px; }
+.gbo-kpi-delta.positive { color: var(--gbo-positive); }
+.gbo-kpi-delta.negative { color: var(--gbo-negative); }
+
+/* Profile header -- full crimson-to-crimson-dark gradient card with a
+   gold border, same in both modes (it's a colored surface, not the
+   page background, so it doesn't need to flip with the mode). Name +
+   subtitle are cream (passes on both crimson and crimson-dark; gold
+   text here would NOT -- see module docstring), gold is reserved for
+   the border/frame, not the text. */
+.gbo-profile-card { position: relative; background: linear-gradient(135deg, var(--gbo-crimson) 0%, var(--gbo-crimson-dark) 100%); border: 2px solid var(--gbo-gold); border-radius: 14px; padding: 18px 22px; margin-bottom: 8px; display: flex; align-items: center; gap: 18px; overflow: hidden; }
+.gbo-profile-photo { width: 64px; height: 64px; border-radius: 50%; object-fit: cover; border: 3px solid var(--gbo-gold); flex-shrink: 0; }
+.gbo-profile-name { color: var(--gbo-text-on-crimson); font-size: 1.45rem; font-weight: 800; line-height: 1.15; margin: 0; }
+.gbo-profile-subtitle { color: var(--gbo-text-on-crimson); opacity: 0.85; font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 3px; }
+.gbo-profile-logo { position: absolute; right: 18px; top: 50%; transform: translateY(-50%); width: 46px; height: 46px; opacity: 0.18; object-fit: contain; }
+
+/* Navbar: gradient background (overrides bslib's flat navbar_dark_bg
+   so the gradient survives regardless of Bootstrap version), cream
+   nav-links, a translucent-white highlight on the active link, gold
+   role badge. */
+.navbar { background: linear-gradient(135deg, var(--gbo-crimson) 0%, var(--gbo-crimson-dark) 100%) !important; }
+.navbar .nav-link { color: var(--gbo-text-on-crimson) !important; opacity: 0.88; }
+.navbar .nav-link.active, .navbar .nav-link:hover { opacity: 1; background: rgba(255, 255, 255, 0.16); border-radius: 8px; }
+.navbar .navbar-text { color: var(--gbo-text-on-crimson) !important; }
+.gbo-navbar-brand { display: flex; align-items: center; gap: 8px; font-weight: 800; color: var(--gbo-text-on-crimson); }
+.gbo-navbar-logo { height: 26px; width: auto; }
+.gbo-role-badge { display: inline-block; background: var(--gbo-gold); color: #1A1A1A; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; padding: 3px 10px; border-radius: 20px; }
+
+/* Section title -- for a sub-heading WITHIN a page (e.g. "Team
+   Snapshot" above a KPI row), smaller/lower-emphasis than
+   .gbo-page-header. Gold, uppercase, crimson underline rule. */
+.gbo-section-title { color: var(--gbo-gold-text); font-size: 0.95rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; border-bottom: 2px solid var(--gbo-crimson); display: inline-block; padding-bottom: 4px; margin: 0 0 14px; }
+
+/* Category title -- one step down from .gbo-section-title, for a
+   labeled sub-block WITHIN a section (e.g. "Body Comp — 60" inside the
+   "Physical Testing Breakdown" section). Gold text carries the accent
+   without the uppercase/underline treatment, so it doesn't visually
+   compete with the section title above it; a thin crimson left-border
+   (echoing .gbo-profile-card's accent stripe) marks it as a labeled
+   block rather than a plain heading. */
+.gbo-category-title { color: var(--gbo-gold-text); font-weight: 700; font-size: 0.92rem; border-left: 3px solid var(--gbo-crimson); padding-left: 10px; margin: 18px 0 8px; }
+
+/* Subgroup label -- one step down from .gbo-category-title, for the
+   finest-grained grouping (e.g. "Jumps — 82" under Power). Muted and
+   italic, same as a plain <em> would look, but tokenized so it tracks
+   dark/light mode instead of relying on default browser italic-gray. */
+.gbo-subgroup-label { color: var(--gbo-text-muted); font-style: italic; font-size: 0.85rem; margin: 10px 0 4px; }
+
+/* Plain data tables (read-only listings -- ui.tags.table built pages).
+   First column (the "key" -- date, name, category) gets the gold
+   accent treatment; the rest stay normal text color. */
+.table { color: var(--gbo-text); }
+.table > :not(caption) > * > * { border-bottom-color: var(--gbo-border); }
+.table tbody tr td:first-child { color: var(--gbo-gold-text); font-weight: 700; }
+""".replace("{FONT_STACK}", FONT_STACK)
+
+
+def logo_img(css_class: str = "gbo-navbar-logo"):
+    return ui.tags.img(src=LOGO_URL, class_=css_class, alt="GBO")

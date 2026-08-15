@@ -4,13 +4,14 @@ GBO — Strike zone coordinate system (Game Tracking).
 Replaces manual 1-9 zone-button entry with click-the-exact-spot
 location, per Ryker's architecture doc.
 
-Click capture uses Streamlit's own native st.plotly_chart(on_select=)
--- NOT the third-party streamlit-image-coordinates package, which
-failed against a recent Streamlit release (ImportError on an internal
-Streamlit class the package depended on, streamlit==1.61.1). Native
-Plotly selection is first-party, documented Streamlit behavior
-maintained by the Streamlit team itself, so it can't go stale against
-future Streamlit releases the same way.
+Click capture (in the Streamlit UI, via render_zone_selector below)
+uses Streamlit's own native st.plotly_chart(on_select=) -- NOT the
+third-party streamlit-image-coordinates package, which failed against
+a recent Streamlit release (ImportError on an internal Streamlit class
+the package depended on, streamlit==1.61.1). Native Plotly selection is
+first-party, documented Streamlit behavior maintained by the Streamlit
+team itself, so it can't go stale against future Streamlit releases the
+same way.
 
 Coordinate convention (matches Statcast/Trackman): plate_x in feet,
 0 = center of the plate; plate_z in feet, 0 = the ground.
@@ -18,9 +19,16 @@ Coordinate convention (matches Statcast/Trackman): plate_x in feet,
 The zone-derivation math (derive_old_zone, is_in_zone) is unchanged
 from the original version -- verified with round-trip and zone-center
 tests before this was wired into any page.
+
+Shiny for Python migration note: build_zone_selector_figure() below is
+the pure, framework-agnostic part (figure construction only, no
+Streamlit import) -- the Shiny UI layer calls it directly and captures
+clicks via shinywidgets' FigureWidget .on_click() instead of
+st.plotly_chart(on_select=). render_zone_selector() is kept as a thin
+Streamlit-only wrapper around it so existing Streamlit pages keep
+working unchanged until they're migrated.
 """
 
-import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 
@@ -128,12 +136,12 @@ def classify_attack_zone(plate_x, plate_z):
     return "Waste"
 
 
-def render_zone_selector(key, marker_x=None, marker_z=None):
-    """Renders the clickable strike-zone graphic and returns whatever
-    was clicked THIS run as (plate_x, plate_z), or (None, None) if
-    nothing was clicked this run. marker_x/marker_z (a previously
-    recorded click) are drawn as a small circle so the coach can see
-    what's currently captured, not just a blank zone."""
+def build_zone_selector_figure(marker_x=None, marker_z=None):
+    """Pure figure builder -- strike zone rectangle, thirds gridlines,
+    invisible dense click-grid, and (if given) a marker at the
+    currently-recorded click. No Streamlit/UI-framework dependency:
+    returns a plain plotly Figure that any UI layer can render and
+    attach click-capture to on its own terms."""
     xs, zs = np.meshgrid(_GRID_X, _GRID_Z)
     xs, zs = xs.flatten(), zs.flatten()
 
@@ -169,7 +177,19 @@ def render_zone_selector(key, marker_x=None, marker_z=None):
         clickmode="event+select",
         dragmode=False,
     )
+    return fig
 
+
+def render_zone_selector(key, marker_x=None, marker_z=None):
+    """Streamlit-only wrapper: renders the zone figure via
+    st.plotly_chart(on_select=) and returns whatever was clicked THIS
+    run as (plate_x, plate_z), or (None, None) if nothing was clicked
+    this run. Kept as-is for existing Streamlit pages -- the Shiny UI
+    layer should call build_zone_selector_figure() directly instead and
+    implement its own click capture (see module docstring)."""
+    import streamlit as st
+
+    fig = build_zone_selector_figure(marker_x=marker_x, marker_z=marker_z)
     result = st.plotly_chart(fig, on_select="rerun", key=key, config={"displayModeBar": False})
 
     # TEMPORARY DEBUG -- remove once click selection is confirmed working

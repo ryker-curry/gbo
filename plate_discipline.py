@@ -18,9 +18,16 @@ actually have a recorded location (actual_plate_x/z not null) --
 pitches logged without a location click are excluded from those
 specific metrics, shown separately as "located_pitches" vs the full
 pitch count, rather than silently treated as in-zone or out.
+
+Shiny for Python migration note: build_zone_performance_heatmap_figure()
+below is the pure, framework-agnostic part (figure construction only,
+no Streamlit import) -- the Shiny UI layer calls it directly and
+renders it with shinywidgets instead of st.plotly_chart().
+render_zone_performance_heatmap() is kept as a thin Streamlit-only
+wrapper around it so existing Streamlit pages keep working unchanged
+until they're migrated.
 """
 
-import streamlit as st
 import plotly.graph_objects as go
 
 from strike_zone import is_in_zone, derive_old_zone, classify_attack_zone
@@ -149,10 +156,12 @@ def compute_zone_performance(pitches):
     return avg_rv, counts
 
 
-def render_zone_performance_heatmap(avg_rv, counts, title="Performance by zone"):
-    """3x3 heatmap of average Run Value per zone. Green = good for the
-    pitcher (low/negative RV), red = poor (high/positive RV) -- an
-    inverted colorscale, since low RV is the good outcome here."""
+def build_zone_performance_heatmap_figure(avg_rv, counts, title="Performance by zone"):
+    """Pure figure builder: 3x3 heatmap of average Run Value per zone.
+    Green = good for the pitcher (low/negative RV), red = poor
+    (high/positive RV) -- an inverted colorscale, since low RV is the
+    good outcome here. No Streamlit/UI-framework dependency: returns a
+    plain plotly Figure that any UI layer can render."""
     zone_grid = [[7, 8, 9], [4, 5, 6], [1, 2, 3]]
     z = [[avg_rv.get(zid) for zid in row] for row in zone_grid]
     text = [[f"{avg_rv[zid]:+.2f}<br>({counts[zid]})" if zid in avg_rv else "—" for zid in row] for row in zone_grid]
@@ -172,5 +181,17 @@ def render_zone_performance_heatmap(avg_rv, counts, title="Performance by zone")
         yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
         margin=dict(t=40, b=20, l=20, r=20),
     )
+    return fig
+
+
+def render_zone_performance_heatmap(avg_rv, counts, title="Performance by zone"):
+    """Streamlit-only wrapper: builds the heatmap figure and renders it
+    via st.plotly_chart(). Kept as-is for existing Streamlit pages --
+    the Shiny UI layer should call
+    build_zone_performance_heatmap_figure() directly instead (see
+    module docstring)."""
+    import streamlit as st
+
+    fig = build_zone_performance_heatmap_figure(avg_rv, counts, title=title)
     st.plotly_chart(fig, use_container_width=True)
     st.caption("Green = good for him (low/negative Run Value), red = poor (high/positive). Number in parentheses is pitch count. Zone 0/Bury not shown on this grid.")

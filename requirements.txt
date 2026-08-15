@@ -7,3 +7,30 @@ plotly>=5.24
 supabase>=2.10
 numpy>=1.26
 boto3>=1.34
+
+# Shiny for Python UI (migration target -- see shiny_app/). streamlit
+# above stays until the migration is complete and the Streamlit app.py
+# + pages/ are retired; the two UIs run side by side until then.
+shiny>=1.0
+shinywidgets>=0.3
+# Renders plotly figures to static PNGs for shiny_app/bucket_display.py
+# (decorative charts -- score rings, bar charts -- embedded as <img>
+# tags rather than live plotly.js widgets; see that file's docstring).
+#
+# NOTE: this was previously pinned to kaleido==0.2.1 (which bundled its
+# own Chromium, avoiding a separate browser-install step). That pin no
+# longer works: plotly.py dropped support for Kaleido v0.x entirely
+# (removed after Sept 2025 -- current plotly raises "Image export...
+# requires the Kaleido package" even with 0.2.1 installed), and 0.2.1
+# also has no prebuilt wheel for newer Pythons like 3.14 anyway (same
+# class of problem as the libsass issue). Kaleido v1 is the only
+# version that works with current plotly -- it does NOT bundle Chrome,
+# it looks for an existing Chrome/Chromium on the machine (most people
+# already have Chrome). If `pip install -r requirements.txt` completes
+# but the Physical Testing charts still error at runtime, run this
+# ONE-TIME command (from the same environment you installed
+# requirements.txt into):
+#     plotly_get_chrome
+# which downloads a Chrome build kaleido can use. You do not need to
+# rerun it after that -- kaleido finds it automatically from then on.
+kaleido>=1.0
