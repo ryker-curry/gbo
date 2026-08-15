@@ -6,9 +6,11 @@ old SQLite file. Nothing about the ORM models needs to change to make
 this swap — only the connection string.
 
 Reads DATABASE_URL from a local .env file (via python-dotenv) when
-running on a laptop, or from Streamlit Cloud's secrets manager once
-deployed there -- .env files aren't used in that environment, so this
-falls back to st.secrets if the environment variable isn't set.
+running on a laptop, or from the deployment platform's own environment
+variables in production -- same os.environ path either way. (Previously
+also fell back to st.secrets for Streamlit Cloud; removed now that the
+UI layer is Shiny, not Streamlit -- this module has no UI-framework
+dependency at all anymore.)
 """
 
 import os
@@ -19,13 +21,6 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 load_dotenv()
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
-
-if not DATABASE_URL:
-    try:
-        import streamlit as st
-        DATABASE_URL = st.secrets.get("DATABASE_URL")
-    except Exception:
-        pass
 
 if not DATABASE_URL:
     raise RuntimeError(

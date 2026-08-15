@@ -16,8 +16,8 @@ each category gets its own folder prefix inside it instead
 
 Reads R2_* credentials the same way supabase_client.py reads
 SUPABASE_* ones: from a local .env file (via python-dotenv) when
-running on a laptop, or from Streamlit Cloud's secrets manager once
-deployed there.
+running on a laptop, or from the deployment platform's own environment
+variables in production.
 
 One-time setup (in the Cloudflare dashboard, all free):
   1. R2 object storage -> Create bucket (e.g. "gbo-videos").
@@ -52,14 +52,7 @@ load_dotenv()
 
 
 def _get_secret(key: str):
-    value = os.environ.get(key)
-    if not value:
-        try:
-            import streamlit as st
-            value = st.secrets.get(key)
-        except Exception:
-            pass
-    return value
+    return os.environ.get(key)
 
 
 R2_ACCOUNT_ID = _get_secret("R2_ACCOUNT_ID")
@@ -90,13 +83,20 @@ def get_r2_client():
 
 
 def upload_video_to_r2(uploaded_file, identifier: str, bucket_subfolder: str = ""):
-    """Upload one Streamlit st.file_uploader file to R2 and return its
-    public URL. bucket_subfolder (e.g. "pitch-videos/", "routine-
-    videos/") keeps the different video categories from colliding in
-    the single shared R2 bucket, the same way separate Supabase
-    buckets used to keep them apart. Raises on failure -- callers
-    catch and show an st.error with setup guidance, same pattern as
-    the old Supabase upload helpers."""
+    """Upload one file to R2 and return its public URL. bucket_subfolder
+    (e.g. "pitch-videos/", "routine-videos/") keeps the different video
+    categories from colliding in the single shared R2 bucket, the same
+    way separate Supabase buckets used to keep them apart. Raises on
+    failure -- callers catch it and show an error with setup guidance,
+    same pattern as the old Supabase upload helpers.
+
+    uploaded_file needs a .name, a .getvalue() -> bytes, and optionally
+    a .type -- Streamlit's UploadedFile satisfies this directly. Shiny's
+    ui.input_file() instead returns a dict with "name"/"datapath" (a
+    path on disk, no in-memory bytes) -- the Shiny UI layer will need a
+    small adapter object (or a call-site tweak reading the file from
+    datapath) when video upload pages are migrated; not a change to
+    this function's contract, just a note for that migration step."""
     if not (R2_BUCKET_NAME and R2_PUBLIC_URL_BASE):
         raise RuntimeError(
             "R2_BUCKET_NAME and R2_PUBLIC_URL_BASE must be set in .env (see .env.example)."

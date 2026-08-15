@@ -9,18 +9,26 @@ computed later at analysis time than resolved live during entry --
 same "store what happened, compute the derived stat later" principle
 as everywhere else in this data model.
 
-Click capture uses Streamlit's own native st.plotly_chart(on_select=)
--- NOT the third-party streamlit-image-coordinates package, which
-failed against a recent Streamlit release. See strike_zone.py for the
-full explanation; same fix applied here for consistency.
+Click capture (in the Streamlit UI, via render_field_selector below)
+uses Streamlit's own native st.plotly_chart(on_select=) -- NOT the
+third-party streamlit-image-coordinates package, which failed against
+a recent Streamlit release. See strike_zone.py for the full
+explanation; same fix applied here for consistency.
 
 Coordinate convention: feet from home plate. x = feet right of the
 center-field line (negative = left field side, positive = right field
 side); y = feet from home plate toward the outfield (0 = the plate).
+
+Shiny for Python migration note: build_field_selector_figure() below is
+the pure, framework-agnostic part (figure construction only, no
+Streamlit import) -- the Shiny UI layer calls it directly and captures
+clicks via shinywidgets' FigureWidget .on_click() instead of
+st.plotly_chart(on_select=). render_field_selector() is kept as a thin
+Streamlit-only wrapper around it so existing Streamlit pages keep
+working unchanged until they're migrated.
 """
 
 import math
-import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 
@@ -89,12 +97,12 @@ def classify_spray_direction(x, y, bats=None):
     return "Center"
 
 
-def render_field_selector(key, marker_x=None, marker_y=None):
-    """Renders the clickable field graphic (foul lines, outfield arc,
-    infield reference dots) and returns whatever was clicked THIS run
-    as (x, y), or (None, None) if nothing was clicked this run.
-    marker_x/marker_y (a previously recorded click) are drawn as a
-    small circle so the coach can see what's currently captured."""
+def build_field_selector_figure(marker_x=None, marker_y=None):
+    """Pure figure builder -- foul lines, outfield arc, infield
+    reference dots, invisible dense click-grid, and (if given) a marker
+    at the currently-recorded click. No Streamlit/UI-framework
+    dependency: returns a plain plotly Figure that any UI layer can
+    render and attach click-capture to on its own terms."""
     xs, ys = np.meshgrid(_GRID_X, _GRID_Y)
     xs, ys = xs.flatten(), ys.flatten()
 
@@ -143,7 +151,19 @@ def render_field_selector(key, marker_x=None, marker_y=None):
         clickmode="event+select",
         dragmode=False,
     )
+    return fig
 
+
+def render_field_selector(key, marker_x=None, marker_y=None):
+    """Streamlit-only wrapper: renders the field figure via
+    st.plotly_chart(on_select=) and returns whatever was clicked THIS
+    run as (x, y), or (None, None) if nothing was clicked this run.
+    Kept as-is for existing Streamlit pages -- the Shiny UI layer
+    should call build_field_selector_figure() directly instead and
+    implement its own click capture (see module docstring)."""
+    import streamlit as st
+
+    fig = build_field_selector_figure(marker_x=marker_x, marker_y=marker_y)
     result = st.plotly_chart(fig, on_select="rerun", key=key, config={"displayModeBar": False})
 
     # TEMPORARY DEBUG -- remove once click selection is confirmed working
