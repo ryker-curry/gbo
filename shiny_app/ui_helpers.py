@@ -16,6 +16,8 @@ light mode, via the --gbo-accent-ink token).
 
 from shiny import ui
 
+import theme
+
 
 def page_header(title: str):
     """Consistent page title with a crimson accent underline -- used in
@@ -43,9 +45,15 @@ def empty_state(message: str, icon: str = ""):
     return ui.div(*children, class_="gbo-empty-state")
 
 
-def render_staff_profile_header(first_name: str, last_name: str, role_name: str, logo_base64: str = None, photo_url: str = None):
+def render_staff_profile_header(first_name: str, last_name: str, role_name: str, show_logo: bool = True, photo_url: str = None):
     """Same profile-card style as render_player_profile_header, for
-    staff dashboards -- role name in place of jersey/position/class."""
+    staff dashboards -- role name in place of jersey/position/class.
+
+    The original Streamlit version base64-encoded the logo file on every
+    call (st.markdown(unsafe_allow_html) needs a data URI, no static
+    file serving). Shiny doesn't have that constraint -- app.py mounts
+    assets/ as a real static route (theme.ASSETS_DIR), so this just
+    points an <img> at theme.LOGO_URL instead."""
     children = []
     if photo_url:
         children.append(ui.tags.img(src=photo_url, class_="gbo-profile-photo"))
@@ -55,15 +63,16 @@ def render_staff_profile_header(first_name: str, last_name: str, role_name: str,
             ui.div(role_name, class_="gbo-profile-subtitle"),
         )
     )
-    if logo_base64:
-        children.append(ui.tags.img(src=f"data:image/png;base64,{logo_base64}", class_="gbo-profile-logo"))
+    if show_logo:
+        children.append(ui.tags.img(src=theme.LOGO_URL, class_="gbo-profile-logo", alt="GBO"))
     return ui.div(*children, class_="gbo-profile-card")
 
 
-def render_player_profile_header(player, logo_base64: str = None):
+def render_player_profile_header(player, show_logo: bool = True):
     """A card-style player profile header for the Player dashboard --
     name, crimson accent stripe, jersey/position/class, optional photo
-    and GBO logo watermark."""
+    and GBO logo watermark (see render_staff_profile_header's docstring
+    for why this is a static asset src now instead of base64)."""
     position_label = player.player_position.position_name if player.player_position else ""
     class_label = player.player_class.class_name if player.player_class else ""
     jersey_label = f"#{player.jersey_number}" if player.jersey_number else ""
@@ -79,9 +88,42 @@ def render_player_profile_header(player, logo_base64: str = None):
             ui.div(subtitle, class_="gbo-profile-subtitle"),
         )
     )
-    if logo_base64:
-        children.append(ui.tags.img(src=f"data:image/png;base64,{logo_base64}", class_="gbo-profile-logo"))
+    if show_logo:
+        children.append(ui.tags.img(src=theme.LOGO_URL, class_="gbo-profile-logo", alt="GBO"))
     return ui.div(*children, class_="gbo-profile-card")
+
+
+def render_dict_table(rows: list, empty_message: str = None):
+    """Shiny equivalent of the original's very common
+    st.dataframe(list_of_dicts, use_container_width=True, hide_index=True)
+    pattern (dozens of call sites across the app -- dashboard, players,
+    assessments, idp, and nearly every other page). Columns are the
+    union of every row's keys, in first-seen order, same as
+    player_stats.py's/player_schedule.py's hand-built table helpers
+    (pandas' auto-union behavior, made explicit since a plain HTML
+    table has no equivalent auto-fill).
+
+    Returns empty_state(empty_message) if rows is empty and a message
+    was given, otherwise a styled <table>. Every cell value is passed
+    through ui.tags.td() as plain text, so it's auto-escaped the same
+    way every other value in this app is -- callers should pre-format
+    (dates, rounding, "—" for None) before building the row dicts, same
+    as every other table-building call site in this codebase.
+    """
+    if not rows:
+        if empty_message:
+            return empty_state(empty_message)
+        return None
+
+    columns = []
+    for row in rows:
+        for key in row:
+            if key not in columns:
+                columns.append(key)
+
+    header = ui.tags.tr(*[ui.tags.th(c) for c in columns])
+    body_rows = [ui.tags.tr(*[ui.tags.td(row.get(c, "—")) for c in columns]) for row in rows]
+    return ui.tags.table(ui.tags.thead(header), ui.tags.tbody(*body_rows), class_="table table-sm")
 
 
 def render_kpi_cards(cards: list):
@@ -111,3 +153,33 @@ def render_kpi_cards(cards: list):
         card_divs.append(ui.div(*parts, class_="gbo-kpi-card"))
 
     return ui.div(*card_divs, class_="gbo-kpi-row")
+
+
+def remove_selected_grid_rows(rows: list, selected_records: list) -> list:
+    """Removes rows matching selected_records (by exact dict equality)
+    from `rows`, consuming one match per selected record so duplicate
+    rows are handled correctly -- removes exactly as many rows as were
+    selected, not every row that happens to match a selected row's
+    content (which matters here since several blank/identical scratch
+    rows are common in these grids).
+
+    Part of the Task #11 "editable grid" pattern used by
+    opponent_teams.py, bullpen_scripts.py, and training_routines.py:
+    Shiny's render.data_frame widget (as of shiny 1.7) has no built-in
+    per-row delete affordance or "add a blank row" button the way
+    Streamlit's st.data_editor(num_rows="dynamic") does, so those pages
+    hold their working rows in a plain Python list (a module-local
+    reactive.Value), rebuild a pandas DataFrame from it on every
+    render, and implement "+Add row(s)"/"Remove selected"/"Save" as
+    ordinary buttons: Add appends blank dict(s) to the list; Remove
+    reads <grid>.data_view(selected=True) and calls this function;
+    Save reads <grid>.data_view() (the full current data, patches
+    included) and persists it. Row selection (and therefore "remove")
+    is enabled via DataGrid(..., selection_mode="rows")."""
+    remaining = list(rows)
+    for rec in selected_records:
+        for i, row in enumerate(remaining):
+            if row == rec:
+                del remaining[i]
+                break
+    return remaining

@@ -237,6 +237,12 @@ a { color: var(--gbo-crimson); }
 .gbo-profile-subtitle { color: var(--gbo-text-on-crimson); opacity: 0.85; font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 3px; }
 .gbo-profile-logo { position: absolute; right: 18px; top: 50%; transform: translateY(-50%); width: 46px; height: 46px; opacity: 0.18; object-fit: contain; }
 
+/* Small roster-table headshot thumbnail (Players page) -- distinct
+   from .gbo-profile-photo (that one's a large circular profile-header
+   photo on a crimson card; this is a compact square-ish cell image on
+   a plain table row). */
+.gbo-roster-thumb { width: 32px; height: 32px; border-radius: 6px; object-fit: cover; }
+
 /* Navbar: gradient background (overrides bslib's flat navbar_dark_bg
    so the gradient survives regardless of Bootstrap version), cream
    nav-links, a translucent-white highlight on the active link, gold
