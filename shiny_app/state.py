@@ -41,6 +41,17 @@ class AppState:
     # here which is identity/role state tied to the authenticated user.
     dark_mode: reactive.Value
 
+    # int | None -- a one-shot "open this specific bullpen session" deep
+    # link, e.g. from Import Rapsodo Data's "Open full Bullpen Dashboard"
+    # button. Shiny has no per-page URL the way Streamlit's st.query_params
+    # did (see the migration plan's translation table), so a same-page
+    # nav-switch (ui.update_navs()) plus this shared, consume-once value
+    # is the in-app equivalent: the setter calls ui.update_navs(...) then
+    # sets this; modules/bullpen_dashboard.py reads it once on the next
+    # render and immediately clears it back to None so revisiting the
+    # page later doesn't keep jumping back to that same old session.
+    deep_link_bullpen_id: reactive.Value
+
     def is_authenticated(self) -> bool:
         """True once Supabase login succeeded AND a matching, active GBO
         users row was found (role_name gets set only then)."""
@@ -65,6 +76,7 @@ class AppState:
         self.can_edit_sessions.set(False)
         self.coach_specialty.set(None)
         self.is_pitcher.set(False)
+        self.deep_link_bullpen_id.set(None)
 
 
 def new_app_state() -> AppState:
@@ -83,4 +95,5 @@ def new_app_state() -> AppState:
         coach_specialty=reactive.Value(None),
         is_pitcher=reactive.Value(False),
         dark_mode=reactive.Value("dark"),
+        deep_link_bullpen_id=reactive.Value(None),
     )

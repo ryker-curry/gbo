@@ -46,7 +46,7 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
         pd_pages = [
             NavPage("players", "Players", "person"),
             NavPage("assessments", "Assessments", "clipboard-check"),
-            NavPage("pitch_video", "Video Review", "camera-video"),
+            NavPage("video_import", "Video Import", "camera-video"),
             NavPage("idp", "IDP", "bullseye"),
             NavPage("team_schedule", "Team Schedule", "calendar3"),
             NavPage("player_assignments", "Player Assignments", "check2-square"),

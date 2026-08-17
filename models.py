@@ -1084,6 +1084,22 @@ class Game(Base):
     opponent_score = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="Scheduled", nullable=False)  # "Scheduled" / "In Progress" / "Paused" / "Final" / "Cancelled"
     starting_pitcher_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)
+    # Squad A's starting pitcher (starting_pitcher_id above) has always
+    # been formally tracked -- Squad A's ongoing "who's pitching" is
+    # derived from PitchingChange, falling back to this field (see
+    # get_current_pitcher_id() in modules/game_tracking.py). Squad B
+    # never had an equivalent: its pitcher was picked live, every
+    # single plate appearance, with nothing saved. This column adds
+    # just the STARTING pick for Squad B (mirroring starting_pitcher_id)
+    # -- added via migrations/migrate_squad_b_starting_pitcher.py, not
+    # backed by a parallel PitchingChange-style table, so Squad B still
+    # has no formal "pitching change" history the way Squad A does.
+    # Live tracking uses this as a smarter DEFAULT for the per-PA
+    # opposing-pitcher picker (falling back further to whichever Squad B
+    # pitcher most recently appeared in this game's pitches once any
+    # have been recorded) -- always overridable, same as every other
+    # auto-suggested default on this page.
+    squad_b_starting_pitcher_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)
     opponent_starting_pitcher_id = Column(Integer, ForeignKey("opponent_players.opponent_player_id"), nullable=True)
     notes = Column(Text, nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
@@ -1094,6 +1110,7 @@ class Game(Base):
     opponent_team = relationship("OpponentTeam")
     lineup_slots = relationship("GameLineupSlot", back_populates="game", cascade="all, delete-orphan", order_by="GameLineupSlot.batting_order")
     starting_pitcher = relationship("Player", foreign_keys=[starting_pitcher_id])
+    squad_b_starting_pitcher = relationship("Player", foreign_keys=[squad_b_starting_pitcher_id])
     opponent_lineup_slots = relationship("OpponentLineupSlot", back_populates="game", cascade="all, delete-orphan", order_by="OpponentLineupSlot.batting_order")
     opponent_starting_pitcher = relationship("OpponentPlayer", foreign_keys=[opponent_starting_pitcher_id])
     pitches = relationship("GamePitch", back_populates="game", cascade="all, delete-orphan", order_by="GamePitch.pitch_sequence")
