@@ -17,23 +17,22 @@ output).
 Deliberate UX simplifications made porting this page (disclosed here,
 same as every other such deviation elsewhere in this migration):
 
-  1. **Numeric coordinate entry with a live static-preview image,
-     instead of click-to-place.** The original captures intended pitch
-     location, actual pitch location (Video Review), and batted-ball
-     landing spot via st.plotly_chart(on_select="rerun") -- a real
-     click on the figure. Shiny's equivalent would be shinywidgets'
-     FigureWidget.on_click(), which is untested anywhere else in this
-     migration and hard to verify without a live browser session. Since
-     strike_zone.py/field_location.py already expose pure, Streamlit-
-     free figure builders (build_zone_selector_figure/
-     build_field_selector_figure) specifically so a UI layer can attach
-     its own click handling, this page instead pairs a plain
-     ui.input_numeric() pair (plate side/height, or field x/y) with a
-     read-only preview image (chart_helpers.fig_to_img wrapping those
-     same builders) that updates live as the numbers are typed. Less
-     tactile than tapping the exact spot, but the same coordinate
-     system, the same stored data, and no behavioral difference to
-     anything downstream (execution %, spray charts, etc.).
+  1. **Numeric coordinate entry, superseded by real click-to-place
+     (Milestone 2 -- see below).** This page originally paired a plain
+     ui.input_numeric() pair with a read-only static-preview image
+     instead of a true click interface, because shinywidgets'
+     FigureWidget.on_click() was untested anywhere else in this
+     migration. That's since been implemented (see
+     _build_clickable_widget/_register_click_to_numeric and
+     intended_location_widget/batted_ball_location_widget/
+     video_review_widget below) -- clicking anywhere on the zone/field
+     figure now writes the clicked coordinates straight into the same
+     numeric inputs the click-less version used, via ui.update_numeric().
+     Those numeric inputs are KEPT as the actual source of truth
+     (still directly typeable for fine correction or if a click misses)
+     -- nothing downstream (_do_record_pitch, _vr_save, execution %,
+     spray charts, etc.) changed at all, since it never read the click
+     event itself, only the numeric inputs the click now also fills in.
   2. **Live cross-slot lineup exclusion IS implemented**, matching the
      original -- once a player is picked in one batting-order slot, he
      disappears from every OTHER slot's dropdown for that squad. This
@@ -157,13 +156,191 @@ changes:
     selection (_active_game_id) and any not-yet-submitted in-progress
     pitch entry are lost on refresh; picking the game again from
     game_picker immediately restores full context.
+
+Milestone 2 -- real click-to-place pitch/batted-ball location, replacing
+the numeric-entry-only workaround (see the "Deliberate UX
+simplifications" note above for what this superseded). No schema
+changes -- clicks still populate the exact same ui.input_numeric()
+fields _do_record_pitch/_vr_save already read, so nothing downstream of
+those inputs changed:
+  - **_build_clickable_widget** -- wraps a plain plotly Figure (from
+    strike_zone.build_zone_selector_figure/
+    field_location.build_field_selector_figure -- both pure,
+    Streamlit-free figure builders that already included an invisible,
+    dense click-grid scatter trace at data index 0 specifically for
+    this, left over from those modules' original Streamlit design) into
+    a go.FigureWidget with the toolbar hidden.
+  - **_register_click_to_numeric** -- one long-lived @reactive.effect
+    per clickable figure, registered once at module-server setup time,
+    that reads the render function's `.widget` attribute (shinywidgets'
+    documented render_widget_base pattern -- None until first render,
+    invalidates on every new widget instance) and calls
+    `widget.data[0].on_click(...)` to re-attach a click handler each
+    time a fresh FigureWidget is produced. The handler reads the
+    clicked grid point's coordinates off plotly's own
+    `points.xs`/`points.ys`/`points.point_inds` (see
+    plotly.callbacks.Points) and writes them into the two numeric
+    inputs it's told to target via ui.update_numeric().
+  - **Three call sites**, all following the identical
+    render_plotly-widget + caption-text pair shape (a render_plotly
+    can't also return caption text, so each is split into a
+    `..._widget` output_widget() and a separate `..._caption`
+    ui.output_ui()): intended_location_widget (Live Tracking, intended
+    pitch location while pitching), batted_ball_location_widget (Live
+    Tracking, "In Play" batted-ball landing spot),
+    video_review_widget (Video Review, actual pitch location).
+  - **Verification caveat, disclosed for the same reason
+    strike_zone.py/field_location.py's own docstrings already flag it**:
+    this sandbox has no live Supabase/Postgres credentials and no
+    browser, so an actual in-browser click was never click-tested here
+    -- only the API contracts (shinywidgets' render_widget_base.widget
+    property, plotly's Points/on_click signature, the existing
+    click-grid trace ordering) were verified directly against the
+    installed shinywidgets==0.8.1/shiny==1.7.0/plotly packages in this
+    environment. If a click doesn't register live, the numeric inputs
+    still work exactly as before (nothing about them changed), so nothing
+    is lost even in that case -- but please click-test this for real and
+    flag it if something's off.
+
+Milestone 3 -- opponent scouting / pitch-calling ("what should we throw
+this hitter?"), from GamePitch.opponent_player_id data. No schema
+changes -- new query function only:
+  - **game_stats.get_pitches_thrown_to_opponent_batter** (new function,
+    living in game_stats.py alongside get_batting_pitches/
+    get_pitching_pitches which it mirrors) -- every pitch WE threw to a
+    given OpponentPlayer, keyed the same way get_pitching_pitches/
+    get_batting_pitches are keyed on our own player_id, just on the
+    opponent side instead. Its result plugs directly into the EXISTING
+    compute_pitching_line()/compute_pitch_type_breakdown() unchanged --
+    both are already generic over any list of pitches WE threw,
+    regardless of whose stat line they're aggregating, so no new stats
+    logic was needed, only the new query.
+  - **opponent_scouting_card** -- shown live in Live Tracking whenever
+    we're pitching to a known opposing batter (resolved by
+    _resolve_current_opponent_batter_id): his career-vs-us line (PA,
+    OBA, K, BB, whiffs) plus a per-pitch-type breakdown table
+    (usage/strike%/whiff%/CSW%/chase%), sorted by CSW% so the most
+    effective pitch against him surfaces first. This is the DATA, not
+    an automated pitch-calling recommendation -- the coach still makes
+    the call; an automated recommendation engine is explicitly a later,
+    out-of-scope phase (the original spec's Phase 5 "Advanced
+    Intelligence").
+  - **Coverage caveat**: only pitches where the coach picked the batter
+    from the opponent's roster (opp_roster_player_select, rather than
+    "-- Not on roster / unknown --") are attributable this way -- an
+    opponent with no roster on file, or at-bats logged without naming
+    the batter, simply won't have a card (or will show "no pitch
+    history yet") even if we've technically faced them before. This is
+    an existing data-capture gap, not something this milestone changed;
+    Opponent Teams' roster-building flow already exists (see
+    opponent_lineup_setup_picker/who_is_up_identity_picker) and is the
+    lever to improve coverage, not this card.
+
+Milestone 4 -- batting lineup substitutions. The gap: once a squad's
+starting lineup was saved, `who_is_up_identity_picker`'s batter choices
+were hard-restricted to whoever was in that saved GameLineupSlot set --
+for either squad, in intrasquad scrimmages OR real external games, with
+no substitute/pinch-hitter/extra-hitter path anywhere on the page (only
+whole-game delete). This blocked Ryker's stated goal of tracking data
+for every player in an intrasquad scrimmage, and ordinary pinch-hitting
+in real games. Pitching substitutions never had this problem (any active
+pitcher, any time, via PitchingChange); the opponent's own batting order
+was also already open (opp_roster_player_select offers their whole
+roster every PA). So this milestone is scoped entirely to GameLineupSlot
+(our own squads' batting slots). New schema, mirrors PitchingChange's
+proven "a start + an ordered list of changes, most-recent-wins" shape,
+scoped to an individual slot rather than the whole team (batting has N
+*simultaneous* current occupants, one per slot, unlike pitching's single
+role):
+  - **LineupSubstitution** (new table, models.py) -- a formal record of
+    a player entering an EXISTING slot, replacing whoever's there now.
+    `GameLineupSlot.player_id`/`starting_position_id` keep their
+    original meaning (that slot's ORIGINAL starter, immutable once
+    saved) -- who's CURRENTLY in a slot is derived, via
+    `get_current_slot_occupant_id`/`get_current_slot_position_id`
+    below, the batting-side equivalent of `get_current_pitcher_id`.
+  - **GamePitch.batting_slot_id** (new nullable column) -- which slot
+    the batter occupied at the moment a pitch was recorded, stamped by
+    `_do_record_pitch` via `_resolve_current_batting_slot` for both the
+    Squad A batting case and the intrasquad Squad B batting case (NULL
+    for external-opponent batting, and for any pitch recorded before
+    this migration ran). Lets "who's up next" look up the next slot
+    directly instead of re-matching by player identity, which breaks
+    once a player can be subbed out and later re-enter the same slot.
+  - **Adding a brand-new slot** that wasn't part of the original saved
+    lineup (an "extra hitter" cycling into a scrimmage for reps) is a
+    DIFFERENT, simpler operation -- just another GameLineupSlot row,
+    via `_insert_lineup_slot_at`. Per Ryker's explicit choice, new slots
+    are insertable at ANY position in the batting order, not just
+    appended -- every existing slot at or after the insertion point
+    shifts `batting_order` +1 (processed highest-order-first, with a
+    `db.flush()` after each shift, so no two slots are ever briefly
+    equal). This is safe because every FK that references a slot
+    (`LineupSubstitution.lineup_slot_id`, `GamePitch.batting_slot_id`)
+    points at the slot's stable `lineup_slot_id` primary key, never at
+    the mutable `batting_order` value -- renumbering never invalidates
+    a past pitch's or substitution's slot reference.
+  - **Migration**: migrations/migrate_lineup_substitutions.py (not yet
+    run against the live database as of this commit -- run it once
+    before this milestone's UI is used against real data). Existing
+    games are unaffected: no LineupSubstitution rows yet, and every
+    existing GamePitch row defaults batting_slot_id=NULL, so
+    suggest_next_our_batter/suggest_next_squad_b_batter fall back to
+    identity-matching (against each slot's CURRENT occupant) for those
+    older pitches.
+  - **who_is_up_identity_picker**: both squads' batter-choice lists now
+    use `get_current_slot_occupant_id(s)` instead of `s.player_id`, so a
+    substituted-in player becomes immediately pickable the moment a
+    LineupSubstitution row exists for his slot.
+  - **suggest_next_our_batter/suggest_next_squad_b_batter**: now
+    slot-aware -- prefer the last recorded batting pitch's
+    `batting_slot_id` (advance to the next slot by batting_order, return
+    ITS current occupant), falling back to identity-matching against
+    current occupants for older, pre-migration pitches where the column
+    is NULL.
+  - **_register_squad_lineup's _display()**: shows each slot's current
+    occupant + current position (via the two new helpers), tagging a
+    changed occupant "(sub)", instead of only ever showing the original
+    starter -- so Lineup & Setup always reflects live reality.
+    _picker()/_slots() (first-time lineup creation) are unchanged.
+  - **_register_lineup_moves(squad, prefix)** -- new factory, called for
+    both squads at server setup (Squad B's panel only renders when
+    game.is_intrasquad, same guard opponent_scouting_card-adjacent
+    blocks use elsewhere). Lives entirely in Live Tracking, not
+    duplicated into Lineup & Setup, since these are live in-game events
+    tied to the current inning/outs -- same reasoning
+    _confirm_pitching_change already follows, and it reads
+    _load_tracking_context's own state for inning/outs_at_entry rather
+    than re-deriving it. Two accordion panels, mirroring the existing
+    pitching-change accordion's shape: "Substitute into a slot" (slot
+    select, labelled with the current occupant + optional
+    position-change select, eligible incoming players excluding anyone
+    via `_currently_occupied_player_ids`) and "Add a batting slot"
+    (eligible incoming player + a batting-order-position select
+    covering every position 1..N+1, defaulting to the end). Both
+    confirm handlers bump BOTH `_pa_tick` (so the live Who's Up picker
+    updates immediately) and `_refresh_tick` (so Lineup & Setup's
+    display updates too) -- the one place on this page a single action
+    needs both. Eligible-player dropdowns are computed fresh on each
+    render from `_currently_occupied_player_ids`, not synced live via
+    ui.update_select() the way `_sync_lineup_exclusions` does for
+    initial lineup entry -- acceptable here since these panels remount
+    on every `_pa_tick`, unlike the one-time lineup-entry form.
+  - **No changes needed**: Undo Last Pitch (Milestone 1) only ever
+    deletes the highest-pitch_sequence GamePitch row and never
+    renumbers remaining sequences, so it has zero interaction with
+    LineupSubstitution.pitch_sequence_at_entry ordering. The
+    opponent-scouting card (Milestone 3) is entirely OpponentPlayer-keyed
+    and orthogonal.
 """
 
 import uuid
 from datetime import date
 
 from shiny import module, ui, render, reactive, req
+from shinywidgets import output_widget, render_plotly
 from sqlalchemy.orm import joinedload
+import plotly.graph_objects as go
 
 from database import get_session
 from r2_client import upload_video_to_r2
@@ -172,12 +349,14 @@ import field_location
 from models import (
     Player, Position, PitchType, Game, GameLineupSlot, GamePitch, RunExpectancy,
     OpponentTeam, OpponentPlayer, Season, PitchingChange, PlayerPitchArsenal, OpponentLineupSlot,
-    GameVideoClip,
+    GameVideoClip, LineupSubstitution,
 )
-from game_stats import get_pitching_pitches, get_batting_pitches, compute_pitching_line, compute_batting_line
+from game_stats import (
+    get_pitching_pitches, get_batting_pitches, compute_pitching_line, compute_batting_line,
+    get_pitches_thrown_to_opponent_batter, compute_pitch_type_breakdown,
+)
 
 import ui_helpers
-import chart_helpers
 
 ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst")
 
@@ -245,6 +424,95 @@ def get_current_squad_b_pitcher_id(game):
     return game.squad_b_starting_pitcher_id
 
 
+def get_current_slot_occupant_id(slot):
+    """Milestone 4 -- batting-side equivalent of get_current_pitcher_id
+    above. A slot's current occupant is whoever the most recent
+    LineupSubstitution for that slot says entered, falling back to the
+    slot's original starter (GameLineupSlot.player_id) if no
+    substitution has happened yet."""
+    subs = sorted(slot.substitutions, key=lambda s: s.pitch_sequence_at_entry)
+    if subs:
+        return subs[-1].player_id
+    return slot.player_id
+
+
+def get_current_slot_position_id(slot):
+    """Milestone 4 -- same "most recent, fall back to the original"
+    idea as get_current_slot_occupant_id, but for the slot's current
+    defensive position. A LineupSubstitution's new_position_id is only
+    set when the incoming player takes over a DIFFERENT position (NULL
+    means "unchanged from before"), so this walks the slot's
+    substitution history newest-first for the first non-NULL
+    new_position_id, falling all the way back to the slot's original
+    starting_position_id if none was ever set."""
+    subs = sorted(slot.substitutions, key=lambda s: s.pitch_sequence_at_entry, reverse=True)
+    for s in subs:
+        if s.new_position_id is not None:
+            return s.new_position_id
+    return slot.starting_position_id
+
+
+def _currently_occupied_player_ids(game, squad):
+    """Milestone 4 -- every player currently occupying a GameLineupSlot
+    for this squad right now (original starters who haven't been subbed
+    out, plus anyone substituted in since) -- used to exclude
+    already-in-the-lineup players from the incoming-player choices on
+    both "Substitute into a slot" and "Add a batting slot," so nobody
+    can be picked into two slots at once."""
+    slots = [s for s in game.lineup_slots if s.squad == squad]
+    return {get_current_slot_occupant_id(s) for s in slots}
+
+
+def _resolve_current_batting_slot(slots, batter_player_id):
+    """Milestone 4 -- which GameLineupSlot the given batter currently
+    occupies, used to stamp GamePitch.batting_slot_id at record time.
+    Matches on each slot's CURRENT occupant (get_current_slot_occupant_id),
+    not its original starter, so a substituted-in player is correctly
+    attributed to the slot he entered. Returns None if batter_player_id
+    doesn't currently occupy any slot in the list (an external opponent
+    batter, or a squad with no saved lineup yet)."""
+    if batter_player_id is None:
+        return None
+    for slot in slots:
+        if get_current_slot_occupant_id(slot) == batter_player_id:
+            return slot.lineup_slot_id
+    return None
+
+
+def _insert_lineup_slot_at(db, game_id, squad, batting_order_position, player_id, position_id):
+    """Milestone 4 -- insert a brand-new GameLineupSlot at an arbitrary
+    position in the batting order (an "extra hitter" who wasn't part of
+    the original saved lineup, cycling into a scrimmage for reps).
+    Every existing slot at or after the insertion point shifts
+    batting_order +1, processed highest-order-first with a db.flush()
+    after each shift so no two slots are ever briefly equal. Safe
+    because every FK that references a slot (LineupSubstitution.
+    lineup_slot_id, GamePitch.batting_slot_id) points at the slot's
+    stable lineup_slot_id, never at the mutable batting_order value --
+    see GameLineupSlot's docstring in models.py. Caller is responsible
+    for committing."""
+    shifting = (
+        db.query(GameLineupSlot)
+        .filter(
+            GameLineupSlot.game_id == game_id,
+            GameLineupSlot.squad == squad,
+            GameLineupSlot.batting_order >= batting_order_position,
+        )
+        .order_by(GameLineupSlot.batting_order.desc())
+        .all()
+    )
+    for slot in shifting:
+        slot.batting_order += 1
+        db.flush()
+    new_slot = GameLineupSlot(
+        game_id=game_id, squad=squad, batting_order=batting_order_position,
+        player_id=player_id, starting_position_id=position_id,
+    )
+    db.add(new_slot)
+    db.flush()
+    return new_slot
+
+
 def get_arsenal_pitch_type_names(db, pitcher_id, all_pitch_types):
     arsenal = (
         db.query(PlayerPitchArsenal)
@@ -258,6 +526,12 @@ def get_arsenal_pitch_type_names(db, pitcher_id, all_pitch_types):
 
 
 def suggest_next_our_batter(game, lineup_slots):
+    """Milestone 4 -- now slot-aware: prefers the last recorded batting
+    pitch's batting_slot_id (a direct slot lookup, correct even after a
+    substitution), falling back to identity-matching against each
+    slot's CURRENT occupant for older, pre-migration pitches where that
+    column is NULL. Always returns the resolved slot's CURRENT occupant
+    (get_current_slot_occupant_id), not necessarily who started there."""
     if not lineup_slots:
         return None
     our_pa_endings = sorted(
@@ -265,18 +539,26 @@ def suggest_next_our_batter(game, lineup_slots):
         key=lambda p: p.pitch_sequence,
     )
     if not our_pa_endings:
-        return lineup_slots[0].player_id
-    last_batter_id = our_pa_endings[-1].our_player_id
-    last_slot = next((s for s in lineup_slots if s.player_id == last_batter_id), None)
+        return get_current_slot_occupant_id(lineup_slots[0])
+    last_pitch = our_pa_endings[-1]
+    if last_pitch.batting_slot_id is not None:
+        last_slot = next((s for s in lineup_slots if s.lineup_slot_id == last_pitch.batting_slot_id), None)
+    else:
+        last_batter_id = last_pitch.our_player_id
+        last_slot = next((s for s in lineup_slots if get_current_slot_occupant_id(s) == last_batter_id), None)
     if last_slot is None:
-        return lineup_slots[0].player_id
+        return get_current_slot_occupant_id(lineup_slots[0])
     slot_orders = sorted(s.batting_order for s in lineup_slots)
     current_idx = slot_orders.index(last_slot.batting_order)
     next_order = slot_orders[(current_idx + 1) % len(slot_orders)]
-    return next((s.player_id for s in lineup_slots if s.batting_order == next_order), lineup_slots[0].player_id)
+    next_slot = next((s for s in lineup_slots if s.batting_order == next_order), lineup_slots[0])
+    return get_current_slot_occupant_id(next_slot)
 
 
 def suggest_next_squad_b_batter(game, squad_b_slots):
+    """Milestone 4 -- see suggest_next_our_batter above; identical
+    slot-aware logic, mirrored for Squad B's opponent_our_player_id/
+    opponent-side pitch fields."""
     if not squad_b_slots:
         return None
     squad_b_pa_endings = sorted(
@@ -284,15 +566,20 @@ def suggest_next_squad_b_batter(game, squad_b_slots):
         key=lambda p: p.pitch_sequence,
     )
     if not squad_b_pa_endings:
-        return squad_b_slots[0].player_id
-    last_batter_id = squad_b_pa_endings[-1].opponent_our_player_id
-    last_slot = next((s for s in squad_b_slots if s.player_id == last_batter_id), None)
+        return get_current_slot_occupant_id(squad_b_slots[0])
+    last_pitch = squad_b_pa_endings[-1]
+    if last_pitch.batting_slot_id is not None:
+        last_slot = next((s for s in squad_b_slots if s.lineup_slot_id == last_pitch.batting_slot_id), None)
+    else:
+        last_batter_id = last_pitch.opponent_our_player_id
+        last_slot = next((s for s in squad_b_slots if get_current_slot_occupant_id(s) == last_batter_id), None)
     if last_slot is None:
-        return squad_b_slots[0].player_id
+        return get_current_slot_occupant_id(squad_b_slots[0])
     slot_orders = sorted(s.batting_order for s in squad_b_slots)
     current_idx = slot_orders.index(last_slot.batting_order)
     next_order = slot_orders[(current_idx + 1) % len(slot_orders)]
-    return next((s.player_id for s in squad_b_slots if s.batting_order == next_order), squad_b_slots[0].player_id)
+    next_slot = next((s for s in squad_b_slots if s.batting_order == next_order), squad_b_slots[0])
+    return get_current_slot_occupant_id(next_slot)
 
 
 def suggest_next_opponent_order(game):
@@ -559,6 +846,64 @@ def _upload_game_video_clip(file_info: dict, identifier: str):
         return None
 
 
+def _build_clickable_widget(fig):
+    """Wraps a plain plotly Figure (as returned by
+    strike_zone.build_zone_selector_figure/
+    field_location.build_field_selector_figure -- both pure,
+    framework-agnostic figure builders, see those modules' docstrings)
+    into a go.FigureWidget with the same mode-bar-hidden config the
+    original Streamlit click-selector used
+    (config={"displayModeBar": False} in strike_zone.render_zone_selector/
+    field_location.render_field_selector). shinywidgets' render_plotly
+    would auto-convert a plain go.Figure for us (see as_widget_plotly in
+    the shinywidgets package), but only this explicit path lets us also
+    set the widget's display config before it's returned."""
+    widget = go.FigureWidget(fig.data, fig.layout)
+    widget._config = {"displayModeBar": False}
+    return widget
+
+
+def _register_click_to_numeric(widget_render_fn, x_input_id, y_input_id, round_ndigits):
+    """Wires a clickable figure (built via _build_clickable_widget,
+    always with the invisible dense click-grid from
+    strike_zone.py/field_location.py at trace index 0 -- see those
+    modules' build_*_selector_figure docstrings) to a pair of existing
+    ui.input_numeric() fields: a click writes the clicked grid point's
+    coordinates into those inputs via ui.update_numeric(), exactly as
+    if the coach had typed them. The numeric inputs stay the source of
+    truth and the only thing _do_record_pitch/_vr_save ever read --
+    clicking is just a faster way to fill them in, so manual correction
+    (mis-clicks, fine adjustment) keeps working exactly as before, and
+    nothing downstream had to change.
+
+    Registered once, at module-server setup time, as a single
+    long-lived @reactive.effect that reads widget_render_fn.widget --
+    per shinywidgets' documented render_widget_base pattern, that
+    attribute is None until the widget has rendered at least once, and
+    invalidates (so this effect re-runs and re-attaches the click
+    handler) every time a NEW widget instance is produced. That happens
+    on every re-render of the figure -- including every keystroke in
+    the paired numeric inputs, since the figure reads them to position
+    the marker -- and on_click() must be re-registered against each
+    fresh FigureWidget instance every time; plotly.py doesn't carry
+    click callbacks over between separate FigureWidget objects."""
+    @reactive.effect
+    def _handler():
+        widget = widget_render_fn.widget
+        if widget is None:
+            return
+
+        def _on_click(trace, points, state):
+            if not points.point_inds:
+                return
+            idx = points.point_inds[0]
+            ui.update_numeric(x_input_id, value=round(float(points.xs[idx]), round_ndigits))
+            ui.update_numeric(y_input_id, value=round(float(points.ys[idx]), round_ndigits))
+
+        widget.data[0].on_click(_on_click)
+    return _handler
+
+
 @module.ui
 def game_tracking_ui():
     return ui.div(
@@ -599,6 +944,29 @@ def game_tracking_server(input, output, session, app_state):
     def _can_edit():
         return app_state.can_edit_sessions() or app_state.role_name() == "Data Analyst"
 
+    def _resolve_current_opponent_batter_id(game, state):
+        """Milestone 3 -- see module docstring. Which OpponentPlayer is
+        up right now, for opponent_scouting_card below -- only
+        meaningful when we're pitching (state['is_our_batting'] is
+        False) against a genuine external opponent (never intrasquad,
+        which has no OpponentPlayer rows at all -- Squad B batters are
+        just our own Players, already covered by
+        _resolve_current_hitter_id_for_stats). Mid-PA, the committed
+        identity already lives on state (compute_current_state's
+        'current_opp_player'). At the start of a new PA, nothing's
+        committed yet, so this reads whatever's currently selected in
+        opp_roster_player_select -- the same picker
+        who_is_up_identity_picker shows, defined in a separate render
+        block, so reading it here is fine (see this file's read/define
+        rule)."""
+        if game.is_intrasquad or state["is_our_batting"]:
+            return None
+        if not state["new_pa"]:
+            return state.get("current_opp_player")
+        if "opp_roster_player_select" in input and input.opp_roster_player_select():
+            return int(input.opp_roster_player_select())
+        return None
+
     def _load_tracking_context(db, game_id):
         game = (
             db.query(Game)
@@ -610,12 +978,12 @@ def game_tracking_server(input, output, session, app_state):
             return None
         pitches = sorted(game.pitches, key=lambda p: p.pitch_sequence)
         squad_a_slots = (
-            db.query(GameLineupSlot).options(joinedload(GameLineupSlot.player))
+            db.query(GameLineupSlot).options(joinedload(GameLineupSlot.player), joinedload(GameLineupSlot.substitutions))
             .filter(GameLineupSlot.game_id == game_id, GameLineupSlot.squad == "A")
             .order_by(GameLineupSlot.batting_order).all()
         )
         squad_b_slots = (
-            db.query(GameLineupSlot).options(joinedload(GameLineupSlot.player))
+            db.query(GameLineupSlot).options(joinedload(GameLineupSlot.player), joinedload(GameLineupSlot.substitutions))
             .filter(GameLineupSlot.game_id == game_id, GameLineupSlot.squad == "B")
             .order_by(GameLineupSlot.batting_order).all()
         )
@@ -1007,17 +1375,44 @@ def game_tracking_server(input, output, session, app_state):
                     return None
                 slots = (
                     db.query(GameLineupSlot)
-                    .options(joinedload(GameLineupSlot.player), joinedload(GameLineupSlot.starting_position))
+                    .options(
+                        joinedload(GameLineupSlot.player),
+                        joinedload(GameLineupSlot.starting_position),
+                        joinedload(GameLineupSlot.substitutions),
+                    )
                     .filter(GameLineupSlot.game_id == game_id, GameLineupSlot.squad == squad)
                     .order_by(GameLineupSlot.batting_order).all()
                 )
                 if not slots:
                     return None
                 label = squad_label if squad == "B" else ("Squad A Lineup" if game.is_intrasquad else "Lineup")
-                rows = [
-                    {"#": s.batting_order, "Player": f"{s.player.first_name} {s.player.last_name}" if s.player else "—", "Position": s.starting_position.position_name if s.starting_position else "—"}
-                    for s in slots
-                ]
+                # Milestone 4 -- shows each slot's CURRENT occupant/position
+                # (post-substitution), not the original starter; see
+                # get_current_slot_occupant_id/get_current_slot_position_id.
+                occupant_ids = {s.lineup_slot_id: get_current_slot_occupant_id(s) for s in slots}
+                position_ids = {s.lineup_slot_id: get_current_slot_position_id(s) for s in slots}
+                players_by_id = {
+                    p.player_id: p for p in db.query(Player).filter(
+                        Player.player_id.in_([pid for pid in occupant_ids.values() if pid])
+                    ).all()
+                }
+                positions_by_id = {
+                    p.position_id: p for p in db.query(Position).filter(
+                        Position.position_id.in_([pid for pid in position_ids.values() if pid])
+                    ).all()
+                }
+                rows = []
+                for s in slots:
+                    occupant = players_by_id.get(occupant_ids[s.lineup_slot_id])
+                    position = positions_by_id.get(position_ids[s.lineup_slot_id])
+                    player_label = f"{occupant.first_name} {occupant.last_name}" if occupant else "—"
+                    if occupant_ids[s.lineup_slot_id] != s.player_id:
+                        player_label += " (sub)"
+                    rows.append({
+                        "#": s.batting_order,
+                        "Player": player_label,
+                        "Position": position.position_name if position else "—",
+                    })
                 children = [ui.h5(label, class_="gbo-section-title"), ui_helpers.render_dict_table(rows)]
                 starting_pitcher_id = game.starting_pitcher_id if squad == "A" else game.squad_b_starting_pitcher_id
                 pitcher_prefix = "Starting pitcher" if squad == "A" else "Starting pitcher (default -- overridable live)"
@@ -1296,13 +1691,18 @@ def game_tracking_server(input, output, session, app_state):
                 ui.h5("Who's Up", class_="gbo-section-title"),
                 ui.output_ui("who_is_up_identity_picker"),
                 ui.output_ui("who_is_up_hand_and_order"),
+                ui.output_ui("opponent_scouting_card"),
+                ui.output_ui("squad_a_lineup_moves"),
+                ui.output_ui("squad_b_lineup_moves"),
                 ui.hr(),
                 ui.output_ui("live_pitch_sequence_display"),
                 ui.hr(),
                 ui.output_ui("pitch_type_and_outcome_picker"),
-                ui.output_ui("intended_location_preview"),
+                output_widget("intended_location_widget"),
+                ui.output_ui("intended_location_caption"),
                 ui.output_ui("pitch_outcome_dependent_fields"),
-                ui.output_ui("batted_ball_location_preview"),
+                output_widget("batted_ball_location_widget"),
+                ui.output_ui("batted_ball_location_caption"),
                 ui.output_ui("result_ab_outcome_picker"),
                 ui.output_ui("result_fields_body"),
                 ui.hr(),
@@ -1447,7 +1847,7 @@ def game_tracking_server(input, output, session, app_state):
 
             if state["is_our_batting"]:
                 if squad_a_slots:
-                    lineup_ids = [s.player_id for s in squad_a_slots]
+                    lineup_ids = [get_current_slot_occupant_id(s) for s in squad_a_slots]
                 else:
                     lineup_ids = [p.player_id for p in db.query(Player).filter(Player.active.is_(True), Player.is_pitcher.is_(False)).order_by(Player.last_name, Player.first_name).all()]
                 players_by_id = {p.player_id: p for p in db.query(Player).filter(Player.player_id.in_(lineup_ids)).all()}
@@ -1468,7 +1868,7 @@ def game_tracking_server(input, output, session, app_state):
             else:
                 if game.is_intrasquad:
                     if squad_b_slots:
-                        squad_b_ids = [s.player_id for s in squad_b_slots]
+                        squad_b_ids = [get_current_slot_occupant_id(s) for s in squad_b_slots]
                     else:
                         squad_b_ids = [p.player_id for p in db.query(Player).filter(Player.active.is_(True)).order_by(Player.last_name, Player.first_name).all()]
                     players_by_id = {p.player_id: p for p in db.query(Player).filter(Player.player_id.in_(squad_b_ids)).all()}
@@ -1554,6 +1954,87 @@ def game_tracking_server(input, output, session, app_state):
             db.close()
 
     @render.ui
+    def opponent_scouting_card():
+        """Milestone 3 -- opponent scouting / pitch-calling (see module
+        docstring). Shown in Live Tracking whenever we're pitching to a
+        known opposing batter (identified via
+        _resolve_current_opponent_batter_id): that hitter's line
+        against us and a per-pitch-type usage/effectiveness breakdown,
+        so the coach can see what's worked against him without leaving
+        the tracking screen. This surfaces the DATA -- reusing
+        game_stats.py's existing compute_pitching_line/
+        compute_pitch_type_breakdown unchanged, no new stats logic --
+        rather than an automated "throw this pitch" recommendation,
+        which is an explicitly later, out-of-scope phase (see the
+        original spec's Phase 5 "Advanced Intelligence", deferred)."""
+        _pa_tick()
+        if not _access_ok() or not _can_edit():
+            return None
+        game_id = _active_game_id()
+        if game_id is None:
+            return None
+        db = get_session()
+        try:
+            ctx = _load_tracking_context(db, game_id)
+            if ctx is None:
+                return None
+            game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state = ctx
+            if game.status != "In Progress":
+                return None
+            opponent_batter_id = _resolve_current_opponent_batter_id(game, state)
+            if opponent_batter_id is None:
+                return None
+            opp_player = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == opponent_batter_id).first()
+            if opp_player is None:
+                return None
+
+            history = get_pitches_thrown_to_opponent_batter(db, opponent_batter_id)
+            if not history:
+                return ui.div(
+                    ui.h6(f"Scouting — {opp_player.player_name}", class_="gbo-section-title"),
+                    ui.p("No pitch history against this hitter yet -- this card fills in once we've faced him before.", class_="text-muted small"),
+                )
+
+            line = compute_pitching_line(history)
+            oba = line["OBA (opponent AVG)"]
+            children = [
+                ui.h6(f"Scouting — {opp_player.player_name}", class_="gbo-section-title"),
+                ui_helpers.render_kpi_cards([
+                    {"label": "PA vs. us", "value": str(line["Batters Faced"])},
+                    {"label": "OBA", "value": f"{oba:.3f}" if oba is not None else "—"},
+                    {"label": "K", "value": str(line["K"])},
+                    {"label": "BB", "value": str(line["BB"])},
+                    {"label": "Whiffs", "value": str(sum(1 for p in history if p.pitch_outcome == "Swing and Miss"))},
+                ]),
+            ]
+
+            breakdown = compute_pitch_type_breakdown(history)
+            per_type_rows = [row for row in breakdown if row["Pitch Type"] != "Total"]
+            if per_type_rows:
+                table_rows = [
+                    {
+                        "Pitch Type": row["Pitch Type"],
+                        "Thrown": row["Total Pitches"],
+                        "Usage %": row["Pitch Usage %"],
+                        "Strike %": row["Strike %"],
+                        "Whiff %": row["Whiff %"],
+                        "CSW %": row["CSW %"],
+                        "Chase %": row["Chase %"],
+                    }
+                    for row in sorted(per_type_rows, key=lambda r: (r["CSW %"] if r["CSW %"] is not None else -1), reverse=True)
+                ]
+                children.append(ui_helpers.render_dict_table(table_rows))
+                children.append(ui.p(
+                    "Sorted by CSW% (called strikes + whiffs), highest first -- what's generated the most strikes "
+                    "against this hitter so far. Small sample sizes (low \"Thrown\" counts) are noisy; check the "
+                    "count before trusting a single pitch type's row.",
+                    class_="text-muted small",
+                ))
+            return ui.div(*children)
+        finally:
+            db.close()
+
+    @render.ui
     def live_pitch_sequence_display():
         """Milestone 1 -- see module docstring. Shows only the pitches
         of the current, still-open plate appearance (via
@@ -1616,6 +2097,156 @@ def game_tracking_server(input, output, session, app_state):
         finally:
             db.close()
 
+    def _register_lineup_moves(squad, prefix):
+        """Milestone 4 -- see module docstring. Live, in-game batting
+        substitutions and mid-order slot additions, registered per squad
+        (called for both squads below, same one-set-of-functions-
+        registered-twice pattern _register_squad_lineup already uses).
+        Lives entirely in Live Tracking, not duplicated into Lineup &
+        Setup, since these are live events tied to the current
+        inning/outs -- same reasoning _confirm_pitching_change follows,
+        reading _load_tracking_context's own state rather than
+        re-deriving it."""
+
+        @output(id=f"{prefix}_moves")
+        @render.ui
+        def _moves_ui():
+            _pa_tick()
+            if not _access_ok() or not _can_edit():
+                return None
+            game_id = _active_game_id()
+            if game_id is None:
+                return None
+            db = get_session()
+            try:
+                game = db.query(Game).filter(Game.game_id == game_id).first()
+                if game is None or game.status != "In Progress" or (squad == "B" and not game.is_intrasquad):
+                    return None
+                slots = (
+                    db.query(GameLineupSlot)
+                    .options(joinedload(GameLineupSlot.substitutions))
+                    .filter(GameLineupSlot.game_id == game_id, GameLineupSlot.squad == squad)
+                    .order_by(GameLineupSlot.batting_order).all()
+                )
+                if not slots:
+                    return None  # no saved lineup for this squad yet -- nothing to substitute into
+
+                occupant_ids = {s.lineup_slot_id: get_current_slot_occupant_id(s) for s in slots}
+                players_by_id = {
+                    p.player_id: p for p in db.query(Player).filter(
+                        Player.player_id.in_([pid for pid in occupant_ids.values() if pid])
+                    ).all()
+                }
+                slot_choices = {}
+                for s in slots:
+                    occ = players_by_id.get(occupant_ids[s.lineup_slot_id])
+                    label = f"#{s.batting_order} — {occ.first_name} {occ.last_name}" if occ else f"#{s.batting_order} — —"
+                    slot_choices[str(s.lineup_slot_id)] = label
+
+                occupied_ids = _currently_occupied_player_ids(game, squad)
+                eligible = db.query(Player).filter(Player.active.is_(True)).order_by(Player.last_name, Player.first_name).all()
+                eligible_choices = {"": "-- Select --"}
+                eligible_choices.update({str(p.player_id): f"{p.first_name} {p.last_name}" for p in eligible if p.player_id not in occupied_ids})
+
+                positions = db.query(Position).order_by(Position.display_order).all()
+                sub_position_choices = {"": "No change"}
+                sub_position_choices.update({str(pos.position_id): pos.position_name for pos in positions})
+                add_position_choices = {"": "-- Position --"}
+                add_position_choices.update({str(pos.position_id): pos.position_name for pos in positions})
+
+                max_order = max((s.batting_order for s in slots), default=0)
+                order_choices = {str(i): str(i) for i in range(1, max_order + 2)}
+
+                title_suffix = " (Squad B)" if squad == "B" else ""
+
+                return ui.accordion(
+                    ui.accordion_panel(
+                        f"Substitute into a slot{title_suffix}",
+                        ui.input_select(f"{prefix}_sub_slot_select", "Slot", choices=slot_choices),
+                        ui.input_select(f"{prefix}_sub_player_select", "Incoming player", choices=eligible_choices),
+                        ui.input_select(f"{prefix}_sub_position_select", "New position (optional)", choices=sub_position_choices),
+                        ui.input_action_button(f"{prefix}_confirm_sub_btn", "Confirm substitution", class_="btn-sm btn-primary"),
+                    ),
+                    ui.accordion_panel(
+                        f"Add a batting slot{title_suffix}",
+                        ui.input_select(f"{prefix}_add_player_select", "Incoming player", choices=eligible_choices),
+                        ui.input_select(f"{prefix}_add_order_select", "Batting order position", choices=order_choices, selected=str(max_order + 1)),
+                        ui.input_select(f"{prefix}_add_position_select", "Position (optional)", choices=add_position_choices),
+                        ui.input_action_button(f"{prefix}_confirm_add_btn", "Add to lineup", class_="btn-sm btn-primary"),
+                    ),
+                    open=False, id=None,
+                )
+            finally:
+                db.close()
+
+        @reactive.effect
+        @reactive.event(input[f"{prefix}_confirm_sub_btn"])
+        def _confirm_sub():
+            game_id = _active_game_id()
+            if game_id is None:
+                return
+            req(f"{prefix}_sub_slot_select" in input)
+            slot_raw = input[f"{prefix}_sub_slot_select"]()
+            player_raw = input[f"{prefix}_sub_player_select"]()
+            if not slot_raw or not player_raw:
+                ui.notification_show("Pick both a slot and an incoming player.", type="error", duration=8)
+                return
+            db = get_session()
+            try:
+                ctx = _load_tracking_context(db, game_id)
+                if ctx is None:
+                    return
+                game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state = ctx
+                slot = db.query(GameLineupSlot).filter(GameLineupSlot.lineup_slot_id == int(slot_raw), GameLineupSlot.game_id == game_id).first()
+                if slot is None:
+                    return
+                position_raw = input[f"{prefix}_sub_position_select"]() if f"{prefix}_sub_position_select" in input else ""
+                db.add(LineupSubstitution(
+                    game_id=game_id, lineup_slot_id=slot.lineup_slot_id, player_id=int(player_raw),
+                    inning=state["inning"], outs_at_entry=state["outs"], pitch_sequence_at_entry=len(pitches),
+                    new_position_id=int(position_raw) if position_raw else None,
+                ))
+                db.commit()
+                player = db.query(Player).filter(Player.player_id == int(player_raw)).first()
+                ui.notification_show(f"{player.first_name} {player.last_name} is now in the #{slot.batting_order} spot.", type="message", duration=8)
+                _bump_pa()
+                _bump_refresh()
+            finally:
+                db.close()
+
+        @reactive.effect
+        @reactive.event(input[f"{prefix}_confirm_add_btn"])
+        def _confirm_add():
+            game_id = _active_game_id()
+            if game_id is None:
+                return
+            req(f"{prefix}_add_player_select" in input)
+            player_raw = input[f"{prefix}_add_player_select"]()
+            order_raw = input[f"{prefix}_add_order_select"]() if f"{prefix}_add_order_select" in input else ""
+            if not player_raw or not order_raw:
+                ui.notification_show("Pick both an incoming player and a batting-order position.", type="error", duration=8)
+                return
+            db = get_session()
+            try:
+                game = db.query(Game).filter(Game.game_id == game_id).first()
+                if game is None:
+                    return
+                position_raw = input[f"{prefix}_add_position_select"]() if f"{prefix}_add_position_select" in input else ""
+                _insert_lineup_slot_at(
+                    db, game_id, squad, int(order_raw), int(player_raw),
+                    int(position_raw) if position_raw else None,
+                )
+                db.commit()
+                player = db.query(Player).filter(Player.player_id == int(player_raw)).first()
+                ui.notification_show(f"{player.first_name} {player.last_name} added to the lineup at #{order_raw}.", type="message", duration=8)
+                _bump_pa()
+                _bump_refresh()
+            finally:
+                db.close()
+
+    _register_lineup_moves("A", "squad_a_lineup")
+    _register_lineup_moves("B", "squad_b_lineup")
+
     @render.ui
     def pitch_type_and_outcome_picker():
         _pa_tick()
@@ -1662,8 +2293,16 @@ def game_tracking_server(input, output, session, app_state):
         finally:
             db.close()
 
-    @render.ui
-    def intended_location_preview():
+    @render_plotly
+    def intended_location_widget():
+        """Real click-to-place intended pitch location, replacing the
+        numeric-entry + static-preview-image workaround (see module
+        docstring's Milestone 2 note). Clicking anywhere in the zone
+        writes the clicked point into intended_x_input/intended_z_input
+        via _register_click_to_numeric below -- those two numeric
+        inputs stay the actual source of truth (still directly typeable
+        for fine correction), so _do_record_pitch and everything else
+        downstream is completely unchanged."""
         if not _access_ok() or not _can_edit():
             return None
         game_id = _active_game_id()
@@ -1678,10 +2317,29 @@ def game_tracking_server(input, output, session, app_state):
             db.close()
         req("intended_x_input" in input)
         x, z = input.intended_x_input(), input.intended_z_input()
-        fig = strike_zone.build_zone_selector_figure(marker_x=x, marker_z=z)
-        return ui.div(
-            chart_helpers.fig_to_img(fig, width=300, height=300),
-            ui.p(f"Intended: {x:+.2f} ft, {z:.2f} ft high", class_="text-muted small text-center"),
+        return _build_clickable_widget(strike_zone.build_zone_selector_figure(marker_x=x, marker_z=z))
+
+    _register_click_to_numeric(intended_location_widget, "intended_x_input", "intended_z_input", 2)
+
+    @render.ui
+    def intended_location_caption():
+        if not _access_ok() or not _can_edit():
+            return None
+        game_id = _active_game_id()
+        if game_id is None:
+            return None
+        db = get_session()
+        try:
+            ctx = _load_tracking_context(db, game_id)
+            if ctx is None or ctx[0].status != "In Progress" or ctx[5]["is_our_batting"]:
+                return None
+        finally:
+            db.close()
+        req("intended_x_input" in input)
+        x, z = input.intended_x_input(), input.intended_z_input()
+        return ui.p(
+            f"Intended: {x:+.2f} ft, {z:.2f} ft high — click the zone above, or type coordinates directly.",
+            class_="text-muted small text-center",
         )
 
     @render.ui
@@ -1711,8 +2369,12 @@ def game_tracking_server(input, output, session, app_state):
             return None
         return ui.div(*children)
 
-    @render.ui
-    def batted_ball_location_preview():
+    @render_plotly
+    def batted_ball_location_widget():
+        """Real click-to-place batted-ball landing spot -- see
+        intended_location_widget above for the pattern (this is the
+        same approach applied to field_location's field selector);
+        clicks write into batted_ball_x_input/batted_ball_y_input."""
         if not _access_ok() or not _can_edit():
             return None
         if _active_game_id() is None:
@@ -1722,11 +2384,25 @@ def game_tracking_server(input, output, session, app_state):
             return None
         req("batted_ball_x_input" in input)
         x, y = input.batted_ball_x_input(), input.batted_ball_y_input()
-        fig = field_location.build_field_selector_figure(marker_x=x, marker_y=y)
+        return _build_clickable_widget(field_location.build_field_selector_figure(marker_x=x, marker_y=y))
+
+    _register_click_to_numeric(batted_ball_location_widget, "batted_ball_x_input", "batted_ball_y_input", 1)
+
+    @render.ui
+    def batted_ball_location_caption():
+        if not _access_ok() or not _can_edit():
+            return None
+        if _active_game_id() is None:
+            return None
+        req("pitch_outcome_select" in input)
+        if input.pitch_outcome_select() != "In Play":
+            return None
+        req("batted_ball_x_input" in input)
+        x, y = input.batted_ball_x_input(), input.batted_ball_y_input()
         dist = field_location.distance_from_plate(x, y)
-        return ui.div(
-            chart_helpers.fig_to_img(fig, width=320, height=340),
-            ui.p(f"Landed: {x:+.0f} ft, {y:.0f} ft deep ({dist:.0f} ft from home)", class_="text-muted small text-center"),
+        return ui.p(
+            f"Landed: {x:+.0f} ft, {y:.0f} ft deep ({dist:.0f} ft from home) — click the field above, or type coordinates directly.",
+            class_="text-muted small text-center",
         )
 
     @render.ui
@@ -1922,6 +2598,19 @@ def game_tracking_server(input, output, session, app_state):
                     ui.notification_show("Couldn't determine who's up -- try refreshing the page.", type="error", duration=8)
                     return
 
+            # Milestone 4 -- which GameLineupSlot the batter currently
+            # occupies, so "who's up next" can look this up directly
+            # instead of re-matching by identity. Only meaningful when
+            # the batter is one of our own roster players in a saved
+            # lineup (Squad A batting, or intrasquad Squad B batting) --
+            # None for a true external-opponent batter, where there's no
+            # GameLineupSlot to reference.
+            batting_slot_id = None
+            if state["is_our_batting"]:
+                batting_slot_id = _resolve_current_batting_slot(squad_a_slots, our_player_choice)
+            elif game.is_intrasquad:
+                batting_slot_id = _resolve_current_batting_slot(squad_b_slots, opp_our_player_choice)
+
             req("pitch_type_select" in input)
             pitch_type_name = input.pitch_type_select()
             pitch_types = db.query(PitchType).all()
@@ -1985,6 +2674,7 @@ def game_tracking_server(input, output, session, app_state):
                 opponent_batting_order=opp_batting_order_choice if not state["is_our_batting"] else None,
                 opponent_player_id=opp_player_choice if not state["is_our_batting"] else None,
                 opponent_our_player_id=opp_our_player_choice,
+                batting_slot_id=batting_slot_id,
                 pa_pitch_number=state["pa_pitch_number"],
                 balls_before=state["balls"],
                 strikes_before=state["strikes"],
@@ -2063,7 +2753,8 @@ def game_tracking_server(input, output, session, app_state):
             ui.hr(),
             ui.output_ui("video_review_jump_picker"),
             ui.output_ui("video_review_detail"),
-            ui.output_ui("video_review_preview"),
+            output_widget("video_review_widget"),
+            ui.output_ui("video_review_caption"),
             ui.output_ui("video_review_nav"),
         )
 
@@ -2308,19 +2999,33 @@ def game_tracking_server(input, output, session, app_state):
         finally:
             db.close()
 
-    @render.ui
-    def video_review_preview():
+    @render_plotly
+    def video_review_widget():
+        """Real click-to-place actual pitch location -- see
+        intended_location_widget above for the pattern; clicks write
+        into vr_actual_x_input/vr_actual_z_input."""
         if not _access_ok() or not _can_edit():
             return None
         if _vr_current_pitch_id() is None:
             return None
         req("vr_actual_x_input" in input)
         x, z = input.vr_actual_x_input(), input.vr_actual_z_input()
-        fig = strike_zone.build_zone_selector_figure(marker_x=x, marker_z=z)
+        return _build_clickable_widget(strike_zone.build_zone_selector_figure(marker_x=x, marker_z=z))
+
+    _register_click_to_numeric(video_review_widget, "vr_actual_x_input", "vr_actual_z_input", 2)
+
+    @render.ui
+    def video_review_caption():
+        if not _access_ok() or not _can_edit():
+            return None
+        if _vr_current_pitch_id() is None:
+            return None
+        req("vr_actual_x_input" in input)
+        x, z = input.vr_actual_x_input(), input.vr_actual_z_input()
         located = strike_zone.is_in_zone(x, z)
-        return ui.div(
-            chart_helpers.fig_to_img(fig, width=320, height=320),
-            ui.p(f"Marked: {x:+.2f} ft, {z:.2f} ft high — {'In zone' if located else 'Out of zone'}", class_="text-muted small text-center"),
+        return ui.p(
+            f"Marked: {x:+.2f} ft, {z:.2f} ft high — {'In zone' if located else 'Out of zone'} — click the zone above, or type coordinates directly.",
+            class_="text-muted small text-center",
         )
 
     @render.ui
