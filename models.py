@@ -1115,15 +1115,16 @@ class Game(Base):
     opponent_starting_pitcher = relationship("OpponentPlayer", foreign_keys=[opponent_starting_pitcher_id])
     pitches = relationship("GamePitch", back_populates="game", cascade="all, delete-orphan", order_by="GamePitch.pitch_sequence")
     pitching_changes = relationship("PitchingChange", back_populates="game", cascade="all, delete-orphan", order_by="PitchingChange.pitch_sequence_at_entry")
+    lineup_substitutions = relationship("LineupSubstitution", back_populates="game", cascade="all, delete-orphan", order_by="LineupSubstitution.pitch_sequence_at_entry")
     video_clips = relationship("GameVideoClip", back_populates="game", cascade="all, delete-orphan", order_by="GameVideoClip.uploaded_at")
 
 
 class GameLineupSlot(Base):
-    """One batting-order slot for a lineup in a given game -- who's
-    hitting where, and their starting defensive position. Pitching
-    changes aren't tracked as a separate list in this first version --
-    who pitched is simply whatever's on the GamePitch records
-    (pitcher_player_id), derived rather than pre-declared.
+    """One batting-order slot for a lineup in a given game -- who
+    STARTED hitting where, and their starting defensive position.
+    Pitching changes aren't tracked as a separate list in this first
+    version -- who pitched is simply whatever's on the GamePitch
+    records (pitcher_player_id), derived rather than pre-declared.
 
     squad: 'A' (default) or 'B'. For every external game this is always
     'A' -- the "OUR lineup" this table was originally built for. For
@@ -1133,19 +1134,38 @@ class GameLineupSlot(Base):
     lineup instead of only Squad A having one and Squad B being picked
     ad hoc every at-bat. Squad B's PITCHING staff (starting
     pitcher/pitching changes) is intentionally NOT covered by this --
-    that stays a per-at-bat pick, same as before this column existed."""
+    that stays a per-at-bat pick, same as before this column existed.
+
+    player_id/starting_position_id are this slot's ORIGINAL occupant --
+    kept immutable once saved, same as PitchingChange never rewrites
+    Game.starting_pitcher_id. Who's CURRENTLY in this slot (after any
+    in-game substitutions) is derived, not stored here -- see
+    LineupSubstitution below and game_tracking.py's
+    get_current_slot_occupant_id()/get_current_slot_position_id(), the
+    batting-side equivalent of get_current_pitcher_id() for pitching.
+
+    batting_order can be renumbered in place when a new slot is
+    inserted mid-order (game_tracking.py's _insert_lineup_slot_at --
+    every existing slot at or after the insertion point shifts +1).
+    This is safe: every foreign key that references a slot
+    (LineupSubstitution.lineup_slot_id, GamePitch.batting_slot_id)
+    points at lineup_slot_id, this row's stable primary key, never at
+    the batting_order value -- so renumbering never invalidates a past
+    pitch's or substitution's slot reference, it only changes what
+    order number that slot currently displays as."""
     __tablename__ = "game_lineup_slots"
 
     lineup_slot_id = Column(Integer, primary_key=True)
     game_id = Column(Integer, ForeignKey("games.game_id"), nullable=False)
     squad = Column(String(1), nullable=False, default="A")  # 'A' or 'B' -- see class docstring
-    batting_order = Column(Integer, nullable=False)  # 1-9 (or more, extra hitters/re-entry not handled in v1)
+    batting_order = Column(Integer, nullable=False)  # 1-9 (or more -- extra slots can be inserted anywhere mid-game, see class docstring)
     player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)
     starting_position_id = Column(Integer, ForeignKey("positions.position_id"), nullable=True)
 
     game = relationship("Game", back_populates="lineup_slots")
     player = relationship("Player")
     starting_position = relationship("Position")
+    substitutions = relationship("LineupSubstitution", back_populates="lineup_slot", cascade="all, delete-orphan", order_by="LineupSubstitution.pitch_sequence_at_entry")
 
 
 class OpponentLineupSlot(Base):
@@ -1203,6 +1223,53 @@ class PitchingChange(Base):
     player = relationship("Player")
 
 
+class LineupSubstitution(Base):
+    """A formal record of a player entering an EXISTING batting-order
+    slot (GameLineupSlot), replacing whoever currently occupies it --
+    who, and when (inning/outs/pitch sequence at entry). Analogous to
+    PitchingChange above, but scoped to ONE lineup slot rather than the
+    whole team, since batting has many simultaneous "current occupants"
+    (one per batting-order slot) instead of a single pitcher role.
+
+    The "current occupant" of a given slot is derived from the MOST
+    RECENT LineupSubstitution for that slot (falling back to
+    GameLineupSlot.player_id -- the slot's original starter -- if none
+    exist yet), the exact same "most-recent-wins, fall back to the
+    starting field" idea PitchingChange already uses -- see
+    game_tracking.py's get_current_slot_occupant_id(), the batting-side
+    equivalent of get_current_pitcher_id().
+
+    Adding a brand-new slot that wasn't part of the original lineup
+    (an "extra hitter" cycling into a scrimmage) is a DIFFERENT
+    operation from this table -- see GameLineupSlot's docstring and
+    game_tracking.py's _insert_lineup_slot_at(); this table only covers
+    swapping who's IN an existing slot.
+
+    new_position_id optionally records that the incoming player takes
+    over a different defensive position than the slot's previous
+    occupant, going forward. This is informational only -- who's
+    nominally playing where -- and is NOT used for any fielding-stat
+    attribution (putouts/assists/errors by fielder remain a separate,
+    out-of-scope future phase; this app doesn't track those at all
+    yet)."""
+    __tablename__ = "lineup_substitutions"
+
+    lineup_substitution_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id"), nullable=False)
+    lineup_slot_id = Column(Integer, ForeignKey("game_lineup_slots.lineup_slot_id"), nullable=False)
+    player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)
+    inning = Column(Integer, nullable=False)
+    outs_at_entry = Column(Integer, nullable=False)
+    pitch_sequence_at_entry = Column(Integer, nullable=False)  # overall game pitch # at entry -- orders changes within the slot, same convention as PitchingChange.pitch_sequence_at_entry
+    new_position_id = Column(Integer, ForeignKey("positions.position_id"), nullable=True)  # NULL = position unchanged from whoever/whatever was there before
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    game = relationship("Game", back_populates="lineup_substitutions")
+    lineup_slot = relationship("GameLineupSlot", back_populates="substitutions")
+    player = relationship("Player")
+    new_position = relationship("Position")
+
+
 class PlayerPitchArsenal(Base):
     """Which pitch types a given pitcher actually throws -- filters the
     pitch-type dropdown during live tracking to just their real
@@ -1256,6 +1323,18 @@ class GamePitch(Base):
     opponent_batting_order = Column(Integer, nullable=True)  # only meaningful when is_our_team_batting is False -- their lineup slot
     opponent_player_id = Column(Integer, ForeignKey("opponent_players.opponent_player_id"), nullable=True)  # optional: a specific named player from the opponent's roster, if their team roster is built out
     opponent_our_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)  # intrasquad games only: the OTHER side is actually one of our own roster players (Squad A vs Squad B) -- keeps their stats attributed to their real profile instead of a generic hand/order entry
+    # Which GameLineupSlot the batter currently occupies, at the moment
+    # this pitch was recorded -- set only when a real batter (our
+    # Squad A, or our Squad B in an intrasquad game) is at the plate;
+    # NULL for pitches where we're pitching, and NULL when batting
+    # against a genuine external opponent (their batters aren't backed
+    # by a GameLineupSlot at all). Lets game_tracking.py's
+    # suggest_next_our_batter/suggest_next_squad_b_batter look up "the
+    # next slot after this one" directly, instead of re-matching by
+    # player identity -- which stays robust even if a player is
+    # substituted out and later re-enters the same slot. See
+    # LineupSubstitution and _resolve_current_batting_slot().
+    batting_slot_id = Column(Integer, ForeignKey("game_lineup_slots.lineup_slot_id"), nullable=True)
 
     pa_pitch_number = Column(Integer, nullable=True)  # pitch # within this specific plate appearance
     balls_before = Column(Integer, nullable=True)
@@ -1330,6 +1409,7 @@ class GamePitch(Base):
     opponent_our_player = relationship("Player", foreign_keys=[opponent_our_player_id])
     pitch_type = relationship("PitchType")
     opponent_player = relationship("OpponentPlayer")
+    batting_slot = relationship("GameLineupSlot", foreign_keys=[batting_slot_id])
 
 
 class GameVideoClip(Base):

@@ -70,6 +70,38 @@ def get_pitching_pitches(session, player_id, season_id=None, game_id=None):
     return query.all()
 
 
+def get_pitches_thrown_to_opponent_batter(session, opponent_player_id, season_id=None, game_id=None):
+    """Every pitch WE threw to this specific opposing batter -- an
+    OpponentPlayer (a real external team's roster entry), not one of
+    our own Players, so this is a separate lookup from
+    get_batting_pitches/get_pitching_pitches above (both of which are
+    keyed on our own player_id). This is the data source for Game
+    Tracking's opponent-scouting / pitch-calling card ("what should we
+    throw this hitter?") -- from OUR pitching perspective, so the
+    result plugs straight into compute_pitching_line()/
+    compute_pitch_type_breakdown() unchanged (both are generic over any
+    list of GamePitch rows we threw, regardless of whose stat line
+    they're being aggregated for).
+
+    Only pitches where the coach explicitly identified the batter from
+    the opponent's roster (game_tracking.py's opp_roster_player_select,
+    rather than leaving it "-- Not on roster / unknown --") carry a
+    GamePitch.opponent_player_id and so are attributable this way --
+    an opponent with no roster on file, or at-bats logged without
+    picking a specific name, simply won't show up here."""
+    query = (
+        session.query(GamePitch)
+        .join(Game, GamePitch.game_id == Game.game_id)
+        .options(joinedload(GamePitch.pitch_type))
+        .filter(GamePitch.is_our_team_batting.is_(False), GamePitch.opponent_player_id == opponent_player_id)
+    )
+    if season_id is not None:
+        query = query.filter(Game.season_id == season_id)
+    if game_id is not None:
+        query = query.filter(GamePitch.game_id == game_id)
+    return query.all()
+
+
 HIT_OUTCOMES = {"1B", "2B", "3B", "HR"}
 NON_AB_OUTCOMES = {"BB", "HBP", "Sac Bunt", "Sac Fly"}
 
