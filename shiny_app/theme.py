@@ -198,6 +198,14 @@ a { color: var(--gbo-crimson); }
    guest, authenticated app alike) -- see app.py's outer shell. */
 .gbo-mode-toggle { position: fixed; top: 10px; right: 14px; z-index: 1050; }
 
+/* Auth screens (login/guest-continue) -- centered branded card,
+   consistent with the rest of the "Bold Athletic" system instead of a
+   plain unstyled Bootstrap form. */
+.gbo-auth-wrap { display: flex; justify-content: center; align-items: center; min-height: 80vh; padding: 20px; }
+.gbo-auth-card { background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); border-top: 4px solid var(--gbo-crimson); border-radius: var(--bs-border-radius-lg); padding: 32px 36px; width: 100%; max-width: 420px; }
+.gbo-auth-logo { height: 56px; width: auto; display: block; margin: 0 auto 14px; }
+.gbo-auth-underline { width: 42px; height: 3px; background: var(--gbo-crimson); border-radius: 2px; margin: 0 auto 18px; }
+
 /* Page header -- "Bold Athletic": gold, uppercase, letter-spaced,
    crimson underline -- replaces a plain <h1>/st.title() on every page. */
 .gbo-page-header { font-size: 1.5rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; color: var(--gbo-gold-text); margin-bottom: 6px; }

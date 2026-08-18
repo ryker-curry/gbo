@@ -202,24 +202,24 @@ def server(input, output, session):
 
 def _login_ui(app_state):
     error = app_state.auth_error()
-    error_html = ui.div(ui.tags.span(error, class_="text-danger")) if error else ui.div()
+    error_html = ui.div(ui.tags.span(error, class_="text-danger small"), class_="mt-2 text-center") if error else ui.div()
 
     return ui.div(
-        ui.h2("Gorilla Baseball Operations", class_="text-center mt-4"),
-        ui.p("Log in with your GBO account", class_="text-center text-muted mb-4"),
-        ui.row(
-            ui.column(
-                4,
-                ui.input_text("login_email", "Email"),
-                ui.input_password("login_password", "Password"),
-                ui.input_action_button("login_submit", "Log in", class_="btn-primary w-100 mt-2"),
-                error_html,
-                ui.hr(),
-                ui.p("Just want to see what GBO looks like?", class_="text-muted small"),
-                ui.input_action_button("guest_continue", "Continue as Guest", class_="w-100"),
-                offset=4,
-            ),
+        ui.div(
+            theme.logo_img(css_class="gbo-auth-logo"),
+            ui.div("Gorilla Baseball Operations", class_="gbo-page-header", style="text-align:center;"),
+            ui.div(class_="gbo-auth-underline"),
+            ui.p("Log in with your GBO account", class_="text-muted small", style="text-align:center; margin-bottom:20px;"),
+            ui.input_text("login_email", "Email"),
+            ui.input_password("login_password", "Password"),
+            ui.input_action_button("login_submit", "Log in", class_="btn-primary w-100 mt-3"),
+            error_html,
+            ui.hr(),
+            ui.p("Just want to see what GBO looks like?", class_="text-muted small", style="text-align:center;"),
+            ui.input_action_button("guest_continue", "Continue as Guest", class_="btn-outline-light w-100"),
+            class_="gbo-auth-card",
         ),
+        class_="gbo-auth-wrap",
     )
 
 
