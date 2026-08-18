@@ -11,7 +11,16 @@ change: Shiny reactivity instead of st.session_state + st.rerun().
 Uses database.py/models.py/supabase_client.py completely unchanged --
 those are part of the analytics-engine boundary this migration
 preserves, not something auth-specific to rewrite.
+
+TEMPORARY DEBUG LOGGING: do_login below prints whether SUPABASE_URL/
+SUPABASE_ANON_KEY are visible to the process, and the real exception
+if login fails, to stdout so it shows up in the hosting platform's
+server logs -- without changing what the user sees in the browser
+(still the same generic "Login failed" message). Remove this print()
+block once the live login issue is diagnosed and fixed.
 """
+
+import os
 
 from sqlalchemy.orm import joinedload
 
@@ -27,10 +36,16 @@ def do_login(app_state, email: str, password: str):
     script rerun; here it happens inline since Shiny has no "next
     rerun" to lean on -- reactive.Value.set() below is what actually
     triggers the UI to update)."""
-    supabase = get_supabase_client()
+    print(
+        f"[GBO LOGIN DEBUG] SUPABASE_URL set={bool(os.environ.get('SUPABASE_URL'))} "
+        f"SUPABASE_ANON_KEY set={bool(os.environ.get('SUPABASE_ANON_KEY'))}",
+        flush=True,
+    )
     try:
+        supabase = get_supabase_client()
         result = supabase.auth.sign_in_with_password({"email": email, "password": password})
-    except Exception:
+    except Exception as e:
+        print(f"[GBO LOGIN ERROR] {type(e).__name__}: {e}", flush=True)
         app_state.auth_user.set(None)
         app_state.auth_error.set("Login failed. Check your email and password and try again.")
         return
