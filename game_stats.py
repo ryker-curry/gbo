@@ -358,6 +358,14 @@ def compute_pitching_line(pitches):
     all_pas = _group_into_plate_appearances(pitches)
     completed_pas = [pa for pa in all_pas if pa[-1].ends_plate_appearance]
 
+    # First-Pitch Strike % -- classic pitcher-command KPI: of all
+    # completed plate appearances, how many started with pitch #1 being
+    # a strike (any STRIKE_OUTCOMES pitch -- called, swinging, foul, or
+    # put in play; a HBP or Ball on pitch 1 doesn't count). pa[0] is the
+    # first pitch of that PA per _group_into_plate_appearances' own
+    # ordering.
+    first_pitch_strikes = sum(1 for pa in completed_pas if pa[0].pitch_outcome in STRIKE_OUTCOMES)
+
     early_pas = 0
     ahead_pas = 0
     for pa in completed_pas:
@@ -395,6 +403,7 @@ def compute_pitching_line(pitches):
         # New box-score-style stats, added to match Ryker's Game Stat Sheet:
         "IP": ip_display, "IP (decimal)": round(ip_decimal, 3),
         "Strikes": strikes, "Strike %": _rate(strikes, len(pitches)),
+        "First Pitch Strikes": first_pitch_strikes, "First Pitch Strike %": _rate(first_pitch_strikes, len(completed_pas)),
         "Balls": balls_thrown, "Ball %": _rate(balls_thrown, len(pitches)),
         "Pitches/Inning": round(len(pitches) / ip_decimal, 1) if ip_decimal else None,
         "AB": ab, "Hits": hits_allowed, "HBP": hbp, "XBH": xbh_allowed,
