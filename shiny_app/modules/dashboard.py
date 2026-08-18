@@ -16,19 +16,35 @@ Full port of pages/dashboard.py -- role-adaptive:
     recent assessments across all categories, tracked-session activity
     combining Bullpen + Hitter Tracking) -- deliberately NOT scheduling/
     coaching-operations content, same as the original
-  - Everyone else (Administrator, Head Coach, Coach, Data Analyst):
-    general overview -- roster size, open IDP goals, recent
-    assessments/sessions across all categories
+  - Coach tagged Pitching specialty: pitching-staff KPIs -- a team-wide
+    pitching line (ERA/WHIP/K%/K-BB) aggregated from every charted
+    pitch thrown by anyone on this coach's roster, plus a per-pitcher
+    leaderboard, over a coach-selectable window (current season vs.
+    last 30 days -- see controls()/_pitching_staff_section()).
+  - Coach tagged Hitting specialty: the mirror-opposite -- team-wide
+    hitting line (AVG/OBP/SLG/OPS) plus a per-hitter leaderboard, same
+    selectable window (see _hitter_staff_section()).
+  - Head Coach, and a Coach with no specialty tag (Both/unset): team-
+    ops focus (team record, next game, this week's team schedule, full
+    player-availability detail, recent game results) -- NOT assessment/
+    assignment completion counts, which coaches don't manage day-to-day
+    the way Sports Scientist/Strength Coach do, and NOT the pitching-
+    or hitting-specific KPI split above, since a Head Coach oversees
+    both sides of the ball rather than one specialty.
+  - Administrator, Data Analyst: general overview -- roster size, open
+    IDP goals, recent assessments/sessions across all categories (the
+    original shared "everyone else" dashboard). Revisit Administrator's
+    own dashboard as a separate pass later.
 
 Every staff view is scoped to whichever players the logged-in role can
 see (app_state.can_view_all_players(), same rule used everywhere else)
 -- this is also what makes a Coach assigned only to pitchers naturally
-see a pitcher-focused dashboard, without separate "Pitching Coach" /
-"Hitting Coach" roles.
+see a pitcher-heavy roster feed into their dashboard, on top of the
+specialty-based KPI split above.
 
 Same st.dataframe(list_of_dicts) -> table conversion every other
 migrated module uses, but via the new shared ui_helpers.render_dict_table()
-helper (this file has ~10 of these tables -- the first module to
+helper (this file has ~10+ of these tables -- the first module to
 actually need that dedup, see that function's docstring).
 
 One wording change from the original: its "See My Schedule and My
@@ -49,18 +65,30 @@ from models import (
     AssessmentTestType, AssessmentCategory, IDPGoal, IDPStatus,
     TrainingSession, TeamScheduleEvent, TeamEventType, User,
     PlayerAssignment, ATAppointment, TrainingRoutine, BullpenSession,
-    HitterTrackingSession,
+    HitterTrackingSession, Game, Season,
 )
+from game_stats import get_pitching_pitches, get_batting_pitches, compute_pitching_line, compute_batting_line
 from bucket_system import compute_bucket_system
 
 import ui_helpers
 import bucket_display
+
+# How many of the team's most recent completed games count as "recent
+# form" for the pitching-staff / hitter KPI window toggle -- a game-
+# count window rather than a calendar-day one, since a coach thinks in
+# terms of "the last few outings" and this rides out bye weeks/gaps in
+# the schedule cleanly (a fixed day count can land on zero games one
+# week and two full series the next). 5 games is roughly a weekend
+# series plus a midweek game -- enough of a sample to mean something
+# without going stale. Change this one constant to retune it.
+RECENT_GAMES_COUNT = 5
 
 
 @module.ui
 def dashboard_ui():
     return ui.div(
         ui_helpers.page_header("Dashboard"),
+        ui.output_ui("controls"),
         ui.output_ui("body"),
         ui_helpers.page_footer(),
     )
@@ -68,6 +96,31 @@ def dashboard_ui():
 
 @module.server
 def dashboard_server(input, output, session, app_state):
+    # Static-ish control strip: only rendered (non-empty) for the two
+    # specialty-KPI roles, so it doesn't clutter every other role's
+    # dashboard. Lives in its own output (rather than being built
+    # inline inside body() below) so the radio buttons aren't
+    # destroyed and recreated -- and their selected value reset -- on
+    # every re-render of body() itself.
+    @render.ui
+    def controls():
+        if not app_state.is_authenticated():
+            return None
+        role_name = app_state.role_name()
+        specialty = app_state.coach_specialty()
+        if role_name == "Coach" and specialty in ("Pitching", "Hitting"):
+            return ui.div(
+                ui.input_radio_buttons(
+                    "kpi_window",
+                    None,
+                    {"season": "Current Season", "recent": f"Last {RECENT_GAMES_COUNT} Games"},
+                    selected="season",
+                    inline=True,
+                ),
+                class_="mb-3",
+            )
+        return None
+
     @render.ui
     def body():
         if not app_state.is_authenticated():
@@ -76,6 +129,7 @@ def dashboard_server(input, output, session, app_state):
         role_name = app_state.role_name()
         current_user_id = app_state.user_id()
         can_view_all = app_state.can_view_all_players()
+        specialty = app_state.coach_specialty()
         mode = app_state.dark_mode() or "dark"
 
         db = get_session()
@@ -117,6 +171,18 @@ def dashboard_server(input, output, session, app_state):
                 sections.append(_strength_coach_section(db, players, player_ids, week_ago))
             elif role_name == "Sports Scientist":
                 sections.append(_sports_scientist_section(db, players, player_ids, week_ago))
+            elif role_name == "Coach" and specialty == "Pitching":
+                # Reads the radio button rendered by controls() above --
+                # accessing it before the client has echoed its default
+                # value back is expected to briefly hold this output
+                # empty (Shiny's normal "silent" retry behavior for a
+                # not-yet-available input), then it renders once the
+                # value arrives -- no error, no explicit fallback needed.
+                sections.append(_pitching_staff_section(db, players, input.kpi_window()))
+            elif role_name == "Coach" and specialty == "Hitting":
+                sections.append(_hitter_staff_section(db, players, input.kpi_window()))
+            elif role_name in ("Head Coach", "Coach"):
+                sections.append(_head_coach_section(db, players, player_ids, week_ago))
             else:
                 sections.append(_general_section(db, players, player_ids, week_ago))
 
@@ -626,7 +692,370 @@ def _sports_scientist_section(db, players, player_ids, week_ago):
 
 
 # =============================================================================
-# EVERYONE ELSE -- general overview (Administrator, Head Coach, Coach, Data Analyst)
+# SHARED HELPERS -- "current season" resolution and window-scoped pitch
+# lookups, used by both specialty-KPI sections below.
+# =============================================================================
+
+def _current_season(db):
+    """Best-guess 'current season' for the season-window KPI toggle: the
+    Season row whose start/end date range contains today, or (if none is
+    dated that way -- e.g. no end_date set yet for an ongoing season) the
+    most recently started one. Returns None if no seasons exist yet at
+    all, in which case callers fall back to all-time charted data rather
+    than showing an empty page."""
+    today = date.today()
+    seasons = db.query(Season).all()
+    for s in seasons:
+        if s.start_date and s.end_date and s.start_date <= today <= s.end_date:
+            return s
+    dated = [s for s in seasons if s.start_date]
+    if dated:
+        return max(dated, key=lambda s: s.start_date)
+    return None
+
+
+def _recent_game_ids(db, n):
+    """The game_ids of the N most recently completed (Final) games, by
+    date -- both external and intrasquad, since intrasquad reps are
+    still real charted innings/at-bats worth including in a "recent
+    form" read. This is the game-count version of the KPI window
+    toggle: naturally rides out bye weeks/schedule gaps, unlike a fixed
+    calendar-day cutoff."""
+    games = (
+        db.query(Game.game_id)
+        .filter(Game.status == "Final")
+        .order_by(Game.game_date.desc())
+        .limit(n)
+        .all()
+    )
+    return {row[0] for row in games}
+
+
+def _pitching_pitches_for_window(db, player_id, window, season, recent_game_ids):
+    if window == "recent":
+        return [p for p in get_pitching_pitches(db, player_id) if p.game_id in recent_game_ids]
+    # "season" -- or any unrecognized value defaults here too
+    return get_pitching_pitches(db, player_id, season_id=season.season_id if season else None)
+
+
+def _batting_pitches_for_window(db, player_id, window, season, recent_game_ids):
+    if window == "recent":
+        return [p for p in get_batting_pitches(db, player_id) if p.game_id in recent_game_ids]
+    return get_batting_pitches(db, player_id, season_id=season.season_id if season else None)
+
+
+def _window_controls_caption(window, season):
+    if window == "recent":
+        return f"Showing: Last {RECENT_GAMES_COUNT} Games"
+    if season is not None:
+        return f"Showing: Current Season ({season.season_name})"
+    return "Showing: All-time (no season set up yet)"
+
+
+# =============================================================================
+# COACH -- Pitching specialty: pitching-staff KPIs
+# =============================================================================
+
+def _pitching_staff_section(db, players, window):
+    """Team-wide pitching KPIs for a Pitching-specialty Coach: an
+    aggregate staff pitching line built from every charted pitch thrown
+    by anyone on this coach's roster (combined into one box score via
+    game_stats.compute_pitching_line -- correctly weighted, not an
+    average of individual rates), then a per-pitcher leaderboard below
+    ranked by workload (innings pitched) so the staff's most-used arms
+    surface first. window is "season" (current Season by date range) or
+    "recent" (last RECENT_GAMES_COUNT completed games), driven by the
+    radio toggle in controls() above."""
+    season = _current_season(db)
+    recent_game_ids = _recent_game_ids(db, RECENT_GAMES_COUNT) if window == "recent" else set()
+
+    per_pitcher = []
+    all_pitches = []
+    for p in players:
+        pitches = _pitching_pitches_for_window(db, p.player_id, window, season, recent_game_ids)
+        if not pitches:
+            continue
+        line = compute_pitching_line(pitches)
+        per_pitcher.append((p, line))
+        all_pitches.extend(pitches)
+
+    per_pitcher.sort(key=lambda row: row[1]["IP (decimal)"] or 0, reverse=True)
+
+    sections = [ui.p(_window_controls_caption(window, season), class_="text-muted small")]
+
+    if not all_pitches:
+        sections.append(ui_helpers.empty_state(
+            "No charted pitches yet for this window -- log some innings in Game Tracking."
+        ))
+        return ui.div(*sections)
+
+    team_line = compute_pitching_line(all_pitches)
+    era_key = "ERA (runs-allowed avg -- ER not tracked)"
+
+    sections.append(ui_helpers.render_kpi_cards([
+        {"label": "Team ERA*", "value": str(team_line[era_key]) if team_line[era_key] is not None else "—"},
+        {"label": "WHIP", "value": str(team_line["WHIP"]) if team_line["WHIP"] is not None else "—"},
+        {"label": "K %", "value": f'{team_line["K %"]}%' if team_line["K %"] is not None else "—"},
+        {"label": "K/BB", "value": str(team_line["K/BB"]) if team_line["K/BB"] is not None else "—"},
+        {"label": "First Pitch Strike %", "value": f'{team_line["First Pitch Strike %"]}%' if team_line["First Pitch Strike %"] is not None else "—"},
+    ]))
+    sections.append(ui.p(
+        "*Runs-allowed average -- GBO doesn't track earned vs. unearned runs.",
+        class_="text-muted small",
+    ))
+
+    sections.append(ui.hr())
+    sections.append(ui.h5("Pitching Staff Leaderboard", class_="gbo-section-title"))
+    sections.append(ui_helpers.render_dict_table(
+        [
+            {
+                "Pitcher": f"{p.first_name} {p.last_name}",
+                "IP": line["IP"],
+                "ERA*": line[era_key] if line[era_key] is not None else "—",
+                "WHIP": line["WHIP"] if line["WHIP"] is not None else "—",
+                "K": line["K"], "BB": line["BB"],
+                "K %": line["K %"] if line["K %"] is not None else "—",
+                "FPS %": line["First Pitch Strike %"] if line["First Pitch Strike %"] is not None else "—",
+                "BF": line["Batters Faced"],
+            }
+            for p, line in per_pitcher
+        ],
+        empty_message="No pitchers with charted innings yet.",
+    ))
+    sections.append(ui.p(
+        "See Bullpen Dashboard / Pitcher Game Report in the navigation for full pitch-by-pitch detail.",
+        class_="text-muted small",
+    ))
+
+    return ui.div(*sections)
+
+
+# =============================================================================
+# COACH -- Hitting specialty: hitter KPIs
+# =============================================================================
+
+def _hitter_staff_section(db, players, window):
+    """Mirror-opposite of _pitching_staff_section() above, for a
+    Hitting-specialty Coach: team-wide hitting line (AVG/OBP/SLG/OPS)
+    aggregated from every charted plate appearance for anyone on this
+    coach's roster, plus a per-hitter leaderboard ranked by plate
+    appearances (most active hitters first). Same window toggle as the
+    pitching side."""
+    season = _current_season(db)
+    recent_game_ids = _recent_game_ids(db, RECENT_GAMES_COUNT) if window == "recent" else set()
+
+    per_hitter = []
+    all_pitches = []
+    for p in players:
+        pitches = _batting_pitches_for_window(db, p.player_id, window, season, recent_game_ids)
+        if not pitches:
+            continue
+        line = compute_batting_line(pitches)
+        per_hitter.append((p, line))
+        all_pitches.extend(pitches)
+
+    per_hitter.sort(key=lambda row: row[1]["PA"] or 0, reverse=True)
+
+    sections = [ui.p(_window_controls_caption(window, season), class_="text-muted small")]
+
+    if not all_pitches:
+        sections.append(ui_helpers.empty_state(
+            "No charted plate appearances yet for this window -- log some at-bats in Game Tracking."
+        ))
+        return ui.div(*sections)
+
+    team_line = compute_batting_line(all_pitches)
+
+    sections.append(ui_helpers.render_kpi_cards([
+        {"label": "Team AVG", "value": str(team_line["AVG"]) if team_line["AVG"] is not None else "—"},
+        {"label": "Team OBP", "value": str(team_line["OBP"]) if team_line["OBP"] is not None else "—"},
+        {"label": "Team SLG", "value": str(team_line["SLG"]) if team_line["SLG"] is not None else "—"},
+        {"label": "Team OPS", "value": str(team_line["OPS"]) if team_line["OPS"] is not None else "—"},
+    ]))
+
+    sections.append(ui.hr())
+    sections.append(ui.h5("Hitters Leaderboard", class_="gbo-section-title"))
+    sections.append(ui_helpers.render_dict_table(
+        [
+            {
+                "Hitter": f"{p.first_name} {p.last_name}",
+                "PA": line["PA"], "AB": line["AB"],
+                "AVG": line["AVG"] if line["AVG"] is not None else "—",
+                "OBP": line["OBP"] if line["OBP"] is not None else "—",
+                "SLG": line["SLG"] if line["SLG"] is not None else "—",
+                "OPS": line["OPS"] if line["OPS"] is not None else "—",
+                "BB %": line["BB %"] if line["BB %"] is not None else "—",
+                "K %": line["K %"] if line["K %"] is not None else "—",
+            }
+            for p, line in per_hitter
+        ],
+        empty_message="No hitters with charted plate appearances yet.",
+    ))
+    sections.append(ui.p(
+        "See Hitter Tracking / Hitter Game Report in the navigation for full at-bat detail.",
+        class_="text-muted small",
+    ))
+
+    return ui.div(*sections)
+
+
+# =============================================================================
+# HEAD COACH, and COACH with no Pitching/Hitting specialty -- team-ops
+# focus: record, next game, this week's schedule, full player
+# availability, recent results. Replaces the assessment/assignment-
+# completion-count view these roles used to share with Administrator/
+# Data Analyst below -- that's not what a coach actually manages day to
+# day.
+# =============================================================================
+
+def _head_coach_section(db, players, player_ids, week_ago):
+    today = date.today()
+    week_ahead = today + timedelta(days=6)
+
+    # --- Record: external (non-intrasquad) Final games only -- a
+    # scrimmage against your own Squad B shouldn't count toward the
+    # season record. ---
+    final_games = (
+        db.query(Game)
+        .options(joinedload(Game.opponent_team))
+        .filter(Game.status == "Final")
+        .order_by(Game.game_date.desc())
+        .all()
+    )
+    external_finals = [g for g in final_games if not g.is_intrasquad]
+    wins = sum(1 for g in external_finals if g.our_score > g.opponent_score)
+    losses = sum(1 for g in external_finals if g.our_score < g.opponent_score)
+    ties = sum(1 for g in external_finals if g.our_score == g.opponent_score)
+    record_label = f"{wins}-{losses}" + (f"-{ties}" if ties else "")
+
+    # --- Next game ---
+    next_game = (
+        db.query(Game)
+        .options(
+            joinedload(Game.opponent_team),
+            joinedload(Game.starting_pitcher),
+            joinedload(Game.opponent_starting_pitcher),
+        )
+        .filter(Game.game_date >= today, Game.status.in_(["Scheduled", "In Progress", "Paused"]))
+        .order_by(Game.game_date)
+        .first()
+    )
+
+    def _opp_label(g):
+        if g.opponent_team:
+            return g.opponent_team.team_name
+        if g.is_intrasquad:
+            return "Intrasquad"
+        return g.opponent_name or "TBD"
+
+    if next_game:
+        next_game_value = f"{next_game.game_date.strftime('%-m/%-d')} vs {_opp_label(next_game)}"
+    else:
+        next_game_value = "None scheduled"
+
+    # --- Player availability ---
+    status_counts = {}
+    for p in players:
+        name = p.status.status_name if p.status else "Unknown"
+        status_counts[name] = status_counts.get(name, 0) + 1
+    injured_count = status_counts.get("Injured", 0)
+    medical_hold_count = status_counts.get("Medical Hold", 0)
+
+    # --- This week's team schedule ---
+    team = players[0].team if players else None
+    week_events = (
+        db.query(TeamScheduleEvent)
+        .options(joinedload(TeamScheduleEvent.event_type))
+        .filter(
+            TeamScheduleEvent.team_id == team.team_id,
+            TeamScheduleEvent.scheduled_date >= today,
+            TeamScheduleEvent.scheduled_date <= week_ahead,
+        )
+        .order_by(TeamScheduleEvent.scheduled_date)
+        .all()
+    ) if team else []
+
+    sections = [ui_helpers.render_kpi_cards([
+        {"label": "Record", "value": record_label},
+        {"label": "Next Game", "value": next_game_value},
+        {"label": "Injured", "value": str(injured_count)},
+        {"label": "Medical Hold", "value": str(medical_hold_count)},
+    ])]
+
+    # --- This week ---
+    sections.append(ui.hr())
+    sections.append(ui.h5("This Week", class_="gbo-section-title"))
+    if not week_events:
+        sections.append(ui_helpers.empty_state("Nothing on the team schedule this week."))
+    else:
+        sections.append(ui_helpers.render_dict_table([
+            {
+                "Date": e.scheduled_date.strftime("%Y-%m-%d (%a)"),
+                "Type": e.event_type.type_name if e.event_type else "Event",
+                "Title": e.title,
+                "Pitchers only": "Yes" if e.pitchers_only else "",
+            }
+            for e in week_events
+        ]))
+
+    # --- Next game detail ---
+    sections.append(ui.hr())
+    sections.append(ui.h5("Next Game", class_="gbo-section-title"))
+    if next_game is None:
+        sections.append(ui_helpers.empty_state("No upcoming game scheduled -- add one from Game Tracking."))
+    else:
+        location = "Home" if next_game.is_home else ("Away" if next_game.is_home is False else "—")
+        our_sp = f"{next_game.starting_pitcher.first_name} {next_game.starting_pitcher.last_name}" if next_game.starting_pitcher else "Not set"
+        sections.append(ui.p(
+            ui.strong(f"{_opp_label(next_game)} — {next_game.game_date.strftime('%Y-%m-%d (%a)')}"),
+            f" ({location})",
+        ))
+        sections.append(ui.p(f"Our starting pitcher: {our_sp}", class_="text-muted small"))
+        if not next_game.is_intrasquad:
+            their_sp = next_game.opponent_starting_pitcher.player_name if next_game.opponent_starting_pitcher else "Unknown"
+            sections.append(ui.p(f"Their starting pitcher: {their_sp}", class_="text-muted small"))
+
+    # --- Player availability detail ---
+    sections.append(ui.hr())
+    sections.append(ui.h5("Player Availability", class_="gbo-section-title"))
+    flagged_statuses = ("Injured", "Medical Hold")
+    flagged_players = [p for p in players if p.status and p.status.status_name in flagged_statuses]
+    sections.append(ui_helpers.render_dict_table(
+        [
+            {
+                "Name": f"{p.first_name} {p.last_name}",
+                "Status": p.status.status_name if p.status else "—",
+                "Position": p.player_position.position_name if p.player_position else "—",
+            }
+            for p in flagged_players
+        ],
+        empty_message="Everyone is available -- no players currently injured or on medical hold.",
+    ))
+
+    # --- Recent results ---
+    sections.append(ui.hr())
+    sections.append(ui.h5("Recent Results", class_="gbo-section-title"))
+    recent_finals = final_games[:5]
+    if not recent_finals:
+        sections.append(ui_helpers.empty_state("No completed games logged yet."))
+    else:
+        sections.append(ui_helpers.render_dict_table([
+            {
+                "Date": g.game_date.strftime("%Y-%m-%d (%a)"),
+                "Opponent": _opp_label(g),
+                "Score": f"{g.our_score}-{g.opponent_score}",
+                "Result": "W" if g.our_score > g.opponent_score else ("L" if g.our_score < g.opponent_score else "T"),
+            }
+            for g in recent_finals
+        ]))
+        sections.append(ui.p("See Player Stats / Game Reports in the navigation for full box scores and trends.", class_="text-muted small"))
+
+    return ui.div(*sections)
+
+
+# =============================================================================
+# ADMINISTRATOR / DATA ANALYST -- general overview (unchanged for now --
+# revisit Administrator's own dashboard as a separate pass later)
 # =============================================================================
 
 def _general_section(db, players, player_ids, week_ago):
