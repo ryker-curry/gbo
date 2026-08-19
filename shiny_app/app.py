@@ -256,7 +256,7 @@ _GUEST_ASSESSMENT_CATEGORIES = [
      "throwing arm vs. non-throwing arm). This tracks a player's power-to-weight ratio and conditioning "
      "level over an offseason or season, and asymmetries between limbs can flag developing imbalances "
      "before they become injuries."),
-    ("Mobility & ROM", "22 range-of-motion measurements",
+    ("Mobility & ROM", "24 range-of-motion measurements",
      "How far the shoulder, elbow, and hip move, tested bilaterally (or by drive leg/plant leg for "
      "the hip) -- plus Total Arc of Motion and GIRD (Glenohumeral Internal Rotation Deficit), both "
      "calculated automatically from the shoulder readings rather than tested separately. Restricted "
