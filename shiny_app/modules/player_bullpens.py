@@ -269,6 +269,11 @@ def player_bullpens_server(input, output, session, app_state):
     # one page load. Same "gate behind an explicit click" fix already
     # applied to Bullpen Dashboard for the same reason.
     _charts_shown = reactive.Value(frozenset())
+    # Shared cache for chart_helpers.render_chart_async -- see that
+    # function's docstring for the "Loading chart..." two-tick mechanism.
+    # One cache shared by every session's chart outputs is fine (see the
+    # docstring's note on the harmless extra-churn tradeoff).
+    _chart_cache = reactive.Value({})
 
     def _my_player(db):
         me = db.query(User).filter(User.user_id == app_state.user_id()).first()
@@ -586,10 +591,14 @@ def player_bullpens_server(input, output, session, app_state):
             def _chart_location():
                 if bullpen_id not in _charts_shown():
                     return None
-                return ui.div(
-                    _render_strike_zone_plot("Actual Pitch Locations", movement_data),
-                    ui.p("Where pitches actually crossed the plate -- from real Rapsodo Plate Side/Height, not the called intended zone.", class_="text-muted small"),
-                )
+
+                def _build():
+                    return ui.div(
+                        _render_strike_zone_plot("Actual Pitch Locations", movement_data),
+                        ui.p("Where pitches actually crossed the plate -- from real Rapsodo Plate Side/Height, not the called intended zone.", class_="text-muted small"),
+                    )
+
+                return chart_helpers.render_chart_async(_chart_cache, (location_output_id, bullpen_id), _build)
 
         if has_movement:
             @output(id=movement_output_id)
@@ -597,10 +606,14 @@ def player_bullpens_server(input, output, session, app_state):
             def _chart_movement():
                 if bullpen_id not in _charts_shown():
                     return None
-                return _render_scatter_with_averages(
-                    "Movement Plot", "Horizontal Break (in)", "Induced Vertical Break (in)",
-                    movement_data, "Horizontal Break", "Induced Vertical Break",
-                )
+
+                def _build():
+                    return _render_scatter_with_averages(
+                        "Movement Plot", "Horizontal Break (in)", "Induced Vertical Break (in)",
+                        movement_data, "Horizontal Break", "Induced Vertical Break",
+                    )
+
+                return chart_helpers.render_chart_async(_chart_cache, (movement_output_id, bullpen_id), _build)
 
         if has_release:
             @output(id=release_output_id)
@@ -608,10 +621,14 @@ def player_bullpens_server(input, output, session, app_state):
             def _chart_release():
                 if bullpen_id not in _charts_shown():
                     return None
-                return _render_scatter_with_averages(
-                    "Release Point (tunneling)", "Release Side (ft)", "Release Height (ft)",
-                    movement_data, "Release Side", "Release Height",
-                )
+
+                def _build():
+                    return _render_scatter_with_averages(
+                        "Release Point (tunneling)", "Release Side (ft)", "Release Height (ft)",
+                        movement_data, "Release Side", "Release Height",
+                    )
+
+                return chart_helpers.render_chart_async(_chart_cache, (release_output_id, bullpen_id), _build)
 
         if has_velocity:
             @output(id=velocity_output_id)
@@ -619,18 +636,22 @@ def player_bullpens_server(input, output, session, app_state):
             def _chart_velocity():
                 if bullpen_id not in _charts_shown():
                     return None
-                velo_fig = go.Figure()
-                for i, (pt_name, vs) in enumerate(velos_by_type.items()):
-                    if not vs:
-                        continue
-                    color = PITCH_TYPE_COLORS[i % len(PITCH_TYPE_COLORS)]
-                    velo_fig.add_trace(go.Bar(x=[pt_name], y=[sum(vs) / len(vs)], marker_color=color, showlegend=False, name=pt_name))
-                velo_fig.update_layout(
-                    title="Average Velocity by Pitch Type", yaxis_title="mph",
-                    plot_bgcolor="#1E1E1E", paper_bgcolor="#1E1E1E", font=dict(color="#FFFDE5"),
-                    yaxis=dict(gridcolor="#3A3A3A"), height=380, margin=dict(t=40, b=40, l=40, r=40),
-                )
-                return chart_helpers.fig_to_img(velo_fig, width=700, height=380)
+
+                def _build():
+                    velo_fig = go.Figure()
+                    for i, (pt_name, vs) in enumerate(velos_by_type.items()):
+                        if not vs:
+                            continue
+                        color = PITCH_TYPE_COLORS[i % len(PITCH_TYPE_COLORS)]
+                        velo_fig.add_trace(go.Bar(x=[pt_name], y=[sum(vs) / len(vs)], marker_color=color, showlegend=False, name=pt_name))
+                    velo_fig.update_layout(
+                        title="Average Velocity by Pitch Type", yaxis_title="mph",
+                        plot_bgcolor="#1E1E1E", paper_bgcolor="#1E1E1E", font=dict(color="#FFFDE5"),
+                        yaxis=dict(gridcolor="#3A3A3A"), height=380, margin=dict(t=40, b=40, l=40, r=40),
+                    )
+                    return chart_helpers.fig_to_img(velo_fig, width=700, height=380)
+
+                return chart_helpers.render_chart_async(_chart_cache, (velocity_output_id, bullpen_id), _build)
 
     def _register_video_player(bullpen_id, video_key, video_pitches):
         output_id = f"video_player_{bullpen_id}"

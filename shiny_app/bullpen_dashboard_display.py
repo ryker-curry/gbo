@@ -197,6 +197,13 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
     # of auto-rendering four fresh chart images before the page can
     # respond to anything else.
     _charts_shown_for = reactive.Value(None)
+    # Backs chart_helpers.render_chart_async -- see that function's
+    # docstring. Moves each chart's actual kaleido render onto a
+    # background thread so a "Loading chart..." placeholder can
+    # actually reach the browser instead of the render just silently
+    # blocking (Ryker's report: charts felt "frozen" for ~30s with
+    # nothing visible in between).
+    _chart_cache = reactive.Value({})
 
     def _target_key(target):
         if target["kind"] == "session":
@@ -359,12 +366,17 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
         if not _charts_ready(target, filtered_pitches):
             return None
         min_shading = input[shading_key]() if shading_key in input else 2
-        children = [chart_helpers.fig_to_img(movement_chart(filtered_pitches, min_pitches_for_shading=min_shading), width=700, height=420)]
-        summary_rows = pitch_type_summary(filtered_pitches)
-        legend = _pitch_type_legend(summary_rows, len(filtered_pitches))
-        if legend is not None:
-            children.append(legend)
-        return ui.div(*children)
+
+        def _build():
+            children = [chart_helpers.fig_to_img(movement_chart(filtered_pitches, min_pitches_for_shading=min_shading), width=700, height=420)]
+            summary_rows = pitch_type_summary(filtered_pitches)
+            legend = _pitch_type_legend(summary_rows, len(filtered_pitches))
+            if legend is not None:
+                children.append(legend)
+            return ui.div(*children)
+
+        key = (movement_chart_id, _target_key(target), min_shading)
+        return chart_helpers.render_chart_async(_chart_cache, key, _build)
 
     @output(id=release_chart_id)
     @render.ui
@@ -372,10 +384,15 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
         target, filtered_pitches = _filtered()
         if not _charts_ready(target, filtered_pitches):
             return None
-        return ui.layout_columns(
-            chart_helpers.fig_to_img(release_point_chart(filtered_pitches, mode="individual"), width=450, height=420),
-            chart_helpers.fig_to_img(release_point_chart(filtered_pitches, mode="average"), width=450, height=420),
-        )
+
+        def _build():
+            return ui.layout_columns(
+                chart_helpers.fig_to_img(release_point_chart(filtered_pitches, mode="individual"), width=450, height=420),
+                chart_helpers.fig_to_img(release_point_chart(filtered_pitches, mode="average"), width=450, height=420),
+            )
+
+        key = (release_chart_id, _target_key(target))
+        return chart_helpers.render_chart_async(_chart_cache, key, _build)
 
     @output(id=location_chart_id)
     @render.ui
@@ -384,9 +401,14 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
         if not _charts_ready(target, filtered_pitches):
             return None
         location_mode = input[location_mode_key]() if location_mode_key in input else "Heat Map"
-        return chart_helpers.fig_to_img(
-            location_chart(filtered_pitches, mode="heatmap" if location_mode == "Heat Map" else "individual"), width=700, height=480,
-        )
+
+        def _build():
+            return chart_helpers.fig_to_img(
+                location_chart(filtered_pitches, mode="heatmap" if location_mode == "Heat Map" else "individual"), width=700, height=480,
+            )
+
+        key = (location_chart_id, _target_key(target), location_mode)
+        return chart_helpers.render_chart_async(_chart_cache, key, _build)
 
     @output(id=spin_chart_id)
     @render.ui
@@ -396,14 +418,19 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
             return None
         selected_type = input[type_filter_key]() if type_filter_key in input else "All Pitches"
         spin_axis_mode = input[spin_axis_mode_key]() if spin_axis_mode_key in input else "Average by Pitch Type"
-        children = []
-        if spin_axis_mode == "Average by Pitch Type":
-            children.append(chart_helpers.fig_to_img(average_spin_axis_chart(filtered_pitches), width=500, height=420))
-        else:
-            individual_type_filter = None if selected_type == "All Pitches" else selected_type
-            if selected_type == "All Pitches":
-                children.append(ui.p("Showing every pitch type at once gets busy -- filter to one type above for a cleaner view.", class_="text-muted small"))
-            children.append(chart_helpers.fig_to_img(individual_spin_axis_chart(filtered_pitches, pitch_type_filter=individual_type_filter), width=500, height=420))
-        return ui.div(*children)
+
+        def _build():
+            children = []
+            if spin_axis_mode == "Average by Pitch Type":
+                children.append(chart_helpers.fig_to_img(average_spin_axis_chart(filtered_pitches), width=500, height=420))
+            else:
+                individual_type_filter = None if selected_type == "All Pitches" else selected_type
+                if selected_type == "All Pitches":
+                    children.append(ui.p("Showing every pitch type at once gets busy -- filter to one type above for a cleaner view.", class_="text-muted small"))
+                children.append(chart_helpers.fig_to_img(individual_spin_axis_chart(filtered_pitches, pitch_type_filter=individual_type_filter), width=500, height=420))
+            return ui.div(*children)
+
+        key = (spin_chart_id, _target_key(target), selected_type, spin_axis_mode)
+        return chart_helpers.render_chart_async(_chart_cache, key, _build)
 
     return ui.output_ui(controls_id)
