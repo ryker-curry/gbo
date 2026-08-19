@@ -98,10 +98,12 @@ BODY_COMPOSITION_TESTS = [
 # permanently-empty fields. Shoulder Total Arc and GIRD were also on
 # the original sheet as manual-entry fields, but per Ryker's call
 # neither should ever be typed in at all -- both are auto-calculated
-# live from the ER/IR values below instead (GIRD -> compute_gird_
-# percentiles, Total Arc -> compute_shoulder_total_arc_percentiles, both
-# in bucket_system.py), so they're removed from this manual-entry list
-# entirely, not just left empty.
+# live from the ER/IR values below instead (both computed inside
+# compute_mobility_rom_report in bucket_system.py), so they're removed
+# from this manual-entry list entirely, not just left empty. Note:
+# Mobility & ROM is checked pass/fail against a fixed threshold now,
+# not percentile-ranked against the team -- see MOBILITY_ROM_
+# THRESHOLDS in bucket_system.py for the current design.
 MOBILITY_ROM_TESTS = [
     ("Shoulder: Right External Rotation", "°"), ("Shoulder: Left External Rotation", "°"),
     ("Shoulder: Right Internal Rotation", "°"), ("Shoulder: Left Internal Rotation", "°"),
