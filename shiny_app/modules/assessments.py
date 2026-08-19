@@ -505,7 +505,7 @@ def assessments_server(input, output, session, app_state):
             test_types = (
                 db.query(AssessmentTestType)
                 .filter(AssessmentTestType.category_id == selected_category_id)
-                .order_by(AssessmentTestType.display_order)
+                .order_by(AssessmentTestType.display_order, AssessmentTestType.test_type_id)
                 .all()
             )
             entry_test_types = test_types
@@ -574,7 +574,7 @@ def assessments_server(input, output, session, app_state):
             test_types = (
                 db.query(AssessmentTestType)
                 .filter(AssessmentTestType.category_id == selected_category_id)
-                .order_by(AssessmentTestType.display_order)
+                .order_by(AssessmentTestType.display_order, AssessmentTestType.test_type_id)
                 .all()
             )
             entry_test_types = test_types
