@@ -18,10 +18,17 @@ def seed_roles(session):
     roles = [
         Role(role_name="Administrator", description="Full access to users, roles, teams, players, all data and settings.",
              can_edit_assessments=True, can_edit_idp=True, can_edit_sessions=True, can_view_all_players=True, is_admin=True),
-        Role(role_name="Head Coach", description="All players, all assessments, IDPs, reports, and the team dashboard.",
-             can_edit_assessments=True, can_edit_idp=True, can_edit_sessions=True, can_view_all_players=True),
-        Role(role_name="Coach", description="Assigned players only -- assessments, IDPs, sessions, reports.",
-             can_edit_assessments=True, can_edit_idp=True, can_edit_sessions=True, can_view_all_players=False),
+        # Head Coach and Coach are view-only for Assessments, Video Import,
+        # and Rapsodo/Bullpen/Hitter Tracking (can_edit_assessments/
+        # can_edit_sessions both False) -- Ryker's explicit call: the
+        # Administrator is the only one who enters that data, coaching
+        # staff just view results. IDP editing (can_edit_idp) is
+        # unaffected -- coaches still manage IDP goals/action steps, only
+        # the raw assessment/session/video DATA ENTRY is Administrator-only.
+        Role(role_name="Head Coach", description="All players, all assessments/IDPs/reports/team dashboard -- view-only on assessments, sessions (Rapsodo/Bullpen/Hitter Tracking), and video; can still manage IDP goals.",
+             can_edit_assessments=False, can_edit_idp=True, can_edit_sessions=False, can_view_all_players=True),
+        Role(role_name="Coach", description="Assigned players only -- view-only on assessments, sessions (Rapsodo/Bullpen/Hitter Tracking), and video; can still manage IDP goals/reports.",
+             can_edit_assessments=False, can_edit_idp=True, can_edit_sessions=False, can_view_all_players=False),
         Role(role_name="Strength Coach", description="Assessments, sessions, and IDP -- edit rights.",
              can_edit_assessments=True, can_edit_idp=True, can_edit_sessions=True, can_view_all_players=True),
         Role(role_name="Athletic Trainer", description="Assessments, sessions, and IDP progress notes -- edit rights.",
@@ -80,26 +87,32 @@ BODY_COMPOSITION_TESTS = [
     ("Trunk Fat Mass", "lb"), ("Right Leg Fat Mass", "lb"), ("Left Leg Fat Mass", "lb"),
 ]
 
-# (test_name, unit) -- from Ryker's fully-populated Mobility sheet.
-# Test names prefixed with their sub-category (Cervical Spine, Shoulder,
-# Elbow, T-Spine, Lumbar Spine, Hip, Ankle) from the sheet's own grouping.
+# (test_name, unit) -- pruned down to exactly what's actually measured
+# (Aug 2026, per Ryker's explicit correction): Shoulder ER/IR/Flexion/
+# Extension, Elbow Flexion/Extension, and the full Hip block -- all
+# entered as Right/Left (Shoulder/Elbow) or Drive Leg/Plant Leg (Hip)
+# pairs. The original draft of this sheet also had Cervical Spine,
+# Elbow Pronation/Supination, T-Spine, Lumbar Spine, and Ankle -- those
+# were things Ryker intended to measure but never actually collected,
+# so they're removed here rather than sitting on the entry form as
+# permanently-empty fields. Shoulder Total Arc and GIRD were also on
+# the original sheet as manual-entry fields, but per Ryker's call
+# neither should ever be typed in at all -- both are auto-calculated
+# live from the ER/IR values below instead (GIRD -> compute_gird_
+# percentiles, Total Arc -> compute_shoulder_total_arc_percentiles, both
+# in bucket_system.py), so they're removed from this manual-entry list
+# entirely, not just left empty.
 MOBILITY_ROM_TESTS = [
-    ("Cervical Spine: Forward Bend", "°"), ("Cervical Spine: Backward Bend", "°"),
-    ("Cervical Spine: Rotation", "°"), ("Cervical Spine: Left Rotation", "°"),
     ("Shoulder: Right External Rotation", "°"), ("Shoulder: Left External Rotation", "°"),
     ("Shoulder: Right Internal Rotation", "°"), ("Shoulder: Left Internal Rotation", "°"),
-    ("Shoulder: Throwing Arm Total Arc", "°"), ("Shoulder: Non-Throwing Arm Total Arc", "°"),
-    ("Shoulder: GIRD", "°"), ("Shoulder: Right Flexion", "°"), ("Shoulder: Left Flexion", "°"),
+    ("Shoulder: Right Flexion", "°"), ("Shoulder: Left Flexion", "°"),
     ("Shoulder: Right Extension", "°"), ("Shoulder: Left Extension", "°"),
-    ("Elbow: Flexion", "°"), ("Elbow: Extension", "°"), ("Elbow: Pronation", "°"), ("Elbow: Supination", "°"),
-    ("T-Spine: Right Rotation", "°"), ("T-Spine: Left Rotation", "°"),
-    ("Lumbar Spine: Forward Bend", "°"), ("Lumbar Spine: Backward Bend", "°"),
+    ("Elbow: Flexion", "°"), ("Elbow: Extension", "°"),
     ("Hip: Drive Leg Internal Rotation", "°"), ("Hip: Drive Leg External Rotation", "°"),
     ("Hip: Plant Leg Internal Rotation", "°"), ("Hip: Plant Leg External Rotation", "°"),
     ("Hip: Drive Leg Abduction", "°"), ("Hip: Plant Leg Abduction", "°"),
     ("Hip: Drive Leg Adduction", "°"), ("Hip: Plant Leg Adduction", "°"),
     ("Hip: Flexion", "°"), ("Hip: Extension", "°"),
-    ("Ankle: Drive Leg Dorsiflexion", "°"), ("Ankle: Stride Leg Dorsiflexion", "°"),
 ]
 
 # (test_name, unit) -- from Ryker's fully-populated Arm Health sheet.

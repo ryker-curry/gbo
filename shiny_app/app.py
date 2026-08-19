@@ -256,10 +256,12 @@ _GUEST_ASSESSMENT_CATEGORIES = [
      "throwing arm vs. non-throwing arm). This tracks a player's power-to-weight ratio and conditioning "
      "level over an offseason or season, and asymmetries between limbs can flag developing imbalances "
      "before they become injuries."),
-    ("Mobility & ROM", "33 range-of-motion measurements",
-     "How far each joint moves -- shoulder, elbow, hip, spine, ankle, and more, tested at multiple "
-     "sub-regions (Cervical Spine, T-Spine, Lumbar Spine, Hip, Ankle). Restricted mobility anywhere in "
-     "the chain limits how efficiently force transfers through the body, and it's one of the most "
+    ("Mobility & ROM", "20 range-of-motion measurements",
+     "How far the shoulder, elbow, and hip move, tested bilaterally (or by drive leg/plant leg for "
+     "the hip) -- plus Total Arc of Motion and GIRD (Glenohumeral Internal Rotation Deficit), both "
+     "calculated automatically from the shoulder readings rather than tested separately. Restricted "
+     "mobility anywhere in the chain limits how efficiently force transfers through the body, and it's "
+     "one of the most "
      "common root causes of both reduced performance and overuse injury."),
     ("Arm Health", "26 metrics — ROM, strength, pain, and workload",
      "A dedicated deep-dive on the throwing arm: shoulder rotation range, shoulder and grip strength, "
