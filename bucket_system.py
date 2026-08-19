@@ -256,10 +256,25 @@ CAPACITY_SUBGROUPS = {
 # resolved to Throwing/Non-Throwing Arm since they're inherently a
 # side-to-side comparison, not an absolute floor.
 #
-# Hip fields stay role-based (Drive Leg / Plant Leg, not Right/Left)
-# -- unlike the shoulder, "which leg is which" is unambiguous from the
-# pitching motion itself (drive leg = push-off/back leg, same side as
-# the throwing arm; plant leg = front/landing leg, the glove side).
+# Hip fields are ALSO entered anatomically (Right/Left) as of Ryker's
+# follow-up call -- an earlier version of this dict had hip entered
+# directly as Drive Leg/Plant Leg (reasoning: "which leg is which" is
+# unambiguous from the pitching motion itself, so why not enter it that
+# way), but that turned out to be confusing to actually type in at
+# assessment time (a coach has to stop and work out which leg is
+# "drive" for this particular player). Drive Leg/Plant Leg is still the
+# right framing for INTERPRETING the result -- the McCulloch et al.
+# 2014 thresholds below are keyed to that role, not to anatomical side
+# -- so entry stays Right/Left (via HIP_ROM_BASE_METRICS, resolved the
+# same Player.throws-based way as GIRD/Total Arc below: drive leg =
+# throwing-side leg, plant leg = glove-side leg) while the threshold
+# dict below and the report stay keyed by role. See
+# compute_mobility_rom_report for where that resolution happens.
+#
+# One consequence worth knowing: a player with no Player.throws on
+# file can't be resolved to a side, so their hip ROM values won't show
+# on the report until handedness is set on their profile -- same
+# limitation GIRD/Total Arc already had.
 MOBILITY_ROM_THRESHOLDS = {
     # Shoulder External Rotation (throwing arm, 90° abduction) --
     # Wilk et al. 2011, uninjured high school pitchers: throwing-arm
@@ -309,6 +324,18 @@ MOBILITY_ROM_THRESHOLDS = {
     "Hip: Drive Leg Extension": None,
     "Hip: Plant Leg Extension": None,
 }
+
+# The 6 hip metrics above are entered as "Hip: Right {base}" / "Hip:
+# Left {base}" (see seed_lookups.py's MOBILITY_ROM_TESTS), NOT as the
+# "Hip: Drive Leg {base}" / "Hip: Plant Leg {base}" names used as keys
+# in MOBILITY_ROM_THRESHOLDS above -- compute_mobility_rom_report
+# resolves Right/Left -> Drive Leg/Plant Leg per player (via
+# resolve_side_by_throws, same as GIRD/Total Arc) before doing the
+# threshold lookup/status check, so this list is what drives that
+# resolution loop.
+HIP_ROM_BASE_METRICS = [
+    "Internal Rotation", "External Rotation", "Abduction", "Adduction", "Flexion", "Extension",
+]
 
 # Shoulder Health bucket (Physical Development extension, reference
 # only -- not in Total yet). Named "Shoulder Health" rather than "Arm
@@ -460,7 +487,15 @@ def _all_bucket_test_names():
     names.update(name for name, _ in SPEED_METRICS)
     for metrics in CAPACITY_SUBGROUPS.values():
         names.update(name for name, _ in metrics)
-    names.update(MOBILITY_ROM_THRESHOLDS.keys())
+    # Shoulder/Elbow ROM: entered anatomically, so the threshold dict's
+    # own keys ARE the entry field names.
+    names.update(name for name in MOBILITY_ROM_THRESHOLDS if not name.startswith("Hip:"))
+    # Hip ROM: threshold dict keys are Drive Leg/Plant Leg (role-based),
+    # but the actual entry fields are Right/Left -- see HIP_ROM_BASE_
+    # METRICS' comment above.
+    for base_metric in HIP_ROM_BASE_METRICS:
+        names.add(f"Hip: Right {base_metric}")
+        names.add(f"Hip: Left {base_metric}")
     return names
 
 
@@ -699,34 +734,64 @@ def compute_mobility_rom_report(session, player_id, _cache=None, _throws_map=Non
     scoring for this section entirely, per Ryker's explicit call (see
     MOBILITY_ROM_THRESHOLDS' docstring for the full rationale).
 
-    For every test_name in MOBILITY_ROM_THRESHOLDS, looks up this
-    player's latest value (if any) and statuses it via
-    _mobility_rom_status. Then appends Throwing Arm / Non-Throwing Arm
-    Total Arc (External Rotation + Internal Rotation for that arm --
-    the standard "Total Arc of Motion" shoulder ROM measure, per Wilk
-    et al. 2011: throwing-arm mean ~190° ± 15°, expected to stay
-    roughly symmetric with the non-throwing arm) as two more rows,
-    always with threshold=None/status=None -- Total Arc is a derived
-    reference value, not a separately-entered measurement, and no
-    baseball-specific single-number floor for it was found (the
-    literature flags a RELATIVE loss vs. the non-throwing arm, not an
-    absolute cutoff -- same reasoning GIRD, below, already uses a
-    deficit formula for instead of an absolute floor).
+    Shoulder/Elbow: for every non-hip test_name in MOBILITY_ROM_
+    THRESHOLDS, looks up this player's latest value (if any) directly
+    (entered anatomically, Right/Left, no resolution needed) and
+    statuses it via _mobility_rom_status.
+
+    Hip: entered as Right/Left (see HIP_ROM_BASE_METRICS' comment for
+    why), resolved per player to Drive Leg/Plant Leg via
+    resolve_side_by_throws (drive leg = throwing-side leg, plant leg =
+    glove-side leg) before the threshold lookup/status check -- same
+    Player.throws-based resolution GIRD/Total Arc already use. A player
+    with no Player.throws on file won't have hip ROM rows here at all
+    (can't resolve a side without knowing handedness).
+
+    Then appends Throwing Arm / Non-Throwing Arm Total Arc (External
+    Rotation + Internal Rotation for that arm -- the standard "Total
+    Arc of Motion" shoulder ROM measure, per Wilk et al. 2011:
+    throwing-arm mean ~190° ± 15°, expected to stay roughly symmetric
+    with the non-throwing arm) as two more rows, always with
+    threshold=None/status=None -- Total Arc is a derived reference
+    value, not a separately-entered measurement, and no baseball-
+    specific single-number floor for it was found (the literature flags
+    a RELATIVE loss vs. the non-throwing arm, not an absolute cutoff --
+    same reasoning GIRD, below, already uses a deficit formula for
+    instead of an absolute floor).
 
     Returns a list of dicts (only for metrics/sides with a raw value
     on file for this player -- no blank rows), each shaped:
       {"test_name": ..., "raw": ..., "unit": "°",
        "threshold": <float or None>, "status": "red"/"yellow"/"green"/None}
-    Ordered to match MOBILITY_ROM_THRESHOLDS' own definition order
-    (Shoulder, Elbow, Hip), Total Arc rows last."""
+    Ordered Shoulder, Elbow, Hip (Drive Leg then Plant Leg per metric,
+    in HIP_ROM_BASE_METRICS' order), Total Arc rows last."""
     out = []
     for test_name, threshold in MOBILITY_ROM_THRESHOLDS.items():
+        if test_name.startswith("Hip:"):
+            continue
         by_player = get_latest_values_by_player(session, test_name, _cache=_cache)
         if player_id not in by_player:
             continue
         raw = by_player[player_id]
         status = _mobility_rom_status(raw, threshold)
         out.append({"test_name": test_name, "raw": raw, "unit": "°", "threshold": threshold, "status": status})
+
+    for base_metric in HIP_ROM_BASE_METRICS:
+        right_test_name = f"Hip: Right {base_metric}"
+        left_test_name = f"Hip: Left {base_metric}"
+        drive_by_player, plant_by_player = resolve_side_by_throws(
+            session, right_test_name, left_test_name, _cache=_cache, _throws_map=_throws_map
+        )
+        if player_id in drive_by_player:
+            drive_name = f"Hip: Drive Leg {base_metric}"
+            raw = drive_by_player[player_id]
+            threshold = MOBILITY_ROM_THRESHOLDS.get(drive_name)
+            out.append({"test_name": drive_name, "raw": raw, "unit": "°", "threshold": threshold, "status": _mobility_rom_status(raw, threshold)})
+        if player_id in plant_by_player:
+            plant_name = f"Hip: Plant Leg {base_metric}"
+            raw = plant_by_player[player_id]
+            threshold = MOBILITY_ROM_THRESHOLDS.get(plant_name)
+            out.append({"test_name": plant_name, "raw": raw, "unit": "°", "threshold": threshold, "status": _mobility_rom_status(raw, threshold)})
 
     throwing_er, non_throwing_er = resolve_side_by_throws(
         session, SHOULDER_RIGHT_ER_TEST, SHOULDER_LEFT_ER_TEST, _cache=_cache, _throws_map=_throws_map
