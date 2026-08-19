@@ -40,24 +40,26 @@ the machine, found automatically or via a one-time `plotly_get_chrome`
 -- it no longer bundles its own the way the old 0.2.1 pin did).
 """
 
-import base64
-
 import plotly.graph_objects as go
 from shiny import ui
 
 from bucket_system import BODY_COMP_METRICS
+from chart_helpers import fig_to_img as _fig_to_img
 
 import theme
 
 BODY_COMP_BAR_NAMES = {name for name, _ in BODY_COMP_METRICS}
 
-
-def _fig_to_img(fig, width=None, height=None):
-    """Render a plotly Figure to a static PNG and wrap it in an <img>
-    tag -- see module docstring for why."""
-    png_bytes = fig.to_image(format="png", width=width, height=height, scale=2)
-    b64 = base64.b64encode(png_bytes).decode("ascii")
-    return ui.tags.img(src=f"data:image/png;base64,{b64}", style="max-width:100%; height:auto; display:block; margin:0 auto;")
+# _fig_to_img used to be a private copy of this exact function, hardcoded
+# at scale=2 (retina resolution) -- that's the same per-image kaleido CPU
+# cost chart_helpers.fig_to_img's docstring explains was slow enough to
+# disconnect the Bullpen Dashboard. This page (Assessments' score
+# rings/breakdown) renders even more charts per load than Bullpen
+# Dashboard does -- up to 4 rings, a development-profile section, and a
+# bar chart per physical-testing sub-group, all on every player switch --
+# so it was an even bigger contributor to "assessments takes forever to
+# load". Now shares the same scale=1-by-default helper instead of
+# keeping its own stale, unfixed copy.
 
 
 def build_percentage_rings(metrics, key_prefix, show_ordinal=False, mode="dark"):
