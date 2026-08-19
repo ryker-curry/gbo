@@ -169,6 +169,20 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
     spin_axis_mode_key = f"{key_prefix}_spin_axis_mode"
     show_charts_key = f"{key_prefix}_show_charts_btn"
 
+    # Each of the four chart "slots" below is its OWN output id, not one
+    # combined block -- Ryker's call, after "Show charts" still took ~30
+    # seconds with nothing visible the whole time on Connect Cloud's
+    # shared CPU. Splitting into independent outputs doesn't reduce the
+    # total kaleido render time, but Shiny sends each output to the
+    # browser as soon as THAT one finishes rather than waiting for every
+    # chart to be done -- so charts stream in one at a time (movement
+    # chart first, typically within a few seconds) instead of one long
+    # blank wait followed by everything appearing at once.
+    movement_chart_id = f"{key_prefix}_chart_movement"
+    release_chart_id = f"{key_prefix}_chart_release"
+    location_chart_id = f"{key_prefix}_chart_location"
+    spin_chart_id = f"{key_prefix}_chart_spin"
+
     # The four charts below are real Plotly-to-PNG (kaleido) renders --
     # unlike bucket_display.py's rings/bars, these are genuine data
     # visualizations (scatter/heatmap positions), not something CSS can
@@ -213,6 +227,28 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
             return target, _load_pitches(db, target)
         finally:
             db.close()
+
+    @reactive.calc
+    def _filtered():
+        """(target, filtered_pitches) -- shared by _results and all four
+        chart outputs below, so the pitch-type/range filtering only
+        happens once per actual change instead of once per output."""
+        req(type_filter_key in input)
+        req(range_key in input)
+        target, all_pitches = _target_and_pitches()
+        if target is None:
+            return None, None
+        selected_type = input[type_filter_key]()
+        pitch_range = input[range_key]()
+        filtered_pitches = filter_pitches(
+            all_pitches,
+            pitch_type_name=None if selected_type == "All Pitches" else selected_type,
+            pitch_number_range=pitch_range,
+        )
+        return target, filtered_pitches
+
+    def _charts_ready(target, filtered_pitches):
+        return target is not None and filtered_pitches and _charts_shown_for() == _target_key(target)
 
     @output(id=controls_id)
     @render.ui
@@ -271,19 +307,9 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
     @output(id=results_id)
     @render.ui
     def _results():
-        req(type_filter_key in input)
-        req(range_key in input)
-        target, all_pitches = _target_and_pitches()
+        target, filtered_pitches = _filtered()
         if target is None:
             return None
-
-        selected_type = input[type_filter_key]()
-        pitch_range = input[range_key]()
-        filtered_pitches = filter_pitches(
-            all_pitches,
-            pitch_type_name=None if selected_type == "All Pitches" else selected_type,
-            pitch_number_range=pitch_range,
-        )
         if not filtered_pitches:
             return ui_helpers.empty_state("No pitches match the selected filters.")
 
@@ -308,41 +334,76 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
                 ui.input_action_button(show_charts_key, "Show charts", class_="btn-outline-secondary mt-2"),
             )
 
-        chart_children = [
+        # Chart images themselves are NOT built here -- each is its own
+        # output (registered below) so they can stream in independently
+        # instead of this one output blocking until all four are done.
+        charts_section = _card(
             _section_label(3, "Charts"),
             ui.input_slider(shading_key, "Minimum pitches to shade a pitch type's cluster", min=1, max=10, value=2),
-        ]
+            ui.output_ui(movement_chart_id),
+            ui.p("Centered on release point; color-coded by pitch type.", class_="text-muted small"),
+            ui.p("Left: every pitch's release point. Right: each pitch type's average.", class_="text-muted small"),
+            ui.output_ui(release_chart_id),
+            ui.input_radio_buttons(location_mode_key, "Location view", ["Heat Map", "Individual Pitches"], inline=True),
+            ui.output_ui(location_chart_id),
+            ui.input_radio_buttons(spin_axis_mode_key, "Spin axis view", ["Average by Pitch Type", "Individual Pitches"], inline=True),
+            ui.output_ui(spin_chart_id),
+        )
+
+        return ui.div(summary_section, charts_section)
+
+    @output(id=movement_chart_id)
+    @render.ui
+    def _chart_movement():
+        target, filtered_pitches = _filtered()
+        if not _charts_ready(target, filtered_pitches):
+            return None
         min_shading = input[shading_key]() if shading_key in input else 2
-        chart_children.append(chart_helpers.fig_to_img(movement_chart(filtered_pitches, min_pitches_for_shading=min_shading), width=700, height=420))
+        children = [chart_helpers.fig_to_img(movement_chart(filtered_pitches, min_pitches_for_shading=min_shading), width=700, height=420)]
+        summary_rows = pitch_type_summary(filtered_pitches)
         legend = _pitch_type_legend(summary_rows, len(filtered_pitches))
         if legend is not None:
-            chart_children.append(legend)
-        chart_children.append(ui.p("Centered on release point; color-coded by pitch type.", class_="text-muted small"))
+            children.append(legend)
+        return ui.div(*children)
 
-        chart_children.append(ui.layout_columns(
+    @output(id=release_chart_id)
+    @render.ui
+    def _chart_release():
+        target, filtered_pitches = _filtered()
+        if not _charts_ready(target, filtered_pitches):
+            return None
+        return ui.layout_columns(
             chart_helpers.fig_to_img(release_point_chart(filtered_pitches, mode="individual"), width=450, height=420),
             chart_helpers.fig_to_img(release_point_chart(filtered_pitches, mode="average"), width=450, height=420),
-        ))
-        chart_children.append(ui.p("Left: every pitch's release point. Right: each pitch type's average.", class_="text-muted small"))
+        )
 
-        chart_children.append(ui.input_radio_buttons(location_mode_key, "Location view", ["Heat Map", "Individual Pitches"], inline=True))
+    @output(id=location_chart_id)
+    @render.ui
+    def _chart_location():
+        target, filtered_pitches = _filtered()
+        if not _charts_ready(target, filtered_pitches):
+            return None
         location_mode = input[location_mode_key]() if location_mode_key in input else "Heat Map"
-        chart_children.append(chart_helpers.fig_to_img(
+        return chart_helpers.fig_to_img(
             location_chart(filtered_pitches, mode="heatmap" if location_mode == "Heat Map" else "individual"), width=700, height=480,
-        ))
+        )
 
-        chart_children.append(ui.input_radio_buttons(spin_axis_mode_key, "Spin axis view", ["Average by Pitch Type", "Individual Pitches"], inline=True))
+    @output(id=spin_chart_id)
+    @render.ui
+    def _chart_spin():
+        target, filtered_pitches = _filtered()
+        if not _charts_ready(target, filtered_pitches):
+            return None
+        selected_type = input[type_filter_key]() if type_filter_key in input else "All Pitches"
         spin_axis_mode = input[spin_axis_mode_key]() if spin_axis_mode_key in input else "Average by Pitch Type"
+        children = []
         if spin_axis_mode == "Average by Pitch Type":
-            chart_children.append(chart_helpers.fig_to_img(average_spin_axis_chart(filtered_pitches), width=500, height=420))
+            children.append(chart_helpers.fig_to_img(average_spin_axis_chart(filtered_pitches), width=500, height=420))
         else:
             individual_type_filter = None if selected_type == "All Pitches" else selected_type
             if selected_type == "All Pitches":
-                chart_children.append(ui.p("Showing every pitch type at once gets busy -- filter to one type above for a cleaner view.", class_="text-muted small"))
-            chart_children.append(chart_helpers.fig_to_img(individual_spin_axis_chart(filtered_pitches, pitch_type_filter=individual_type_filter), width=500, height=420))
-
-        charts_section = _card(*chart_children)
-
-        return ui.div(summary_section, charts_section)
+                children.append(ui.p("Showing every pitch type at once gets busy -- filter to one type above for a cleaner view.", class_="text-muted small"))
+            children.append(chart_helpers.fig_to_img(individual_spin_axis_chart(filtered_pitches, pitch_type_filter=individual_type_filter), width=500, height=420))
+        return ui.div(*children)
 
     return ui.output_ui(controls_id)

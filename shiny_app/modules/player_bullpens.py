@@ -541,34 +541,84 @@ def player_bullpens_server(input, output, session, app_state):
         registration, same accepted staleness tradeoff _register_video_player
         already has for pitches_by_id (this session's pitches don't change
         after import, so it's a non-issue in practice)."""
-        output_id = f"bp_charts_section_{bullpen_id}"
-        if output_id in _registered_chart_outputs:
+        gate_output_id = f"bp_charts_section_{bullpen_id}"
+        if gate_output_id in _registered_chart_outputs:
             return
-        _registered_chart_outputs.add(output_id)
+        _registered_chart_outputs.add(gate_output_id)
         show_charts_key = f"bp_show_charts_{bullpen_id}"
+        location_output_id = f"bp_chart_location_{bullpen_id}"
+        movement_output_id = f"bp_chart_movement_{bullpen_id}"
+        release_output_id = f"bp_chart_release_{bullpen_id}"
+        velocity_output_id = f"bp_chart_velocity_{bullpen_id}"
 
-        @output(id=output_id)
+        @output(id=gate_output_id)
         @render.ui
-        def _charts_section():
+        def _charts_gate():
+            """Cheap orchestration only (no chart rendering here) --
+            either the "Show charts" button, or a placeholder per
+            applicable chart type, each its own output (registered
+            below) so they stream in individually instead of this one
+            output blocking until every chart in the session is done.
+            Same fix as bullpen_dashboard_display.py's chart outputs,
+            for the same "~30 seconds with nothing visible" complaint."""
             if bullpen_id not in _charts_shown():
                 return ui.input_action_button(show_charts_key, "Show charts", class_="btn-outline-secondary mt-2")
-
             children = []
             if has_location:
-                children.append(_render_strike_zone_plot("Actual Pitch Locations", movement_data))
-                children.append(ui.p("Where pitches actually crossed the plate -- from real Rapsodo Plate Side/Height, not the called intended zone.", class_="text-muted small"))
+                children.append(ui.output_ui(location_output_id))
             children.append(ui.p("Bold labeled markers are the average per pitch type; smaller dots are individual pitches.", class_="text-muted small"))
             if has_movement:
-                children.append(_render_scatter_with_averages(
+                children.append(ui.output_ui(movement_output_id))
+            if has_release:
+                children.append(ui.output_ui(release_output_id))
+            if has_velocity:
+                children.append(ui.output_ui(velocity_output_id))
+            return ui.div(*children)
+
+        @reactive.effect
+        @reactive.event(input[show_charts_key])
+        def _on_show_charts():
+            _charts_shown.set(_charts_shown() | {bullpen_id})
+
+        if has_location:
+            @output(id=location_output_id)
+            @render.ui
+            def _chart_location():
+                if bullpen_id not in _charts_shown():
+                    return None
+                return ui.div(
+                    _render_strike_zone_plot("Actual Pitch Locations", movement_data),
+                    ui.p("Where pitches actually crossed the plate -- from real Rapsodo Plate Side/Height, not the called intended zone.", class_="text-muted small"),
+                )
+
+        if has_movement:
+            @output(id=movement_output_id)
+            @render.ui
+            def _chart_movement():
+                if bullpen_id not in _charts_shown():
+                    return None
+                return _render_scatter_with_averages(
                     "Movement Plot", "Horizontal Break (in)", "Induced Vertical Break (in)",
                     movement_data, "Horizontal Break", "Induced Vertical Break",
-                ))
-            if has_release:
-                children.append(_render_scatter_with_averages(
+                )
+
+        if has_release:
+            @output(id=release_output_id)
+            @render.ui
+            def _chart_release():
+                if bullpen_id not in _charts_shown():
+                    return None
+                return _render_scatter_with_averages(
                     "Release Point (tunneling)", "Release Side (ft)", "Release Height (ft)",
                     movement_data, "Release Side", "Release Height",
-                ))
-            if has_velocity:
+                )
+
+        if has_velocity:
+            @output(id=velocity_output_id)
+            @render.ui
+            def _chart_velocity():
+                if bullpen_id not in _charts_shown():
+                    return None
                 velo_fig = go.Figure()
                 for i, (pt_name, vs) in enumerate(velos_by_type.items()):
                     if not vs:
@@ -580,13 +630,7 @@ def player_bullpens_server(input, output, session, app_state):
                     plot_bgcolor="#1E1E1E", paper_bgcolor="#1E1E1E", font=dict(color="#FFFDE5"),
                     yaxis=dict(gridcolor="#3A3A3A"), height=380, margin=dict(t=40, b=40, l=40, r=40),
                 )
-                children.append(chart_helpers.fig_to_img(velo_fig, width=700, height=380))
-            return ui.div(*children)
-
-        @reactive.effect
-        @reactive.event(input[show_charts_key])
-        def _on_show_charts():
-            _charts_shown.set(_charts_shown() | {bullpen_id})
+                return chart_helpers.fig_to_img(velo_fig, width=700, height=380)
 
     def _register_video_player(bullpen_id, video_key, video_pitches):
         output_id = f"video_player_{bullpen_id}"
