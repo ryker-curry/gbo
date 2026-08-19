@@ -21,19 +21,24 @@ earlier versions of this page still show up here unchanged.
 
 Playback: Drive share links (the "Copy link" URL you get from Drive's
 share dialog, e.g. https://drive.google.com/file/d/FILE_ID/view?usp=...)
-don't work as a plain <video src>. _drive_file_id() pulls the file ID
-out of the common share-link shapes and _clip_player() builds Drive's
-dedicated embeddable preview URL (.../file/d/FILE_ID/preview) for an
-<iframe> player -- this plays inline just like the old R2-backed
-<video> tag did, but requires the file be shared as "Anyone with the
-link can view" in Drive (GBO has no way to check that from here; if a
-clip won't play, that's the first thing to check). If a pasted link
-doesn't match a recognizable Drive file-share shape (e.g. a folder
-link, or some other host entirely), _clip_player() falls back to a
-plain "Open video" link instead of trying to embed it.
+don't work as a plain <video src>. video_helpers.render_video_clip()
+(previously private to this module as _clip_player, extracted out --
+see that module's docstring for why: bullpen_tracking.py, hitter_
+tracking.py, and player_video.py all render a video_url too and were
+found to still be using a plain, non-working <video> tag) builds
+Drive's dedicated embeddable preview URL (.../file/d/FILE_ID/preview)
+for an <iframe> player -- this plays inline just like the old
+R2-backed <video> tag did, but requires the file be shared as "Anyone
+with the link can view" in Drive (GBO has no way to check that from
+here; if a clip won't play, that's the first thing to check). If a
+pasted link doesn't match a recognizable Drive file-share shape (e.g.
+a folder link, or some other host entirely), it renders a native
+<video> tag instead (works for a direct file URL, e.g. R2 -- see
+video_helpers' module docstring) plus an always-visible "Open in a new
+tab" link, so even a URL that can't actually play inline still has a
+way to view it.
 """
 
-import re
 from datetime import date
 
 from shiny import module, ui, render, reactive, req
@@ -42,45 +47,7 @@ from database import get_session
 from models import Player, StaffPlayerAssignment, Video
 
 import ui_helpers
-
-_DRIVE_FILE_ID_PATTERNS = [
-    re.compile(r"/file/d/([a-zA-Z0-9_-]+)"),
-    re.compile(r"[?&]id=([a-zA-Z0-9_-]+)"),
-]
-
-
-def _drive_file_id(url: str):
-    """Extracts a Google Drive file ID from the common share-link
-    shapes (.../file/d/FILE_ID/view?... and .../open?id=FILE_ID).
-    Returns None if the link doesn't match either -- callers should
-    fall back to a plain outbound link in that case, not assume every
-    pasted URL is a playable Drive file."""
-    url = (url or "").strip()
-    if not url:
-        return None
-    for pattern in _DRIVE_FILE_ID_PATTERNS:
-        m = pattern.search(url)
-        if m:
-            return m.group(1)
-    return None
-
-
-def _clip_player(url: str):
-    """Renders one clip: an embedded Drive preview iframe when the
-    link parses as a Drive file share link, otherwise a plain outbound
-    link (e.g. for a folder link or a non-Drive host)."""
-    file_id = _drive_file_id(url)
-    if file_id:
-        preview_url = f"https://drive.google.com/file/d/{file_id}/preview"
-        return ui.tags.iframe(
-            src=preview_url, width="100%", height="480",
-            allow="autoplay", style="border:0; max-width:100%;",
-        )
-    return ui.p(
-        ui.tags.a("Open video", href=url, target="_blank", rel="noopener noreferrer"),
-        " (doesn't look like a standard Google Drive file link, so it can't be played inline here.)",
-        class_="text-muted small",
-    )
+from video_helpers import drive_file_id, render_video_clip
 
 
 @module.ui
@@ -161,7 +128,7 @@ def video_import_server(input, output, session, app_state):
                 for v in clips:
                     date_label = v.recorded_date.strftime("%Y-%m-%d (%a)") if v.recorded_date else "No date"
                     title = date_label + (f" — {v.description}" if v.description else "")
-                    panels.append(ui.accordion_panel(title, _clip_player(v.video_url)))
+                    panels.append(ui.accordion_panel(title, render_video_clip(v.video_url)))
                 sections.append(ui.accordion(*panels, open=False, id=None))
 
             return ui.div(*sections)
@@ -215,10 +182,10 @@ def video_import_server(input, output, session, app_state):
         if not link:
             ui.notification_show("Paste a Google Drive link first.", type="error", duration=8)
             return
-        if _drive_file_id(link) is None:
+        if drive_file_id(link) is None:
             ui.notification_show(
-                "That doesn't look like a standard Google Drive file link -- it'll still be saved, but will show "
-                "as a plain \"Open video\" link instead of playing inline.",
+                "That doesn't look like a standard Google Drive file link -- it'll still be saved, but it may not "
+                "play inline (an \"Open in a new tab\" link will show alongside it either way).",
                 type="warning", duration=10,
             )
         db = get_session()
@@ -246,7 +213,7 @@ def video_import_server(input, output, session, app_state):
         bulk_date = input.bulk_date()
         bulk_desc = (input.bulk_desc() or "").strip() if "bulk_desc" in input else ""
 
-        unrecognized = sum(1 for link in links if _drive_file_id(link) is None)
+        unrecognized = sum(1 for link in links if drive_file_id(link) is None)
 
         db = get_session()
         try:
@@ -256,7 +223,10 @@ def video_import_server(input, output, session, app_state):
             db.commit()
             msg = f"Added {len(links)} clip(s)."
             if unrecognized:
-                msg += f" {unrecognized} didn't look like standard Drive file links and will show as plain \"Open video\" links."
+                msg += (
+                    f" {unrecognized} didn't look like standard Drive file links -- they'll still be saved, but may "
+                    "not play inline (an \"Open in a new tab\" link will show alongside each one either way)."
+                )
             ui.notification_show(msg, type="message", duration=10)
             _bump_refresh()
         finally:

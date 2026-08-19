@@ -24,6 +24,7 @@ from models import (
 )
 
 import ui_helpers
+from video_helpers import render_video_clip
 
 
 def _build_sessions_list(db, my_player):
@@ -268,7 +269,7 @@ def player_video_server(input, output, session, app_state):
                 p = pitches_by_id.get(int(input.video_pitch_choice()))
                 if p is None:
                     return None
-                children = [ui.tags.video(ui.tags.source(src=p.video_url), controls=True, style="max-width:100%;")]
+                children = [render_video_clip(p.video_url)]
                 if p.notes:
                     children.append(ui.p(p.notes, class_="text-muted small"))
                 return ui.div(*children)
@@ -289,7 +290,7 @@ def player_video_server(input, output, session, app_state):
                     ]))
                 video_col = [ui.h6("Video")]
                 for v in selected_pitch.videos:
-                    video_col.append(ui.tags.video(ui.tags.source(src=v.video_url), controls=True, style="max-width:100%;"))
+                    video_col.append(render_video_clip(v.video_url))
                     if v.description:
                         video_col.append(ui.p(v.description, class_="text-muted small"))
                 return ui.layout_columns(ui.div(*rapsodo_col), ui.div(*video_col))
@@ -300,7 +301,7 @@ def player_video_server(input, output, session, app_state):
                 sw = swings_by_id.get(int(input.video_swing_choice()))
                 if sw is None:
                     return None
-                children = [ui.tags.video(ui.tags.source(src=sw.video_url), controls=True, style="max-width:100%;")]
+                children = [render_video_clip(sw.video_url)]
                 if sw.notes:
                     children.append(ui.p(sw.notes, class_="text-muted small"))
                 return ui.div(*children)
@@ -313,6 +314,6 @@ def player_video_server(input, output, session, app_state):
             v = clips_by_id.get(int(input.video_clip_choice()))
             if v is None:
                 return None
-            return ui.tags.video(ui.tags.source(src=v.video_url), controls=True, style="max-width:100%;")
+            return render_video_clip(v.video_url)
         finally:
             db.close()
