@@ -226,13 +226,29 @@ CAPACITY_SUBGROUPS = {
 # Capacity above.
 #
 # Scoped to ONLY what's actually being tested right now, per Ryker's
-# explicit correction: Shoulder ER/IR/Flexion/Extension, and the full
-# Hip block. The rest of the Mobility & ROM sheet (Cervical Spine,
-# Elbow, T-Spine, Lumbar Spine, Ankle, Shoulder Total Arc) is already
-# in the data model and entry form (see MOBILITY_ROM_TESTS in
-# seed_lookups.py) but isn't real data yet -- add those sub-groups
-# here once the team actually starts collecting them, rather than
-# scoring a bunch of always-empty fields now.
+# explicit correction (confirmed a second time, Aug 2026 -- MOBILITY_
+# ROM_TESTS in seed_lookups.py was pruned down to match this exactly):
+# Shoulder ER/IR/Flexion/Extension, Elbow Flexion/Extension, and the
+# full Hip block. Elbow Pronation/Supination, Cervical Spine, T-Spine,
+# Lumbar Spine, and Ankle were in an earlier draft of the entry form
+# but never actually got measured, so they were removed from
+# MOBILITY_ROM_TESTS entirely rather than sitting there as permanently
+# empty fields. Elbow Flexion/Extension ARE real data now but are NOT
+# yet a scored sub-group here -- they're on the entry form (raw
+# reference data, same treatment as anything else awaiting a scoring
+# decision) but nothing sums them into mobility_score. Add an "Elbow"
+# sub-group here once there's an explicit go-ahead to score it.
+#
+# Shoulder Total Arc and GIRD are NOT manually entered at all (removed
+# from MOBILITY_ROM_TESTS) -- both are auto-calculated live from the
+# raw ER/IR fields instead. GIRD -> compute_gird_percentiles (below).
+# Total Arc (ER + IR per arm) -> compute_shoulder_total_arc_percentiles
+# (below), folded into the Shoulder sub-group's displayed metrics as
+# reference data only -- excluded from the Shoulder sub-group's
+# averaged score since it's a derived combination of ER and IR, both
+# already counted individually (same "raw reference, not in the
+# composite" treatment BODY_COMP_DISPLAY_METRICS gives Body Fat Mass/
+# Percent Body Fat above).
 #
 # Shoulder fields are entered anatomically -- Right/Left, per Ryker's
 # explicit call, so a coach measuring a player doesn't have to think
@@ -676,6 +692,57 @@ def compute_gird_percentiles(session, player_id, _cache=None, _throws_map=None):
     return {"Shoulder ROM: GIRD": {"raw": gird_by_player[player_id], "percentile": pct, "unit": "°"}}
 
 
+SHOULDER_RIGHT_ER_TEST = "Shoulder: Right External Rotation"
+SHOULDER_LEFT_ER_TEST = "Shoulder: Left External Rotation"
+
+
+def compute_shoulder_total_arc_percentiles(session, player_id, _cache=None, _throws_map=None):
+    """Throwing/Non-Throwing Arm Total Arc (the standard "Total Arc of
+    Motion" shoulder ROM measure) = that arm's External Rotation +
+    Internal Rotation, in degrees -- NOT a separately-entered value,
+    same "derive it, don't type it" treatment as GIRD above and for
+    the same reason: it was in an earlier draft of the Mobility & ROM
+    entry form (MOBILITY_ROM_TESTS in seed_lookups.py) but never
+    actually got measured as its own number, only ER and IR were.
+
+    Reuses GIRD_RIGHT_IR_TEST/GIRD_LEFT_IR_TEST for the IR side (same
+    raw fields GIRD already resolves) and the SHOULDER_RIGHT_ER_TEST/
+    SHOULDER_LEFT_ER_TEST pair above for the ER side, both through
+    resolve_side_by_throws.
+
+    "Higher is better" -- more combined rotational range -- unlike
+    GIRD's lower-is-better, so this reuses compute_percentile's
+    ordinary higher-is-better formula, not GIRD's team_min/value one.
+
+    Returns {"Throwing Arm Total Arc": {...}, "Non-Throwing Arm Total
+    Arc": {...}} (only for sides with both a known Player.throws AND
+    both raw ER and IR values on file), same flat shape every other
+    metric dict in this file uses. Callers should merge this into
+    compute_mobility_shoulder_metrics' output for DISPLAY only (see
+    that call site in compute_bucket_system) -- it's deliberately kept
+    out of the Shoulder sub-group's averaged score, since it's just
+    ER + IR recombined and both already count individually there;
+    averaging it in too would double-weight the same underlying
+    measurements."""
+    throwing_er, non_throwing_er = resolve_side_by_throws(
+        session, SHOULDER_RIGHT_ER_TEST, SHOULDER_LEFT_ER_TEST, _cache=_cache, _throws_map=_throws_map
+    )
+    throwing_ir, non_throwing_ir = resolve_side_by_throws(
+        session, GIRD_RIGHT_IR_TEST, GIRD_LEFT_IR_TEST, _cache=_cache, _throws_map=_throws_map
+    )
+    throwing_arc = {pid: throwing_er[pid] + throwing_ir[pid] for pid in throwing_er if pid in throwing_ir}
+    non_throwing_arc = {pid: non_throwing_er[pid] + non_throwing_ir[pid] for pid in non_throwing_er if pid in non_throwing_ir}
+
+    out = {}
+    if player_id in throwing_arc:
+        pct = compute_percentile(throwing_arc[player_id], list(throwing_arc.values()), "higher")
+        out["Throwing Arm Total Arc"] = {"raw": throwing_arc[player_id], "percentile": pct, "unit": "°"}
+    if player_id in non_throwing_arc:
+        pct = compute_percentile(non_throwing_arc[player_id], list(non_throwing_arc.values()), "higher")
+        out["Non-Throwing Arm Total Arc"] = {"raw": non_throwing_arc[player_id], "percentile": pct, "unit": "°"}
+    return out
+
+
 def average_percentiles(metric_dict):
     """Plain mean of whatever percentiles are present (no weighting),
     rounded. None if nothing to average."""
@@ -810,9 +877,15 @@ def compute_bucket_system(session, player_id):
     # every other sub-group in this file uses.
     mobility_subgroup_scores = {}
     mobility_subgroup_metrics = {}
+    # shoulder_m (ER/IR/Flexion/Extension) feeds the Shoulder sub-group
+    # SCORE; Total Arc is merged in afterward for DISPLAY only -- see
+    # compute_shoulder_total_arc_percentiles' docstring for why it's
+    # excluded from the average (same "raw reference, not in the
+    # composite" split BODY_COMP_METRICS/BODY_COMP_DISPLAY_METRICS use).
     shoulder_m = compute_mobility_shoulder_metrics(session, player_id, _cache=_cache, _throws_map=_throws_map)
-    mobility_subgroup_metrics["Shoulder"] = shoulder_m
     mobility_subgroup_scores["Shoulder"] = average_percentiles(shoulder_m)
+    shoulder_total_arc_m = compute_shoulder_total_arc_percentiles(session, player_id, _cache=_cache, _throws_map=_throws_map)
+    mobility_subgroup_metrics["Shoulder"] = {**shoulder_m, **shoulder_total_arc_m}
     for sub_name, metrics in MOBILITY_SUBGROUPS.items():
         m = compute_metric_percentiles(session, player_id, metrics, _cache=_cache, _units=_units)
         mobility_subgroup_metrics[sub_name] = m
