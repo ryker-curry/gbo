@@ -304,8 +304,10 @@ MOBILITY_ROM_THRESHOLDS = {
     "Hip: Plant Leg Abduction": None,
     "Hip: Drive Leg Adduction": None,
     "Hip: Plant Leg Adduction": None,
-    "Hip: Flexion": None,
-    "Hip: Extension": None,
+    "Hip: Drive Leg Flexion": None,
+    "Hip: Plant Leg Flexion": None,
+    "Hip: Drive Leg Extension": None,
+    "Hip: Plant Leg Extension": None,
 }
 
 # Shoulder Health bucket (Physical Development extension, reference

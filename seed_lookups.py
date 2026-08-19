@@ -114,7 +114,8 @@ MOBILITY_ROM_TESTS = [
     ("Hip: Plant Leg Internal Rotation", "°"), ("Hip: Plant Leg External Rotation", "°"),
     ("Hip: Drive Leg Abduction", "°"), ("Hip: Plant Leg Abduction", "°"),
     ("Hip: Drive Leg Adduction", "°"), ("Hip: Plant Leg Adduction", "°"),
-    ("Hip: Flexion", "°"), ("Hip: Extension", "°"),
+    ("Hip: Drive Leg Flexion", "°"), ("Hip: Plant Leg Flexion", "°"),
+    ("Hip: Drive Leg Extension", "°"), ("Hip: Plant Leg Extension", "°"),
 ]
 
 # (test_name, unit) -- from Ryker's fully-populated Arm Health sheet.
