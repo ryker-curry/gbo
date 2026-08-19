@@ -30,7 +30,16 @@ def _build_sessions_list(db, my_player):
     """Same unified-session-list construction as the original --
     see pages/player_video.py's module docstring for the full source
     breakdown (Bullpen Tracking / Hitter Tracking / general Video
-    Review), unchanged here."""
+    Review), plus one fix: general Video Import clips (assessment_id
+    IS NULL -- every clip added from the Video Import page, see that
+    module's docstring) are now included for pitchers too, not just
+    hitters -- see the "general_clip" block below, which used to be
+    hitter-only (the "else" branch's general_clips query) even though
+    nothing about it is actually hitter-specific. A pitcher whose coach
+    used Video Import (rather than linking a clip to a specific
+    Rapsodo-imported pitch) previously had that clip visible on the
+    coach's Video Import page but invisible on the player's own My
+    Video page -- this was a real gap, not intentional scoping."""
     sessions_list = []
 
     if my_player.is_pitcher:
@@ -69,9 +78,9 @@ def _build_sessions_list(db, my_player):
         general_dates = sorted({p.assessment_date for p in general_pitches}, reverse=True)
         for d in general_dates:
             sessions_list.append({
-                "key": f"general_{d.isoformat()}",
+                "key": f"assessment_{d.isoformat()}",
                 "sort_date": d,
-                "display": f"{d.strftime('%Y-%m-%d (%a)')} — General clips",
+                "display": f"{d.strftime('%Y-%m-%d (%a)')} — Pitch-linked clips",
                 "kind": "general_pitcher",
                 "pitches": [p for p in general_pitches if p.assessment_date == d],
             })
@@ -98,20 +107,24 @@ def _build_sessions_list(db, my_player):
                     "swings": video_swings,
                 })
 
-        general_clips = (
-            db.query(Video)
-            .filter(Video.player_id == my_player.player_id, Video.assessment_id.is_(None))
-            .all()
-        )
-        general_clip_dates = sorted({v.recorded_date for v in general_clips if v.recorded_date}, reverse=True)
-        for d in general_clip_dates:
-            sessions_list.append({
-                "key": f"general_{d.isoformat()}",
-                "sort_date": d,
-                "display": f"{d.strftime('%Y-%m-%d (%a)')} — General clips",
-                "kind": "general_hitter",
-                "clips": [v for v in general_clips if v.recorded_date == d],
-            })
+    # General Video Import clips (assessment_id IS NULL) -- every clip
+    # a coach adds from the Video Import page lands here, regardless of
+    # whether the player is a pitcher or hitter. See this function's
+    # docstring for why this now runs for both instead of hitters only.
+    general_clips = (
+        db.query(Video)
+        .filter(Video.player_id == my_player.player_id, Video.assessment_id.is_(None))
+        .all()
+    )
+    general_clip_dates = sorted({v.recorded_date for v in general_clips if v.recorded_date}, reverse=True)
+    for d in general_clip_dates:
+        sessions_list.append({
+            "key": f"general_{d.isoformat()}",
+            "sort_date": d,
+            "display": f"{d.strftime('%Y-%m-%d (%a)')} — General clips",
+            "kind": "general_clip",
+            "clips": [v for v in general_clips if v.recorded_date == d],
+        })
 
     sessions_list.sort(key=lambda s: s["sort_date"], reverse=True)
     return sessions_list
@@ -218,7 +231,9 @@ def player_video_server(input, output, session, app_state):
                     ui.output_ui("clip_player"),
                 )
 
-            # general_hitter
+            # general_clip -- the only remaining kind at this point for
+            # either a pitcher or hitter session (see _build_sessions_
+            # list's docstring)
             clips_by_id = {v.video_id: v for v in selected["clips"]}
             choices = {str(vid): (v.description or f"Clip #{vid}") for vid, v in clips_by_id.items()}
             return ui.div(
@@ -290,7 +305,9 @@ def player_video_server(input, output, session, app_state):
                     children.append(ui.p(sw.notes, class_="text-muted small"))
                 return ui.div(*children)
 
-            # general_hitter
+            # general_clip -- the only remaining kind at this point for
+            # either a pitcher or hitter session (see _build_sessions_
+            # list's docstring)
             req("video_clip_choice" in input)
             clips_by_id = {v.video_id: v for v in selected["clips"]}
             v = clips_by_id.get(int(input.video_clip_choice()))
