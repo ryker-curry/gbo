@@ -283,6 +283,49 @@ a { color: var(--gbo-crimson); }
    dark/light mode instead of relying on default browser italic-gray. */
 .gbo-subgroup-label { color: var(--gbo-text-muted); font-style: italic; font-size: 0.85rem; margin: 10px 0 4px; }
 
+/* Metric progress bars (Physical Testing Breakdown -- Assessments, My
+   Assessments, Dashboard all share this). Replaced a Plotly
+   horizontal-bar-chart-rendered-as-an-image (bulky rows, plus a real
+   per-chart kaleido render cost) with plain HTML/CSS: name + raw
+   value on one line, a thin colored track underneath sized to the
+   percentile. "Comfortable" density -- slimmer than the old chart,
+   still easy to scan. Being real CSS (not a server-rendered image),
+   these track the live dark/light toggle automatically. */
+.gbo-metric-bar-group { display: flex; flex-direction: column; gap: 14px; margin: 4px 0 10px; }
+.gbo-metric-bar-row { width: 100%; }
+.gbo-metric-bar-header { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 5px; }
+.gbo-metric-bar-name { color: var(--gbo-text); font-size: 0.85rem; font-weight: 600; }
+.gbo-metric-bar-raw { color: var(--gbo-text-muted); font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
+.gbo-metric-bar-track { background: var(--gbo-border); border-radius: 5px; height: 10px; overflow: hidden; }
+.gbo-metric-bar-fill { background: var(--gbo-crimson); height: 100%; border-radius: 5px; transition: width 0.3s ease; }
+.gbo-metric-bar-percentile { color: var(--gbo-text-muted); font-size: 0.75rem; margin: 4px 0 0; }
+
+/* Score/percentile rings (Total/Body Comp/Power/Strength, Development
+   Profile's Output/Capacity) -- a CSS conic-gradient circle instead of
+   a rendered Plotly donut-chart image: --gbo-ring-pct (set inline per
+   ring, 0-100) drives how much of the circle fills with crimson before
+   falling back to the track color. .gbo-ring-inner is a same-background
+   circle sized to punch out the donut hole (72%, matching the old
+   Plotly hole=0.72) and centers the value/label text. Real CSS, so
+   (like the metric bars) these track the live dark/light toggle
+   automatically instead of needing a server-side re-render. */
+.gbo-ring-col { text-align: center; }
+.gbo-ring { width: 130px; height: 130px; border-radius: 50%; margin: 0 auto; display: flex; align-items: center; justify-content: center; background: conic-gradient(var(--gbo-crimson) calc(var(--gbo-ring-pct) * 1%), var(--gbo-border) 0); }
+.gbo-ring-inner { width: 74%; height: 74%; border-radius: 50%; background: var(--gbo-bg-card); display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.gbo-ring-value { color: var(--gbo-text); font-size: 1.55rem; font-weight: 800; line-height: 1; }
+.gbo-ring-sublabel { color: var(--gbo-text); font-size: 0.7rem; margin-top: 4px; text-align: center; padding: 0 10px; line-height: 1.2; }
+.gbo-ring-label { color: var(--gbo-text); font-weight: 700; text-align: center; margin: 8px 0 0; }
+
+/* Development Profile's Output-vs-Capacity balance bar -- was a
+   Plotly shapes+scatter-marker chart image, now a plain CSS track
+   with a positioned marker dot (marker's left% is the athlete's
+   -50..50 balance_pct remapped onto 0..100%, see build_development_
+   profile in bucket_display.py). */
+.gbo-balance-bar { position: relative; height: 4px; background: var(--gbo-border); border-radius: 2px; margin: 22px 10px 8px; }
+.gbo-balance-center { position: absolute; left: 50%; top: -8px; bottom: -8px; width: 2px; background: var(--gbo-text); transform: translateX(-50%); }
+.gbo-balance-marker { position: absolute; top: 50%; left: 50%; width: 20px; height: 20px; border-radius: 50%; background: var(--gbo-crimson); border: 2px solid var(--gbo-text); transform: translate(-50%, -50%); }
+.gbo-balance-labels { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--gbo-text-muted); margin: 0 10px 10px; }
+
 /* Plain data tables (read-only listings -- ui.tags.table built pages).
    First column (the "key" -- date, name, category) gets the gold
    accent treatment; the rest stay normal text color. */
