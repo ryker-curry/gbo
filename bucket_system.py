@@ -381,14 +381,31 @@ def get_bucket_test_names_for_category(category_name):
     return set()
 
 
-def get_latest_values_by_player(session, test_name):
-    """{player_id: (value, assessment_date)} -- each player's most
-    recent result for this test type, across the whole roster --
-    ACTIVE AND INACTIVE both count toward the comparison pool (Ryker's
-    explicit call, so last year's players' data still contributes to
-    percentiles even though they're hidden from the current roster
-    everywhere else in the app). Returns {} if the test type doesn't
-    exist yet (e.g. not seeded)."""
+def get_latest_values_by_player(session, test_name, _cache=None):
+    """{player_id: value} -- each player's most recent result for this
+    test type, across the whole roster -- ACTIVE AND INACTIVE both
+    count toward the comparison pool (Ryker's explicit call, so last
+    year's players' data still contributes to percentiles even though
+    they're hidden from the current roster everywhere else in the
+    app). Returns {} if the test type doesn't exist yet (e.g. not
+    seeded).
+
+    _cache: an optional pre-fetched {test_name: {player_id: value}}
+    dict from _batch_fetch_latest_values() -- when provided and this
+    test_name is in it, this skips the database round trip entirely
+    and returns straight from memory. compute_bucket_system() below
+    passes one in so a single player's full score rollup (~60 metrics)
+    costs a couple of queries total instead of one (or two) queries
+    PER METRIC -- that per-metric query loop was the actual cause of
+    Assessments/Dashboard/My Assessments feeling slow (and, over a
+    hosted DB connection with real network latency per round trip,
+    occasionally slow enough to trip the browser's websocket timeout
+    and show "Disconnected from the server"). Falls back to a live
+    query when _cache is None or doesn't have this test_name, so this
+    function is still correct as a plain standalone call."""
+    if _cache is not None and test_name in _cache:
+        return _cache[test_name]
+
     test_type = session.query(AssessmentTestType).filter(AssessmentTestType.test_name == test_name).first()
     if test_type is None:
         return {}
@@ -404,6 +421,93 @@ def get_latest_values_by_player(session, test_name):
         if player_id not in latest or assessment_date > latest[player_id][1]:
             latest[player_id] = (float(result.value), assessment_date)
     return {pid: v for pid, (v, _) in latest.items()}
+
+
+def _all_bucket_test_names():
+    """Every AssessmentTestType name this file's scoring touches,
+    anywhere -- unioned once so compute_bucket_system() can batch-fetch
+    all of them in a couple of queries instead of one round trip per
+    metric (see _batch_fetch_latest_values). Keep this in sync any time
+    a new (test_name, direction) pair is added to one of the subgroup
+    dicts/lists above -- a name missing from here just means that one
+    metric quietly falls back to its own live query instead of using
+    the batch, not a correctness problem."""
+    names = set()
+    names.update(name for name, _ in BODY_COMP_DISPLAY_METRICS)
+    for metrics in POWER_SUBGROUPS.values():
+        names.update(name for name, _ in metrics)
+    for metrics in STRENGTH_SUBGROUPS.values():
+        names.update(name for name, _ in metrics)
+    names.update(name for name, _ in SPEED_METRICS)
+    for metrics in CAPACITY_SUBGROUPS.values():
+        names.update(name for name, _ in metrics)
+    for metrics in MOBILITY_SUBGROUPS.values():
+        names.update(name for name, _ in metrics)
+    for _, right_test, left_test, _, _ in MOBILITY_SHOULDER_SIDED_FIELDS:
+        names.add(right_test)
+        names.add(left_test)
+    return names
+
+
+def _batch_fetch_latest_values(session, test_names):
+    """Batched replacement for calling get_latest_values_by_player()
+    once per metric -- the naive per-metric loop compute_bucket_system()
+    used to run cost roughly 60 metrics x up to 2 queries each, more
+    than a hundred sequential round trips to the database for one
+    player's page load. This does the same lookup for every requested
+    test name in exactly 2 queries total: one to resolve test_type_id +
+    unit for all of them, one to pull every result row for all of them
+    -- then groups down to latest-per-player in Python, which is fast.
+
+    Returns (values_by_test_name, units_by_test_name):
+      - values_by_test_name: {test_name: {player_id: value}} -- every
+        SEEDED test_name from the input is guaranteed a key here (an
+        empty dict if it's seeded but has no results yet), so callers
+        never need to fall back to a live query for a name that's
+        simply data-less. A test_name that isn't seeded at all (no
+        AssessmentTestType row) is absent, matching
+        get_latest_values_by_player's existing "not found" behavior.
+      - units_by_test_name: {test_name: unit_or_None}, for the same
+        seeded names -- avoids a second redundant per-metric query
+        compute_metric_percentiles used to run just to read the unit.
+    """
+    test_names = list(set(test_names))
+    if not test_names:
+        return {}, {}
+
+    type_rows = (
+        session.query(AssessmentTestType.test_type_id, AssessmentTestType.test_name, AssessmentTestType.unit)
+        .filter(AssessmentTestType.test_name.in_(test_names))
+        .all()
+    )
+    name_by_type_id = {row.test_type_id: row.test_name for row in type_rows}
+    units_by_test_name = {row.test_name: row.unit for row in type_rows}
+    type_ids = list(name_by_type_id.keys())
+    if not type_ids:
+        return {}, {}
+
+    result_rows = (
+        session.query(AssessmentResult.test_type_id, AssessmentResult.value, Assessment.player_id, Assessment.assessment_date)
+        .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
+        .filter(AssessmentResult.test_type_id.in_(type_ids))
+        .all()
+    )
+
+    # {test_type_id: {player_id: (value, date)}} -- latest per player, per test
+    latest_by_type_id = {}
+    for test_type_id, value, player_id, assessment_date in result_rows:
+        bucket = latest_by_type_id.setdefault(test_type_id, {})
+        if player_id not in bucket or assessment_date > bucket[player_id][1]:
+            bucket[player_id] = (float(value), assessment_date)
+
+    # Every seeded name gets an entry (possibly empty) -- see docstring.
+    values_by_test_name = {name: {} for name in name_by_type_id.values()}
+    for test_type_id, by_player in latest_by_type_id.items():
+        test_name = name_by_type_id.get(test_type_id)
+        if test_name is not None:
+            values_by_test_name[test_name] = {pid: v for pid, (v, _) in by_player.items()}
+
+    return values_by_test_name, units_by_test_name
 
 
 def compute_percentile(value, team_values, direction):
@@ -426,19 +530,28 @@ def compute_percentile(value, team_values, direction):
         return round((team_min / value) * 100)
 
 
-def compute_metric_percentiles(session, player_id, metrics):
+def compute_metric_percentiles(session, player_id, metrics, _cache=None, _units=None):
     """metrics: [(test_name, direction), ...]. Returns
     {test_name: {"raw": value, "percentile": pct, "unit": unit}} for
-    whichever of these metrics the player actually has a result for."""
+    whichever of these metrics the player actually has a result for.
+
+    _cache/_units: optional pre-fetched dicts from
+    _batch_fetch_latest_values() -- see get_latest_values_by_player's
+    docstring. When provided, this skips both the per-metric results
+    query AND the per-metric unit lookup query."""
     out = {}
     for test_name, direction in metrics:
-        by_player = get_latest_values_by_player(session, test_name)
+        by_player = get_latest_values_by_player(session, test_name, _cache=_cache)
         if player_id not in by_player:
             continue
         value = by_player[player_id]
         pct = compute_percentile(value, list(by_player.values()), direction)
-        test_type = session.query(AssessmentTestType).filter(AssessmentTestType.test_name == test_name).first()
-        out[test_name] = {"raw": value, "percentile": pct, "unit": test_type.unit if test_type else None}
+        if _units is not None and test_name in _units:
+            unit = _units[test_name]
+        else:
+            test_type = session.query(AssessmentTestType).filter(AssessmentTestType.test_name == test_name).first()
+            unit = test_type.unit if test_type else None
+        out[test_name] = {"raw": value, "percentile": pct, "unit": unit}
     return out
 
 
@@ -450,7 +563,7 @@ def get_player_throws_map(session):
     return {p.player_id: p.throws for p in session.query(Player).all()}
 
 
-def resolve_side_by_throws(session, right_test_name, left_test_name):
+def resolve_side_by_throws(session, right_test_name, left_test_name, _cache=None, _throws_map=None):
     """Takes a raw Right/Left pair of AssessmentTestType names (e.g.
     "Shoulder: Right External Rotation" / "...Left...") and resolves
     each player's own THROWING-ARM value and NON-THROWING-ARM value
@@ -468,12 +581,16 @@ def resolve_side_by_throws(session, right_test_name, left_test_name):
     resolve a side without knowing handedness) -- not defaulted to
     either side, since guessing would silently mis-score them.
 
+    _cache/_throws_map: optional pre-fetched data (see
+    get_latest_values_by_player/get_player_throws_map) -- when
+    provided, skips their live queries.
+
     Returns (throwing_by_player, non_throwing_by_player), each a plain
     {player_id: value} dict, only including players who have both a
     known throws side AND a raw value for the appropriate column."""
-    right_by_player = get_latest_values_by_player(session, right_test_name)
-    left_by_player = get_latest_values_by_player(session, left_test_name)
-    throws_map = get_player_throws_map(session)
+    right_by_player = get_latest_values_by_player(session, right_test_name, _cache=_cache)
+    left_by_player = get_latest_values_by_player(session, left_test_name, _cache=_cache)
+    throws_map = _throws_map if _throws_map is not None else get_player_throws_map(session)
 
     throwing_by_player = {}
     non_throwing_by_player = {}
@@ -491,7 +608,7 @@ def resolve_side_by_throws(session, right_test_name, left_test_name):
     return throwing_by_player, non_throwing_by_player
 
 
-def compute_mobility_shoulder_metrics(session, player_id):
+def compute_mobility_shoulder_metrics(session, player_id, _cache=None, _throws_map=None):
     """Builds the Mobility bucket's "Shoulder" sub-group scores from
     MOBILITY_SHOULDER_SIDED_FIELDS -- 4 measured quantities x 2 derived
     labels (Throwing Arm / Non-Throwing Arm) = up to 8 metrics, each
@@ -509,7 +626,9 @@ def compute_mobility_shoulder_metrics(session, player_id):
     entries."""
     out = {}
     for display_name, right_test, left_test, direction, unit in MOBILITY_SHOULDER_SIDED_FIELDS:
-        throwing_by_player, non_throwing_by_player = resolve_side_by_throws(session, right_test, left_test)
+        throwing_by_player, non_throwing_by_player = resolve_side_by_throws(
+            session, right_test, left_test, _cache=_cache, _throws_map=_throws_map
+        )
         if player_id in throwing_by_player:
             value = throwing_by_player[player_id]
             pct = compute_percentile(value, list(throwing_by_player.values()), direction)
@@ -521,7 +640,7 @@ def compute_mobility_shoulder_metrics(session, player_id):
     return out
 
 
-def compute_gird_percentiles(session, player_id):
+def compute_gird_percentiles(session, player_id, _cache=None, _throws_map=None):
     """GIRD (Glenohumeral Internal Rotation Deficit), computed live --
     non-throwing arm IR minus throwing arm IR, in degrees -- from the
     Right/Left Internal Rotation fields (GIRD_RIGHT_IR_TEST /
@@ -544,7 +663,9 @@ def compute_gird_percentiles(session, player_id):
     computed differently under the hood. Kept the "Shoulder ROM: GIRD"
     label (its old Arm Health field name) purely for display
     continuity -- it's no longer read from that stored field."""
-    throwing_ir, non_throwing_ir = resolve_side_by_throws(session, GIRD_RIGHT_IR_TEST, GIRD_LEFT_IR_TEST)
+    throwing_ir, non_throwing_ir = resolve_side_by_throws(
+        session, GIRD_RIGHT_IR_TEST, GIRD_LEFT_IR_TEST, _cache=_cache, _throws_map=_throws_map
+    )
     gird_by_player = {
         pid: non_throwing_ir[pid] - throwing_ir[pid]
         for pid in throwing_ir
@@ -617,21 +738,32 @@ def compute_bucket_system(session, player_id):
     with a second round of queries -- existing callers (Player
     Dashboard, My Assessments, Analytics) are unaffected since they
     only read the keys they already know about."""
+    # Batch-fetch every metric this whole rollup could possibly need in
+    # 2 queries total (plus 1 for player throwing hands), instead of
+    # each of the ~20 compute_metric_percentiles()/resolve_side_by_throws()
+    # calls below hitting the database on its own -- see
+    # _batch_fetch_latest_values's docstring. This is the fix for
+    # Assessments/Dashboard/My Assessments feeling slow (and sometimes
+    # disconnecting): a single player's rollup used to cost 100+
+    # sequential round trips to the hosted database; now it costs 3.
+    _cache, _units = _batch_fetch_latest_values(session, _all_bucket_test_names())
+    _throws_map = get_player_throws_map(session)
+
     # Body Comp -- score is averaged from ONLY the 2 scoring metrics
     # (BODY_COMP_METRICS), but the metrics dict returned for display
     # (body_comp_metrics, rendered as percentile bars) uses all 4
     # entered fields (BODY_COMP_DISPLAY_METRICS), so players see Body
     # Fat Mass and Percent Body Fat too even though those 2 don't
     # affect body_comp_score.
-    body_comp_score_metrics = compute_metric_percentiles(session, player_id, BODY_COMP_METRICS)
+    body_comp_score_metrics = compute_metric_percentiles(session, player_id, BODY_COMP_METRICS, _cache=_cache, _units=_units)
     body_comp_score = average_percentiles(body_comp_score_metrics)
-    body_comp_metrics = compute_metric_percentiles(session, player_id, BODY_COMP_DISPLAY_METRICS)
+    body_comp_metrics = compute_metric_percentiles(session, player_id, BODY_COMP_DISPLAY_METRICS, _cache=_cache, _units=_units)
 
     # Power (5 sub-groups)
     power_subgroup_scores = {}
     power_subgroup_metrics = {}
     for sub_name, metrics in POWER_SUBGROUPS.items():
-        m = compute_metric_percentiles(session, player_id, metrics)
+        m = compute_metric_percentiles(session, player_id, metrics, _cache=_cache, _units=_units)
         power_subgroup_metrics[sub_name] = m
         power_subgroup_scores[sub_name] = average_percentiles(m)
     power_score = round(sum(v for v in power_subgroup_scores.values() if v is not None) / len([v for v in power_subgroup_scores.values() if v is not None])) if any(v is not None for v in power_subgroup_scores.values()) else None
@@ -640,13 +772,13 @@ def compute_bucket_system(session, player_id):
     strength_subgroup_scores = {}
     strength_subgroup_metrics = {}
     for sub_name, metrics in STRENGTH_SUBGROUPS.items():
-        m = compute_metric_percentiles(session, player_id, metrics)
+        m = compute_metric_percentiles(session, player_id, metrics, _cache=_cache, _units=_units)
         strength_subgroup_metrics[sub_name] = m
         strength_subgroup_scores[sub_name] = average_percentiles(m)
     strength_score = round(sum(v for v in strength_subgroup_scores.values() if v is not None) / len([v for v in strength_subgroup_scores.values() if v is not None])) if any(v is not None for v in strength_subgroup_scores.values()) else None
 
     # Speed (reference only, excluded from Total)
-    speed_metrics = compute_metric_percentiles(session, player_id, SPEED_METRICS)
+    speed_metrics = compute_metric_percentiles(session, player_id, SPEED_METRICS, _cache=_cache, _units=_units)
     speed_score = average_percentiles(speed_metrics)
 
     # Total: Body Comp + Power + Strength only
@@ -657,7 +789,7 @@ def compute_bucket_system(session, player_id):
     capacity_subgroup_scores = {}
     capacity_subgroup_metrics = {}
     for sub_name, metrics in CAPACITY_SUBGROUPS.items():
-        m = compute_metric_percentiles(session, player_id, metrics)
+        m = compute_metric_percentiles(session, player_id, metrics, _cache=_cache, _units=_units)
         capacity_subgroup_metrics[sub_name] = m
         capacity_subgroup_scores[sub_name] = average_percentiles(m)
     capacity_score = round(sum(v for v in capacity_subgroup_scores.values() if v is not None) / len([v for v in capacity_subgroup_scores.values() if v is not None])) if any(v is not None for v in capacity_subgroup_scores.values()) else None
@@ -679,11 +811,11 @@ def compute_bucket_system(session, player_id):
     # every other sub-group in this file uses.
     mobility_subgroup_scores = {}
     mobility_subgroup_metrics = {}
-    shoulder_m = compute_mobility_shoulder_metrics(session, player_id)
+    shoulder_m = compute_mobility_shoulder_metrics(session, player_id, _cache=_cache, _throws_map=_throws_map)
     mobility_subgroup_metrics["Shoulder"] = shoulder_m
     mobility_subgroup_scores["Shoulder"] = average_percentiles(shoulder_m)
     for sub_name, metrics in MOBILITY_SUBGROUPS.items():
-        m = compute_metric_percentiles(session, player_id, metrics)
+        m = compute_metric_percentiles(session, player_id, metrics, _cache=_cache, _units=_units)
         mobility_subgroup_metrics[sub_name] = m
         mobility_subgroup_scores[sub_name] = average_percentiles(m)
     mobility_score = round(sum(v for v in mobility_subgroup_scores.values() if v is not None) / len([v for v in mobility_subgroup_scores.values() if v is not None])) if any(v is not None for v in mobility_subgroup_scores.values()) else None
@@ -691,7 +823,7 @@ def compute_bucket_system(session, player_id):
     # Shoulder Health (GIRD only for now, auto-computed -- see
     # compute_gird_percentiles' docstring). Reference only, not in
     # Total -- see module docstring.
-    shoulder_health_metrics = compute_gird_percentiles(session, player_id)
+    shoulder_health_metrics = compute_gird_percentiles(session, player_id, _cache=_cache, _throws_map=_throws_map)
     shoulder_health_score = average_percentiles(shoulder_health_metrics)
 
     return {

@@ -80,7 +80,7 @@ downstream render.ui in this codebase that reads an upstream select.
 
 from sqlalchemy.orm import joinedload
 
-from shiny import ui, render, req
+from shiny import ui, render, req, reactive
 
 from database import get_session
 from models import BullpenSession, RapsodoPitch
@@ -168,15 +168,32 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
     location_mode_key = f"{key_prefix}_location_mode"
     spin_axis_mode_key = f"{key_prefix}_spin_axis_mode"
 
+    @reactive.calc
+    def _target_and_pitches():
+        """Both _controls and _results below need the same (target,
+        pitches) pair -- previously each independently called
+        get_target(input) and re-ran _load_pitches' database query, so
+        picking a session cost that query twice. Memoized here so it
+        only runs once per actual change to the target/upstream
+        selection, same invalidation rule as everywhere else in this
+        app that uses @reactive.calc for this pattern."""
+        target = get_target(input)
+        if target is None:
+            return None, None
+        db = get_session()
+        try:
+            return target, _load_pitches(db, target)
+        finally:
+            db.close()
+
     @output(id=controls_id)
     @render.ui
     def _controls():
-        target = get_target(input)
+        target, pitches = _target_and_pitches()
         if target is None:
             return None
         db = get_session()
         try:
-            pitches = _load_pitches(db, target)
             summary = session_summary(pitches)
             type_options = ["All Pitches"] + summary["pitch_type_names"]
             max_pitch_number = max((p.pitch_number for p in pitches), default=1)
@@ -228,75 +245,70 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
     def _results():
         req(type_filter_key in input)
         req(range_key in input)
-        target = get_target(input)
+        target, all_pitches = _target_and_pitches()
         if target is None:
             return None
 
-        db = get_session()
-        try:
-            all_pitches = _load_pitches(db, target)
-            selected_type = input[type_filter_key]()
-            pitch_range = input[range_key]()
-            filtered_pitches = filter_pitches(
-                all_pitches,
-                pitch_type_name=None if selected_type == "All Pitches" else selected_type,
-                pitch_number_range=pitch_range,
-            )
-            if not filtered_pitches:
-                return ui_helpers.empty_state("No pitches match the selected filters.")
+        selected_type = input[type_filter_key]()
+        pitch_range = input[range_key]()
+        filtered_pitches = filter_pitches(
+            all_pitches,
+            pitch_type_name=None if selected_type == "All Pitches" else selected_type,
+            pitch_number_range=pitch_range,
+        )
+        if not filtered_pitches:
+            return ui_helpers.empty_state("No pitches match the selected filters.")
 
-            summary_rows = pitch_type_summary(filtered_pitches)
-            pitches_by_type = {}
-            for p in filtered_pitches:
-                pitches_by_type.setdefault(pitch_type_label(p), []).append(p)
+        summary_rows = pitch_type_summary(filtered_pitches)
+        pitches_by_type = {}
+        for p in filtered_pitches:
+            pitches_by_type.setdefault(pitch_type_label(p), []).append(p)
 
-            summary_section = _card(
-                _section_label(2, "Pitch Summary"),
-                ui_helpers.render_dict_table(summary_rows),
-                ui.p("Expand a pitch type below to see every individual pitch.", class_="text-muted small"),
-                ui.accordion(*[
-                    ui.accordion_panel(f"{row['Pitch Type']} ({row['#']} pitches)", ui_helpers.render_dict_table(individual_pitch_rows(pitches_by_type[row["Pitch Type"]])))
-                    for row in summary_rows
-                ], open=False, id=None),
-            )
+        summary_section = _card(
+            _section_label(2, "Pitch Summary"),
+            ui_helpers.render_dict_table(summary_rows),
+            ui.p("Expand a pitch type below to see every individual pitch.", class_="text-muted small"),
+            ui.accordion(*[
+                ui.accordion_panel(f"{row['Pitch Type']} ({row['#']} pitches)", ui_helpers.render_dict_table(individual_pitch_rows(pitches_by_type[row["Pitch Type"]])))
+                for row in summary_rows
+            ], open=False, id=None),
+        )
 
-            chart_children = [
-                _section_label(3, "Charts"),
-                ui.input_slider(shading_key, "Minimum pitches to shade a pitch type's cluster", min=1, max=10, value=2),
-            ]
-            min_shading = input[shading_key]() if shading_key in input else 2
-            chart_children.append(chart_helpers.fig_to_img(movement_chart(filtered_pitches, min_pitches_for_shading=min_shading), width=700, height=420))
-            legend = _pitch_type_legend(summary_rows, len(filtered_pitches))
-            if legend is not None:
-                chart_children.append(legend)
-            chart_children.append(ui.p("Centered on release point; color-coded by pitch type.", class_="text-muted small"))
+        chart_children = [
+            _section_label(3, "Charts"),
+            ui.input_slider(shading_key, "Minimum pitches to shade a pitch type's cluster", min=1, max=10, value=2),
+        ]
+        min_shading = input[shading_key]() if shading_key in input else 2
+        chart_children.append(chart_helpers.fig_to_img(movement_chart(filtered_pitches, min_pitches_for_shading=min_shading), width=700, height=420))
+        legend = _pitch_type_legend(summary_rows, len(filtered_pitches))
+        if legend is not None:
+            chart_children.append(legend)
+        chart_children.append(ui.p("Centered on release point; color-coded by pitch type.", class_="text-muted small"))
 
-            chart_children.append(ui.layout_columns(
-                chart_helpers.fig_to_img(release_point_chart(filtered_pitches, mode="individual"), width=450, height=420),
-                chart_helpers.fig_to_img(release_point_chart(filtered_pitches, mode="average"), width=450, height=420),
-            ))
-            chart_children.append(ui.p("Left: every pitch's release point. Right: each pitch type's average.", class_="text-muted small"))
+        chart_children.append(ui.layout_columns(
+            chart_helpers.fig_to_img(release_point_chart(filtered_pitches, mode="individual"), width=450, height=420),
+            chart_helpers.fig_to_img(release_point_chart(filtered_pitches, mode="average"), width=450, height=420),
+        ))
+        chart_children.append(ui.p("Left: every pitch's release point. Right: each pitch type's average.", class_="text-muted small"))
 
-            chart_children.append(ui.input_radio_buttons(location_mode_key, "Location view", ["Heat Map", "Individual Pitches"], inline=True))
-            location_mode = input[location_mode_key]() if location_mode_key in input else "Heat Map"
-            chart_children.append(chart_helpers.fig_to_img(
-                location_chart(filtered_pitches, mode="heatmap" if location_mode == "Heat Map" else "individual"), width=700, height=480,
-            ))
+        chart_children.append(ui.input_radio_buttons(location_mode_key, "Location view", ["Heat Map", "Individual Pitches"], inline=True))
+        location_mode = input[location_mode_key]() if location_mode_key in input else "Heat Map"
+        chart_children.append(chart_helpers.fig_to_img(
+            location_chart(filtered_pitches, mode="heatmap" if location_mode == "Heat Map" else "individual"), width=700, height=480,
+        ))
 
-            chart_children.append(ui.input_radio_buttons(spin_axis_mode_key, "Spin axis view", ["Average by Pitch Type", "Individual Pitches"], inline=True))
-            spin_axis_mode = input[spin_axis_mode_key]() if spin_axis_mode_key in input else "Average by Pitch Type"
-            if spin_axis_mode == "Average by Pitch Type":
-                chart_children.append(chart_helpers.fig_to_img(average_spin_axis_chart(filtered_pitches), width=500, height=420))
-            else:
-                individual_type_filter = None if selected_type == "All Pitches" else selected_type
-                if selected_type == "All Pitches":
-                    chart_children.append(ui.p("Showing every pitch type at once gets busy -- filter to one type above for a cleaner view.", class_="text-muted small"))
-                chart_children.append(chart_helpers.fig_to_img(individual_spin_axis_chart(filtered_pitches, pitch_type_filter=individual_type_filter), width=500, height=420))
+        chart_children.append(ui.input_radio_buttons(spin_axis_mode_key, "Spin axis view", ["Average by Pitch Type", "Individual Pitches"], inline=True))
+        spin_axis_mode = input[spin_axis_mode_key]() if spin_axis_mode_key in input else "Average by Pitch Type"
+        if spin_axis_mode == "Average by Pitch Type":
+            chart_children.append(chart_helpers.fig_to_img(average_spin_axis_chart(filtered_pitches), width=500, height=420))
+        else:
+            individual_type_filter = None if selected_type == "All Pitches" else selected_type
+            if selected_type == "All Pitches":
+                chart_children.append(ui.p("Showing every pitch type at once gets busy -- filter to one type above for a cleaner view.", class_="text-muted small"))
+            chart_children.append(chart_helpers.fig_to_img(individual_spin_axis_chart(filtered_pitches, pitch_type_filter=individual_type_filter), width=500, height=420))
 
-            charts_section = _card(*chart_children)
+        charts_section = _card(*chart_children)
 
-            return ui.div(summary_section, charts_section)
-        finally:
-            db.close()
+        return ui.div(summary_section, charts_section)
 
     return ui.output_ui(controls_id)
