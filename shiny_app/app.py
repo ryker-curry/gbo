@@ -103,8 +103,35 @@ MODULE_UI = {
     "game_tracking": lambda: game_tracking.game_tracking_ui("game_tracking"),
 }
 
+# Fix for "scrolling through a page feels like it keeps refreshing/
+# dimming" (Ryker's report -- reproduces on Assessments' New/Edit entry
+# forms, which are a wall of ui.input_numeric fields, and on Bullpen
+# Dashboard's Pitch Number Range / Minimum-pitches-to-shade sliders
+# sitting right above the charts). Root cause: Chrome (and some other
+# browsers) treats a mouse-wheel tick over a focused <input type="number">
+# as an increment/decrement, not a page-scroll -- so scrolling the page
+# with the cursor happening to pass over a numeric field bumps its
+# value instead. Every one of those fields is wired to a live Shiny
+# input, so each accidental bump sends a value to the server and
+# triggers a real (if small) reactive recompute -- which shows up as
+# the page visually flashing/dimming (Shiny's default "recalculating"
+# state on the affected output) once per wheel tick while scrolling.
+# Fix: blur any number input the instant a wheel event reaches it, so
+# the browser has nothing focused to apply its
+# scroll-changes-the-value behavior to, and the wheel event falls
+# through to its normal job -- scrolling the page. Global listener
+# (not a per-input JS binding) so it covers every ui.input_numeric on
+# every page, including any added later, with no per-field wiring.
+_NO_WHEEL_SCROLL_JS = """
+document.addEventListener('wheel', function (e) {
+  var el = e.target && e.target.closest ? e.target.closest('input[type="number"]') : null;
+  if (el) { el.blur(); }
+}, { passive: true, capture: true });
+"""
+
 app_ui = ui.page_fillable(
     ui.tags.style(theme.GLOBAL_CSS),
+    ui.tags.script(_NO_WHEEL_SCROLL_JS),
     ui.div(
         ui.input_dark_mode(id="dark_mode", mode="dark"),
         class_="gbo-mode-toggle",
