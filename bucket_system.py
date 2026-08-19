@@ -663,19 +663,48 @@ SHOULDER_RIGHT_ER_TEST = "Shoulder: Right External Rotation"
 SHOULDER_LEFT_ER_TEST = "Shoulder: Left External Rotation"
 
 
+# How far above a metric's MOBILITY_ROM_THRESHOLDS floor counts as
+# "yellow" (caution) rather than "green" (clear) -- a flat degree
+# buffer applied to every metric, per Ryker's call. Red is still
+# "below the configured threshold" exactly as before; this just splits
+# what used to be a single "met" (green) result into two tiers: yellow
+# for raw values that clear the floor but only just, green for
+# comfortably above it. A metric with no configured threshold (None in
+# MOBILITY_ROM_THRESHOLDS) has no red/yellow/green status at all --
+# same "don't fabricate a flag" rule as before. Bump this one number
+# to widen/narrow the caution band for every metric at once; if a
+# metric ever needs its own buffer instead of this shared one, give it
+# a per-metric override rather than making this a dict.
+MOBILITY_ROM_YELLOW_BUFFER = 10
+
+
+def _mobility_rom_status(raw, threshold):
+    """red/yellow/green/None for one raw value against its threshold
+    -- None (no status) if threshold is None (not configured yet), red
+    if below the threshold, yellow if within MOBILITY_ROM_YELLOW_BUFFER
+    degrees above it, green otherwise."""
+    if threshold is None:
+        return None
+    if raw < threshold:
+        return "red"
+    if raw < threshold + MOBILITY_ROM_YELLOW_BUFFER:
+        return "yellow"
+    return "green"
+
+
 def compute_mobility_rom_report(session, player_id, _cache=None, _throws_map=None):
-    """Pass/fail Mobility & ROM report -- replaces percentile scoring
-    for this section entirely, per Ryker's explicit call (see
+    """Red/yellow/green Mobility & ROM report -- replaces percentile
+    scoring for this section entirely, per Ryker's explicit call (see
     MOBILITY_ROM_THRESHOLDS' docstring for the full rationale).
 
     For every test_name in MOBILITY_ROM_THRESHOLDS, looks up this
-    player's latest value (if any) and compares it against that
-    metric's threshold. Then appends Throwing Arm / Non-Throwing Arm
+    player's latest value (if any) and statuses it via
+    _mobility_rom_status. Then appends Throwing Arm / Non-Throwing Arm
     Total Arc (External Rotation + Internal Rotation for that arm --
     the standard "Total Arc of Motion" shoulder ROM measure, per Wilk
     et al. 2011: throwing-arm mean ~190° ± 15°, expected to stay
     roughly symmetric with the non-throwing arm) as two more rows,
-    always with threshold=None/met=None -- Total Arc is a derived
+    always with threshold=None/status=None -- Total Arc is a derived
     reference value, not a separately-entered measurement, and no
     baseball-specific single-number floor for it was found (the
     literature flags a RELATIVE loss vs. the non-throwing arm, not an
@@ -685,7 +714,7 @@ def compute_mobility_rom_report(session, player_id, _cache=None, _throws_map=Non
     Returns a list of dicts (only for metrics/sides with a raw value
     on file for this player -- no blank rows), each shaped:
       {"test_name": ..., "raw": ..., "unit": "°",
-       "threshold": <float or None>, "met": <True/False/None>}
+       "threshold": <float or None>, "status": "red"/"yellow"/"green"/None}
     Ordered to match MOBILITY_ROM_THRESHOLDS' own definition order
     (Shoulder, Elbow, Hip), Total Arc rows last."""
     out = []
@@ -694,8 +723,8 @@ def compute_mobility_rom_report(session, player_id, _cache=None, _throws_map=Non
         if player_id not in by_player:
             continue
         raw = by_player[player_id]
-        met = None if threshold is None else (raw >= threshold)
-        out.append({"test_name": test_name, "raw": raw, "unit": "°", "threshold": threshold, "met": met})
+        status = _mobility_rom_status(raw, threshold)
+        out.append({"test_name": test_name, "raw": raw, "unit": "°", "threshold": threshold, "status": status})
 
     throwing_er, non_throwing_er = resolve_side_by_throws(
         session, SHOULDER_RIGHT_ER_TEST, SHOULDER_LEFT_ER_TEST, _cache=_cache, _throws_map=_throws_map
@@ -706,9 +735,9 @@ def compute_mobility_rom_report(session, player_id, _cache=None, _throws_map=Non
     throwing_arc = {pid: throwing_er[pid] + throwing_ir[pid] for pid in throwing_er if pid in throwing_ir}
     non_throwing_arc = {pid: non_throwing_er[pid] + non_throwing_ir[pid] for pid in non_throwing_er if pid in non_throwing_ir}
     if player_id in throwing_arc:
-        out.append({"test_name": "Throwing Arm Total Arc", "raw": throwing_arc[player_id], "unit": "°", "threshold": None, "met": None})
+        out.append({"test_name": "Throwing Arm Total Arc", "raw": throwing_arc[player_id], "unit": "°", "threshold": None, "status": None})
     if player_id in non_throwing_arc:
-        out.append({"test_name": "Non-Throwing Arm Total Arc", "raw": non_throwing_arc[player_id], "unit": "°", "threshold": None, "met": None})
+        out.append({"test_name": "Non-Throwing Arm Total Arc", "raw": non_throwing_arc[player_id], "unit": "°", "threshold": None, "status": None})
     return out
 
 

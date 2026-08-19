@@ -59,16 +59,18 @@ def _mobility_rom_region(test_name):
 
 
 def build_mobility_rom_report(report):
-    """Mobility & ROM section -- pass/fail rows, NOT percentile bars
-    (see MOBILITY_ROM_THRESHOLDS/compute_mobility_rom_report in
+    """Mobility & ROM section -- red/yellow/green rows, NOT percentile
+    bars (see MOBILITY_ROM_THRESHOLDS/compute_mobility_rom_report in
     bucket_system.py for why this bucket doesn't rank ROM against the
     team like every other one on this page). Each row shows the raw
-    value plus a colored status pill: green "Meets threshold" if the
-    value clears its configured minimum, red "Below threshold" if it
-    doesn't, gray "No threshold set" if that metric has no configured
-    MOBILITY_ROM_THRESHOLDS entry yet (still shows the raw value, just
-    no pass/fail claim -- see that dict for which fields still need a
-    real number before they can be flagged).
+    value plus a colored status pill: green "Clear" if comfortably
+    above the configured minimum, yellow "Caution" if it clears the
+    minimum but only within MOBILITY_ROM_YELLOW_BUFFER degrees, red
+    "Below threshold" if it doesn't clear the minimum at all, gray "No
+    threshold set" if that metric has no configured MOBILITY_ROM_
+    THRESHOLDS entry yet (still shows the raw value, just no status --
+    see that dict for which fields still need a real number before
+    they can be flagged).
 
     Grouped by body region (Shoulder, Elbow, Hip) via MOBILITY_ROM_
     REGION_ORDER, matching MOBILITY_ROM_THRESHOLDS' own definition
@@ -97,14 +99,17 @@ def build_mobility_rom_report(report):
             if display_name.startswith(prefix):
                 display_name = display_name[len(prefix):]
 
-            if row["met"] is None:
+            status = row["status"]
+            if status is None:
                 status_label, status_class = "No threshold set", "gbo-rom-status-none"
             else:
                 threshold_label = f" (min {row['threshold']:.0f}{unit})"
-                if row["met"]:
-                    status_label, status_class = f"Meets threshold{threshold_label}", "gbo-rom-status-met"
+                if status == "green":
+                    status_label, status_class = f"Clear{threshold_label}", "gbo-rom-status-green"
+                elif status == "yellow":
+                    status_label, status_class = f"Caution{threshold_label}", "gbo-rom-status-yellow"
                 else:
-                    status_label, status_class = f"Below threshold{threshold_label}", "gbo-rom-status-below"
+                    status_label, status_class = f"Below threshold{threshold_label}", "gbo-rom-status-red"
 
             row_els.append(ui.div(
                 ui.span(display_name, class_="gbo-rom-name"),
