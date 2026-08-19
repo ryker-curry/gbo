@@ -120,7 +120,12 @@ def player_stats_server(input, output, session, app_state):
 
         db = get_session()
         try:
-            categories = db.query(AssessmentCategory).order_by(AssessmentCategory.display_order).all()
+            categories = (
+                db.query(AssessmentCategory)
+                .filter(AssessmentCategory.category_name != "Anthropometrics")
+                .order_by(AssessmentCategory.display_order)
+                .all()
+            )
             if not categories:
                 return None
             cat_choices = {str(c.category_id): c.category_name for c in categories}
