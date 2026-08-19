@@ -12,54 +12,33 @@ plain function can't both print itself to the page AND hand back a
 bool the way Streamlit's model allows -- Shiny components have to
 return what they build).
 
-Every chart here is decorative (hoverinfo="skip"/"none" throughout,
-no on_select/click handling anywhere in the original either), so
-rendering them as static PNGs via fig.to_image() (kaleido) instead of
-live plotly.js widgets loses no interactivity. That trade-off is what
-lets a variable, data-dependent number of charts -- one ring per metric
-that has data, one bar chart per sub-group that has data -- render
-inside a single ui.HTML()-free tag tree without needing a fixed,
-pre-declared Shiny output id per chart the way shinywidgets'
-render_plotly would (bucket_system.py's own data determines the count,
-which isn't known ahead of a render).
-
 Deliberately never says "Bucket System" anywhere in the UI, same as the
 original -- Ryker's explicit call. Always labeled "Physical Testing".
 
-Mode-awareness: every build_* function below takes mode="dark"|"light"
-and looks colors up via theme.chart_colors(mode) instead of hardcoded
-hex. These charts are rendered server-side to static PNGs (see
-_fig_to_img), so unlike the rest of the UI they can't pick up the
-client-side dark-mode toggle through CSS alone -- callers pass
-app_state.dark_mode() through explicitly (see modules/player_stats.py).
-Bar marks use marker=dict(cornerradius=6) for a rounded data-end,
-per the dataviz skill's mark-and-anatomy spec (flat baseline, rounded
-tip) -- confirmed working with plotly 6.9.0 + kaleido v1 (see
-requirements.txt's kaleido comment: v1 needs a real Chrome install on
-the machine, found automatically or via a one-time `plotly_get_chrome`
--- it no longer bundles its own the way the old 0.2.1 pin did).
+Every element on this page -- rings, metric bars, the development-
+profile balance bar -- used to be a Plotly figure rendered server-side
+to a static PNG via kaleido (fig.to_image()), one real image render
+per element per page load. That was fine for interactivity (everything
+here is decorative -- hoverinfo="skip"/"none" throughout, no
+on_select/click handling anywhere), but kaleido has real per-image CPU
+cost, and a single player's Physical Testing Breakdown could add up to
+15-20+ of these on one load -- the direct cause of both "assessments
+takes forever to load" and (via the same pattern in
+bullpen_dashboard_display.py) the Bullpen Dashboard pitcher-switch
+disconnect. Every element here is now plain HTML/CSS instead (see the
+.gbo-ring-*/.gbo-metric-bar-*/.gbo-balance-* classes in theme.py's
+GLOBAL_CSS) -- zero image renders, and as a bonus these now track the
+live dark/light toggle automatically instead of needing mode=
+threaded through from a server-side render. mode= stays on every
+build_* signature below purely for call-site compatibility (nothing
+here calls it anymore) so callers didn't need to change.
 """
 
-import plotly.graph_objects as go
 from shiny import ui
 
 from bucket_system import BODY_COMP_METRICS
-from chart_helpers import fig_to_img as _fig_to_img
-
-import theme
 
 BODY_COMP_BAR_NAMES = {name for name, _ in BODY_COMP_METRICS}
-
-# _fig_to_img used to be a private copy of this exact function, hardcoded
-# at scale=2 (retina resolution) -- that's the same per-image kaleido CPU
-# cost chart_helpers.fig_to_img's docstring explains was slow enough to
-# disconnect the Bullpen Dashboard. This page (Assessments' score
-# rings/breakdown) renders even more charts per load than Bullpen
-# Dashboard does -- up to 4 rings, a development-profile section, and a
-# bar chart per physical-testing sub-group, all on every player switch --
-# so it was an even bigger contributor to "assessments takes forever to
-# load". Now shares the same scale=1-by-default helper instead of
-# keeping its own stale, unfixed copy.
 
 
 def build_percentage_rings(metrics, key_prefix, show_ordinal=False, mode="dark"):
@@ -70,12 +49,17 @@ def build_percentage_rings(metrics, key_prefix, show_ordinal=False, mode="dark")
     default) shows a plain percentage ("45%") with the label as the
     in-ring sub-label (direct-percentage KPIs). Returns None (renders
     nothing) if every value is None -- same "show nothing" rule as the
-    original's False return."""
+    original's False return.
+
+    Each ring is a CSS conic-gradient circle (.gbo-ring in GLOBAL_CSS)
+    -- var(--gbo-ring-pct) set inline per ring drives how much of the
+    circle is filled -- with a same-color inner circle punched out
+    (.gbo-ring-inner) to fake the donut hole a Plotly go.Pie(hole=0.72)
+    used to give. No chart image involved."""
     has_any_data = any(v is not None for _, v in metrics)
     if not has_any_data:
         return None
 
-    c = theme.chart_colors(mode)
     col_width = max(1, 12 // len(metrics))
     cols = []
     for label, value in metrics:
@@ -83,34 +67,23 @@ def build_percentage_rings(metrics, key_prefix, show_ordinal=False, mode="dark")
             cols.append(ui.div(ui.p(ui.strong(label)), ui.p("No data yet", class_="text-muted small")))
             continue
 
-        fig = go.Figure(go.Pie(
-            values=[value, 100 - value],
-            hole=0.72,
-            marker=dict(colors=[c["crimson"], c["track"]]),
-            direction="clockwise",
-            rotation=0,
-            sort=False,
-            textinfo="none",
-            hoverinfo="skip",
-        ))
+        pct = max(0, min(100, value))
         if show_ordinal:
-            annotation_text = f"<b>{round(value)}</b>"
+            inner_children = [ui.span(f"{round(value)}", class_="gbo-ring-value")]
         else:
-            annotation_text = f"<b>{value:.0f}%</b><br><span style='font-size:13px'>{label}</span>"
-        fig.update_layout(
-            showlegend=False,
-            annotations=[dict(
-                text=annotation_text,
-                x=0.5, y=0.5, font=dict(size=26, color=c["text"]), showarrow=False,
-            )],
-            paper_bgcolor=c["surface"],
-            margin=dict(t=10, b=10, l=10, r=10),
-            height=200, width=200,
+            inner_children = [
+                ui.span(f"{value:.0f}%", class_="gbo-ring-value"),
+                ui.span(label, class_="gbo-ring-sublabel"),
+            ]
+        ring = ui.div(
+            ui.div(*inner_children, class_="gbo-ring-inner"),
+            class_="gbo-ring",
+            style=f"--gbo-ring-pct: {pct};",
         )
-        children = [_fig_to_img(fig, width=200, height=200)]
+        children = [ring]
         if show_ordinal:
-            children.append(ui.p(ui.strong(label), style="text-align:center; margin-top:-10px;"))
-        cols.append(ui.div(*children))
+            children.append(ui.p(ui.strong(label), class_="gbo-ring-label"))
+        cols.append(ui.div(*children, class_="gbo-ring-col"))
 
     return ui.layout_columns(*cols, col_widths=[col_width] * len(cols))
 
@@ -128,37 +101,65 @@ def build_score_rings(bucket_data, key_prefix, mode="dark"):
     return build_percentage_rings(specs, key_prefix, show_ordinal=True, mode=mode)
 
 
+def _ordinal(n):
+    """11/12/13 stay "th" even though they end in 1/2/3 (11th, 12th,
+    13th, not 11st/12nd/13rd) -- the usual English ordinal-suffix
+    exception."""
+    n = int(round(n))
+    if 10 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
 def build_metric_bars(metrics_dict, chart_key, mode="dark"):
-    """Horizontal bar per metric -- bar length is the percentile
-    (0-100), raw value + unit labeled at the end of the bar. Always
-    returns something (a "no data" caption if metrics_dict is empty),
-    matching the original's unconditional render."""
+    """One row per metric: name + raw value on a line, a thin colored
+    progress bar underneath sized to the percentile (0-100), with the
+    percentile itself labeled below the bar. Always returns something
+    (a "no data" caption if metrics_dict is empty), matching the
+    original's unconditional render.
+
+    Rebuilt from a Plotly horizontal-bar-chart-rendered-as-an-image
+    (see git history) to plain HTML/CSS -- Ryker's call, both because
+    the old chart read as too visually "bulky" (70px-tall bar rows,
+    wide chart margins) and because each one was a real kaleido image
+    render on every player switch, the same per-image CPU cost that
+    made Bullpen Dashboard disconnect on a pitcher switch. A page's
+    full Physical Testing Breakdown can have a dozen-plus of these
+    (one per sub-group) -- cutting all of them from "render a chart
+    image" to "size a <div>" removes that many kaleido renders per
+    page load, on top of looking slimmer. mode= is accepted for
+    call-site compatibility with every other build_* function here,
+    but isn't otherwise used -- unlike the rings/balance bar, these
+    bars are real CSS (styled via GLOBAL_CSS's --gbo-* custom
+    properties, see theme.py), so they already track the live
+    dark/light toggle for free instead of needing a server-side
+    re-render."""
     if not metrics_dict:
         return ui.p("No data yet.", class_="text-muted small")
 
-    c = theme.chart_colors(mode)
-    names = list(metrics_dict.keys())
-    percentiles = [d["percentile"] if d["percentile"] is not None else 0 for d in metrics_dict.values()]
-    raw_labels = [f"{d['raw']:.2f}{d['unit'] or ''}" for d in metrics_dict.values()]
-    fig = go.Figure(go.Bar(
-        x=percentiles,
-        y=names,
-        orientation="h",
-        text=raw_labels,
-        textposition="outside",
-        marker=dict(color=c["crimson"], cornerradius=6),
-    ))
-    chart_height = max(160, 70 * len(names))
-    fig.update_layout(
-        xaxis=dict(range=[0, 115], title="Percentile", tickcolor=c["text"], gridcolor=c["grid"]),
-        yaxis=dict(autorange="reversed"),
-        height=chart_height,
-        margin=dict(l=10, r=60, t=10, b=40),
-        paper_bgcolor=c["surface"],
-        plot_bgcolor=c["surface"],
-        font=dict(color=c["text"]),
-    )
-    return _fig_to_img(fig, width=700, height=chart_height)
+    rows = []
+    for name, d in metrics_dict.items():
+        raw_percentile = d["percentile"]
+        pct = raw_percentile if raw_percentile is not None else 0
+        pct = max(0, min(100, pct))
+        raw_label = f"{d['raw']:.2f}{d['unit'] or ''}"
+        percentile_label = f"{_ordinal(raw_percentile)} percentile" if raw_percentile is not None else "No percentile data"
+        rows.append(ui.div(
+            ui.div(
+                ui.span(name, class_="gbo-metric-bar-name"),
+                ui.span(raw_label, class_="gbo-metric-bar-raw"),
+                class_="gbo-metric-bar-header",
+            ),
+            ui.div(
+                ui.div(class_="gbo-metric-bar-fill", style=f"width: {pct}%;"),
+                class_="gbo-metric-bar-track",
+            ),
+            ui.p(percentile_label, class_="gbo-metric-bar-percentile"),
+            class_="gbo-metric-bar-row",
+        ))
+    return ui.div(*rows, class_="gbo-metric-bar-group")
 
 
 def build_raw_metrics(metrics_dict):
@@ -244,7 +245,6 @@ def build_development_profile(bucket_data, key_prefix, mode="dark"):
     if output_score is None or capacity_score is None:
         return None
 
-    c = theme.chart_colors(mode)
     sections = [ui.p(f"Development Profile: {profile or '—'}", class_="gbo-category-title")]
     rings = build_percentage_rings(
         [("Physical Output", output_score), ("Physical Capacity", capacity_score)],
@@ -256,27 +256,22 @@ def build_development_profile(bucket_data, key_prefix, mode="dark"):
     if balance_pct is not None:
         # Horizontal balance bar: a fixed -50/+50 scale, a center
         # reference line at 0, and a marker at the athlete's actual
-        # balance_pct, clamped to the display range.
+        # balance_pct, clamped to the display range. Plain CSS now
+        # (.gbo-balance-* in GLOBAL_CSS) -- the marker's left% is just
+        # display_pct remapped from a -50..50 range onto 0..100%.
         display_pct = max(-50, min(50, balance_pct))
-        fig = go.Figure()
-        fig.add_shape(type="line", x0=-50, x1=50, y0=0, y1=0, line=dict(color=c["track"], width=4))
-        fig.add_shape(type="line", x0=0, x1=0, y0=-0.3, y1=0.3, line=dict(color=c["text"], width=2))
-        fig.add_trace(go.Scatter(
-            x=[display_pct], y=[0], mode="markers",
-            marker=dict(size=22, color=c["crimson"], line=dict(color=c["text"], width=2)),
-            showlegend=False, hoverinfo="skip",
+        marker_left = display_pct + 50
+        sections.append(ui.div(
+            ui.div(class_="gbo-balance-track"),
+            ui.div(class_="gbo-balance-center"),
+            ui.div(class_="gbo-balance-marker", style=f"left: {marker_left}%;"),
+            class_="gbo-balance-bar",
         ))
-        fig.update_layout(
-            xaxis=dict(range=[-55, 55], visible=False, fixedrange=True),
-            yaxis=dict(range=[-1, 1], visible=False, fixedrange=True),
-            paper_bgcolor=c["surface"], plot_bgcolor=c["surface"],
-            height=90, margin=dict(l=10, r=10, t=10, b=10),
-            annotations=[
-                dict(x=-50, y=-0.7, text="Capacity-Dominant", showarrow=False, font=dict(color=c["text"], size=12), xanchor="left"),
-                dict(x=50, y=-0.7, text="Output-Dominant", showarrow=False, font=dict(color=c["text"], size=12), xanchor="right"),
-            ],
-        )
-        sections.append(_fig_to_img(fig, width=700, height=90))
+        sections.append(ui.div(
+            ui.span("Capacity-Dominant"),
+            ui.span("Output-Dominant"),
+            class_="gbo-balance-labels",
+        ))
         sections.append(ui.p(
             f"Balance: {balance_pct:+.1f}% (provisional bands -- not a validated threshold yet)",
             class_="text-muted small",
