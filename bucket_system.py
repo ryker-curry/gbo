@@ -167,17 +167,20 @@ STRENGTH_SUBGROUPS = {
         ("Hip Abduction Force (Plant Leg)", "higher"),
         ("Hip Adduction Force (Drive Leg)", "higher"),
         ("Hip Adduction Force (Plant Leg)", "higher"),
+        # Isometric Mid-Thigh Pull -- previously its own "Mid-Thigh Pull"
+        # subgroup (a separate "Mid-Thigh Pull — <score>" header on the
+        # Development Profile breakdown), folded into Lower Body Strength
+        # per Ryker's explicit call so it's just part of the one Lower
+        # Body Strength score/bar group instead of a standalone section.
+        ("Isometric Mid-Thigh Pull Average Force", "higher"),
+        ("Isometric Mid-Thigh Pull Peak Vertical Force", "higher"),
+        ("Isometric Mid-Thigh Pull Peak Vertical Force (Drive Leg)", "higher"),
+        ("Isometric Mid-Thigh Pull Peak Vertical Force (Plant Leg)", "higher"),
     ],
     "Upper Body Strength": [
         ("Neutral Grip/DB Bench Press Max Load", "higher"),
         ("Neutral Grip Chin Up Max External Load", "higher"),
         ("Grip Strength (Seated, Throwing Hand)", "higher"),
-    ],
-    "Mid-Thigh Pull": [
-        ("Isometric Mid-Thigh Pull Average Force", "higher"),
-        ("Isometric Mid-Thigh Pull Peak Vertical Force", "higher"),
-        ("Isometric Mid-Thigh Pull Peak Vertical Force (Drive Leg)", "higher"),
-        ("Isometric Mid-Thigh Pull Peak Vertical Force (Plant Leg)", "higher"),
     ],
 }
 
@@ -369,11 +372,7 @@ def get_bucket_test_names_for_category(category_name):
                 names.update(name for name, _ in metrics)
         return names
     if category_name == "Lower Body Strength":
-        names = set()
-        for sub_name, metrics in STRENGTH_SUBGROUPS.items():
-            if sub_name in ("Lower Body Strength", "Mid-Thigh Pull"):
-                names.update(name for name, _ in metrics)
-        return names
+        return {name for name, _ in STRENGTH_SUBGROUPS["Lower Body Strength"]}
     if category_name == "Upper Body Strength":
         return {name for name, _ in STRENGTH_SUBGROUPS["Upper Body Strength"]}
     if category_name == "Speed":
