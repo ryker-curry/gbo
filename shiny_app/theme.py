@@ -125,6 +125,7 @@ GLOBAL_CSS = """
   --gbo-text-on-crimson: #FFFDE5;
   --gbo-positive: #4CAF50;
   --gbo-negative: #E05252;
+  --gbo-caution: #E0A526;
 }
 :root[data-bs-theme="light"] {
   --gbo-bg-page: #F5F4F1;
@@ -147,6 +148,10 @@ GLOBAL_CSS = """
   --gbo-text-on-crimson: #FFFDE5;
   --gbo-positive: #2E7D32;
   --gbo-negative: #C62828;
+  /* Amber fails as text on a light surface at the dark-mode value
+     (#E0A526 -> ~2.0:1) -- darkened variant, same contrast fix
+     --gbo-gold-text already applies for the same reason. */
+  --gbo-caution: #96690C;
 }
 
 body { background: var(--gbo-bg-page); color: var(--gbo-text); font-family: {FONT_STACK}; }
@@ -311,8 +316,9 @@ a { color: var(--gbo-crimson); }
 .gbo-rom-name { color: var(--gbo-text); font-size: 0.85rem; font-weight: 600; flex: 1 1 auto; min-width: 160px; }
 .gbo-rom-raw { color: var(--gbo-text-muted); font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
 .gbo-rom-status { font-size: 0.75rem; font-weight: 700; white-space: nowrap; padding: 2px 9px; border-radius: 10px; }
-.gbo-rom-status-met { color: var(--gbo-positive); background: color-mix(in srgb, var(--gbo-positive) 15%, transparent); }
-.gbo-rom-status-below { color: var(--gbo-negative); background: color-mix(in srgb, var(--gbo-negative) 15%, transparent); }
+.gbo-rom-status-green { color: var(--gbo-positive); background: color-mix(in srgb, var(--gbo-positive) 15%, transparent); }
+.gbo-rom-status-yellow { color: var(--gbo-caution); background: color-mix(in srgb, var(--gbo-caution) 15%, transparent); }
+.gbo-rom-status-red { color: var(--gbo-negative); background: color-mix(in srgb, var(--gbo-negative) 15%, transparent); }
 .gbo-rom-status-none { color: var(--gbo-text-muted); background: color-mix(in srgb, var(--gbo-text-muted) 12%, transparent); }
 
 /* Score/percentile rings (Total/Body Comp/Power/Strength, Development
