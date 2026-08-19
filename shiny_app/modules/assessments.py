@@ -221,7 +221,12 @@ def assessments_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            categories = db.query(AssessmentCategory).order_by(AssessmentCategory.display_order).all()
+            categories = (
+                db.query(AssessmentCategory)
+                .filter(AssessmentCategory.category_name != "Anthropometrics")
+                .order_by(AssessmentCategory.display_order)
+                .all()
+            )
             choices = {str(c.category_id): c.category_name for c in categories}
             return ui.div(ui.hr(), ui.input_select("category_select", "Category", choices=choices))
         finally:
