@@ -295,16 +295,25 @@ MOBILITY_ROM_THRESHOLDS = {
     "Shoulder: Left Flexion": None,
     "Shoulder: Right Extension": None,
     "Shoulder: Left Extension": None,
-    "Elbow: Flexion": None,
+    "Elbow: Right Flexion": None,
+    "Elbow: Left Flexion": None,
     # Elbow Extension is a well-documented throwing-elbow finding
     # (pitchers commonly develop a flexion contracture -- can't reach
-    # full 0° extension -- from repetitive valgus loading), but
-    # setting a real threshold depends on how this app records the
-    # value (0° = fully straight with a positive number meaning
-    # degrees short of straight, vs. some other convention) -- left
-    # unconfigured until that's confirmed rather than guessing the
-    # polarity of a clinical flag.
-    "Elbow: Extension": None,
+    # full 0° extension -- from repetitive valgus loading). Polarity
+    # confirmed (per Ryker, Aug 2026): standard goniometry convention,
+    # 0° = fully straight, POSITIVE = hyperextension past straight,
+    # NEGATIVE = flexion contracture (short of straight). A red-flag
+    # threshold for this would be a NEGATIVE floor (e.g. "flag if worse
+    # than -X°," not "flag if below X°" the way every other metric in
+    # this dict works) -- _mobility_rom_status's current "raw < X ->
+    # red" comparison already reads correctly for a negative threshold
+    # (more negative = worse = still "less than"), so no code change is
+    # needed there, just a real research-backed negative number here
+    # once one exists. Left None for now -- no baseball-specific
+    # contracture-degree threshold was found in the same literature
+    # sweep that sourced the other values in this dict.
+    "Elbow: Right Extension": None,
+    "Elbow: Left Extension": None,
     # Hip Internal/External Rotation -- McCulloch et al. 2014,
     # professional pitchers (right-handed, n=77): Drive/stance leg IR
     # 32.2° ± 8.2°, ER 30.8° ± 9.7°; Plant/stride leg IR 30.8° ± 8.4°,
