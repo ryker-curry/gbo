@@ -167,6 +167,34 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
     shading_key = f"{key_prefix}_min_shading"
     location_mode_key = f"{key_prefix}_location_mode"
     spin_axis_mode_key = f"{key_prefix}_spin_axis_mode"
+    show_charts_key = f"{key_prefix}_show_charts_btn"
+
+    # The four charts below are real Plotly-to-PNG (kaleido) renders --
+    # unlike bucket_display.py's rings/bars, these are genuine data
+    # visualizations (scatter/heatmap positions), not something CSS can
+    # fake, so they can't be converted away the way Assessments' charts
+    # were. Rendering all four synchronously on every single pitcher/
+    # session switch was slow enough to occasionally blow past the
+    # browser's websocket timeout ("Disconnected from the server") when
+    # switching targets in the live app. _charts_shown_for tracks which
+    # target the charts were last explicitly requested for (via the
+    # "Show charts" button below); switching to a different target
+    # doesn't match, so _results() shows just the button again instead
+    # of auto-rendering four fresh chart images before the page can
+    # respond to anything else.
+    _charts_shown_for = reactive.Value(None)
+
+    def _target_key(target):
+        if target["kind"] == "session":
+            return ("session", target["bullpen_id"])
+        return ("combined", tuple(sorted(target["bullpen_ids"])))
+
+    @reactive.effect
+    @reactive.event(input[show_charts_key])
+    def _on_show_charts():
+        t, _ = _target_and_pitches()
+        if t is not None:
+            _charts_shown_for.set(_target_key(t))
 
     @reactive.calc
     def _target_and_pitches():
@@ -273,6 +301,12 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
                 for row in summary_rows
             ], open=False, id=None),
         )
+
+        if _charts_shown_for() != _target_key(target):
+            return ui.div(
+                summary_section,
+                ui.input_action_button(show_charts_key, "Show charts", class_="btn-outline-secondary mt-2"),
+            )
 
         chart_children = [
             _section_label(3, "Charts"),
