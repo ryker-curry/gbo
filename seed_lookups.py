@@ -89,9 +89,16 @@ BODY_COMPOSITION_TESTS = [
 
 # (test_name, unit) -- pruned down to exactly what's actually measured
 # (Aug 2026, per Ryker's explicit correction): Shoulder ER/IR/Flexion/
-# Extension, Elbow Flexion/Extension, and the full Hip block -- all
-# entered as Right/Left (Shoulder/Elbow) or Drive Leg/Plant Leg (Hip)
-# pairs. The original draft of this sheet also had Cervical Spine,
+# Extension, Elbow Flexion/Extension, and the full Hip block -- ALL
+# entered as Right/Left pairs, including Hip (a follow-up correction:
+# Hip was originally entered as Drive Leg/Plant Leg, matching how it's
+# actually interpreted, but that turned out to be confusing to type in
+# at assessment time -- a coach has to stop and work out which leg is
+# "drive" for this particular player. Entry stays Right/Left; Drive
+# Leg/Plant Leg is resolved per player from that in bucket_system.py's
+# compute_mobility_rom_report, the same way GIRD/Total Arc resolve
+# Throwing Arm/Non-Throwing Arm -- see HIP_ROM_BASE_METRICS there).
+# The original draft of this sheet also had Cervical Spine,
 # Elbow Pronation/Supination, T-Spine, Lumbar Spine, and Ankle -- those
 # were things Ryker intended to measure but never actually collected,
 # so they're removed here rather than sitting on the entry form as
@@ -110,12 +117,12 @@ MOBILITY_ROM_TESTS = [
     ("Shoulder: Right Flexion", "°"), ("Shoulder: Left Flexion", "°"),
     ("Shoulder: Right Extension", "°"), ("Shoulder: Left Extension", "°"),
     ("Elbow: Flexion", "°"), ("Elbow: Extension", "°"),
-    ("Hip: Drive Leg Internal Rotation", "°"), ("Hip: Drive Leg External Rotation", "°"),
-    ("Hip: Plant Leg Internal Rotation", "°"), ("Hip: Plant Leg External Rotation", "°"),
-    ("Hip: Drive Leg Abduction", "°"), ("Hip: Plant Leg Abduction", "°"),
-    ("Hip: Drive Leg Adduction", "°"), ("Hip: Plant Leg Adduction", "°"),
-    ("Hip: Drive Leg Flexion", "°"), ("Hip: Plant Leg Flexion", "°"),
-    ("Hip: Drive Leg Extension", "°"), ("Hip: Plant Leg Extension", "°"),
+    ("Hip: Right Internal Rotation", "°"), ("Hip: Left Internal Rotation", "°"),
+    ("Hip: Right External Rotation", "°"), ("Hip: Left External Rotation", "°"),
+    ("Hip: Right Abduction", "°"), ("Hip: Left Abduction", "°"),
+    ("Hip: Right Adduction", "°"), ("Hip: Left Adduction", "°"),
+    ("Hip: Right Flexion", "°"), ("Hip: Left Flexion", "°"),
+    ("Hip: Right Extension", "°"), ("Hip: Left Extension", "°"),
 ]
 
 # (test_name, unit) -- from Ryker's fully-populated Arm Health sheet.
