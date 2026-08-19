@@ -224,11 +224,6 @@ def _login_ui(app_state):
 
 
 _GUEST_ASSESSMENT_CATEGORIES = [
-    ("Anthropometrics", "18 body measurements",
-     "Standing height, wingspan, limb lengths, and more. These are fixed physical traits (not "
-     "trainable), but they matter because a player's proportions influence their natural mechanics -- "
-     "long levers can help generate velocity or bat speed but may require more mobility work to "
-     "control safely, while shorter levers often mean quicker, more repeatable motions."),
     ("Body Composition", "19 metrics via InBody770",
      "Skeletal muscle mass, body fat percentage, and lean/fat mass broken out by limb (including "
      "throwing arm vs. non-throwing arm). This tracks a player's power-to-weight ratio and conditioning "
@@ -329,7 +324,7 @@ def _guest_ui():
         ),
 
         ui.hr(),
-        ui.h4("Assessments — 11 categories of physical testing"),
+        ui.h4("Assessments — 10 categories of physical testing"),
         ui.p(
             "Every category below supports full history (not just a snapshot) -- a player can be tested "
             "the same way repeatedly over months or years, and the platform tracks trends (Count, Average, "
