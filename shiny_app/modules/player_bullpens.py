@@ -28,7 +28,7 @@ import plotly.graph_objects as go
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import Player, User, BullpenSession, HitterSwing, RapsodoPitch
+from models import Player, User, BullpenSession, HitterSwing, RapsodoPitch, BullpenPitch, Assessment, AssessmentResult
 
 import ui_helpers
 import chart_helpers
@@ -258,6 +258,17 @@ def player_bullpens_ui():
 def player_bullpens_server(input, output, session, app_state):
     _refresh_tick = reactive.Value(0)
     _registered_video_outputs = set()
+    _registered_chart_outputs = set()
+    # bullpen_ids whose per-session charts have been explicitly requested
+    # via that session's "Show charts" button -- see _register_chart_
+    # section below. Every chart in every session's accordion panel used
+    # to render unconditionally on every page load, even panels that were
+    # never expanded (Shiny still builds all panel content up front
+    # regardless of collapsed/expanded state); a player with several
+    # data-heavy sessions could mean dozens of kaleido chart renders on
+    # one page load. Same "gate behind an explicit click" fix already
+    # applied to Bullpen Dashboard for the same reason.
+    _charts_shown = reactive.Value(frozenset())
 
     def _my_player(db):
         me = db.query(User).filter(User.user_id == app_state.user_id()).first()
@@ -358,13 +369,35 @@ def player_bullpens_server(input, output, session, app_state):
 
             sessions = (
                 db.query(BullpenSession)
-                .options(joinedload(BullpenSession.bullpen_type), joinedload(BullpenSession.pitches))
+                .options(
+                    joinedload(BullpenSession.bullpen_type),
+                    # Was just joinedload(BullpenSession.pitches) -- pitches
+                    # loaded eagerly, but nothing about them did (pitch_type,
+                    # linked_assessment, that assessment's results, each
+                    # result's test_type). _summarize() below touches every
+                    # one of those per pitch, so with those left as lazy
+                    # relationships, a page with several sessions of several
+                    # pitches each fired 100+ individual queries -- the same
+                    # N+1 pattern bucket_system.py had (see that fix's
+                    # commit). Chaining joinedload all the way down collapses
+                    # this back to a small constant number of queries.
+                    joinedload(BullpenSession.pitches).joinedload(BullpenPitch.pitch_type),
+                    joinedload(BullpenSession.pitches).joinedload(BullpenPitch.linked_assessment)
+                    .joinedload(Assessment.results).joinedload(AssessmentResult.test_type),
+                )
                 .filter(BullpenSession.player_id == my_player.player_id)
                 .order_by(BullpenSession.session_date.desc())
                 .all()
             )
             if not sessions:
                 return ui_helpers.empty_state("No bullpen sessions recorded yet.")
+
+            # Precompute every session's summary once -- previously
+            # _summarize(b) ran once for a session as "current" AND again
+            # as "previous" whenever a later (older) same-bullpen_type
+            # session needed it for its delta, doubling that work for any
+            # session with a same-type predecessor.
+            summaries_by_id = {b.bullpen_id: _summarize(b) for b in sessions}
 
             sections = [ui.output_ui("bp_dashboard_body")]
 
@@ -379,7 +412,7 @@ def player_bullpens_server(input, output, session, app_state):
                 if not b.pitches:
                     panel_children.append(ui.p("No pitches recorded for this session.", class_="text-muted small"))
                 else:
-                    current = _summarize(b)
+                    current = summaries_by_id[b.bullpen_id]
                     hits = current["hits"]
                     linked_count = current["linked"]
                     counts_by_type = current["counts_by_type"]
@@ -388,7 +421,7 @@ def player_bullpens_server(input, output, session, app_state):
                     movement_by_type = current["movement_by_type"]
 
                     previous_session = next((sessions[j] for j in range(idx + 1, len(sessions)) if sessions[j].bullpen_type_id == b.bullpen_type_id), None)
-                    prev_summary = _summarize(previous_session) if previous_session else None
+                    prev_summary = summaries_by_id[previous_session.bullpen_id] if previous_session else None
                     prev_date_label = previous_session.session_date.strftime("%Y-%m-%d (%a)") if previous_session else None
 
                     panel_children.append(ui.p(ui.strong("Summary")))
@@ -460,7 +493,8 @@ def player_bullpens_server(input, output, session, app_state):
                         by_type_lines = [f"{pt}: {count}" for pt, count in counts_by_type.items()]
                         panel_children.append(ui.p(" · ".join(by_type_lines)))
 
-                    # --- Charts ---
+                    # --- Charts (gated behind "Show charts" -- see
+                    # _register_chart_section below) ---
                     movement_data = current["movement_by_type"]
                     has_movement = any("Horizontal Break" in e and "Induced Vertical Break" in e for entries in movement_data.values() for e in entries)
                     has_release = any("Release Side" in e and "Release Height" in e for entries in movement_data.values() for e in entries)
@@ -469,33 +503,11 @@ def player_bullpens_server(input, output, session, app_state):
 
                     if has_movement or has_release or has_location or has_velocity:
                         panel_children.append(ui.p(ui.strong("Charts")))
-                        if has_location:
-                            panel_children.append(_render_strike_zone_plot("Actual Pitch Locations", movement_data))
-                            panel_children.append(ui.p("Where pitches actually crossed the plate -- from real Rapsodo Plate Side/Height, not the called intended zone.", class_="text-muted small"))
-                        panel_children.append(ui.p("Bold labeled markers are the average per pitch type; smaller dots are individual pitches.", class_="text-muted small"))
-                        if has_movement:
-                            panel_children.append(_render_scatter_with_averages(
-                                "Movement Plot", "Horizontal Break (in)", "Induced Vertical Break (in)",
-                                movement_data, "Horizontal Break", "Induced Vertical Break",
-                            ))
-                        if has_release:
-                            panel_children.append(_render_scatter_with_averages(
-                                "Release Point (tunneling)", "Release Side (ft)", "Release Height (ft)",
-                                movement_data, "Release Side", "Release Height",
-                            ))
-                        if has_velocity:
-                            velo_fig = go.Figure()
-                            for i, (pt_name, vs) in enumerate(current["velos_by_type"].items()):
-                                if not vs:
-                                    continue
-                                color = PITCH_TYPE_COLORS[i % len(PITCH_TYPE_COLORS)]
-                                velo_fig.add_trace(go.Bar(x=[pt_name], y=[sum(vs) / len(vs)], marker_color=color, showlegend=False, name=pt_name))
-                            velo_fig.update_layout(
-                                title="Average Velocity by Pitch Type", yaxis_title="mph",
-                                plot_bgcolor="#1E1E1E", paper_bgcolor="#1E1E1E", font=dict(color="#FFFDE5"),
-                                yaxis=dict(gridcolor="#3A3A3A"), height=380, margin=dict(t=40, b=40, l=40, r=40),
-                            )
-                            panel_children.append(chart_helpers.fig_to_img(velo_fig, width=700, height=380))
+                        panel_children.append(ui.output_ui(f"bp_charts_section_{b.bullpen_id}"))
+                        _register_chart_section(
+                            b.bullpen_id, movement_data, current["velos_by_type"],
+                            has_movement, has_release, has_location, has_velocity,
+                        )
 
                     # --- Pitch video ---
                     video_pitches = [p for p in b.pitches if p.video_url]
@@ -521,6 +533,60 @@ def player_bullpens_server(input, output, session, app_state):
             return ui.div(*sections)
         finally:
             db.close()
+
+    def _register_chart_section(bullpen_id, movement_data, velos_by_type, has_movement, has_release, has_location, has_velocity):
+        """Registers this session's "Show charts" gate exactly once (per
+        bullpen_id, same dedup-guard idiom as _register_video_player
+        below) -- chart data is captured in the closure at first
+        registration, same accepted staleness tradeoff _register_video_player
+        already has for pitches_by_id (this session's pitches don't change
+        after import, so it's a non-issue in practice)."""
+        output_id = f"bp_charts_section_{bullpen_id}"
+        if output_id in _registered_chart_outputs:
+            return
+        _registered_chart_outputs.add(output_id)
+        show_charts_key = f"bp_show_charts_{bullpen_id}"
+
+        @output(id=output_id)
+        @render.ui
+        def _charts_section():
+            if bullpen_id not in _charts_shown():
+                return ui.input_action_button(show_charts_key, "Show charts", class_="btn-outline-secondary mt-2")
+
+            children = []
+            if has_location:
+                children.append(_render_strike_zone_plot("Actual Pitch Locations", movement_data))
+                children.append(ui.p("Where pitches actually crossed the plate -- from real Rapsodo Plate Side/Height, not the called intended zone.", class_="text-muted small"))
+            children.append(ui.p("Bold labeled markers are the average per pitch type; smaller dots are individual pitches.", class_="text-muted small"))
+            if has_movement:
+                children.append(_render_scatter_with_averages(
+                    "Movement Plot", "Horizontal Break (in)", "Induced Vertical Break (in)",
+                    movement_data, "Horizontal Break", "Induced Vertical Break",
+                ))
+            if has_release:
+                children.append(_render_scatter_with_averages(
+                    "Release Point (tunneling)", "Release Side (ft)", "Release Height (ft)",
+                    movement_data, "Release Side", "Release Height",
+                ))
+            if has_velocity:
+                velo_fig = go.Figure()
+                for i, (pt_name, vs) in enumerate(velos_by_type.items()):
+                    if not vs:
+                        continue
+                    color = PITCH_TYPE_COLORS[i % len(PITCH_TYPE_COLORS)]
+                    velo_fig.add_trace(go.Bar(x=[pt_name], y=[sum(vs) / len(vs)], marker_color=color, showlegend=False, name=pt_name))
+                velo_fig.update_layout(
+                    title="Average Velocity by Pitch Type", yaxis_title="mph",
+                    plot_bgcolor="#1E1E1E", paper_bgcolor="#1E1E1E", font=dict(color="#FFFDE5"),
+                    yaxis=dict(gridcolor="#3A3A3A"), height=380, margin=dict(t=40, b=40, l=40, r=40),
+                )
+                children.append(chart_helpers.fig_to_img(velo_fig, width=700, height=380))
+            return ui.div(*children)
+
+        @reactive.effect
+        @reactive.event(input[show_charts_key])
+        def _on_show_charts():
+            _charts_shown.set(_charts_shown() | {bullpen_id})
 
     def _register_video_player(bullpen_id, video_key, video_pitches):
         output_id = f"video_player_{bullpen_id}"
