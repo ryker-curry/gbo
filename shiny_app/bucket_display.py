@@ -40,6 +40,81 @@ from bucket_system import BODY_COMP_METRICS
 
 BODY_COMP_BAR_NAMES = {name for name, _ in BODY_COMP_METRICS}
 
+MOBILITY_ROM_REGION_ORDER = ["Shoulder", "Elbow", "Hip", "Other"]
+
+
+def _mobility_rom_region(test_name):
+    """Which region heading a compute_mobility_rom_report row displays
+    under. Total Arc rows ("Throwing Arm Total Arc"/"Non-Throwing Arm
+    Total Arc") don't start with "Shoulder:" like the rest of that
+    region's raw fields do, but they're derived from Shoulder ER/IR so
+    they belong grouped there too."""
+    if test_name.startswith("Shoulder:") or "Total Arc" in test_name:
+        return "Shoulder"
+    if test_name.startswith("Elbow:"):
+        return "Elbow"
+    if test_name.startswith("Hip:"):
+        return "Hip"
+    return "Other"
+
+
+def build_mobility_rom_report(report):
+    """Mobility & ROM section -- pass/fail rows, NOT percentile bars
+    (see MOBILITY_ROM_THRESHOLDS/compute_mobility_rom_report in
+    bucket_system.py for why this bucket doesn't rank ROM against the
+    team like every other one on this page). Each row shows the raw
+    value plus a colored status pill: green "Meets threshold" if the
+    value clears its configured minimum, red "Below threshold" if it
+    doesn't, gray "No threshold set" if that metric has no configured
+    MOBILITY_ROM_THRESHOLDS entry yet (still shows the raw value, just
+    no pass/fail claim -- see that dict for which fields still need a
+    real number before they can be flagged).
+
+    Grouped by body region (Shoulder, Elbow, Hip) via MOBILITY_ROM_
+    REGION_ORDER, matching MOBILITY_ROM_THRESHOLDS' own definition
+    order -- Total Arc rows are grouped under Shoulder since they're
+    derived from Shoulder ER/IR, not their own measurement. Returns
+    None if the report is empty (no ROM data on file for this player
+    yet), same "show nothing" rule the rest of this module uses."""
+    if not report:
+        return None
+    by_region = {}
+    for row in report:
+        by_region.setdefault(_mobility_rom_region(row["test_name"]), []).append(row)
+
+    sections = []
+    for region in MOBILITY_ROM_REGION_ORDER:
+        rows = by_region.get(region)
+        if not rows:
+            continue
+        sections.append(ui.p(region, class_="gbo-subgroup-label"))
+        row_els = []
+        for row in rows:
+            unit = row["unit"] or ""
+            raw_label = f"{row['raw']:.1f}{unit}"
+            display_name = row["test_name"]
+            prefix = f"{region}: "
+            if display_name.startswith(prefix):
+                display_name = display_name[len(prefix):]
+
+            if row["met"] is None:
+                status_label, status_class = "No threshold set", "gbo-rom-status-none"
+            else:
+                threshold_label = f" (min {row['threshold']:.0f}{unit})"
+                if row["met"]:
+                    status_label, status_class = f"Meets threshold{threshold_label}", "gbo-rom-status-met"
+                else:
+                    status_label, status_class = f"Below threshold{threshold_label}", "gbo-rom-status-below"
+
+            row_els.append(ui.div(
+                ui.span(display_name, class_="gbo-rom-name"),
+                ui.span(raw_label, class_="gbo-rom-raw"),
+                ui.span(status_label, class_=f"gbo-rom-status {status_class}"),
+                class_="gbo-rom-row",
+            ))
+        sections.append(ui.div(*row_els, class_="gbo-rom-group"))
+    return ui.div(*sections)
+
 
 def build_percentage_rings(metrics, key_prefix, show_ordinal=False, mode="dark"):
     """Generic full-circle percentage ring display -- metrics is a list
@@ -216,15 +291,10 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark"):
             sections.append(ui.p(f"{sub_name} — {sub_score if sub_score is not None else '—'}", class_="gbo-subgroup-label"))
             sections.append(build_metric_bars(metrics, f"{key_prefix}_capacity_{sub_name}", mode=mode))
 
-    mobility_metrics_present = any(bucket_data.get("mobility_subgroup_metrics", {}).values())
-    if mobility_metrics_present:
-        sections.append(ui.p(f"Mobility (reference only, not in Total) — {bucket_data['mobility_score'] if bucket_data['mobility_score'] is not None else '—'}", class_="gbo-category-title"))
-        for sub_name, sub_score in bucket_data["mobility_subgroup_scores"].items():
-            metrics = bucket_data["mobility_subgroup_metrics"][sub_name]
-            if not metrics:
-                continue
-            sections.append(ui.p(f"{sub_name} — {sub_score if sub_score is not None else '—'}", class_="gbo-subgroup-label"))
-            sections.append(build_metric_bars(metrics, f"{key_prefix}_mobility_{sub_name}", mode=mode))
+    mobility_rom_ui = build_mobility_rom_report(bucket_data.get("mobility_rom_report", []))
+    if mobility_rom_ui is not None:
+        sections.append(ui.p("Mobility & ROM (reference only, not in Total)", class_="gbo-category-title"))
+        sections.append(mobility_rom_ui)
 
     if bucket_data.get("shoulder_health_metrics"):
         sections.append(ui.p(f"Shoulder Health (reference only, not in Total) — {bucket_data['shoulder_health_score'] if bucket_data['shoulder_health_score'] is not None else '—'}", class_="gbo-category-title"))

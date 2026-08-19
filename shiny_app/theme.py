@@ -300,6 +300,21 @@ a { color: var(--gbo-crimson); }
 .gbo-metric-bar-fill { background: var(--gbo-crimson); height: 100%; border-radius: 5px; transition: width 0.3s ease; }
 .gbo-metric-bar-percentile { color: var(--gbo-text-muted); font-size: 0.75rem; margin: 4px 0 0; }
 
+/* Mobility & ROM pass/fail report (build_mobility_rom_report in
+   bucket_display.py) -- NOT a percentile bar like .gbo-metric-bar-*
+   above, since Mobility & ROM is checked against a fixed threshold
+   instead of ranked against the team (see MOBILITY_ROM_THRESHOLDS in
+   bucket_system.py). Each row is a name + raw value + a colored
+   status pill instead of a track/fill bar. */
+.gbo-rom-group { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 10px; }
+.gbo-rom-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--gbo-border); }
+.gbo-rom-name { color: var(--gbo-text); font-size: 0.85rem; font-weight: 600; flex: 1 1 auto; min-width: 160px; }
+.gbo-rom-raw { color: var(--gbo-text-muted); font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
+.gbo-rom-status { font-size: 0.75rem; font-weight: 700; white-space: nowrap; padding: 2px 9px; border-radius: 10px; }
+.gbo-rom-status-met { color: var(--gbo-positive); background: color-mix(in srgb, var(--gbo-positive) 15%, transparent); }
+.gbo-rom-status-below { color: var(--gbo-negative); background: color-mix(in srgb, var(--gbo-negative) 15%, transparent); }
+.gbo-rom-status-none { color: var(--gbo-text-muted); background: color-mix(in srgb, var(--gbo-text-muted) 12%, transparent); }
+
 /* Score/percentile rings (Total/Body Comp/Power/Strength, Development
    Profile's Output/Capacity) -- a CSS conic-gradient circle instead of
    a rendered Plotly donut-chart image: --gbo-ring-pct (set inline per
