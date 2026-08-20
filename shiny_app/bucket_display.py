@@ -93,12 +93,42 @@ def build_mobility_rom_report(report):
         row_els = []
         for row in rows:
             unit = row["unit"] or ""
-            raw_label = f"{row['raw']:.1f}{unit}"
             display_name = row["test_name"]
             prefix = f"{region}: "
             if display_name.startswith(prefix):
                 display_name = display_name[len(prefix):]
 
+            # Rows from compute_shoulder_rom_profile (Total Arc Deficit,
+            # GIRD, ERG, Flexion/Extension Difference -- Ryker's Aug
+            # 2026 ROM redesign spec) carry "explanation"/"recommendation"
+            # keys the plain absolute-threshold rows above don't have --
+            # that key's presence is the signal to render this row with
+            # the spec's own status wording ("Good"/"Monitor"/"Red Flag —
+            # Priority Review") and an expanded "why this matters" block,
+            # instead of the simpler existing "Clear"/"Caution"/"Below
+            # threshold" pill.
+            if "explanation" in row:
+                raw_label = f"{row['raw']:+.1f}{unit}"  # signed -- these are all differences/deficits/gains, direction matters
+                status = row["status"]
+                if status is None:
+                    status_label, status_class = "Reference only", "gbo-rom-status-none"
+                else:
+                    status_label, status_class = row["status_label"], f"gbo-rom-status-{status}"
+
+                row_children = [
+                    ui.span(display_name, class_="gbo-rom-name"),
+                    ui.span(raw_label, class_="gbo-rom-raw"),
+                    ui.span(status_label, class_=f"gbo-rom-status {status_class}"),
+                ]
+                block_children = [ui.div(*row_children, class_="gbo-rom-row")]
+                if row.get("explanation"):
+                    block_children.append(ui.p(row["explanation"], class_="gbo-rom-explanation"))
+                if row.get("recommendation"):
+                    block_children.append(ui.p(ui.strong("Recommendation: "), row["recommendation"], class_="gbo-rom-recommendation"))
+                row_els.append(ui.div(*block_children, class_="gbo-rom-compound-row"))
+                continue
+
+            raw_label = f"{row['raw']:.1f}{unit}"
             status = row["status"]
             if status is None:
                 status_label, status_class = "No threshold set", "gbo-rom-status-none"
@@ -119,6 +149,58 @@ def build_mobility_rom_report(report):
             ))
         sections.append(ui.div(*row_els, class_="gbo-rom-group"))
     return ui.div(*sections)
+
+
+_ROM_STATUS_SEVERITY = {"red": 2, "yellow": 1, "green": 0}
+_ROM_STATUS_WORD = {"red": "RED", "yellow": "YELLOW", "green": "GREEN"}
+
+
+def build_rom_status_ring(report, key_prefix, mode="dark"):
+    """Overall Mobility & ROM status ring -- shows the worst status
+    word (GREEN/YELLOW/RED) across every row in the report that has a
+    status at all (reference-only rows with status=None don't count),
+    not a numeric percentage. Per Ryker's explicit call: ROM doesn't
+    have a percentile score anymore (replaced with pass/fail status
+    per metric earlier this same week), so a "72%"-style ring here
+    would either be meaningless or require inventing a new scoring
+    formula this app deliberately moved away from -- a status ring
+    keeps this consistent with that decision while still giving an
+    at-a-glance summary, matching the "Overall: YELLOW -- 2 Areas Need
+    Attention" header in Ryker's ROM redesign spec.
+
+    Worst-status-wins: any red row -> ring is red; else any yellow row
+    -> ring is yellow; else green (only reachable if at least one row
+    has a real green status). Always shows the status WORD alongside
+    the color (not color alone), per Ryker's colorblind-accessibility
+    requirement. Returns None if no row in the report has a status
+    (nothing yet to summarize)."""
+    statused = [row for row in report if row.get("status") in _ROM_STATUS_SEVERITY]
+    if not statused:
+        return None
+    worst = max(statused, key=lambda row: _ROM_STATUS_SEVERITY[row["status"]])["status"]
+    yellow_count = sum(1 for row in statused if row["status"] == "yellow")
+    red_count = sum(1 for row in statused if row["status"] == "red")
+    attention_count = yellow_count + red_count
+
+    if attention_count == 0:
+        sublabel = "All areas within range"
+    else:
+        area_word = "Area" if attention_count == 1 else "Areas"
+        sublabel = f"{attention_count} {area_word} Need Attention"
+
+    ring = ui.div(
+        ui.div(
+            ui.span(_ROM_STATUS_WORD[worst], class_="gbo-ring-value"),
+            ui.span(sublabel, class_="gbo-ring-sublabel"),
+            class_="gbo-ring-inner",
+        ),
+        class_=f"gbo-ring gbo-ring--{worst}",
+    )
+    return ui.div(
+        ring,
+        ui.p(ui.strong(f"ROM Status: {_ROM_STATUS_WORD[worst]}"), class_="gbo-ring-label"),
+        class_="gbo-ring-col",
+    )
 
 
 def build_percentage_rings(metrics, key_prefix, show_ordinal=False, mode="dark"):
@@ -296,9 +378,13 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark"):
             sections.append(ui.p(f"{sub_name} — {sub_score if sub_score is not None else '—'}", class_="gbo-subgroup-label"))
             sections.append(build_metric_bars(metrics, f"{key_prefix}_capacity_{sub_name}", mode=mode))
 
-    mobility_rom_ui = build_mobility_rom_report(bucket_data.get("mobility_rom_report", []))
+    mobility_rom_report = bucket_data.get("mobility_rom_report", [])
+    mobility_rom_ui = build_mobility_rom_report(mobility_rom_report)
     if mobility_rom_ui is not None:
         sections.append(ui.p("Mobility & ROM (reference only, not in Total)", class_="gbo-category-title"))
+        rom_ring = build_rom_status_ring(mobility_rom_report, f"{key_prefix}_rom_status", mode=mode)
+        if rom_ring is not None:
+            sections.append(rom_ring)
         sections.append(mobility_rom_ui)
 
     if bucket_data.get("shoulder_health_metrics"):
