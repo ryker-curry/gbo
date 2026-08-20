@@ -108,7 +108,11 @@ def build_mobility_rom_report(report):
             # instead of the simpler existing "Clear"/"Caution"/"Below
             # threshold" pill.
             if "explanation" in row:
-                raw_label = f"{row['raw']:+.1f}{unit}"  # signed -- these are all differences/deficits/gains, direction matters
+                # signed by default (these are almost all differences/deficits/gains, direction
+                # matters) -- a row can opt out via "signed": False for a plain magnitude (e.g.
+                # Hip Drive/Plant Total Rotation, which is never negative and doesn't need a "+").
+                fmt = "{:+.1f}" if row.get("signed", True) else "{:.1f}"
+                raw_label = f"{fmt.format(row['raw'])}{unit}"
                 status = row["status"]
                 if status is None:
                     status_label, status_class = "Reference only", "gbo-rom-status-none"

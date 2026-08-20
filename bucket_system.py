@@ -1023,6 +1023,104 @@ def compute_shoulder_rom_profile(session, player_id, _cache=None, _throws_map=No
     return out
 
 
+# ---------------------------------------------------------------------
+# Hip ROM derived metrics (Aug 2026, Phase 2 of Ryker's ROM redesign
+# spec). Unlike Shoulder Phase 1, NONE of these get a red/yellow/green
+# status -- per Ryker's own explicit instruction: "For hip ROM, do NOT
+# invent injury-risk thresholds when strong baseball-specific evidence
+# does not exist. Instead distinguish between Normative comparison and
+# Evidence-supported red flag." The absolute-value Hip IR/ER floors
+# already in MOBILITY_ROM_THRESHOLDS (McCulloch et al. 2014) ARE kept
+# as-is -- that's a real (if purely descriptive, not injury-outcome)
+# baseball-pitcher normative dataset, unlike anything found for hip
+# TOTAL rotation or hip ASYMMETRY specifically. No baseball-specific
+# research was found correlating hip total rotation or side-to-side
+# hip differences with injury incidence, nor even a normative
+# mean/SD for those specific derived numbers (as opposed to the raw
+# per-leg IR/ER means McCulloch et al. does report) -- so per the
+# same "don't fabricate a flag" rule this file uses everywhere else,
+# these are shown as REFERENCE-ONLY values (status=None), not colored.
+# If/when real baseball hip-ROM norms exist (e.g. once Pitt State's
+# own multi-year data is usable, or new published research), these can
+# gain real thresholds the same way Shoulder's did -- see
+# SHOULDER_ROM_STANDARDS for that pattern.
+_HIP_REFERENCE_NOTE = (
+    "Reference value only -- no baseball-specific hip {label} threshold (injury-associated or "
+    "normative) has been established in the literature yet. Shown to track change over time and "
+    "support staff's own clinical judgment, not as a pass/fail flag."
+)
+
+
+def compute_hip_rom_profile(session, player_id, _cache=None, _throws_map=None):
+    """Hip ROM derived values, per Ryker's ROM redesign spec: Drive Leg
+    / Plant Leg Total Rotation (IR + ER per leg) and side-to-side
+    differences for IR, ER, Total Rotation, Abduction, and Adduction.
+    ALL reference-only (status=None, no color) -- see this section's
+    module comment for why (no baseball-specific injury OR normative
+    threshold exists for these specific derived numbers, unlike the
+    raw per-leg IR/ER absolute floors in MOBILITY_ROM_THRESHOLDS).
+
+    Differences are Drive Leg - Plant Leg throughout (positive = drive
+    leg has more of that quality), matching the Throwing - Non-Throwing
+    sign convention compute_shoulder_rom_profile uses above.
+
+    Only includes rows for players who have both raw values needed AND
+    a known Player.throws (can't resolve Drive/Plant without knowing
+    handedness -- same limitation the rest of this file's Hip/Shoulder
+    resolution already has). Returns a list of row dicts in the same
+    shape compute_shoulder_rom_profile's rows use (test_name/raw/unit/
+    threshold/status/status_label/explanation/recommendation) so
+    build_mobility_rom_report renders them identically."""
+    # Only resolves the 4 metrics this function actually uses (IR/ER/
+    # Abduction/Adduction) -- NOT all of HIP_ROM_BASE_METRICS, which
+    # also includes Flexion/Extension (used by the plain-threshold Hip
+    # rows elsewhere in compute_mobility_rom_report, not here -- no
+    # spec-requested derived Hip Flexion/Extension values exist).
+    resolved = {}
+    for base_metric in ("Internal Rotation", "External Rotation", "Abduction", "Adduction"):
+        resolved[base_metric] = resolve_side_by_throws(
+            session, f"Hip: Right {base_metric}", f"Hip: Left {base_metric}", _cache=_cache, _throws_map=_throws_map
+        )
+
+    out = []
+
+    def _ref_row(test_name, raw, label, signed=True):
+        # signed=False for the two Total Rotation rows -- those are
+        # plain magnitudes (never negative), not a difference, so a
+        # "+62°"-style leading plus sign would be visual noise; every
+        # other row here IS a Drive-vs-Plant difference where the sign
+        # is the whole point, so that's the default.
+        row = {
+            "test_name": test_name, "raw": raw, "unit": "°", "threshold": None, "status": None,
+            "status_label": None, "explanation": _HIP_REFERENCE_NOTE.format(label=label), "recommendation": None,
+        }
+        if not signed:
+            row["signed"] = False
+        out.append(row)
+
+    drive_ir, plant_ir = resolved["Internal Rotation"]
+    drive_er, plant_er = resolved["External Rotation"]
+    has_rotation = player_id in drive_ir and player_id in plant_ir and player_id in drive_er and player_id in plant_er
+    if has_rotation:
+        drive_total = drive_ir[player_id] + drive_er[player_id]
+        plant_total = plant_ir[player_id] + plant_er[player_id]
+        _ref_row("Hip: Drive Leg Total Rotation", drive_total, "Drive Leg Total Rotation", signed=False)
+        _ref_row("Hip: Plant Leg Total Rotation", plant_total, "Plant Leg Total Rotation", signed=False)
+        _ref_row("Hip: Internal Rotation Difference (Drive vs. Plant)", drive_ir[player_id] - plant_ir[player_id], "Internal Rotation asymmetry")
+        _ref_row("Hip: External Rotation Difference (Drive vs. Plant)", drive_er[player_id] - plant_er[player_id], "External Rotation asymmetry")
+        _ref_row("Hip: Total Rotation Difference (Drive vs. Plant)", drive_total - plant_total, "Total Rotation asymmetry")
+
+    drive_abd, plant_abd = resolved["Abduction"]
+    if player_id in drive_abd and player_id in plant_abd:
+        _ref_row("Hip: Abduction Difference (Drive vs. Plant)", drive_abd[player_id] - plant_abd[player_id], "Abduction asymmetry")
+
+    drive_add, plant_add = resolved["Adduction"]
+    if player_id in drive_add and player_id in plant_add:
+        _ref_row("Hip: Adduction Difference (Drive vs. Plant)", drive_add[player_id] - plant_add[player_id], "Adduction asymmetry")
+
+    return out
+
+
 # How far above a metric's MOBILITY_ROM_THRESHOLDS floor counts as
 # "yellow" (caution) rather than "green" (clear) -- a flat degree
 # buffer applied to every metric, per Ryker's call. Red is still
@@ -1138,6 +1236,7 @@ def compute_mobility_rom_report(session, player_id, _cache=None, _throws_map=Non
         out.append({"test_name": "Non-Throwing Arm Total Arc", "raw": non_throwing_arc[player_id], "unit": "°", "threshold": None, "status": None})
 
     out.extend(compute_shoulder_rom_profile(session, player_id, _cache=_cache, _throws_map=_throws_map))
+    out.extend(compute_hip_rom_profile(session, player_id, _cache=_cache, _throws_map=_throws_map))
     return out
 
 
