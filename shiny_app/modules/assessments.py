@@ -150,11 +150,22 @@ def assessments_server(input, output, session, app_state):
             sections = []
             bucket_data = compute_bucket_system(db, selected_player_id)
             rings = bucket_display.build_score_rings(bucket_data, "assess", mode=mode)
-            if rings is not None:
-                sections.append(rings)
-                profile = bucket_display.build_development_profile(bucket_data, "assess", mode=mode)
-                if profile is not None:
-                    sections.append(profile)
+            # rings is None when Total/Body Comp/Power/Strength are all
+            # None -- but a player can have real data in a reference-
+            # only section (Mobility & ROM, Speed, etc.) that isn't part
+            # of any of those 4 scores. Without this check, a player who
+            # (for example) only has ROM data on file so far would show
+            # NO breakdown at all here, even though real data exists --
+            # found via a screenshot of a player whose ROM testing had
+            # just started (Aug 2026) showing "no data" despite having
+            # ROM values on record.
+            has_mobility_data = bool(bucket_data.get("mobility_rom_report"))
+            if rings is not None or has_mobility_data:
+                if rings is not None:
+                    sections.append(rings)
+                    profile = bucket_display.build_development_profile(bucket_data, "assess", mode=mode)
+                    if profile is not None:
+                        sections.append(profile)
                 sections.append(ui.h5("Physical Testing Breakdown", class_="gbo-section-title"))
                 sections.append(bucket_display.build_full_breakdown(bucket_data, "assess_detail", mode=mode))
                 sections.append(ui.hr())

@@ -102,7 +102,17 @@ def player_stats_server(input, output, session, app_state):
 
             # --- Bucket System: full breakdown by metric. ---
             sections.append(ui.h5("Physical Testing Breakdown", class_="gbo-section-title"))
-            has_any_data = any(bucket_data[k] is not None for k in ("total_score", "body_comp_score", "power_score", "strength_score"))
+            # A player can have real data in a reference-only section
+            # (Mobility & ROM, Speed, etc.) before ever having Total/
+            # Body Comp/Power/Strength data -- without also checking
+            # mobility_rom_report here, that player would see "No
+            # physical testing data yet." despite having real ROM
+            # values on record (found via a screenshot of a player
+            # whose ROM testing had just started, Aug 2026).
+            has_any_data = (
+                any(bucket_data[k] is not None for k in ("total_score", "body_comp_score", "power_score", "strength_score"))
+                or bool(bucket_data.get("mobility_rom_report"))
+            )
             if not has_any_data:
                 sections.append(ui_helpers.empty_state("No physical testing data yet."))
             else:
