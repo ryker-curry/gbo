@@ -707,6 +707,320 @@ def compute_gird_percentiles(session, player_id, _cache=None, _throws_map=None):
 
 SHOULDER_RIGHT_ER_TEST = "Shoulder: Right External Rotation"
 SHOULDER_LEFT_ER_TEST = "Shoulder: Left External Rotation"
+SHOULDER_RIGHT_FLEXION_TEST = "Shoulder: Right Flexion"
+SHOULDER_LEFT_FLEXION_TEST = "Shoulder: Left Flexion"
+SHOULDER_RIGHT_EXTENSION_TEST = "Shoulder: Right Extension"
+SHOULDER_LEFT_EXTENSION_TEST = "Shoulder: Left Extension"
+
+
+# ---------------------------------------------------------------------
+# Shoulder ROM compound classification (Aug 2026, per Ryker's detailed
+# ROM redesign spec -- "Phase 1: Shoulder logic"). This is a DIFFERENT
+# kind of check than everything in MOBILITY_ROM_THRESHOLDS above: those
+# are single-value floor checks (one raw number vs. one threshold).
+# These are DERIVED, bilateral, and in GIRD's case CONTEXTUAL --
+# they're computed from two raw fields (or, for GIRD, from another
+# derived value too) and explicitly must NOT flag a normal throwing
+# adaptation just because a same-side absolute number looks "low."
+# See compute_shoulder_rom_profile below for where these get applied.
+#
+# Each entry carries the full metadata Ryker's spec asked for
+# (population/level/protocol/citation/evidence strength/notes) so this
+# can grow into a real reference-standards table later without a
+# reshape -- for now it's still a plain Python dict (per Ryker's call:
+# a structured config file now, a DB-backed staff-editable table is a
+# later phase, not this one).
+#
+# "direction" controls which side of the bound is "bad":
+#   "ceiling" -- LOWER is better (a magnitude/deficit metric: Total Arc
+#     Deficit, GIRD). value <= green_threshold -> green, <=
+#     yellow_threshold -> yellow, above that -> red.
+#   "floor" -- HIGHER is better (ERG: the throwing arm is EXPECTED to
+#     gain ER, so a small or negative gain is the concerning direction,
+#     the reverse of every other metric in this file). value >=
+#     green_threshold -> green, >= yellow_threshold -> yellow, below
+#     that -> red.
+SHOULDER_ROM_STANDARDS = {
+    "Total Arc Deficit": {
+        "variable": "Throwing Arm Total Arc Deficit vs. Non-Throwing Arm",
+        "population": "Baseball pitchers",
+        "position": "Pitcher",
+        "level_of_play": "College (Ryker's call -- not level-differentiated yet)",
+        "direction": "ceiling",
+        "green_threshold": 5,   # <=5 deg deficit
+        "yellow_threshold": 10,  # <=10 deg deficit (>10 = red)
+        "unit": "°",
+        "measurement_protocol": (
+            "Total Arc = Shoulder Internal Rotation + Shoulder External Rotation, each arm. "
+            "Total Arc Deficit = Throwing Arm Total Arc - Non-Throwing Arm Total Arc, evaluated "
+            "one-directionally (only a THROWING-side loss is flagged -- a throwing arm with MORE "
+            "total arc than the non-throwing arm is not penalized)."
+        ),
+        "research_source": (
+            "Concept -- total rotational motion, not isolated IR, is the more clinically meaningful "
+            "shoulder ROM measure in throwing athletes -- per Wilk et al. 2011. The specific 5/10 "
+            "degree cut points here are a GBO starting point pending stronger baseball-specific "
+            "total-arc-deficit literature, not a number pulled directly from that citation."
+        ),
+        "citation": "Wilk KE, et al. Correlation of glenohumeral internal rotation deficit and total rotation with shoulder injuries in professional baseball pitchers. Am J Sports Med. 2011;39(2):329-335.",
+        "evidence_strength": "Moderate (concept well-supported; exact cut points are GBO-set, not directly cited)",
+        "notes": "This is the primary shoulder red flag per Ryker's spec -- total arc loss matters more than isolated IR loss alone.",
+    },
+    "GIRD": {
+        "variable": "GIRD (Glenohumeral Internal Rotation Deficit), contextualized by Total Arc",
+        "population": "Baseball pitchers",
+        "position": "Pitcher",
+        "level_of_play": "College (Ryker's call -- not level-differentiated yet)",
+        "direction": "ceiling",
+        "green_threshold": 15,
+        "green_inclusive": False,  # Ryker's spec: "Green: <15°" (strict), vs. Total Arc Deficit's inclusive "0-5°" -- these two tables use different boundary conventions in his own spec, kept exact rather than normalized to one style
+        "yellow_threshold": 20,
+        "unit": "°",
+        "measurement_protocol": "Non-Throwing Arm Internal Rotation - Throwing Arm Internal Rotation, at 90° abduction.",
+        "research_source": "Wilk et al. 2011; Burkhart's 'disabled throwing shoulder' GIRD work.",
+        "citation": "Wilk KE, et al. Am J Sports Med. 2011;39(2):329-335.",
+        "evidence_strength": "Moderate -- GIRD alone is a widely-cited screen, but per the same literature it should be read alongside Total Arc, not in isolation (see 'contextual override' below).",
+        "notes": (
+            "CONTEXTUAL OVERRIDE (per Ryker's explicit call): a raw-threshold GIRD status of yellow or "
+            "red is downgraded ONE tier (red->yellow, yellow->green) whenever this player's Total Arc "
+            "Deficit status is green -- i.e. total rotational motion is preserved. Isolated IR loss "
+            "with a preserved total arc is a common, likely-benign throwing adaptation, not a true "
+            "mobility deficit -- flagging it the same as a GIRD paired with real total-arc loss would "
+            "over-flag normal throwing shoulders. See compute_shoulder_rom_profile for where this is "
+            "applied and _shoulder_rom_explanation for how it's worded to the user."
+        ),
+    },
+    "External Rotation Gain (ERG)": {
+        "variable": "Throwing Arm ER Gain vs. Non-Throwing Arm (Throwing ER - Non-Throwing ER)",
+        "population": "Baseball pitchers",
+        "position": "Pitcher",
+        "level_of_play": "College (Ryker's call -- not level-differentiated yet)",
+        "direction": "floor",  # inverted vs. everything else here -- LOWER is worse
+        "green_threshold": 5,   # >=5 deg gain = expected adaptation present
+        "yellow_threshold": 0,  # 0-5 deg gain = monitor; <0 (throwing arm has LESS ER) = red
+        "unit": "°",
+        "measurement_protocol": "Throwing Arm External Rotation - Non-Throwing Arm External Rotation, at 90° abduction.",
+        "research_source": (
+            "The throwing shoulder developing additional external rotation is a well-documented "
+            "adaptation in the literature; the specific 5°/0° cut points are GBO's own interpretation "
+            "of Ryker's spec ('pay particular attention when throwing ER is <5° greater than "
+            "non-throwing ER') -- not a number drawn from a specific cited study. Treat as a starting "
+            "point to refine once Pitt State's own pitcher data accumulates."
+        ),
+        "citation": None,
+        "evidence_strength": "Low-moderate (adaptation concept is well-supported; exact cut points are a GBO estimate, not directly cited)",
+        "notes": "Direction is inverted vs. every other metric here -- a LOWER (or negative) ERG is the concerning direction, since it means the expected throwing-arm adaptation didn't develop.",
+    },
+}
+
+
+def _shoulder_rom_classify(value, standard):
+    """Applies one SHOULDER_ROM_STANDARDS entry's green/yellow/red
+    bounds to a computed value. direction="ceiling" -> lower is better
+    (value <= green -> green [or < green if the standard sets
+    green_inclusive=False -- Ryker's spec worded GIRD's green cutoff as
+    a strict "<15°" but Total Arc Deficit's as an inclusive "0-5°", so
+    this is per-standard, not normalized to one style], <= yellow ->
+    yellow, else red). direction="floor" -> higher is better (value >=
+    green -> green, >= yellow -> yellow, else red)."""
+    green, yellow, direction = standard["green_threshold"], standard["yellow_threshold"], standard["direction"]
+    if direction == "ceiling":
+        is_green = value < green if standard.get("green_inclusive", True) is False else value <= green
+        if is_green:
+            return "green"
+        if value <= yellow:
+            return "yellow"
+        return "red"
+    if value >= green:
+        return "green"
+    if value >= yellow:
+        return "yellow"
+    return "red"
+
+
+_STATUS_DOWNGRADE = {"red": "yellow", "yellow": "green", "green": "green"}
+
+
+def _shoulder_rom_explanation(metric_key, raw, status, extra=None):
+    """Plain-language 'why this matters' text for one Shoulder ROM
+    compound metric + its final status, matching the tone/format of
+    Ryker's spec examples exactly (numbers first, then a short causal
+    sentence -- never language stating an injury WILL happen; red uses
+    'associated with' / 'priority review' framing only, per his
+    explicit safety requirement). Returns (explanation, recommendation)
+    -- recommendation is None for green (nothing to act on)."""
+    extra = extra or {}
+    if metric_key == "Total Arc Deficit":
+        deficit = max(0, -raw)  # raw = throwing_arc - non_throwing_arc; deficit only counts a THROWING-side loss
+        if status == "green":
+            return (
+                f"Total rotational motion is well-preserved between the throwing and non-throwing "
+                f"shoulders (throwing-side difference: {raw:+.0f}°).",
+                None,
+            )
+        if status == "yellow":
+            return (
+                f"The throwing shoulder has {deficit:.0f}° less total rotational motion than the "
+                f"non-throwing shoulder. Worth monitoring as part of this player's development plan.",
+                "Consider targeted mobility work and re-check at the next testing cycle.",
+            )
+        return (
+            f"The throwing shoulder has {deficit:.0f}° less total rotational motion than the "
+            f"non-throwing shoulder. A substantial loss of total arc is more concerning than internal "
+            f"rotation loss alone.",
+            "Red Flag — Priority Review: recommend evaluation by appropriate performance/sports medicine staff.",
+        )
+    if metric_key == "GIRD":
+        tad_status = extra.get("total_arc_deficit_status")
+        downgraded = extra.get("downgraded", False)
+        tad_raw = extra.get("total_arc_deficit_raw")
+        tad_label = f"{-max(0, -tad_raw):.0f}°" if tad_raw is not None else "—"  # signed throwing-vs-non-throwing diff, for display
+        if downgraded:
+            return (
+                f"The throwing shoulder has reduced internal rotation (GIRD: {raw:.0f}°), but total "
+                f"rotational motion is preserved (Total Arc difference: {tad_label}). This pattern may "
+                f"represent a normal throwing adaptation rather than a mobility deficit.",
+                None,
+            )
+        if status == "green":
+            return (f"GIRD ({raw:.0f}°) is within the expected range for a healthy throwing shoulder.", None)
+        if status == "yellow":
+            return (
+                f"GIRD is {raw:.0f}°, and total rotational motion is not fully preserved "
+                f"(Total Arc difference: {tad_label}). Worth monitoring alongside total arc at the "
+                f"next testing cycle.",
+                "Consider targeted internal rotation mobility work and re-check at the next testing cycle.",
+            )
+        return (
+            f"GIRD is {raw:.0f}°, and total rotational motion is also compromised "
+            f"(Total Arc difference: {tad_label}). This combination -- IR loss WITHOUT a preserved "
+            f"total arc -- is a more concerning pattern than an isolated internal rotation loss.",
+            "Red Flag — Priority Review: recommend evaluation by appropriate performance/sports medicine staff.",
+        )
+    if metric_key == "External Rotation Gain (ERG)":
+        if status == "green":
+            return (
+                f"The throwing shoulder shows {raw:.0f}° more external rotation than the non-throwing "
+                f"shoulder, consistent with the expected throwing-arm adaptation.",
+                None,
+            )
+        if status == "yellow":
+            return (
+                f"The throwing shoulder shows only {raw:.0f}° more external rotation than the "
+                f"non-throwing shoulder -- less than the gain typically seen in throwing athletes.",
+                "Worth incorporating into this player's mobility development plan and re-checking at the next testing cycle.",
+            )
+        return (
+            f"The throwing shoulder does NOT show the expected external rotation gain -- it actually "
+            f"has {abs(raw):.0f}° LESS external rotation than the non-throwing shoulder, an atypical "
+            f"pattern worth flagging for review.",
+            "Red Flag — Priority Review: recommend evaluation by appropriate performance/sports medicine staff.",
+        )
+    return ("", None)
+
+
+_SHOULDER_ROM_STATUS_LABELS = {"green": "Good", "yellow": "Monitor", "red": "Red Flag — Priority Review"}
+
+
+def compute_shoulder_rom_profile(session, player_id, _cache=None, _throws_map=None):
+    """Shoulder ROM 'Phase 1' compound classification, per Ryker's Aug
+    2026 ROM redesign spec -- Total Arc Deficit, GIRD (contextualized
+    by Total Arc), and External Rotation Gain, each with a real
+    red/yellow/green status, a plain-language explanation, and a
+    recommendation (yellow/red only). Also includes Flexion/Extension
+    side-to-side differences as REFERENCE-ONLY rows (status=None) --
+    no baseball-specific research threshold exists for these yet, same
+    "don't fabricate a flag" rule this file uses everywhere else (see
+    MOBILITY_ROM_THRESHOLDS' docstring); they still show the raw
+    difference so staff can watch for a real research-backed cutoff or
+    a meaningful CHANGE over time later.
+
+    Returns a list of row dicts, richer than compute_mobility_rom_
+    report's plain rows: {"test_name", "raw", "unit", "threshold":
+    None (these aren't a single-value floor check), "status",
+    "status_label": the spec's own wording ("Good"/"Monitor"/"Red Flag
+    — Priority Review") instead of the simpler existing "Clear"/
+    "Caution"/"Below threshold" pill wording -- deliberately distinct
+    since these are the injury-risk-aware compound metrics Ryker's
+    spec specifically asked to word this way, "explanation", and
+    "recommendation" (None unless yellow/red).
+
+    Only includes rows for players who have all the needed raw values
+    on file AND a known Player.throws (same "can't resolve a side
+    without knowing handedness" limitation the rest of this Shoulder/
+    Hip resolution logic already has)."""
+    throwing_ir, non_throwing_ir = resolve_side_by_throws(
+        session, GIRD_RIGHT_IR_TEST, GIRD_LEFT_IR_TEST, _cache=_cache, _throws_map=_throws_map
+    )
+    throwing_er, non_throwing_er = resolve_side_by_throws(
+        session, SHOULDER_RIGHT_ER_TEST, SHOULDER_LEFT_ER_TEST, _cache=_cache, _throws_map=_throws_map
+    )
+    throwing_flex, non_throwing_flex = resolve_side_by_throws(
+        session, SHOULDER_RIGHT_FLEXION_TEST, SHOULDER_LEFT_FLEXION_TEST, _cache=_cache, _throws_map=_throws_map
+    )
+    throwing_ext, non_throwing_ext = resolve_side_by_throws(
+        session, SHOULDER_RIGHT_EXTENSION_TEST, SHOULDER_LEFT_EXTENSION_TEST, _cache=_cache, _throws_map=_throws_map
+    )
+
+    out = []
+
+    has_rotation = player_id in throwing_ir and player_id in non_throwing_ir and player_id in throwing_er and player_id in non_throwing_er
+    total_arc_deficit_status = None
+    if has_rotation:
+        throwing_arc = throwing_ir[player_id] + throwing_er[player_id]
+        non_throwing_arc = non_throwing_ir[player_id] + non_throwing_er[player_id]
+        tad_raw = throwing_arc - non_throwing_arc  # negative = throwing-side loss
+        tad_standard = SHOULDER_ROM_STANDARDS["Total Arc Deficit"]
+        total_arc_deficit_status = _shoulder_rom_classify(max(0, -tad_raw), tad_standard)
+        explanation, recommendation = _shoulder_rom_explanation("Total Arc Deficit", tad_raw, total_arc_deficit_status)
+        out.append({
+            "test_name": "Shoulder: Total Arc Deficit (Throwing vs. Non-Throwing)", "raw": tad_raw, "unit": "°",
+            "threshold": None, "status": total_arc_deficit_status,
+            "status_label": _SHOULDER_ROM_STATUS_LABELS[total_arc_deficit_status],
+            "explanation": explanation, "recommendation": recommendation,
+        })
+
+        gird_raw = non_throwing_ir[player_id] - throwing_ir[player_id]
+        gird_standard = SHOULDER_ROM_STANDARDS["GIRD"]
+        base_status = _shoulder_rom_classify(gird_raw, gird_standard)
+        downgraded = total_arc_deficit_status == "green" and base_status in ("yellow", "red")
+        gird_status = _STATUS_DOWNGRADE[base_status] if downgraded else base_status
+        explanation, recommendation = _shoulder_rom_explanation(
+            "GIRD", gird_raw, gird_status,
+            extra={"total_arc_deficit_status": total_arc_deficit_status, "total_arc_deficit_raw": tad_raw, "downgraded": downgraded},
+        )
+        out.append({
+            "test_name": "Shoulder: GIRD (contextualized by Total Arc)", "raw": gird_raw, "unit": "°",
+            "threshold": None, "status": gird_status,
+            "status_label": _SHOULDER_ROM_STATUS_LABELS[gird_status],
+            "explanation": explanation, "recommendation": recommendation,
+        })
+
+        erg_raw = throwing_er[player_id] - non_throwing_er[player_id]
+        erg_standard = SHOULDER_ROM_STANDARDS["External Rotation Gain (ERG)"]
+        erg_status = _shoulder_rom_classify(erg_raw, erg_standard)
+        explanation, recommendation = _shoulder_rom_explanation("External Rotation Gain (ERG)", erg_raw, erg_status)
+        out.append({
+            "test_name": "Shoulder: External Rotation Gain (ERG)", "raw": erg_raw, "unit": "°",
+            "threshold": None, "status": erg_status,
+            "status_label": _SHOULDER_ROM_STATUS_LABELS[erg_status],
+            "explanation": explanation, "recommendation": recommendation,
+        })
+
+    if player_id in throwing_flex and player_id in non_throwing_flex:
+        diff = throwing_flex[player_id] - non_throwing_flex[player_id]
+        out.append({
+            "test_name": "Shoulder: Flexion Difference (Throwing vs. Non-Throwing)", "raw": diff, "unit": "°",
+            "threshold": None, "status": None, "status_label": None, "explanation": None, "recommendation": None,
+        })
+    if player_id in throwing_ext and player_id in non_throwing_ext:
+        diff = throwing_ext[player_id] - non_throwing_ext[player_id]
+        out.append({
+            "test_name": "Shoulder: Extension Difference (Throwing vs. Non-Throwing)", "raw": diff, "unit": "°",
+            "threshold": None, "status": None, "status_label": None, "explanation": None, "recommendation": None,
+        })
+
+    return out
 
 
 # How far above a metric's MOBILITY_ROM_THRESHOLDS floor counts as
@@ -760,20 +1074,28 @@ def compute_mobility_rom_report(session, player_id, _cache=None, _throws_map=Non
     Rotation + Internal Rotation for that arm -- the standard "Total
     Arc of Motion" shoulder ROM measure, per Wilk et al. 2011:
     throwing-arm mean ~190° ± 15°, expected to stay roughly symmetric
-    with the non-throwing arm) as two more rows, always with
-    threshold=None/status=None -- Total Arc is a derived reference
-    value, not a separately-entered measurement, and no baseball-
-    specific single-number floor for it was found (the literature flags
-    a RELATIVE loss vs. the non-throwing arm, not an absolute cutoff --
-    same reasoning GIRD, below, already uses a deficit formula for
-    instead of an absolute floor).
+    with the non-throwing arm) as two more raw reference rows (always
+    threshold=None/status=None).
+
+    Finally appends compute_shoulder_rom_profile's rows -- Total Arc
+    Deficit, GIRD (contextualized by Total Arc), External Rotation
+    Gain, and Flexion/Extension side-to-side differences (Aug 2026,
+    Ryker's ROM redesign spec, "Phase 1: Shoulder logic"). These carry
+    real red/yellow/green statuses plus "explanation"/"recommendation"/
+    "status_label" keys the plain rows above don't have -- see that
+    function's docstring. build_mobility_rom_report in bucket_display.py
+    renders whichever keys are present per row, so this doesn't break
+    the plain rows' simpler shape.
 
     Returns a list of dicts (only for metrics/sides with a raw value
-    on file for this player -- no blank rows), each shaped:
+    on file for this player -- no blank rows), each shaped at minimum:
       {"test_name": ..., "raw": ..., "unit": "°",
        "threshold": <float or None>, "status": "red"/"yellow"/"green"/None}
-    Ordered Shoulder, Elbow, Hip (Drive Leg then Plant Leg per metric,
-    in HIP_ROM_BASE_METRICS' order), Total Arc rows last."""
+    (compute_shoulder_rom_profile's rows add "status_label",
+    "explanation", "recommendation" on top of this). Ordered Shoulder,
+    Elbow, Hip (Drive Leg then Plant Leg per metric, in HIP_ROM_BASE_
+    METRICS' order), Total Arc reference rows, then the new compound
+    Shoulder rows last."""
     out = []
     for test_name, threshold in MOBILITY_ROM_THRESHOLDS.items():
         if test_name.startswith("Hip:"):
@@ -814,6 +1136,8 @@ def compute_mobility_rom_report(session, player_id, _cache=None, _throws_map=Non
         out.append({"test_name": "Throwing Arm Total Arc", "raw": throwing_arc[player_id], "unit": "°", "threshold": None, "status": None})
     if player_id in non_throwing_arc:
         out.append({"test_name": "Non-Throwing Arm Total Arc", "raw": non_throwing_arc[player_id], "unit": "°", "threshold": None, "status": None})
+
+    out.extend(compute_shoulder_rom_profile(session, player_id, _cache=_cache, _throws_map=_throws_map))
     return out
 
 

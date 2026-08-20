@@ -321,6 +321,17 @@ a { color: var(--gbo-crimson); }
 .gbo-rom-status-red { color: var(--gbo-negative); background: color-mix(in srgb, var(--gbo-negative) 15%, transparent); }
 .gbo-rom-status-none { color: var(--gbo-text-muted); background: color-mix(in srgb, var(--gbo-text-muted) 12%, transparent); }
 
+/* Compound Shoulder ROM rows (Total Arc Deficit, GIRD, ERG, Flexion/
+   Extension Difference -- Ryker's Aug 2026 ROM redesign spec). Same
+   .gbo-rom-row for the name/value/pill line, plus an explanation
+   ("why this matters") and, for yellow/red only, a recommendation
+   line underneath -- see build_mobility_rom_report and compute_
+   shoulder_rom_profile/​_shoulder_rom_explanation in bucket_system.py. */
+.gbo-rom-compound-row { padding-bottom: 6px; border-bottom: 1px solid var(--gbo-border); }
+.gbo-rom-compound-row .gbo-rom-row { border-bottom: none; padding-bottom: 2px; }
+.gbo-rom-explanation { color: var(--gbo-text-muted); font-size: 0.8rem; margin: 2px 0 0; line-height: 1.4; }
+.gbo-rom-recommendation { color: var(--gbo-text); font-size: 0.8rem; margin: 4px 0 0; line-height: 1.4; }
+
 /* Score/percentile rings (Total/Body Comp/Power/Strength, Development
    Profile's Output/Capacity) -- a CSS conic-gradient circle instead of
    a rendered Plotly donut-chart image: --gbo-ring-pct (set inline per
@@ -336,6 +347,19 @@ a { color: var(--gbo-crimson); }
 .gbo-ring-value { color: var(--gbo-text); font-size: 1.55rem; font-weight: 800; line-height: 1; }
 .gbo-ring-sublabel { color: var(--gbo-text); font-size: 0.7rem; margin-top: 4px; text-align: center; padding: 0 10px; line-height: 1.2; }
 .gbo-ring-label { color: var(--gbo-text); font-weight: 700; text-align: center; margin: 8px 0 0; }
+
+/* Status ring (build_rom_status_ring) -- a fully-filled solid-color
+   circle showing a STATUS WORD (GREEN/YELLOW/RED), not a percentage,
+   since Mobility & ROM doesn't have a percentile score to plot (see
+   that function's docstring). Same .gbo-ring/.gbo-ring-inner shell as
+   the percentage rings above, just with a flat color instead of a
+   conic-gradient fill -- these modifier classes override the default
+   crimson background. The status word is always shown as TEXT
+   alongside the color (never color alone), per Ryker's explicit
+   colorblind-accessibility requirement. */
+.gbo-ring--green { background: var(--gbo-positive); }
+.gbo-ring--yellow { background: var(--gbo-caution); }
+.gbo-ring--red { background: var(--gbo-negative); }
 
 /* Development Profile's Output-vs-Capacity balance bar -- was a
    Plotly shapes+scatter-marker chart image, now a plain CSS track
