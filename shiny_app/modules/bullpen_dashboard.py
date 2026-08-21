@@ -301,6 +301,26 @@ def bullpen_dashboard_server(input, output, session, app_state):
     def dash_overall_controls_slot():
         if not app_state.is_authenticated():
             return None
+        resolved = _resolved()
+        if resolved["target_bullpen_id"] is not None:
+            # A specific session is open below (dash_session_controls_
+            # slot) -- if that's this pitcher's ONLY session with
+            # Rapsodo data, "Overall Pitch Tracking" (which combines
+            # every one of their sessions) would show byte-for-byte
+            # identical numbers and charts to the single-session
+            # drill-down beneath it, since there's only one session to
+            # combine. Found via a real case (Aug 2026): a one-session
+            # pitcher's dashboard rendered the entire page twice, which
+            # reads as a bug even though it's actually two different
+            # (currently identical) sections. Skip Overall here since it
+            # adds no information in that case -- still shown normally
+            # before a specific session is opened (Step 1's picker flow
+            # needs it), and still shown once there are 2+ sessions to
+            # actually aggregate.
+            target_player_id = resolved["sessions_by_id"][resolved["target_bullpen_id"]].player_id
+            session_count = sum(1 for b in resolved["sessions_by_id"].values() if b.player_id == target_player_id)
+            if session_count <= 1:
+                return None
         return _overall_fragment
 
     @render.ui
