@@ -198,12 +198,25 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
     # respond to anything else.
     _charts_shown_for = reactive.Value(None)
     # Backs chart_helpers.render_chart_async -- see that function's
-    # docstring. Moves each chart's actual kaleido render onto a
-    # background thread so a "Loading chart..." placeholder can
-    # actually reach the browser instead of the render just silently
-    # blocking (Ryker's report: charts felt "frozen" for ~30s with
-    # nothing visible in between).
+    # docstring for the actual two-tick, no-threading mechanism (an
+    # earlier version of this comment described a background-thread
+    # approach; that was replaced before ship, this wasn't updated
+    # until now). Whatever the mechanism, the effect is the same: a
+    # placeholder reaches the browser immediately instead of the render
+    # just silently blocking (Ryker's report: charts felt "frozen" for
+    # ~30s with nothing visible in between).
     _chart_cache = reactive.Value({})
+    # Separate cache for _controls() below (Aug 2026, same fix applied
+    # one level up): picking a pitcher/session with a large pitch
+    # history runs its own real DB query (_load_pitches) before any of
+    # the KPI cards or "Show charts" button can appear -- previously
+    # that query ran synchronously with nothing on screen in the
+    # meantime, the same "frozen" complaint the charts themselves used
+    # to have, just one step earlier in the flow. A distinct cache
+    # (not reused from _chart_cache) since the keys are shaped
+    # differently and there's no reason for a chart re-render to
+    # invalidate the session header or vice versa.
+    _controls_cache = reactive.Value({})
 
     def _target_key(target):
         if target["kind"] == "session":
@@ -260,9 +273,29 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
     @output(id=controls_id)
     @render.ui
     def _controls():
-        target, pitches = _target_and_pitches()
+        # get_target(input) alone is cheap (reads already-resolved
+        # inputs, at most one single-row Player lookup) -- it's safe to
+        # call directly on tick 1 just to know whether there's a target
+        # at all and to build the cache key. The actual pitch-list load
+        # (_target_and_pitches, which _load_pitches makes a real query
+        # for -- worse the larger the session/combined view) is what
+        # needs to be deferred to tick 2, inside _build below, so tick
+        # 1 can return the loading placeholder immediately instead of
+        # blocking on that query first.
+        target = get_target(input)
         if target is None:
             return None
+
+        def _build():
+            _, pitches = _target_and_pitches()
+            if pitches is None:
+                return None
+            return _build_controls(target, pitches)
+
+        key = (controls_id, _target_key(target))
+        return chart_helpers.render_chart_async(_controls_cache, key, _build, label="Loading session data…")
+
+    def _build_controls(target, pitches):
         db = get_session()
         try:
             summary = session_summary(pitches)

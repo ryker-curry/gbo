@@ -20,10 +20,17 @@ kaleido/base64 logic a third time.
 import base64
 
 
-def render_chart_async(cache, key, builder):
+def render_chart_async(cache, key, builder, label="Loading chart…"):
     """Render a chart's UI (via `builder`, a zero-arg callable) so a
-    "Loading chart..." placeholder shows first, before the actual
-    (still synchronous) render happens.
+    spinner + placeholder shows first, before the actual (still
+    synchronous) render happens.
+
+    `label` customizes the placeholder text for callers building
+    something other than a literal chart (e.g. bullpen_dashboard_
+    display.py's session header/KPI section, which also goes through
+    this same two-tick pattern to avoid a blank gap while its own
+    pitch-list query runs) -- defaults to "Loading chart…" for the
+    common case.
 
     This deliberately does NOT use a background thread. An earlier
     version offloaded `builder()` to a ThreadPoolExecutor so the main
@@ -73,7 +80,11 @@ def render_chart_async(cache, key, builder):
     if entry is None:
         cache.set({**state, key: "pending"})
         reactive.invalidate_later(0.1)
-        return ui.p("Loading chart…", class_="text-muted small")
+        return ui.div(
+            ui.div(class_="gbo-loading-spinner"),
+            ui.span(label),
+            class_="gbo-loading-row",
+        )
 
     if entry == "pending":
         result = builder()

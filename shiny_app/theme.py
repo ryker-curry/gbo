@@ -385,6 +385,18 @@ a { color: var(--gbo-crimson); }
 .gbo-flag-score { margin-left: 8px; color: var(--gbo-text-muted); font-size: 0.85rem; font-weight: 600; }
 .gbo-flag-reason { margin: 6px 0 0; }
 
+/* Loading placeholder (chart_helpers.render_chart_async) -- a small
+   spinner + label shown while a chart image or other slow, DB-backed
+   section is still rendering (kaleido PNG export, or a big pitch-list
+   query on Bullpen Dashboard). Ryker's report (Aug 2026): the old
+   plain-text "Loading chart..." placeholder was too easy to miss
+   against the dark theme, read as inert text rather than something
+   actively working -- a rotating ring reads as "in progress" the way
+   text alone doesn't, regardless of theme/color. */
+@keyframes gbo-spin { to { transform: rotate(360deg); } }
+.gbo-loading-row { display: flex; align-items: center; gap: 10px; padding: 14px 0; color: var(--gbo-text-muted); font-size: 0.85rem; }
+.gbo-loading-spinner { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid var(--gbo-border); border-top-color: var(--gbo-crimson); animation: gbo-spin 0.7s linear infinite; flex-shrink: 0; }
+
 /* Development Profile's Output-vs-Capacity balance bar -- was a
    Plotly shapes+scatter-marker chart image, now a plain CSS track
    with a positioned marker dot (marker's left% is the athlete's
