@@ -396,6 +396,25 @@ def players_server(input, output, session, app_state):
                 ui.input_date("dob", "Date of birth", value=editing_player.date_of_birth if editing_player and editing_player.date_of_birth else date(2005, 1, 1)),
                 ui.input_text("email", "Email", value=(editing_player.email if editing_player else "") or ""),
 
+                ui.markdown("**Movement Flag**"),
+                ui.p(
+                    "These two feed the Movement Flag on the player's Physical Testing "
+                    "breakdown, alongside their ROM deficit count -- see Assessments/My "
+                    "Assessments for how the flag itself is calculated.",
+                    class_="text-muted small",
+                ),
+                ui.input_checkbox("poor_mover", "Poor Mover", value=editing_player.poor_mover if editing_player else False),
+                ui.input_checkbox(
+                    "current_injury", "Current injury / surgical recovery",
+                    value=editing_player.current_injury if editing_player else False,
+                ),
+                ui.input_text_area(
+                    "injury_note", "Injury note (optional)",
+                    value=(editing_player.injury_note if editing_player else "") or "",
+                    placeholder="e.g. \"UCL reconstruction, 4 months post-op\" -- shown as the flag's reason when checked above.",
+                    rows=2,
+                ),
+
                 ui.markdown("**Status**"),
                 ui.input_select("status_choice", "Status", choices=status_names, selected=default_status),
                 ui.input_checkbox("active", "Active in system (unchecking soft-deletes/hides them)", value=editing_player.active if editing_player else True),
@@ -438,6 +457,9 @@ def players_server(input, output, session, app_state):
             previous_school = input.previous_school()
             dob = input.dob()
             email = input.email()
+            poor_mover = input.poor_mover()
+            current_injury = input.current_injury()
+            injury_note = input.injury_note()
             status_choice = input.status_choice()
             active = input.active()
             confirm_deactivate = input.confirm_deactivate() if "confirm_deactivate" in input else False
@@ -532,6 +554,9 @@ def players_server(input, output, session, app_state):
                 previous_school=(previous_school or "").strip() or None,
                 date_of_birth=dob,
                 email=(email or "").strip() or None,
+                poor_mover=poor_mover,
+                current_injury=current_injury,
+                injury_note=(injury_note or "").strip() or None,
                 status_id=status_id,
                 active=active,
             )

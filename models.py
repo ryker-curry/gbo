@@ -224,6 +224,15 @@ class Player(Base):
     photo_url = Column(String(500), nullable=True)
     date_of_birth = Column(Date, nullable=True)
     email = Column(String(150), nullable=True)
+    # Movement Flag inputs (bucket_system.compute_movement_flag) -- staff-set
+    # on the player profile, not derived from any test data. poor_mover is
+    # just the label used to number an already-Red flag (6+ ROM deficits);
+    # current_injury is a hard override that forces Red regardless of
+    # deficit count, since an active injury/surgical recovery matters more
+    # than any ROM number. See compute_movement_flag's docstring.
+    poor_mover = Column(Boolean, default=False, nullable=False)
+    current_injury = Column(Boolean, default=False, nullable=False)
+    injury_note = Column(Text, nullable=True)
     active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

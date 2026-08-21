@@ -112,6 +112,10 @@ def player_stats_server(input, output, session, app_state):
             has_any_data = (
                 any(bucket_data[k] is not None for k in ("total_score", "body_comp_score", "power_score", "strength_score"))
                 or bool(bucket_data.get("mobility_rom_report"))
+                # movement_flag can be set (e.g. a current_injury flag on the
+                # player profile) before any ROM data is ever entered -- same
+                # "don't gate on the wrong section's data" fix as above.
+                or bool(bucket_data.get("movement_flag"))
             )
             if not has_any_data:
                 sections.append(ui_helpers.empty_state("No physical testing data yet."))

@@ -158,6 +158,14 @@ def build_mobility_rom_report(report):
 _ROM_STATUS_SEVERITY = {"red": 2, "yellow": 1, "green": 0}
 _ROM_STATUS_WORD = {"red": "RED", "yellow": "YELLOW", "green": "GREEN"}
 
+# A single red metric (even alongside a yellow) shouldn't tip the whole
+# player into an overall RED ring -- one below-threshold measurement next
+# to one borderline one reads as "keep an eye on this," not "priority
+# review." Ryker's call (Aug 2026): require at least this many red-status
+# rows before the ring escalates to red; below that it caps at yellow.
+# Tunable in one place if this needs to change later.
+ROM_RING_RED_MIN_COUNT = 2
+
 
 def build_rom_status_ring(report, key_prefix, mode="dark"):
     """Overall Mobility & ROM status ring -- shows the worst status
@@ -172,19 +180,28 @@ def build_rom_status_ring(report, key_prefix, mode="dark"):
     at-a-glance summary, matching the "Overall: YELLOW -- 2 Areas Need
     Attention" header in Ryker's ROM redesign spec.
 
-    Worst-status-wins: any red row -> ring is red; else any yellow row
-    -> ring is yellow; else green (only reachable if at least one row
-    has a real green status). Always shows the status WORD alongside
-    the color (not color alone), per Ryker's colorblind-accessibility
-    requirement. Returns None if no row in the report has a status
-    (nothing yet to summarize)."""
+    Escalation rule (changed Aug 2026, Ryker's call): a single red row
+    no longer forces the ring to red by itself -- that read as too
+    alarming for "one metric below threshold, one borderline" cases.
+    Ring is red only when ROM_RING_RED_MIN_COUNT or more rows are red;
+    else ring is yellow if there's at least one yellow OR exactly one
+    red; else green (only reachable with zero reds and zero yellows).
+    Always shows the status WORD alongside the color (not color alone),
+    per Ryker's colorblind-accessibility requirement. Returns None if
+    no row in the report has a status (nothing yet to summarize)."""
     statused = [row for row in report if row.get("status") in _ROM_STATUS_SEVERITY]
     if not statused:
         return None
-    worst = max(statused, key=lambda row: _ROM_STATUS_SEVERITY[row["status"]])["status"]
     yellow_count = sum(1 for row in statused if row["status"] == "yellow")
     red_count = sum(1 for row in statused if row["status"] == "red")
     attention_count = yellow_count + red_count
+
+    if red_count >= ROM_RING_RED_MIN_COUNT:
+        worst = "red"
+    elif yellow_count > 0 or red_count > 0:
+        worst = "yellow"
+    else:
+        worst = "green"
 
     if attention_count == 0:
         sublabel = "All areas within range"
@@ -204,6 +221,30 @@ def build_rom_status_ring(report, key_prefix, mode="dark"):
         ring,
         ui.p(ui.strong(f"ROM Status: {_ROM_STATUS_WORD[worst]}"), class_="gbo-ring-label"),
         class_="gbo-ring-col",
+    )
+
+
+_MOVEMENT_FLAG_WORD = {"red": "RED", "orange": "ORANGE", "yellow": "YELLOW", "green": "GREEN"}
+
+
+def build_movement_flag_badge(movement_flag, key_prefix, mode="dark"):
+    """Movement Flag pill -- Ryker's own deficit-count flag (see
+    compute_movement_flag in bucket_system.py for the full rule). Shows
+    the color word AND the 1-5 numeric score together (never color
+    alone, same colorblind-accessibility rule as build_rom_status_ring),
+    plus a short reason line (deficit count, or the injury note if
+    that's what triggered Red). Returns None if there's nothing to
+    show yet (compute_movement_flag already returns None in that
+    case)."""
+    if movement_flag is None:
+        return None
+    color = movement_flag["color"]
+    word = _MOVEMENT_FLAG_WORD[color]
+    return ui.div(
+        ui.span(f"Movement Flag: {word}", class_=f"gbo-flag-badge gbo-flag-badge--{color}"),
+        ui.span(f"Score: {movement_flag['score']}", class_="gbo-flag-score"),
+        ui.p(movement_flag["reason"], class_="gbo-flag-reason text-muted small"),
+        class_="gbo-flag-col",
     )
 
 
@@ -389,7 +430,22 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark"):
         rom_ring = build_rom_status_ring(mobility_rom_report, f"{key_prefix}_rom_status", mode=mode)
         if rom_ring is not None:
             sections.append(rom_ring)
+        flag_ui = build_movement_flag_badge(bucket_data.get("movement_flag"), f"{key_prefix}_movement_flag", mode=mode)
+        if flag_ui is not None:
+            sections.append(flag_ui)
         sections.append(mobility_rom_ui)
+    else:
+        # A player can have a current_injury flag on file before ever
+        # having real ROM data entered -- compute_movement_flag's
+        # injury override applies independent of the ROM report, so
+        # show the badge on its own in that case rather than hiding it
+        # behind "has real ROM rows" (mirrors the earlier "No physical
+        # testing data yet." fix's same lesson: don't gate one section
+        # on another unrelated section's data).
+        flag_ui = build_movement_flag_badge(bucket_data.get("movement_flag"), f"{key_prefix}_movement_flag", mode=mode)
+        if flag_ui is not None:
+            sections.append(ui.p("Mobility & ROM (reference only, not in Total)", class_="gbo-category-title"))
+            sections.append(flag_ui)
 
     if bucket_data.get("shoulder_health_metrics"):
         sections.append(ui.p(f"Shoulder Health (reference only, not in Total) — {bucket_data['shoulder_health_score'] if bucket_data['shoulder_health_score'] is not None else '—'}", class_="gbo-category-title"))

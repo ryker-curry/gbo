@@ -159,7 +159,12 @@ def assessments_server(input, output, session, app_state):
             # found via a screenshot of a player whose ROM testing had
             # just started (Aug 2026) showing "no data" despite having
             # ROM values on record.
-            has_mobility_data = bool(bucket_data.get("mobility_rom_report"))
+            # A movement_flag can exist even with an empty mobility_rom_report
+            # (e.g. a current_injury flag set on the player profile before any
+            # ROM data is ever entered -- compute_movement_flag's injury
+            # override doesn't require ROM rows) -- same "don't gate one
+            # section's visibility on another section's data" fix as above.
+            has_mobility_data = bool(bucket_data.get("mobility_rom_report")) or bool(bucket_data.get("movement_flag"))
             if rings is not None or has_mobility_data:
                 if rings is not None:
                     sections.append(rings)
