@@ -27,6 +27,19 @@ def _max(values):
     return round(float(max(vals)), 2) if vals else None
 
 
+def _avg_extension(values):
+    """Same as _avg(), but treats exactly 0 as a missing/bad reading rather
+    than a real measurement. Rapsodo occasionally reports release_extension
+    as a literal 0 when it fails to compute a real value -- a legitimate
+    release extension is roughly 5-7 feet, so 0 is never a real reading.
+    Including those in the average would silently drag it down, so they're
+    excluded here the same way None already is. Only used for Extension --
+    other fields (IVB, HB, etc.) can legitimately be near zero, so they
+    keep using the plain _avg()."""
+    vals = [v for v in values if v is not None and v != 0]
+    return round(float(mean(vals)), 2) if vals else None
+
+
 def pitch_type_label(pitch):
     """Display name for a pitch's type -- the normalized canonical name
     if one was matched at import time, otherwise the raw Rapsodo label
@@ -112,7 +125,7 @@ def pitch_type_summary(pitches):
             "Avg Spin": _avg([p.total_spin for p in group]),
             "IVB": _avg([p.vb_spin for p in group]),
             "HB": _avg([p.hb_spin for p in group]),
-            "Extension": _avg([p.release_extension for p in group]),
+            "Extension": _avg_extension([p.release_extension for p in group]),
             "Release Height": _avg([p.release_height for p in group]),
             "Release Side": _avg([p.release_side for p in group]),
         })
