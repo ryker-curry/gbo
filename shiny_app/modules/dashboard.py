@@ -223,8 +223,25 @@ def _player_dashboard_ui(db, current_user_id, mode):
     # Overall/Strength/Power at a glance. ---
     bucket_data = compute_bucket_system(db, my_player.player_id)
     rings = bucket_display.build_score_rings(bucket_data, "dash", mode=mode)
+    # Movement Flag ring sits right underneath, in the same block as
+    # Overall/Body Comp/Power/Strength above -- no section header of its
+    # own, so it reads as one more ring in the same "at a glance" area
+    # rather than a separate feature. It already labels itself
+    # ("Movement Flag: GREEN" under the ring, via build_movement_flag_
+    # ring) so no extra heading is needed. Reuses the exact same
+    # bucket_data already computed above (no extra query), so this
+    # always agrees with My Assessments. Ryker's call (Aug 2026).
+    # Renders nothing if the player has no ROM data and no injury/
+    # poor-mover flags on file yet.
+    mobility_rom_report = bucket_data.get("mobility_rom_report", [])
+    movement_ring = bucket_display.build_movement_flag_ring(
+        bucket_data.get("movement_flag"), mobility_rom_report, "dash_flag", mode=mode
+    )
     if rings is not None:
         sections.append(rings)
+    if movement_ring is not None:
+        sections.append(movement_ring)
+    if rings is not None or movement_ring is not None:
         sections.append(ui.p("Full breakdown by metric is on My Assessments.", class_="text-muted small"))
 
     today = date.today()

@@ -1246,8 +1246,7 @@ def compute_mobility_rom_report(session, player_id, _cache=None, _throws_map=Non
 # reworked to fit GBO rather than reusing their name/scale directly.
 #
 # A "deficit" = one red-status row in that player's own Mobility & ROM
-# report (the exact same rows build_rom_status_ring already counts toward
-# its own escalation rule) -- currently that means Shoulder/Elbow/Hip
+# report -- currently that means Shoulder/Elbow/Hip
 # only, since Cervical/Thoracic/Lumbar/Ankle aren't tracked as entry
 # fields in the app yet (Ryker's call: start with what's already tracked,
 # add the other regions as a later phase).
@@ -1284,9 +1283,9 @@ def compute_movement_flag(session, player_id, mobility_rom_report):
 
     Deliberately reuses mobility_rom_report rather than re-querying --
     this is meant to be called right after compute_mobility_rom_report
-    inside compute_bucket_system, on the same report that already
-    feeds build_rom_status_ring, so the deficit count and the ROM
-    ring's own red count always agree."""
+    inside compute_bucket_system, on the same report that also feeds
+    build_movement_flag_ring's Caution-count caption, so the two always
+    agree."""
     player = session.query(Player).filter(Player.player_id == player_id).first()
     poor_mover = bool(player.poor_mover) if player else False
     current_injury = bool(player.current_injury) if player else False
