@@ -128,7 +128,7 @@ GLOBAL_CSS = """
   --gbo-caution: #E0A526;
   /* Movement Flag's 4-tier scale (Green/Yellow/Orange/Red) needs a 4th
      hue distinct from both caution-amber and negative-red -- see
-     build_movement_flag_badge in bucket_display.py. */
+     build_movement_flag_ring in bucket_display.py. */
   --gbo-orange: #E0791E;
 }
 :root[data-bs-theme="light"] {
@@ -355,35 +355,27 @@ a { color: var(--gbo-crimson); }
 .gbo-ring-sublabel { color: var(--gbo-text); font-size: 0.7rem; margin-top: 4px; text-align: center; padding: 0 10px; line-height: 1.2; }
 .gbo-ring-label { color: var(--gbo-text); font-weight: 700; text-align: center; margin: 8px 0 0; }
 
-/* Status ring (build_rom_status_ring) -- a fully-filled solid-color
-   circle showing a STATUS WORD (GREEN/YELLOW/RED), not a percentage,
-   since Mobility & ROM doesn't have a percentile score to plot (see
-   that function's docstring). Same .gbo-ring/.gbo-ring-inner shell as
-   the percentage rings above, just with a flat color instead of a
-   conic-gradient fill -- these modifier classes override the default
-   crimson background. The status word is always shown as TEXT
-   alongside the color (never color alone), per Ryker's explicit
-   colorblind-accessibility requirement. */
+/* Movement Flag ring (build_movement_flag_ring) -- a fully-filled
+   solid-color circle showing the flag's STATUS WORD (GREEN/YELLOW/
+   ORANGE/RED) plus its 1-5 score, not a percentage, since Mobility &
+   ROM doesn't have a percentile score to plot (see that function's
+   docstring). Same .gbo-ring/.gbo-ring-inner shell as the percentage
+   rings above, just with a flat color instead of a conic-gradient fill
+   -- these modifier classes override the default crimson background.
+   The status word is always shown as TEXT alongside the color (never
+   color alone), per Ryker's explicit colorblind-accessibility
+   requirement. Originally this was two separate widgets -- a 3-color
+   (green/yellow/red) ROM-only ring plus a 4-color Movement Flag pill
+   sitting next to it -- collapsed into one ring (Ryker's call, Aug
+   2026) since the two could show conflicting reads and even when they
+   agreed, showing two different "problem counts" side by side read as
+   contradictory. This ring's color/word now comes from Movement Flag
+   (compute_movement_flag in bucket_system.py), which is why it needs
+   all 4 hues, not just the 3 the ROM-only version used. */
 .gbo-ring--green { background: var(--gbo-positive); }
 .gbo-ring--yellow { background: var(--gbo-caution); }
+.gbo-ring--orange { background: var(--gbo-orange); }
 .gbo-ring--red { background: var(--gbo-negative); }
-
-/* Movement Flag badge (build_movement_flag_badge) -- Ryker's own
-   take on a deficit-count flag system (adapted from an outside PT
-   vendor's model, Aug 2026): counts red-status rows already in the
-   Mobility & ROM report and buckets the player into Green/Yellow/
-   Orange/Red, with a 1-5 numeric score alongside the color word (never
-   color alone, same colorblind rule as the ROM ring above). A flat
-   pill instead of a ring since this is a distinct, smaller-emphasis
-   summary sitting right under the ROM ring, not a second big dial. */
-.gbo-flag-col { text-align: center; margin: 14px 0; }
-.gbo-flag-badge { display: inline-block; padding: 5px 14px; border-radius: 999px; font-weight: 700; font-size: 0.85rem; color: #FFFDE5; }
-.gbo-flag-badge--green { background: var(--gbo-positive); }
-.gbo-flag-badge--yellow { background: var(--gbo-caution); }
-.gbo-flag-badge--orange { background: var(--gbo-orange); }
-.gbo-flag-badge--red { background: var(--gbo-negative); }
-.gbo-flag-score { margin-left: 8px; color: var(--gbo-text-muted); font-size: 0.85rem; font-weight: 600; }
-.gbo-flag-reason { margin: 6px 0 0; }
 
 /* Loading placeholder (chart_helpers.render_chart_async) -- a small
    spinner + label shown while a chart image or other slow, DB-backed
