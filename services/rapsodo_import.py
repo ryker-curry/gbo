@@ -59,6 +59,12 @@ class RapsodoValidationError(RapsodoImportError):
     unreadable structure, or no usable pitch rows at all."""
 
 
+class RapsodoImportNotFoundError(RapsodoImportError):
+    """No RapsodoImport exists with the given import_id (already deleted,
+    or a bad id -- e.g. a stale button click after someone else deleted
+    the same import a moment earlier)."""
+
+
 # Normalized (lowercase, alnum-only) column-header text -> RapsodoPitch raw
 # field name. Multiple keys can point at the same field to tolerate export
 # naming variants (e.g. an older/different Rapsodo report using
@@ -437,3 +443,65 @@ def import_rapsodo_file(
         )
 
     return import_record
+
+
+def delete_rapsodo_import(db_session, import_id: int) -> dict:
+    """Deletes one previously-imported Rapsodo file: every RapsodoPitch row
+    it created, plus the RapsodoImport audit record itself. This is what
+    lets a coach recover from uploading the wrong file (or a bad export)
+    without leaving orphaned pitches behind -- see the DuplicateImportError
+    message above, which points a coach here when a re-upload is a
+    correction rather than a mistake.
+
+    RapsodoPitch rows are deleted explicitly rather than relying on ORM
+    cascade -- RapsodoImport.pitches has no cascade="delete-orphan"
+    configured (only BullpenSession -> RapsodoPitch has that, for deleting
+    a whole session at once), so an unqualified db_session.delete() on the
+    RapsodoImport row alone would violate RapsodoPitch.import_id's NOT
+    NULL foreign key instead of cleaning up.
+
+    Deliberately does NOT touch the parent BullpenSession -- a session can
+    hold pitches from more than one import, or a mix of Rapsodo and
+    manually-tracked BullpenPitch rows, so only this one import's pitches
+    are removed. If this was the session's only data, the session is left
+    behind as an empty shell rather than auto-deleted; that's a
+    deliberate choice (the session itself may carry its own notes/date a
+    coach still wants), not an oversight.
+
+    Raises RapsodoImportNotFoundError if the import doesn't exist (already
+    deleted, or a bad id). Raises RapsodoImportError if the delete itself
+    fails partway through, leaving nothing changed. Commits on success and
+    returns a small summary dict (player_id, bullpen_id,
+    original_filename, uploaded_at, deleted_pitch_count) so the caller can
+    build a confirmation message without a second query.
+    """
+    import_record = db_session.query(RapsodoImport).filter(RapsodoImport.import_id == import_id).first()
+    if import_record is None:
+        raise RapsodoImportNotFoundError(
+            f"No Rapsodo import found with id {import_id} -- it may have already been deleted."
+        )
+
+    summary = {
+        "player_id": import_record.player_id,
+        "bullpen_id": import_record.bullpen_id,
+        "original_filename": import_record.original_filename,
+        "uploaded_at": import_record.uploaded_at,
+    }
+
+    try:
+        deleted_pitch_count = (
+            db_session.query(RapsodoPitch)
+            .filter(RapsodoPitch.import_id == import_id)
+            .delete(synchronize_session=False)
+        )
+        db_session.delete(import_record)
+        db_session.commit()
+    except Exception:
+        db_session.rollback()
+        raise RapsodoImportError(
+            f"Couldn't delete this import (id {import_id}) -- nothing was removed. Try again, and if it keeps "
+            f"failing check for other data (e.g. a report) that might still reference these pitches."
+        )
+
+    summary["deleted_pitch_count"] = deleted_pitch_count
+    return summary
