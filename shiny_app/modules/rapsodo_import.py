@@ -25,6 +25,16 @@ module's own `session` is namespaced to "rapsodo_import", but
 the update has to go out through the root (un-namespaced) session or it
 would silently address a "rapsodo_import-main_nav" id that doesn't
 exist.
+
+Delete an import (Aug 2026, Ryker's request -- "I accidentally put the
+wrong one for somebody"): services/rapsodo_import.py already has a
+delete_rapsodo_import() function (removes the RapsodoPitch rows +
+RapsodoImport audit record for one import, leaves the parent
+BullpenSession alone) -- this module just adds the UI to call it, in
+two places: a quick "undo" right after a fresh upload
+(import_result_section), and a general "past imports" list+delete for
+an existing session (existing_imports_section, under session_picker),
+since a wrong-pitcher upload might not be noticed until later.
 """
 
 from datetime import date
@@ -33,10 +43,10 @@ from shiny import module, ui, render, reactive, req
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import Player, StaffPlayerAssignment, BullpenSession, BullpenType, RapsodoPitch
+from models import Player, StaffPlayerAssignment, BullpenSession, BullpenType, RapsodoPitch, RapsodoImport
 from services.rapsodo_import import (
-    import_rapsodo_file, validate_file_structure, read_csv_bytes,
-    DuplicateImportError, RapsodoValidationError, RapsodoImportError,
+    import_rapsodo_file, validate_file_structure, read_csv_bytes, delete_rapsodo_import,
+    DuplicateImportError, RapsodoValidationError, RapsodoImportError, RapsodoImportNotFoundError,
 )
 
 import ui_helpers
@@ -141,6 +151,8 @@ def rapsodo_import_server(input, output, session, app_state):
 
             fields = [ui.input_select("target_bullpen_choice", "Session to import into", choices=choices)]
             fields.append(ui.output_ui("new_session_fields"))
+            if can_edit_sessions:
+                fields.append(ui.output_ui("existing_imports_section"))
             return ui.div(*fields)
         finally:
             db.close()
@@ -169,6 +181,83 @@ def rapsodo_import_server(input, output, session, app_state):
                 ),
                 ui.input_text("new_bullpen_notes", "Session notes (optional)"),
             )
+        finally:
+            db.close()
+
+    @render.ui
+    def existing_imports_section():
+        """Lists every Rapsodo import tied to the currently-selected
+        EXISTING bullpen session (does nothing for "-- Start a new
+        bullpen session --", since there's nothing imported into it
+        yet), each with the option to delete it -- covers a mistake
+        found later, not just right after uploading (see
+        import_result_section's own quick-delete for that immediate
+        case). A session can hold more than one import (e.g. two
+        Rapsodo files from the same outing), so this is a picker +
+        single delete action, same pattern as players.py's player_select
+        + confirm-checkbox + save flow, rather than one button per row."""
+        _refresh_tick()
+        req("target_bullpen_choice" in input)
+        target_bullpen_id = input.target_bullpen_choice()
+        if not target_bullpen_id:
+            return None
+
+        db = get_session()
+        try:
+            imports = (
+                db.query(RapsodoImport)
+                .filter(RapsodoImport.bullpen_id == int(target_bullpen_id))
+                .order_by(RapsodoImport.uploaded_at.desc())
+                .all()
+            )
+            if not imports:
+                return None
+
+            import_choices = {
+                str(imp.import_id): (
+                    f"{imp.original_filename} — uploaded {imp.uploaded_at.strftime('%Y-%m-%d %I:%M %p')} "
+                    f"({imp.imported_row_count} pitch(es) imported"
+                    + (f", {imp.rejected_row_count} skipped" if imp.rejected_row_count else "")
+                    + ")"
+                )
+                for imp in imports
+            }
+            return ui.div(
+                ui.markdown("**Imports on this session**"),
+                ui.input_select("import_to_delete", "Delete an import", choices=import_choices),
+                ui.input_checkbox(
+                    "confirm_delete_import_existing",
+                    "Yes, permanently delete this import and every pitch it added (this can't be undone)",
+                    value=False,
+                ),
+                ui.input_action_button("delete_existing_import_btn", "Delete selected import", class_="btn-outline-danger btn-sm mt-2"),
+                class_="mt-3 mb-2",
+            )
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.delete_existing_import_btn)
+    def _delete_existing_import():
+        if not input.confirm_delete_import_existing():
+            ui.notification_show("Check the confirmation box before deleting an import.", type="warning", duration=8)
+            return
+        import_id = int(input.import_to_delete())
+        db = get_session()
+        try:
+            try:
+                summary = delete_rapsodo_import(db, import_id)
+            except RapsodoImportNotFoundError as e:
+                ui.notification_show(str(e), type="error", duration=10)
+                return
+            except RapsodoImportError as e:
+                ui.notification_show(str(e), type="error", duration=10)
+                return
+            ui.notification_show(
+                f"Deleted \"{summary['original_filename']}\" -- removed {summary['deleted_pitch_count']} pitch(es).",
+                type="message", duration=8,
+            )
+            _bump_refresh()
         finally:
             db.close()
 
@@ -301,10 +390,15 @@ def rapsodo_import_server(input, output, session, app_state):
 
         db = get_session()
         try:
-            from models import RapsodoImport
             import_record = db.query(RapsodoImport).filter(RapsodoImport.import_id == import_id).first()
+            if import_record is None:
+                # Already deleted (e.g. via the quick-undo button below, or
+                # the existing_imports_section picker further up the page)
+                # -- nothing left to show for it.
+                _last_import.set(None)
+                return None
             sections = []
-            if import_record and import_record.error_summary:
+            if import_record.error_summary:
                 sections.append(ui.accordion(
                     ui.accordion_panel(
                         f"Skipped rows ({import_record.rejected_row_count})",
@@ -343,7 +437,46 @@ def rapsodo_import_server(input, output, session, app_state):
                 f"Open full Bullpen Dashboard ({session_date.strftime('%Y-%m-%d (%a)')} session)",
                 class_="btn-outline-primary",
             ))
+
+            # Quick undo -- imported the wrong file, or into the wrong
+            # pitcher, and noticed immediately. existing_imports_section
+            # above (under session_picker) covers the same delete for a
+            # mistake noticed later, after leaving this page.
+            sections.append(ui.hr())
+            sections.append(ui.p(ui.strong("Made a mistake? "), "Wrong pitcher, wrong file, or a bad export.", class_="text-muted small"))
+            sections.append(ui.input_checkbox("confirm_delete_import", "Yes, permanently delete this import and every pitch it added", value=False))
+            sections.append(ui.input_action_button("delete_import_btn", "Delete this import", class_="btn-outline-danger btn-sm"))
             return ui.div(*sections)
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.delete_import_btn)
+    def _delete_just_imported():
+        if not input.confirm_delete_import():
+            ui.notification_show("Check the confirmation box before deleting this import.", type="warning", duration=8)
+            return
+        last = _last_import()
+        if last is None:
+            return
+        import_id, _, _ = last
+        db = get_session()
+        try:
+            try:
+                summary = delete_rapsodo_import(db, import_id)
+            except RapsodoImportNotFoundError as e:
+                ui.notification_show(str(e), type="error", duration=10)
+                _last_import.set(None)
+                return
+            except RapsodoImportError as e:
+                ui.notification_show(str(e), type="error", duration=10)
+                return
+            ui.notification_show(
+                f"Deleted \"{summary['original_filename']}\" -- removed {summary['deleted_pitch_count']} pitch(es).",
+                type="message", duration=8,
+            )
+            _last_import.set(None)
+            _bump_refresh()
         finally:
             db.close()
 
