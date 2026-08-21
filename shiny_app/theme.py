@@ -126,6 +126,10 @@ GLOBAL_CSS = """
   --gbo-positive: #4CAF50;
   --gbo-negative: #E05252;
   --gbo-caution: #E0A526;
+  /* Movement Flag's 4-tier scale (Green/Yellow/Orange/Red) needs a 4th
+     hue distinct from both caution-amber and negative-red -- see
+     build_movement_flag_badge in bucket_display.py. */
+  --gbo-orange: #E0791E;
 }
 :root[data-bs-theme="light"] {
   --gbo-bg-page: #F5F4F1;
@@ -152,6 +156,9 @@ GLOBAL_CSS = """
      (#E0A526 -> ~2.0:1) -- darkened variant, same contrast fix
      --gbo-gold-text already applies for the same reason. */
   --gbo-caution: #96690C;
+  /* Same contrast fix as --gbo-caution/--gbo-negative above, darkened
+     so orange text/badges pass on a light surface. */
+  --gbo-orange: #A3550F;
 }
 
 body { background: var(--gbo-bg-page); color: var(--gbo-text); font-family: {FONT_STACK}; }
@@ -360,6 +367,23 @@ a { color: var(--gbo-crimson); }
 .gbo-ring--green { background: var(--gbo-positive); }
 .gbo-ring--yellow { background: var(--gbo-caution); }
 .gbo-ring--red { background: var(--gbo-negative); }
+
+/* Movement Flag badge (build_movement_flag_badge) -- Ryker's own
+   take on a deficit-count flag system (adapted from an outside PT
+   vendor's model, Aug 2026): counts red-status rows already in the
+   Mobility & ROM report and buckets the player into Green/Yellow/
+   Orange/Red, with a 1-5 numeric score alongside the color word (never
+   color alone, same colorblind rule as the ROM ring above). A flat
+   pill instead of a ring since this is a distinct, smaller-emphasis
+   summary sitting right under the ROM ring, not a second big dial. */
+.gbo-flag-col { text-align: center; margin: 14px 0; }
+.gbo-flag-badge { display: inline-block; padding: 5px 14px; border-radius: 999px; font-weight: 700; font-size: 0.85rem; color: #FFFDE5; }
+.gbo-flag-badge--green { background: var(--gbo-positive); }
+.gbo-flag-badge--yellow { background: var(--gbo-caution); }
+.gbo-flag-badge--orange { background: var(--gbo-orange); }
+.gbo-flag-badge--red { background: var(--gbo-negative); }
+.gbo-flag-score { margin-left: 8px; color: var(--gbo-text-muted); font-size: 0.85rem; font-weight: 600; }
+.gbo-flag-reason { margin: 6px 0 0; }
 
 /* Development Profile's Output-vs-Capacity balance bar -- was a
    Plotly shapes+scatter-marker chart image, now a plain CSS track

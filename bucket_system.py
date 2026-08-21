@@ -1240,6 +1240,95 @@ def compute_mobility_rom_report(session, player_id, _cache=None, _throws_map=Non
     return out
 
 
+# ---------------------------------------------------------------------------
+# Movement Flag -- Ryker's own deficit-count flag (Aug 2026), adapted from
+# an idea he'd previously used with an outside PT vendor (ADAPT) but
+# reworked to fit GBO rather than reusing their name/scale directly.
+#
+# A "deficit" = one red-status row in that player's own Mobility & ROM
+# report (the exact same rows build_rom_status_ring already counts toward
+# its own escalation rule) -- currently that means Shoulder/Elbow/Hip
+# only, since Cervical/Thoracic/Lumbar/Ankle aren't tracked as entry
+# fields in the app yet (Ryker's call: start with what's already tracked,
+# add the other regions as a later phase).
+#
+# Flag color is driven by deficit count, with one hard override:
+#   Red:    6+ deficits, OR a current injury/surgical recovery on file
+#   Orange: 4-5 deficits
+#   Yellow: 2-3 deficits
+#   Green:  0-1 deficits
+# Numeric score (1-5, matching Ryker's own scale) is fixed per color
+# EXCEPT Red, which splits in two: 1 if there's a current injury/surgical
+# recovery noted (worse -- an active medical issue, not just a mobility
+# gap), 2 otherwise (a red purely from deficit count -- "poor mover" is
+# the label for that case, not a separate trigger; it only affects the
+# score, never whether the flag itself is red). If a player hits the 6+
+# deficit bar but staff hasn't checked either box yet, this defaults to
+# the poor-mover score (2) rather than leaving it undefined -- staff
+# should still check the box for the record, but the flag shouldn't sit
+# unscored while that's pending.
+MOVEMENT_FLAG_RED_MIN = 6
+MOVEMENT_FLAG_ORANGE_MIN = 4
+MOVEMENT_FLAG_YELLOW_MIN = 2
+
+MOVEMENT_FLAG_SCORES = {"green": 5, "yellow": 4, "orange": 3}
+MOVEMENT_FLAG_RED_SCORE_INJURY = 1
+MOVEMENT_FLAG_RED_SCORE_POOR_MOVER = 2
+
+
+def compute_movement_flag(session, player_id, mobility_rom_report):
+    """Returns {"color", "score", "deficit_count", "reason", "poor_mover",
+    "current_injury"} or None if there's nothing to summarize yet (no
+    statused ROM rows at all AND no injury on file -- same "show
+    nothing" rule the rest of this module uses).
+
+    Deliberately reuses mobility_rom_report rather than re-querying --
+    this is meant to be called right after compute_mobility_rom_report
+    inside compute_bucket_system, on the same report that already
+    feeds build_rom_status_ring, so the deficit count and the ROM
+    ring's own red count always agree."""
+    player = session.query(Player).filter(Player.player_id == player_id).first()
+    poor_mover = bool(player.poor_mover) if player else False
+    current_injury = bool(player.current_injury) if player else False
+    injury_note = (player.injury_note or "").strip() if player else ""
+
+    statused = [row for row in mobility_rom_report if row.get("status") in ("red", "yellow", "green")]
+    if not statused and not current_injury:
+        return None
+
+    deficit_count = sum(1 for row in statused if row["status"] == "red")
+
+    if current_injury:
+        color = "red"
+        score = MOVEMENT_FLAG_RED_SCORE_INJURY
+        reason = injury_note or "Current injury / surgical recovery on file"
+    elif deficit_count >= MOVEMENT_FLAG_RED_MIN:
+        color = "red"
+        score = MOVEMENT_FLAG_RED_SCORE_POOR_MOVER
+        reason = f"{deficit_count} ROM deficits" + (" — Poor Mover" if poor_mover else "")
+    elif deficit_count >= MOVEMENT_FLAG_ORANGE_MIN:
+        color = "orange"
+        score = MOVEMENT_FLAG_SCORES["orange"]
+        reason = f"{deficit_count} ROM deficits"
+    elif deficit_count >= MOVEMENT_FLAG_YELLOW_MIN:
+        color = "yellow"
+        score = MOVEMENT_FLAG_SCORES["yellow"]
+        reason = f"{deficit_count} ROM deficits"
+    else:
+        color = "green"
+        score = MOVEMENT_FLAG_SCORES["green"]
+        reason = f"{deficit_count} ROM deficit" + ("s" if deficit_count != 1 else "")
+
+    return {
+        "color": color,
+        "score": score,
+        "deficit_count": deficit_count,
+        "reason": reason,
+        "poor_mover": poor_mover,
+        "current_injury": current_injury,
+    }
+
+
 def average_percentiles(metric_dict):
     """Plain mean of whatever percentiles are present (no weighting),
     rounded. None if nothing to average."""
@@ -1371,6 +1460,10 @@ def compute_bucket_system(session, player_id):
     # docstrings for the full rationale/sourcing.
     mobility_rom_report = compute_mobility_rom_report(session, player_id, _cache=_cache, _throws_map=_throws_map)
 
+    # Movement Flag -- deficit-count flag derived from the same report
+    # above (see compute_movement_flag's docstring for the full rule).
+    movement_flag = compute_movement_flag(session, player_id, mobility_rom_report)
+
     # Shoulder Health (GIRD only for now, auto-computed -- see
     # compute_gird_percentiles' docstring). Reference only, not in
     # Total -- see module docstring.
@@ -1396,6 +1489,7 @@ def compute_bucket_system(session, player_id):
         "balance_pct": balance_pct,
         "development_profile": development_profile,
         "mobility_rom_report": mobility_rom_report,
+        "movement_flag": movement_flag,
         "shoulder_health_score": shoulder_health_score,
         "shoulder_health_metrics": shoulder_health_metrics,
     }
