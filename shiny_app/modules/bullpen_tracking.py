@@ -89,8 +89,9 @@ from r2_client import upload_video_to_r2
 from models import (
     Player, StaffPlayerAssignment, BullpenType, BullpenSession, BullpenPitch,
     PitchType, Assessment, AssessmentCategory, AssessmentResult, PlayerAssignment,
-    BullpenScript, RapsodoPitch,
+    BullpenScript, RapsodoPitch, RapsodoImport,
 )
+from services.rapsodo_import import delete_rapsodo_import, RapsodoImportError
 
 import ui_helpers
 import chart_helpers
@@ -641,8 +642,36 @@ def bullpen_tracking_server(input, output, session, app_state):
             active_bullpen = db.query(BullpenSession).filter(BullpenSession.bullpen_id == bullpen_id).first()
             if active_bullpen is None:
                 return
+            # Capture any Rapsodo import audit records tied to this session
+            # BEFORE deleting it. BullpenSession's cascade only covers the
+            # RapsodoPitch rows themselves (rapsodo_pitches relationship,
+            # cascade="all, delete-orphan") -- the RapsodoImport audit
+            # record each upload created has no such cascade, and its
+            # bullpen_id column is nullable, so deleting the session just
+            # leaves that record behind with bullpen_id nulled out rather
+            # than blocking the delete. Left alone, that orphaned record's
+            # file_hash keeps tripping the "this file was already
+            # imported" duplicate guard forever, even after the session
+            # and its pitches are long gone -- found via a real case (Aug
+            # 2026): deleting a bullpen to fix a wrong-pitcher Rapsodo
+            # upload permanently blocked that file from ever being
+            # re-uploaded, anywhere, since the duplicate check is keyed on
+            # (player_id, file_hash), not on a still-existing session.
+            stale_import_ids = [
+                i.import_id for i in
+                db.query(RapsodoImport).filter(RapsodoImport.bullpen_id == bullpen_id).all()
+            ]
             db.delete(active_bullpen)
             db.commit()
+            # Only after the session (and its cascaded RapsodoPitch rows)
+            # are actually gone -- delete_rapsodo_import would otherwise
+            # hit RapsodoPitch.import_id's NOT NULL FK trying to delete an
+            # import that still has live pitches attached.
+            for import_id in stale_import_ids:
+                try:
+                    delete_rapsodo_import(db, import_id)
+                except RapsodoImportError:
+                    pass  # already cleaned up, or a real problem -- either way, the session delete above already succeeded, so don't block on this
             _active_bullpen_id.set(None)
             ui.notification_show(f"Deleted bullpen session #{bullpen_id}.", type="message", duration=8)
             _bump_refresh()
