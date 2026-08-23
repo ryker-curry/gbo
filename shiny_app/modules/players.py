@@ -360,7 +360,13 @@ def players_server(input, output, session, app_state):
                 ]
 
             team_names = [t.team_name for t in ref["teams"]]
-            position_names = ["--"] + [p.position_name for p in ref["positions"]]
+            # Primary/Secondary Position now only offer the grouped set
+            # (RHP/LHP/C/INF/OF/DH/UTL) -- picking a specific infield/
+            # outfield spot for a player's profile is no longer a thing,
+            # per Ryker's ask. Game Tracking's lineup-slot position picker
+            # is unaffected -- it explicitly excludes INF/OF and still
+            # offers the full granular list (see game_tracking.py).
+            position_names = ["--"] + _POSITION_FILTER_CHOICES
             class_names = ["--"] + [c.class_name for c in ref["classes"]]
             status_names = ["--"] + [s.status_name for s in ref["statuses"]]
 

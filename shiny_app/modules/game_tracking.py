@@ -1306,7 +1306,14 @@ def game_tracking_server(input, output, session, app_state):
                 num_spots = int(input[f"{prefix}_num_spots"]())
                 include_pitchers = input[f"{prefix}_include_pitchers"]()
                 players = db.query(Player).filter(Player.active.is_(True)).order_by(Player.last_name, Player.first_name).all()
-                positions = db.query(Position).order_by(Position.display_order).all()
+                # Lineup slots need the real, specific fielding position (so
+                # e.g. a 2B and a SS can both be in the lineup at once without
+                # tripping the "no duplicate position" exclusion below) --
+                # exclude the grouped INF/OF entries added for the Players
+                # page's Primary/Secondary Position picker, which are for a
+                # player's profile only and were never meant to be a
+                # selectable defensive assignment for an actual game.
+                positions = db.query(Position).filter(Position.position_name.notin_(["INF", "OF"])).order_by(Position.display_order).all()
                 batter_candidates = players if include_pitchers else [p for p in players if not p.is_pitcher]
                 pitcher_candidates = [p for p in players if p.is_pitcher]
 
@@ -1464,7 +1471,14 @@ def game_tracking_server(input, output, session, app_state):
                 players = db.query(Player).filter(Player.active.is_(True)).order_by(Player.last_name, Player.first_name).all()
                 candidates = players if include_pitchers else [p for p in players if not p.is_pitcher]
                 names_by_id = {p.player_id: f"{p.first_name} {p.last_name}" for p in candidates}
-                positions = db.query(Position).order_by(Position.display_order).all()
+                # Lineup slots need the real, specific fielding position (so
+                # e.g. a 2B and a SS can both be in the lineup at once without
+                # tripping the "no duplicate position" exclusion below) --
+                # exclude the grouped INF/OF entries added for the Players
+                # page's Primary/Secondary Position picker, which are for a
+                # player's profile only and were never meant to be a
+                # selectable defensive assignment for an actual game.
+                positions = db.query(Position).filter(Position.position_name.notin_(["INF", "OF"])).order_by(Position.display_order).all()
                 position_names_by_id = {pos.position_id: pos.position_name for pos in positions}
             finally:
                 db.close()
@@ -2161,7 +2175,14 @@ def game_tracking_server(input, output, session, app_state):
                 eligible_choices = {"": "-- Select --"}
                 eligible_choices.update({str(p.player_id): f"{p.first_name} {p.last_name}" for p in eligible if p.player_id not in occupied_ids})
 
-                positions = db.query(Position).order_by(Position.display_order).all()
+                # Lineup slots need the real, specific fielding position (so
+                # e.g. a 2B and a SS can both be in the lineup at once without
+                # tripping the "no duplicate position" exclusion below) --
+                # exclude the grouped INF/OF entries added for the Players
+                # page's Primary/Secondary Position picker, which are for a
+                # player's profile only and were never meant to be a
+                # selectable defensive assignment for an actual game.
+                positions = db.query(Position).filter(Position.position_name.notin_(["INF", "OF"])).order_by(Position.display_order).all()
                 sub_position_choices = {"": "No change"}
                 sub_position_choices.update({str(pos.position_id): pos.position_name for pos in positions})
                 add_position_choices = {"": "-- Position --"}
