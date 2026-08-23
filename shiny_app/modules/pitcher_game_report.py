@@ -276,6 +276,32 @@ def pitcher_game_report_server(input, output, session, app_state):
             return None, None
         return command_metrics.game_pitches_command_view(pitches, pitcher.throws), pitcher.throws
 
+    def _team_command_plus_baseline(db):
+        """Every located pitch, across every game (intrasquad and real
+        opponents alike -- fall scrimmages and the spring season both),
+        from our own pitchers -- Ryker's 2026-08-23 call on what counts
+        as "the team" for Command+: games only, not bullpen sessions,
+        and not scoped to just intrasquad. A real-opponent game's DOES
+        count for our own pitcher's outings in it -- only the opposing
+        pitcher's pitches are excluded, and that's already handled
+        automatically by the DB filter below: intended_plate_x is only
+        ever set for our own pitcher in the first place (see
+        game_tracking.py's show_intended), never for an opponent's.
+        Not scoped to a season/date range yet -- all-time across every
+        game currently in the system; worth revisiting once "all-time"
+        and "this season" start to meaningfully diverge.
+
+        throws=None is safe here even though these pitches span many
+        different pitchers' hands -- danger_adjusted_miss doesn't depend
+        on throws at all (only the miss_direction/within_*_target labels
+        do, neither of which this baseline needs).
+
+        Returns (mean, stdev, n) from
+        command_metrics.team_command_plus_baseline."""
+        all_pitches = db.query(GamePitch).filter(GamePitch.intended_plate_x.isnot(None)).all()
+        view_pitches = command_metrics.game_pitches_command_view(all_pitches, None)
+        return command_metrics.team_command_plus_baseline(view_pitches)
+
     def _cmd_fmt(value, suffix=""):
         return f"{value}{suffix}" if value is not None else "—"
 
@@ -328,8 +354,14 @@ def pitcher_game_report_server(input, output, session, app_state):
             if scorecard["located_pitches"] == 0:
                 return ui.p("No pitches have an actual location recorded yet -- needs Video Review.", class_="text-muted small")
 
+            baseline_mean, baseline_stdev, baseline_n = _team_command_plus_baseline(db)
+            command_plus_value = None
+            if baseline_n >= command_metrics.MIN_BASELINE_PITCHES:
+                command_plus_value = command_metrics.command_plus(scorecard["avg_danger_adjusted_miss"], baseline_mean, baseline_stdev)
+
             children = [ui_helpers.render_kpi_cards([
                 {"label": "Located / Total", "value": f'{scorecard["located_pitches"]}/{scorecard["total_pitches"]}'},
+                {"label": "Command+", "value": _cmd_fmt(command_plus_value)},
                 {"label": "Avg Miss", "value": _cmd_fmt(scorecard["avg_miss_distance"], " in")},
                 {"label": "Danger-Adj. Miss", "value": _cmd_fmt(scorecard["avg_danger_adjusted_miss"], " in")},
                 {"label": "Median Miss", "value": _cmd_fmt(scorecard["median_miss_distance"], " in")},
@@ -338,6 +370,21 @@ def pitcher_game_report_server(input, output, session, app_state):
                 {"label": "Competitive %", "value": _cmd_fmt(scorecard["competitive_pct"], "%")},
                 {"label": "Major Miss %", "value": _cmd_fmt(scorecard["major_miss_pct"], "%")},
             ])]
+            if command_plus_value is not None:
+                children.append(ui.p(
+                    "Command+: 100 = your own team's average across every located pitch in every game so far -- "
+                    "not an MLB comparison, GBO doesn't have access to league-wide pitch data. Above 100 is better "
+                    "than your team's own average, below is worse.",
+                    class_="text-muted small",
+                ))
+            else:
+                children.append(ui.p(
+                    f"Command+ needs at least {command_metrics.MIN_BASELINE_PITCHES} located pitches across all your "
+                    f"team's games (any pitcher, any game) to form a stable baseline -- {baseline_n} so far. 100 will "
+                    "mean your own team's average, not an MLB comparison -- GBO doesn't have access to league-wide "
+                    "pitch data.",
+                    class_="text-muted small",
+                ))
 
             bias = command_metrics.miss_bias(view_pitches, throws)
             children.append(ui.p(f"Average miss bias: {_cmd_bias_label(bias)}", class_="text-muted small mt-2"))
