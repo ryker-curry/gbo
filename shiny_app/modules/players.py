@@ -73,6 +73,33 @@ import ui_helpers
 
 PHOTO_BUCKET = "player-photos"
 
+# Display-only position grouping for the roster table, CSV export, and the
+# Position filter -- Ryker wants position players shown as INF/OF rather
+# than each specific spot (1B/2B/3B/SS -> INF, LF/CF/RF -> OF), while
+# pitchers (RHP/LHP) and C stay as-is. This is purely a display transform:
+# the underlying Position row (and position_id FK) a player is actually
+# assigned stays exactly as specific as it's always been -- nothing else
+# in the app (lineup slots, game tracking's position-exclusion logic,
+# etc.) reads through this grouping, so nothing else changes behavior.
+# DH and UTL aren't part of the ask and pass through unchanged.
+_POSITION_DISPLAY_GROUPS = {
+    "1B": "INF", "2B": "INF", "3B": "INF", "SS": "INF",
+    "LF": "OF", "CF": "OF", "RF": "OF",
+}
+
+# Fixed display order for the grouped Position filter dropdown -- built
+# once here rather than derived from the (still-granular) positions
+# table, since several specific positions now collapse onto one entry.
+_POSITION_FILTER_CHOICES = ["RHP", "LHP", "C", "INF", "OF", "DH", "UTL"]
+
+
+def _display_position(position_name):
+    """Specific position name -> grouped display label. None/"" -> None
+    so callers can fall back to their own placeholder (e.g. "—")."""
+    if not position_name:
+        return None
+    return _POSITION_DISPLAY_GROUPS.get(position_name, position_name)
+
 
 def _upload_player_photo(file_info: dict, player_identifier: str):
     """Uploads to the player-photos Supabase Storage bucket, returns the
@@ -179,7 +206,7 @@ def players_server(input, output, session, app_state):
         if needle:
             filtered = [p for p in filtered if needle in f"{p.first_name} {p.last_name}".lower()]
         if position_filter and position_filter != "All":
-            filtered = [p for p in filtered if p.player_position and p.player_position.position_name == position_filter]
+            filtered = [p for p in filtered if p.player_position and _display_position(p.player_position.position_name) == position_filter]
         if class_filter and class_filter != "All":
             filtered = [p for p in filtered if p.player_class and p.player_class.class_name == class_filter]
         if status_filter and status_filter != "All":
@@ -203,7 +230,7 @@ def players_server(input, output, session, app_state):
                 ui.tags.td(photo_cell),
                 ui.tags.td(f"{p.first_name} {p.last_name}"),
                 ui.tags.td(str(p.jersey_number) if p.jersey_number else "—"),
-                ui.tags.td(p.player_position.position_name if p.player_position else "—"),
+                ui.tags.td(_display_position(p.player_position.position_name if p.player_position else None) or "—"),
                 ui.tags.td(p.player_class.class_name if p.player_class else "—"),
                 ui.tags.td(p.status.status_name if p.status else "—"),
                 ui.tags.td("Yes" if p.is_pitcher else "No"),
@@ -234,7 +261,7 @@ def players_server(input, output, session, app_state):
 
             controls = ui.layout_columns(
                 ui.input_text("search_text", "Search by name", placeholder="Type a name..."),
-                ui.input_select("position_filter", "Position", choices=["All"] + [p.position_name for p in ref["positions"]]),
+                ui.input_select("position_filter", "Position", choices=["All"] + _POSITION_FILTER_CHOICES),
                 ui.input_select("class_filter", "Class", choices=["All"] + [c.class_name for c in ref["classes"]]),
                 ui.input_select("status_filter", "Status", choices=["All"] + [s.status_name for s in ref["statuses"]]),
                 col_widths=[4, 3, 3, 2],
@@ -270,8 +297,8 @@ def players_server(input, output, session, app_state):
             for p in filtered:
                 writer.writerow([
                     p.first_name, p.last_name, p.jersey_number or "",
-                    p.player_position.position_name if p.player_position else "",
-                    p.player_secondary_position.position_name if p.player_secondary_position else "",
+                    _display_position(p.player_position.position_name if p.player_position else None) or "",
+                    _display_position(p.player_secondary_position.position_name if p.player_secondary_position else None) or "",
                     p.player_class.class_name if p.player_class else "",
                     p.status.status_name if p.status else "",
                     "Yes" if p.is_pitcher else "No",
