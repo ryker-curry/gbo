@@ -17,3 +17,7 @@ env/
 .DS_Store
 .vscode/
 .idea/
+
+# Local runtime artifacts
+shiny_debug.log
+_to_delete/

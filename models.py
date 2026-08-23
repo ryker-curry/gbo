@@ -722,6 +722,7 @@ class BullpenSession(Base):
     rapsodo_imports = relationship("RapsodoImport", back_populates="bullpen")
     rapsodo_pitches = relationship("RapsodoPitch", back_populates="bullpen", cascade="all, delete-orphan", order_by="RapsodoPitch.pitch_number")
     idp_goals = relationship("IDPGoal", back_populates="source_bullpen")
+    command_pitches = relationship("CommandPitch", back_populates="bullpen", cascade="all, delete-orphan", order_by="CommandPitch.pitch_number")
 
 
 class BullpenPitch(Base):
@@ -1445,3 +1446,117 @@ class GameVideoClip(Base):
 
     game = relationship("Game", back_populates="video_clips")
     matched_game_pitch = relationship("GamePitch")
+
+
+# ---------------------------------------------------------------------------
+# INTENDED LOCATION & COMMAND TRACKER
+#
+# GBO's own command-tracking system (inspired by, but not a copy of, any
+# third-party intended-zone tracker) -- captures where a pitcher/catcher/
+# coach INTENDED a pitch to go alongside where it ACTUALLY crossed the
+# plate, as continuous coordinates, so command (intent vs. execution) can
+# be measured directly instead of inferred from strike% or a coarse 1-9
+# zone. See the architecture doc agreed with Ryker (Aug 2026) for the
+# full spec and phased rollout; this is the Phase 1 (MVP) schema only --
+# Phase 2 adds no new columns (trend/heatmap/ellipse views are all
+# computed from what's already here), Phase 3 (automated Rapsodo
+# matching, game-tracking integration) is expected to need further
+# additions and is deliberately not designed yet.
+#
+# Deliberately reuses BullpenSession as the session container (Command
+# Tracker sessions are bullpens -- BullpenType already has a "Command"
+# value) rather than introducing a second, competing Session table.
+# CommandPitch is a NEW table rather than an extension of BullpenPitch:
+# BullpenPitch.target_zone is the older, coarse 1-9-zone manual-tracking
+# design already noted elsewhere in this file as being phased out in
+# favor of continuous coordinates -- bolting continuous x/z onto it would
+# extend a table on its way out rather than replace it cleanly. The two
+# tables coexist for now; a bullpen session can have BullpenPitch rows,
+# RapsodoPitch rows, and/or CommandPitch rows depending on which
+# tracking workflows were used on it.
+# ---------------------------------------------------------------------------
+
+class CommandPitch(Base):
+    """One tracked pitch in the Command Tracker -- intended location vs.
+    actual location, plus GBO-derived command metrics computed at save
+    time from those two points.
+
+    Coordinates (intended_x/z, actual_x/z) are stored in FEET, matching
+    the plate_x/plate_z convention already used everywhere else in GBO
+    (strike_zone.py, GamePitch.intended_plate_x/z and actual_plate_x/z):
+    x = 0 at the center of the plate, z = 0 at the ground. This is
+    deliberately the SAME convention as GamePitch's coordinates (not a
+    second, competing one) so a future Phase 3 game-tracking integration
+    doesn't need any unit translation, and so a future automated Rapsodo
+    actual-location match (Phase 3, see rapsodo_conventions.py's existing
+    inches->feet conversion) can populate actual_x/z directly.
+
+    intended_x/z are required -- the pitcher/catcher always has *some*
+    target in mind, even a chase pitch well outside the zone, so there's
+    no meaningful "no intended location" state for a tracked pitch.
+    actual_x/z are nullable: Phase 1 enters them manually right after
+    intended (see the Command Tracker module's fast-entry workflow), but
+    the column allows a pitch to be logged with intent only and its
+    actual location filled in later -- the same shape a future automated
+    Rapsodo match (Phase 3) will need, without a schema change then.
+
+    horizontal_miss/vertical_miss/miss_distance are stored already
+    converted to INCHES (not feet) -- every consumer of these three
+    columns (the session scorecard, command-by-pitch-type table, miss-
+    bias/miss-direction-distribution reports) only ever wants the inches
+    value coaches actually read ("Miss: 4.2 inches"), so the conversion
+    happens once at save time rather than at every read site. See
+    command_config.py for the target-radius thresholds these and the
+    three within_*_target flags are classified against, and
+    analytics/command_metrics.py for the actual calculation (miss
+    distance, direction -- handedness-aware per Player.throws --  and
+    classification), which is intentionally kept separate from this
+    model so the math has exactly one implementation.
+
+    source distinguishes how actual_x/z was populated: "manual" (Phase 1,
+    a coach/tracker clicked it in) vs. the Phase 3 reserved values
+    "rapsodo" / "trackman" / "game_tracking" for future automated
+    matching -- external_pitch_id is the corresponding foreign system's
+    pitch identifier (e.g. a future match to rapsodo_pitches via its
+    rapsodo_unique_id), left NULL for manual entries."""
+    __tablename__ = "command_pitches"
+
+    command_pitch_id = Column(Integer, primary_key=True)
+    bullpen_id = Column(Integer, ForeignKey("bullpen_sessions.bullpen_id"), nullable=False)
+    pitch_number = Column(Integer, nullable=False)  # sequential within the session, same convention as BullpenPitch.pitch_number
+    pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=True)
+    batter_side = Column(String(1), nullable=True)  # 'R' or 'L' -- who the pitch was aimed against, if simulated/specified; optional in Phase 1
+    balls = Column(Integer, nullable=True)  # count context at the time of the pitch, optional in Phase 1
+    strikes = Column(Integer, nullable=True)
+
+    intended_x = Column(Numeric(5, 3), nullable=False)  # feet, plate-center-at-0 -- see class docstring for convention
+    intended_z = Column(Numeric(5, 3), nullable=False)  # feet, ground-at-0
+    actual_x = Column(Numeric(5, 3), nullable=True)
+    actual_z = Column(Numeric(5, 3), nullable=True)
+
+    # Derived at save time by analytics/command_metrics.py -- never
+    # entered directly, so these can't drift from intended/actual above.
+    # Inches, not feet -- see class docstring.
+    horizontal_miss = Column(Numeric(6, 2), nullable=True)  # actual_x - intended_x, converted to inches (sign preserved -- see command_metrics for the handedness-aware arm-side/glove-side interpretation)
+    vertical_miss = Column(Numeric(6, 2), nullable=True)  # actual_z - intended_z, converted to inches (positive = high)
+    miss_distance = Column(Numeric(6, 2), nullable=True)  # Euclidean distance, inches
+    miss_direction = Column(String(30), nullable=True)  # e.g. "High Arm Side" -- handedness-aware, see command_metrics.classify_miss_direction
+
+    # Target-radius classification against command_config.py's configured
+    # thresholds -- nested (Precision inside Command inside Competitive),
+    # all three NULL until actual_x/z (and therefore miss_distance) exist.
+    within_precision_target = Column(Boolean, nullable=True)
+    within_command_target = Column(Boolean, nullable=True)
+    within_competitive_target = Column(Boolean, nullable=True)
+
+    pitch_result = Column(String(30), nullable=True)  # e.g. "Ball" / "Strike" / "In Play" -- free-standing outcome, deliberately NOT used as a command metric (see architecture doc's Section 38 principle: command is intent-vs-actual location, not strike/ball)
+    velocity = Column(Numeric(6, 2), nullable=True)  # mph, optional for manual tracking
+
+    source = Column(String(20), default="manual", nullable=False)  # "manual" (Phase 1) / "rapsodo" / "trackman" / "game_tracking" (Phase 3, reserved)
+    external_pitch_id = Column(String(100), nullable=True)  # foreign system's pitch identifier once Phase 3 automated matching exists; NULL for manual entries
+
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    bullpen = relationship("BullpenSession", back_populates="command_pitches")
+    pitch_type = relationship("PitchType")

@@ -1,123 +1,333 @@
 """
-GBO — Bullpen Dashboard page chrome, styled after Paradigm Player
-Development's report layout (paradigmpds.com): a near-black background,
-bordered card panels, and small-caps letter-spaced section labels
-prefixed with a number and a thin rule (their "— 03 / WHAT COACHES SAY"
-pattern). Colors are Pittsburg State's own crimson/gold, not Paradigm's
-green -- this borrows their layout language, not their brand.
+GBO -- Bullpen Dashboard module (coach/staff-facing standalone page).
 
-Deliberately scoped to pages/bullpen_dashboard.py only, not folded into
-ui_components.py's shared page_header/render_kpi_cards -- those run on
-every page in GBO, and restyling them would change the whole app's look,
-not just this one dashboard. If this look is wanted elsewhere later,
-promote it into ui_components.py then; don't import this module from
-any other page in the meantime.
+Direct port of pages/bullpen_dashboard.py -- an Overall Pitch Tracking
+table (every one of a pitcher's Rapsodo sessions combined) sitting above
+a single session's full drill-down (KPI cards, filters, pitch-type
+summary, and the four core charts). All rendering is delegated to
+bullpen_dashboard_display.register_bullpen_dashboard(), the same shared
+helper modules/player_bullpens.py's inline "Bullpen Dashboard" section
+already uses -- called TWICE here with distinct key_prefixes
+("dash_overall" and "dash_session"), exactly as that file's own
+docstring anticipated for a page that shows both sections at once.
 
-Same technique ui_components.py already uses everywhere (page_header,
-render_kpi_cards, etc.): inject a <style> block via st.markdown. Because
-Streamlit tears down and rebuilds a page's whole element tree on
-navigation, this style block -- and its effect on .stApp -- only exists
-while this page is the active one; it doesn't leak onto other pages.
+Permissions mirror the original exactly: Players see only their own
+sessions; coaches/staff see StaffPlayerAssignment-assigned players
+unless can_view_all_players; Administrator/Head Coach/Coach/Sports
+Scientist/Data Analyst are the allowed staff roles.
 
-One rule is a deliberate best-effort exception:
-[data-testid="stVerticalBlockBorderWrapper"] / [data-testid="stExpander"]
-recolor Streamlit's own bordered-container and expander chrome, which
-Streamlit doesn't officially guarantee as a stable styling hook. If a
-future Streamlit upgrade renames that testid, the rule just silently
-stops matching -- st.container(border=True) still renders its own
-default border, nothing breaks, it just reverts to plain gray there
-until this is revisited.
+Reached two ways, same as the original's ?bullpen_id=<id> URL param:
+  - Cross-page deep link: rapsodo_import.py's "Open full Bullpen
+    Dashboard" button sets app_state.deep_link_bullpen_id and switches
+    the navset to this page. The one-shot consume-effect below reads it
+    into a LOCAL reactive.Value (_target_bullpen_id) and immediately
+    clears the shared app_state field back to None (per state.py's
+    documented consume-once contract) -- the local copy is what
+    actually drives this page from then on, so a stale app_state value
+    can't re-trigger the jump on a later visit.
+  - In-page picker: pick a pitcher (Step 1, reveals that pitcher's
+    Overall Pitch Tracking table), then pick one of their sessions and
+    click "Open dashboard" (Step 2) -- the click handler sets the same
+    local _target_bullpen_id, so both entry paths converge on identical
+    downstream state.
+
+Deliberate small addition over the original (which has no way back
+short of editing the URL): a "Choose a different session" button once
+a target is open, since Shiny's reactive.Value persists for the whole
+session the way a Streamlit query param never did -- without it, a
+coach who opened one pitcher's dashboard would be stuck on it for the
+rest of their session with no in-app way back to the picker.
 """
 
-import streamlit as st
+from shiny import module, ui, render, reactive, req
+from sqlalchemy.orm import joinedload
 
-# Matches visualizations/chart_theme.py -- kept here too (not imported)
-# since this module intentionally has no dependency on the chart-only
-# visualizations package.
-GOLD = "#D4AF37"
-CRIMSON = "#BF1E2D"
-TEXT_CREAM = "#FFFDE5"
+from database import get_session
+from models import Player, StaffPlayerAssignment, User, BullpenSession, RapsodoPitch
+
+import ui_helpers
+import bullpen_dashboard_display
+
+ALLOWED_STAFF_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst")
 
 
-def inject_dashboard_theme():
-    """Call once near the top of pages/bullpen_dashboard.py, after
-    page_header(). Sets the near-black background and cards/expanders
-    tint for this page only."""
-    st.markdown(
-        """
-        <style>
-        .stApp {
-            background:
-                radial-gradient(ellipse 1400px 700px at 50% -10%, rgba(191,30,45,0.12) 0%, rgba(10,8,8,0) 60%),
-                #0C0909;
-        }
-        [data-testid="stVerticalBlockBorderWrapper"] {
-            background: #161010;
-            border: 1px solid rgba(212,175,55,0.28) !important;
-            border-radius: 14px !important;
-        }
-        [data-testid="stExpander"] {
-            background: #161010;
-            border: 1px solid rgba(212,175,55,0.22) !important;
-            border-radius: 10px !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
+def _allowed_player_ids(db, app_state):
+    """Resolves who this session's user is allowed to see bullpen data
+    for. Returns None if the user has no access at all (Player role
+    with no linked player_id, or a staff role outside
+    ALLOWED_STAFF_ROLES); otherwise a (possibly empty) list of
+    player_ids -- same permission logic as the original page."""
+    if app_state.role_name() == "Player":
+        me = db.query(User).filter(User.user_id == app_state.user_id()).first()
+        if me is None or me.player_id is None:
+            return None
+        return [me.player_id]
+    if app_state.role_name() not in ALLOWED_STAFF_ROLES:
+        return None
+    q = db.query(Player).filter(Player.is_pitcher.is_(True))
+    if not app_state.can_view_all_players():
+        assigned_ids = [
+            a.player_id for a in
+            db.query(StaffPlayerAssignment).filter(StaffPlayerAssignment.staff_user_id == app_state.user_id()).all()
+        ]
+        q = q.filter(Player.player_id.in_(assigned_ids))
+    return [p.player_id for p in q.all()]
+
+
+def _sessions_with_rapsodo_data(db, allowed_player_ids):
+    return (
+        db.query(BullpenSession)
+        .options(joinedload(BullpenSession.bullpen_type), joinedload(BullpenSession.player))
+        .join(RapsodoPitch, RapsodoPitch.bullpen_id == BullpenSession.bullpen_id)
+        .filter(BullpenSession.player_id.in_(allowed_player_ids))
+        .distinct()
+        .order_by(BullpenSession.session_date.desc())
+        .all()
     )
 
 
-def pitch_type_legend(summary_rows, total_pitches, color_for_label):
-    """Colored-pill legend row per pitch type -- Pitch Type / Usage% /
-    Avg MPH -- replacing the movement chart's in-plot Plotly legend
-    (turned off in movement_chart() itself) with the below-chart table
-    style from Ryker's reference image. Takes summary_rows in the same
-    shape analytics.bullpen_metrics.pitch_type_summary() already
-    returns (needs "Pitch Type", "#", "Avg Velo") -- no separate
-    usage/velo computation here, just formatting what's already
-    computed elsewhere for the Pitch Summary table above it.
+@module.ui
+def bullpen_dashboard_ui():
+    return ui.div(
+        ui_helpers.page_header("Bullpen Dashboard"),
+        ui.output_ui("access_gate"),
+        ui.output_ui("pitcher_picker"),
+        ui.output_ui("session_picker"),
+        ui.output_ui("dashboard_header"),
+        ui.output_ui("dash_overall_controls_slot"),
+        ui.output_ui("dash_session_controls_slot"),
+        ui_helpers.page_footer(),
+    )
 
-    color_for_label is passed in rather than imported, so this module
-    (page chrome, not a chart builder) doesn't need to depend on
-    visualizations/bullpen_charts.py."""
-    if not summary_rows or not total_pitches:
-        return
-    cells = []
-    for row in summary_rows:
-        label = row["Pitch Type"]
-        usage_pct = round(100 * row["#"] / total_pitches, 0)
-        avg_velo = f'{row["Avg Velo"]:.1f}' if row["Avg Velo"] is not None else "—"
-        color = color_for_label(label)
-        cells.append(
-            '<div style="text-align:center; min-width:90px;">'
-            f'<div style="width:28px; height:14px; border-radius:7px; background:{color}; margin:0 auto 6px auto;"></div>'
-            f'<div style="color:{TEXT_CREAM}; font-weight:700; font-size:0.85rem;">{label}</div>'
-            f'<div style="color:{GOLD}; font-size:0.8rem; margin-top:2px;">{usage_pct:g}%</div>'
-            f'<div style="color:#B8B8B8; font-size:0.75rem;">{avg_velo} mph</div>'
-            '</div>'
+
+@module.server
+def bullpen_dashboard_server(input, output, session, app_state):
+    _target_bullpen_id = reactive.Value(None)
+
+    # --- Consume the cross-page deep link exactly once ------------------
+    @reactive.effect
+    def _consume_deep_link():
+        incoming = app_state.deep_link_bullpen_id()
+        if incoming is not None:
+            _target_bullpen_id.set(incoming)
+            app_state.deep_link_bullpen_id.set(None)
+
+    @reactive.effect
+    @reactive.event(input.open_dashboard_btn)
+    def _open_from_picker():
+        req("session_select" in input)
+        _target_bullpen_id.set(int(input.session_select()))
+
+    @reactive.effect
+    @reactive.event(input.change_session_btn)
+    def _change_session():
+        _target_bullpen_id.set(None)
+
+    @reactive.calc
+    def _resolved():
+        """Shared resolution used by every block below: allowed player
+        ids, the scoped session list, and whether the current
+        _target_bullpen_id is actually valid for this user. Returns a
+        dict; callers pick out what they need.
+
+        This used to be a plain function (`_resolve(db)`) called fresh,
+        with its own database queries, from SEVEN different places on
+        this one page (access_gate, pitcher_picker, session_picker,
+        dashboard_header, both chart-target resolvers, and the session
+        controls slot) -- every one of them re-running the identical
+        "which players can this user see, which of their bullpen
+        sessions have Rapsodo data" queries on every page load.
+        @reactive.calc makes this a single computation, memoized and
+        shared by all of those callers, that only reruns when something
+        it actually reads (role/user/view-all-players, or which
+        session/pitcher is targeted) changes -- exactly the same
+        invalidation rule Shiny already uses for a render.ui, just
+        computed once instead of seven times."""
+        db = get_session()
+        try:
+            allowed_player_ids = _allowed_player_ids(db, app_state)
+            result = {
+                "allowed_player_ids": allowed_player_ids,
+                "sessions_by_id": {},
+                "target_bullpen_id": None,
+                "invalid_target": False,
+            }
+            if not allowed_player_ids:
+                return result
+            sessions = _sessions_with_rapsodo_data(db, allowed_player_ids)
+            result["sessions_by_id"] = {b.bullpen_id: b for b in sessions}
+
+            raw_target = _target_bullpen_id()
+            if raw_target is not None:
+                if raw_target in result["sessions_by_id"]:
+                    result["target_bullpen_id"] = raw_target
+                else:
+                    result["invalid_target"] = True
+            return result
+        finally:
+            db.close()
+
+    @render.ui
+    def access_gate():
+        if not app_state.is_authenticated():
+            return None
+        if app_state.role_name() != "Player" and app_state.role_name() not in ALLOWED_STAFF_ROLES:
+            return ui.p("You don't have access to this page.", class_="text-danger")
+
+        resolved = _resolved()
+        if resolved["allowed_player_ids"] is None:
+            return ui.p("Your player profile isn't linked yet. Check with an administrator.", class_="text-warning") \
+                if app_state.role_name() == "Player" else ui.p("You don't have access to this page.", class_="text-danger")
+        if not resolved["allowed_player_ids"]:
+            return ui_helpers.empty_state("No pitchers to show yet." if app_state.can_view_all_players() else "No pitchers are currently assigned to you.")
+        if not resolved["sessions_by_id"]:
+            return ui_helpers.empty_state("No bullpen sessions with imported Rapsodo data yet. Upload one from the \"Import Rapsodo Data\" page first.")
+        return None
+
+    @render.ui
+    def pitcher_picker():
+        if not app_state.is_authenticated():
+            return None
+        if app_state.role_name() != "Player" and app_state.role_name() not in ALLOWED_STAFF_ROLES:
+            return None
+
+        resolved = _resolved()
+        if not resolved["allowed_player_ids"] or not resolved["sessions_by_id"]:
+            return None
+        if resolved["target_bullpen_id"] is not None:
+            return None  # a target is already open -- no picker needed
+
+        warning = None
+        if resolved["invalid_target"]:
+            warning = ui.p("That session either doesn't exist, has no Rapsodo data yet, or you don't have access to it.", class_="text-warning")
+
+        pitchers_by_id = {}
+        for b in resolved["sessions_by_id"].values():
+            if b.player and b.player_id not in pitchers_by_id:
+                pitchers_by_id[b.player_id] = b.player
+        sorted_ids = sorted(pitchers_by_id, key=lambda pid: (pitchers_by_id[pid].last_name, pitchers_by_id[pid].first_name))
+        choices = {str(pid): f"{pitchers_by_id[pid].first_name} {pitchers_by_id[pid].last_name}" for pid in sorted_ids}
+
+        children = [c for c in [warning] if c]
+        children.append(ui.p(ui.strong("Select a pitcher")))
+        children.append(ui.input_select("pitcher_select", None, choices=choices))
+        return ui.div(*children)
+
+    @render.ui
+    def session_picker():
+        if not app_state.is_authenticated():
+            return None
+        if app_state.role_name() != "Player" and app_state.role_name() not in ALLOWED_STAFF_ROLES:
+            return None
+
+        resolved = _resolved()
+        if resolved["target_bullpen_id"] is not None or not resolved["sessions_by_id"]:
+            return None
+        req("pitcher_select" in input)
+        target_player_id = int(input.pitcher_select())
+
+        pitcher_sessions_by_id = {
+            bid: b for bid, b in resolved["sessions_by_id"].items() if b.player_id == target_player_id
+        }
+        if not pitcher_sessions_by_id:
+            return None
+
+        def _label(bid):
+            b = pitcher_sessions_by_id[bid]
+            type_label = b.bullpen_type.type_name if b.bullpen_type else "—"
+            return f"{b.session_date.strftime('%Y-%m-%d (%a)')} — {type_label}"
+
+        choices = {str(bid): _label(bid) for bid in pitcher_sessions_by_id}
+        return ui.div(
+            ui.p(ui.strong("Select a session")),
+            ui.input_select("session_select", None, choices=choices),
+            ui.input_action_button("open_dashboard_btn", "Open dashboard", class_="btn-primary"),
         )
-    st.markdown(
-        '<div style="display:flex; justify-content:center; gap:22px; flex-wrap:wrap; margin:6px 0 14px 0;">'
-        + "".join(cells) + '</div>',
-        unsafe_allow_html=True,
+
+    @render.ui
+    def dashboard_header():
+        resolved = _resolved()
+        if resolved["target_bullpen_id"] is None:
+            return None
+        return ui.div(
+            ui.input_action_button("change_session_btn", "Choose a different session", class_="btn-outline-secondary btn-sm mb-2"),
+        )
+
+    def _get_overall_target(input):
+        if not app_state.is_authenticated():
+            return None
+        if app_state.role_name() != "Player" and app_state.role_name() not in ALLOWED_STAFF_ROLES:
+            return None
+        resolved = _resolved()
+        if not resolved["allowed_player_ids"]:
+            return None
+        if resolved["target_bullpen_id"] is not None:
+            target_player_id = resolved["sessions_by_id"][resolved["target_bullpen_id"]].player_id
+        else:
+            req("pitcher_select" in input)
+            target_player_id = int(input.pitcher_select())
+        db = get_session()
+        try:
+            target_player = db.query(Player).filter(Player.player_id == target_player_id).first()
+        finally:
+            db.close()
+        if target_player is None:
+            return None
+        player_session_ids = [
+            bid for bid, b in resolved["sessions_by_id"].items() if b.player_id == target_player_id
+        ]
+        if not player_session_ids:
+            return None
+        return {"kind": "combined", "player": target_player, "bullpen_ids": player_session_ids}
+
+    def _get_session_target(input):
+        if not app_state.is_authenticated():
+            return None
+        if app_state.role_name() != "Player" and app_state.role_name() not in ALLOWED_STAFF_ROLES:
+            return None
+        resolved = _resolved()
+        if resolved["target_bullpen_id"] is not None:
+            return {"kind": "session", "bullpen_id": resolved["target_bullpen_id"]}
+        return None
+
+    _overall_fragment = bullpen_dashboard_display.register_bullpen_dashboard(
+        input, output, session, "dash_overall", _get_overall_target,
+    )
+    _session_fragment = bullpen_dashboard_display.register_bullpen_dashboard(
+        input, output, session, "dash_session", _get_session_target,
     )
 
+    @render.ui
+    def dash_overall_controls_slot():
+        if not app_state.is_authenticated():
+            return None
+        resolved = _resolved()
+        if resolved["target_bullpen_id"] is not None:
+            # A specific session is open below (dash_session_controls_
+            # slot) -- if that's this pitcher's ONLY session with
+            # Rapsodo data, "Overall Pitch Tracking" (which combines
+            # every one of their sessions) would show byte-for-byte
+            # identical numbers and charts to the single-session
+            # drill-down beneath it, since there's only one session to
+            # combine. Found via a real case (Aug 2026): a one-session
+            # pitcher's dashboard rendered the entire page twice, which
+            # reads as a bug even though it's actually two different
+            # (currently identical) sections. Skip Overall here since it
+            # adds no information in that case -- still shown normally
+            # before a specific session is opened (Step 1's picker flow
+            # needs it), and still shown once there are 2+ sessions to
+            # actually aggregate.
+            target_player_id = resolved["sessions_by_id"][resolved["target_bullpen_id"]].player_id
+            session_count = sum(1 for b in resolved["sessions_by_id"].values() if b.player_id == target_player_id)
+            if session_count <= 1:
+                return None
+        return _overall_fragment
 
-def section_label(number, text):
-    """Renders a Paradigm-style numbered section label: a short rule,
-    then "01 · TEXT" in small-caps gold letter-spacing. Use in place of
-    st.subheader() for this page's three structural sections (Filters,
-    Pitch Summary, Charts) -- not a general-purpose replacement for
-    st.subheader() elsewhere in GBO."""
-    st.markdown(
-        f"""
-        <div style="display:flex; align-items:center; gap:12px; margin: 8px 0 14px 0;">
-            <div style="width:32px; height:2px; background:{GOLD};"></div>
-            <div style="color:{GOLD}; font-size:0.8rem; font-weight:700;
-                        text-transform:uppercase; letter-spacing:0.14em;">
-                {number:02d} &middot; {text}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    @render.ui
+    def dash_session_controls_slot():
+        if not app_state.is_authenticated():
+            return None
+        resolved = _resolved()
+        if resolved["target_bullpen_id"] is None:
+            return None
+        return _session_fragment
