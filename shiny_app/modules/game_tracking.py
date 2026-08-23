@@ -1275,9 +1275,10 @@ def game_tracking_server(input, output, session, app_state):
                     ui.input_checkbox(f"{prefix}_include_pitchers", "Include pitchers in the batting order (two-way players)"),
                     ui.input_numeric(f"{prefix}_num_spots", "Number of batting order spots", value=9, min=9, max=20, step=1),
                     ui.p(
-                        "Set the count above, then fill in each slot below. A player can be picked in more than "
-                        "one slot here -- unlike the original, this page doesn't live-filter the dropdowns as you "
-                        "pick (see the module note); duplicates are flagged when you save instead.",
+                        "Set the count above, then fill in each slot below. Once a player is picked in one slot, "
+                        "or a position is assigned in one slot, neither shows up as an option in any other slot -- "
+                        "the dropdowns below live-filter as you go, and save still double-checks for duplicates "
+                        "just in case.",
                         class_="text-muted small",
                     ),
                 )
@@ -1406,23 +1407,35 @@ def game_tracking_server(input, output, session, app_state):
 
         @reactive.effect
         def _sync_lineup_exclusions():
-            """Live cross-slot exclusion: once a player is picked in one
-            slot, every OTHER slot's dropdown stops offering him. Not a
-            @render.ui block (that would hit the "read a client input
-            from the block that defines it" hazard, since it would be
-            reading every slot_player_i to decide what to show for
-            slot_player_i itself) -- instead a plain effect that reads
-            every slot's CURRENT value (registering all of them as
-            dependencies, so this reruns whenever ANY one changes) and
-            pushes fresh, mutually-exclusive choices to every slot via
-            ui.update_select(). This restores the original Streamlit
-            page's live-filtering behavior (each pick immediately
-            removed that player from every other slot) that the initial
-            port had simplified away in favor of a save-time duplicate
-            check -- both protections are kept: this prevents the
-            duplicate from being pickable in the first place, and _save
-            below still double-checks in case a slot's stale choice list
-            briefly allowed one through mid-interaction."""
+            """Live cross-slot exclusion: once a player -- or a
+            defensive position -- is picked in one slot, every OTHER
+            slot's dropdown stops offering it. Not a @render.ui block
+            (that would hit the "read a client input from the block
+            that defines it" hazard, since it would be reading every
+            slot_player_i/slot_position_i to decide what to show for
+            slot_player_i/slot_position_i itself) -- instead a plain
+            effect that reads every slot's CURRENT value (registering
+            all of them as dependencies, so this reruns whenever ANY
+            one changes) and pushes fresh, mutually-exclusive choices
+            to every slot via ui.update_select(). This restores the
+            original Streamlit page's live-filtering behavior (each
+            pick immediately removed that player from every other slot)
+            that the initial port had simplified away in favor of a
+            save-time duplicate check -- both protections are kept:
+            this prevents the duplicate from being pickable in the
+            first place, and _save below still double-checks in case a
+            slot's stale choice list briefly allowed one through
+            mid-interaction.
+
+            Position exclusion is the same idea, added per Ryker's
+            explicit ask (2026-08-23): once one slot is set to Catcher,
+            no other slot can also be set to Catcher, matching real
+            baseball -- exactly one player occupies each position at a
+            time. Applies to every row in the Positions table (RHP,
+            LHP, C, 1B, 2B, 3B, SS, LF, CF, RF, DH, UTL), not just the
+            obvious fielding spots -- no exception was asked for and
+            none seemed clearly warranted; easy to carve one out later
+            if a position turns out to need to repeat."""
             game_id = _active_game_id()
             if game_id is None:
                 return
@@ -1430,15 +1443,20 @@ def game_tracking_server(input, output, session, app_state):
             num_spots = int(input[f"{prefix}_num_spots"]())
             include_pitchers = input[f"{prefix}_include_pitchers"]() if f"{prefix}_include_pitchers" in input else False
 
-            current_picks = {}
+            current_player_picks = {}
+            current_position_picks = {}
             for i in range(1, num_spots + 1):
-                key = f"{prefix}_slot_player_{i}"
-                if key not in input:
-                    continue
-                raw = input[key]()
-                if raw:
-                    current_picks[i] = int(raw)
-            if not current_picks:
+                player_key = f"{prefix}_slot_player_{i}"
+                if player_key in input:
+                    raw = input[player_key]()
+                    if raw:
+                        current_player_picks[i] = int(raw)
+                position_key = f"{prefix}_slot_position_{i}"
+                if position_key in input:
+                    raw = input[position_key]()
+                    if raw:
+                        current_position_picks[i] = int(raw)
+            if not current_player_picks and not current_position_picks:
                 return
 
             db = get_session()
@@ -1446,18 +1464,27 @@ def game_tracking_server(input, output, session, app_state):
                 players = db.query(Player).filter(Player.active.is_(True)).order_by(Player.last_name, Player.first_name).all()
                 candidates = players if include_pitchers else [p for p in players if not p.is_pitcher]
                 names_by_id = {p.player_id: f"{p.first_name} {p.last_name}" for p in candidates}
+                positions = db.query(Position).order_by(Position.display_order).all()
+                position_names_by_id = {pos.position_id: pos.position_name for pos in positions}
             finally:
                 db.close()
 
             for i in range(1, num_spots + 1):
-                key = f"{prefix}_slot_player_{i}"
-                if key not in input:
-                    continue
-                taken_elsewhere = {pid for slot, pid in current_picks.items() if slot != i}
-                choices = {"": "-- Select --"}
-                choices.update({str(pid): name for pid, name in names_by_id.items() if pid not in taken_elsewhere})
-                current_val = current_picks.get(i)
-                ui.update_select(key, choices=choices, selected=str(current_val) if current_val else "")
+                player_key = f"{prefix}_slot_player_{i}"
+                if player_key in input:
+                    taken_elsewhere = {pid for slot, pid in current_player_picks.items() if slot != i}
+                    choices = {"": "-- Select --"}
+                    choices.update({str(pid): name for pid, name in names_by_id.items() if pid not in taken_elsewhere})
+                    current_val = current_player_picks.get(i)
+                    ui.update_select(player_key, choices=choices, selected=str(current_val) if current_val else "")
+
+                position_key = f"{prefix}_slot_position_{i}"
+                if position_key in input:
+                    taken_elsewhere = {pid for slot, pid in current_position_picks.items() if slot != i}
+                    choices = {"": "-- Position --"}
+                    choices.update({str(pid): name for pid, name in position_names_by_id.items() if pid not in taken_elsewhere})
+                    current_val = current_position_picks.get(i)
+                    ui.update_select(position_key, choices=choices, selected=str(current_val) if current_val else "")
 
         @reactive.effect
         @reactive.event(input[f"{prefix}_save_btn"])
@@ -1473,14 +1500,20 @@ def game_tracking_server(input, output, session, app_state):
                     return
                 picks = []
                 chosen_ids = []
+                chosen_position_ids = []
                 for i in range(1, num_spots + 1):
                     player_raw = input[f"{prefix}_slot_player_{i}"]()
                     position_raw = input[f"{prefix}_slot_position_{i}"]()
                     if player_raw:
                         picks.append((i, int(player_raw), int(position_raw) if position_raw else None))
                         chosen_ids.append(int(player_raw))
+                        if position_raw:
+                            chosen_position_ids.append(int(position_raw))
                 if len(chosen_ids) != len(set(chosen_ids)):
                     ui.notification_show("The same player is picked in more than one slot -- fix the duplicate(s) before saving.", type="error", duration=10)
+                    return
+                if len(chosen_position_ids) != len(set(chosen_position_ids)):
+                    ui.notification_show("The same position is assigned to more than one slot -- fix the duplicate(s) before saving.", type="error", duration=10)
                     return
                 for i, player_id, position_id in picks:
                     db.add(GameLineupSlot(game_id=game_id, squad=squad, batting_order=i, player_id=player_id, starting_position_id=position_id))
