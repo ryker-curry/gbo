@@ -315,6 +315,67 @@ def danger_adjusted_miss(pitch):
 
 
 # ---------------------------------------------------------------------------
+# Command+ -- 2026-08-23 design conversation, part 2: a mean-100 index over
+# danger_adjusted_miss, scaled the same way Stuff+/Location+ are (100 =
+# average, roughly 10 points per standard deviation), EXCEPT the baseline
+# population is GBO's own team, not an MLB-wide dataset -- GBO has no
+# access to league-wide Trackman/Statcast pitch data to calibrate against,
+# so this is a GBO-internal scale ("better than your own team's average"),
+# not a claim to match a published Stuff+/Location+ number. Ryker's
+# 2026-08-23 call on what counts as "the team": every located pitch from
+# our own pitchers across every GAME (intrasquad and real opponents alike,
+# fall scrimmages and the spring season both), NOT bullpen sessions --
+# see the UI module that builds this population for exactly how that
+# query works (it's a DB query, so it can't live in this
+# no-database-access module -- see the module docstring at the top of
+# this file).
+# ---------------------------------------------------------------------------
+
+# A baseline built from a handful of pitches swings wildly with every new
+# pitch logged and isn't trustworthy yet -- 20 is a starting floor, not a
+# statistically rigorous minimum. Easy to raise once GBO has more of a
+# season's worth of data to see how noisy Command+ actually is in
+# practice below that.
+MIN_BASELINE_PITCHES = 20
+
+
+def command_plus(danger_adjusted_value, baseline_mean, baseline_stdev):
+    """One danger_adjusted_miss value -> a mean-100 Command+ score against
+    a baseline population's own mean/stdev (see team_command_plus_baseline
+    below for how that population is built). LOWER danger_adjusted_miss is
+    BETTER (0in = as good as executed perfectly), so the sign is flipped
+    from the usual "bigger raw number = bigger + score" pattern -- landing
+    BELOW the baseline mean (a smaller miss) scores ABOVE 100:
+
+        command_plus = 100 + 10 * (baseline_mean - value) / baseline_stdev
+
+    None if any input is None, or if baseline_stdev is 0 (can't scale
+    against a population with no spread -- e.g. a baseline of one pitch,
+    or every pitch in it landing at an identical miss)."""
+    if danger_adjusted_value is None or baseline_mean is None or not baseline_stdev:
+        return None
+    return round(100 + 10 * (baseline_mean - danger_adjusted_value) / baseline_stdev, 1)
+
+
+def team_command_plus_baseline(pitches):
+    """Mean + stdev of danger_adjusted_miss across a population of
+    already-loaded pitches -- the population command_plus() above
+    normalizes against. Pass every pitch in whatever pool counts as "the
+    team" (the calling UI module owns that query/scope -- see this
+    module's Command+ comment above for what Ryker picked). Returns
+    (mean, stdev, n) -- n is the population size actually used, so a
+    caller can compare it against MIN_BASELINE_PITCHES before trusting
+    the number. (None, None, 0) if the population has no located pitches
+    at all."""
+    located = _located(pitches)
+    values = [v for v in (danger_adjusted_miss(p) for p in located) if v is not None]
+    n = len(values)
+    if n == 0:
+        return None, None, 0
+    return _avg(values), _sd(values), n
+
+
+# ---------------------------------------------------------------------------
 # Layer 2: aggregate reports -- read already-stored CommandPitch fields
 # ---------------------------------------------------------------------------
 
