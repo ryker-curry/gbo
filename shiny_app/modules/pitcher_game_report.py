@@ -21,12 +21,25 @@ in an earlier module yet.
 """
 
 from shiny import module, ui, render, reactive, req
+from shinywidgets import output_widget, render_plotly
 from sqlalchemy.orm import joinedload
 
 from database import get_session
 from models import Player, Game, GamePitch
 from game_stats import get_pitching_pitches, compute_pitching_line, compute_pitch_type_breakdown
 from pitch_location_stats import compute_command_precision, compute_attack_zones
+# Target-radius bands (Precision/Command/Competitive/Major Miss) and the
+# concentric-ring chart, reused as-is from Command Tracker rather than a
+# second implementation -- game_pitches_command_view() adapts a game
+# pitcher's own GamePitch rows (intended_plate_x/z/actual_plate_x/z) into
+# the same duck-typed shape session_command_scorecard/command_by_pitch_type
+# and command_chart() already expect, with NO CommandPitch schema change
+# or mirrored rows (see that function's own docstring for why). Existing
+# Command Precision/Attack Zones above are untouched, computed the way
+# they always have been -- this is a new, additional section, not a
+# replacement.
+from analytics import command_metrics
+from visualizations import command_charts
 
 import ui_helpers
 
@@ -57,6 +70,7 @@ def pitcher_game_report_ui():
         ui.output_ui("game_picker"),
         ui.output_ui("pitcher_picker"),
         ui.output_ui("report_body"),
+        ui.output_ui("command_target_section"),
         ui_helpers.page_footer(),
     )
 
@@ -224,5 +238,139 @@ def pitcher_game_report_server(input, output, session, app_state):
                 sections.append(ui_helpers.render_dict_table(az_by_type))
 
             return ui.div(*sections)
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Command Target Zones -- Command Tracker's own scorecard/table/chart
+    # (analytics/command_metrics.py's session_command_scorecard/
+    # command_by_pitch_type/miss_bias + visualizations/command_charts.
+    # command_chart()), fed this game's own GamePitch rows adapted through
+    # command_metrics.game_pitches_command_view() instead of a second,
+    # parallel bullpen-only implementation. A new, additional section
+    # placed AFTER Attack Zones -- Command Precision/Attack Zones above
+    # (pitch_location_stats.py) are completely untouched. Only pitches
+    # with an intended location count here (game_pitches_command_view()
+    # excludes any without one -- i.e. a real external opponent's
+    # pitches, whose intent GBO never captures; see game_tracking.py's
+    # show_intended), so for a real-opponent game this section stays
+    # empty even though Command Precision above (which only needs
+    # intended+actual together anyway) would too. Same three-block
+    # render.ui-wrapper / render_plotly / render.ui-table split as
+    # hitter_game_report.py's Contact Quality by Zone / Pitch Type
+    # section, for the same reason: a render_plotly output needs its own
+    # registered function, not one nested inside report_body's render.ui.
+    # -------------------------------------------------------------------
+
+    def _selected_pitcher_view_pitches(db):
+        if "game_select" not in input or "pitcher_select" not in input:
+            return None, None
+        game_id_raw, pitcher_id_raw = input.game_select(), input.pitcher_select()
+        if not game_id_raw or not pitcher_id_raw:
+            return None, None
+        pitcher = db.query(Player).filter(Player.player_id == int(pitcher_id_raw)).first()
+        if pitcher is None:
+            return None, None
+        pitches = get_pitching_pitches(db, int(pitcher_id_raw), game_id=int(game_id_raw))
+        if not pitches:
+            return None, None
+        return command_metrics.game_pitches_command_view(pitches, pitcher.throws), pitcher.throws
+
+    def _cmd_fmt(value, suffix=""):
+        return f"{value}{suffix}" if value is not None else "—"
+
+    def _cmd_bias_label(bias):
+        parts = []
+        if bias["horizontal_bias_in"] is not None:
+            parts.append(f'{bias["horizontal_bias_in"]:.1f}" {bias["horizontal_bias_label"]}')
+        if bias["vertical_bias_in"] is not None:
+            parts.append(f'{bias["vertical_bias_in"]:.1f}" {bias["vertical_bias_label"]}')
+        return " / ".join(parts) if parts else "—"
+
+    @render.ui
+    def command_target_section():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        req("pitcher_select" in input)
+        db = get_session()
+        try:
+            view_pitches, _throws = _selected_pitcher_view_pitches(db)
+            if not view_pitches:
+                return None
+            return ui.div(
+                ui.hr(),
+                ui.p(ui.strong("Command Target Zones")),
+                ui.p(
+                    "Same Precision/Command/Competitive target-radius bands and concentric-ring chart Command "
+                    "Tracker uses -- built from this game's own intended-vs-actual pitch locations, no separate "
+                    "math. Only pitches with a logged intended location count (a real opponent's pitcher never has "
+                    "one on file).",
+                    class_="text-muted small",
+                ),
+                ui.output_ui("command_target_table"),
+                output_widget("command_target_chart"),
+            )
+        finally:
+            db.close()
+
+    @render.ui
+    def command_target_table():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        db = get_session()
+        try:
+            view_pitches, throws = _selected_pitcher_view_pitches(db)
+            if not view_pitches:
+                return None
+
+            scorecard = command_metrics.session_command_scorecard(view_pitches)
+            if scorecard["located_pitches"] == 0:
+                return ui.p("No pitches have an actual location recorded yet -- needs Video Review.", class_="text-muted small")
+
+            children = [ui_helpers.render_kpi_cards([
+                {"label": "Located / Total", "value": f'{scorecard["located_pitches"]}/{scorecard["total_pitches"]}'},
+                {"label": "Avg Miss", "value": _cmd_fmt(scorecard["avg_miss_distance"], " in")},
+                {"label": "Median Miss", "value": _cmd_fmt(scorecard["median_miss_distance"], " in")},
+                {"label": "Precision %", "value": _cmd_fmt(scorecard["precision_pct"], "%")},
+                {"label": "Command Target %", "value": _cmd_fmt(scorecard["command_target_pct"], "%")},
+                {"label": "Competitive %", "value": _cmd_fmt(scorecard["competitive_pct"], "%")},
+                {"label": "Major Miss %", "value": _cmd_fmt(scorecard["major_miss_pct"], "%")},
+            ])]
+
+            bias = command_metrics.miss_bias(view_pitches, throws)
+            children.append(ui.p(f"Average miss bias: {_cmd_bias_label(bias)}", class_="text-muted small mt-2"))
+
+            by_type = command_metrics.command_by_pitch_type(view_pitches, throws)
+            if len(by_type) > 1:
+                rows = [{
+                    "Pitch Type": row["Pitch Type"],
+                    "Pitches": row["Pitches"],
+                    "Avg Miss (in)": row["Avg Miss"] if row["Avg Miss"] is not None else "—",
+                    "Precision %": row["Precision %"] if row["Precision %"] is not None else "—",
+                    "Command %": row["Command Target %"] if row["Command Target %"] is not None else "—",
+                    "Major Miss %": row["Major Miss %"] if row["Major Miss %"] is not None else "—",
+                    "Miss Bias": _cmd_bias_label(row["Miss Bias"]),
+                } for row in by_type]
+                children.append(ui.h6("By pitch type", class_="mt-3"))
+                children.append(ui_helpers.render_dict_table(rows))
+
+            return ui.div(*children)
+        finally:
+            db.close()
+
+    @render_plotly
+    def command_target_chart():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        db = get_session()
+        try:
+            view_pitches, _throws = _selected_pitcher_view_pitches(db)
+            if not view_pitches:
+                return None
+            located = [p for p in view_pitches if p.horizontal_miss is not None]
+            if not located:
+                return None
+            return command_charts.command_chart(view_pitches)
         finally:
             db.close()
