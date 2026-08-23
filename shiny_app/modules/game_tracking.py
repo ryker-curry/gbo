@@ -2247,7 +2247,17 @@ def game_tracking_server(input, output, session, app_state):
                 ui.input_select("pitch_type_select", "Pitch type", choices=pitch_type_choices),
             ]
 
-            if not state["is_our_batting"]:
+            # Intended location is only meaningful when the pitcher throwing
+            # THIS pitch is someone we coach and can know the intent of --
+            # that's true when we're pitching (always), and ALSO true when
+            # we're batting in an intrasquad game (the "opposing" pitcher is
+            # still one of our own roster players, is_intrasquad's whole
+            # point -- see Game/GamePitch docstrings). A real external
+            # opponent's pitcher's intent is never known, so it's never
+            # captured -- only their pitch type (above) and, via Video
+            # Review, their actual location (see that section below) are.
+            show_intended = (not state["is_our_batting"]) or game.is_intrasquad
+            if show_intended:
                 children.append(ui.p(
                     "Intended location -- click the zone below to place where the pitch was supposed to go, "
                     "or type coordinates directly.",
@@ -2282,7 +2292,12 @@ def game_tracking_server(input, output, session, app_state):
         db = get_session()
         try:
             ctx = _load_tracking_context(db, game_id)
-            if ctx is None or ctx[0].status != "In Progress" or ctx[5]["is_our_batting"]:
+            if ctx is None or ctx[0].status != "In Progress":
+                return None
+            # See pitch_type_and_outcome_picker's show_intended for why this
+            # isn't simply "not is_our_batting" -- intrasquad batting also
+            # shows intended location, since the opposing pitcher is ours too.
+            if not ((not ctx[5]["is_our_batting"]) or ctx[0].is_intrasquad):
                 return None
         finally:
             db.close()
@@ -2300,7 +2315,9 @@ def game_tracking_server(input, output, session, app_state):
         db = get_session()
         try:
             ctx = _load_tracking_context(db, game_id)
-            if ctx is None or ctx[0].status != "In Progress" or ctx[5]["is_our_batting"]:
+            if ctx is None or ctx[0].status != "In Progress":
+                return None
+            if not ((not ctx[5]["is_our_batting"]) or ctx[0].is_intrasquad):
                 return None
         finally:
             db.close()
@@ -2583,12 +2600,14 @@ def game_tracking_server(input, output, session, app_state):
             pitch_type_id = next((pt.pitch_type_id for pt in pitch_types if pt.type_name == pitch_type_name), None)
 
             intended_x = intended_z = None
-            if not state["is_our_batting"] and "intended_x_input" in input:
+            if ((not state["is_our_batting"]) or game.is_intrasquad) and "intended_x_input" in input:
                 intended_x, intended_z = input.intended_x_input(), input.intended_z_input()
 
             # Actual location isn't captured live here either -- same as
             # the original, filled in afterward from game video via
-            # Video Review.
+            # Video Review. As of this change, EVERY pitch eventually gets
+            # an actual location this way, not just ones we threw -- see
+            # the Video Review section below.
             actual_x = actual_z = None
 
             req("pitch_outcome_select" in input)
@@ -2858,15 +2877,18 @@ def game_tracking_server(input, output, session, app_state):
             return
         db = get_session()
         try:
-            pitches_we_threw = (
-                db.query(GamePitch).filter(GamePitch.game_id == game_id, GamePitch.is_our_team_batting.is_(False))
+            # Every pitch in the game needs an actual location eventually
+            # (see the module-level note on Video Review's scope) -- no
+            # is_our_team_batting filter here any more.
+            pitches_to_review = (
+                db.query(GamePitch).filter(GamePitch.game_id == game_id)
                 .order_by(GamePitch.pitch_sequence).all()
             )
-            if not pitches_we_threw:
+            if not pitches_to_review:
                 _vr_current_pitch_id.set(None)
                 return
-            missing = [p.game_pitch_id for p in pitches_we_threw if p.actual_plate_x is None]
-            _vr_current_pitch_id.set(missing[0] if missing else pitches_we_threw[0].game_pitch_id)
+            missing = [p.game_pitch_id for p in pitches_to_review if p.actual_plate_x is None]
+            _vr_current_pitch_id.set(missing[0] if missing else pitches_to_review[0].game_pitch_id)
         finally:
             db.close()
 
@@ -2880,33 +2902,34 @@ def game_tracking_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            pitches_we_threw = (
+            pitches_to_review = (
                 db.query(GamePitch).options(joinedload(GamePitch.pitch_type))
-                .filter(GamePitch.game_id == game_id, GamePitch.is_our_team_batting.is_(False))
+                .filter(GamePitch.game_id == game_id)
                 .order_by(GamePitch.pitch_sequence).all()
             )
-            if not pitches_we_threw:
+            if not pitches_to_review:
                 return ui.div(
                     ui.h5("Video Review — Actual Pitch Locations", class_="gbo-section-title"),
-                    ui_helpers.empty_state("No pitches thrown yet in this game to review."),
+                    ui_helpers.empty_state("No pitches logged yet in this game to review."),
                 )
-            missing_count = sum(1 for p in pitches_we_threw if p.actual_plate_x is None)
+            missing_count = sum(1 for p in pitches_to_review if p.actual_plate_x is None)
             choices = {}
-            for p in pitches_we_threw:
+            for p in pitches_to_review:
                 mark = "unmarked" if p.actual_plate_x is None else "done"
                 pt_name = p.pitch_type.type_name if p.pitch_type else "?"
                 video_tag = " [video]" if p.video_url else ""
-                choices[str(p.game_pitch_id)] = f"[{mark}] #{p.pitch_sequence} — Inn {p.inning}, {p.balls_before}-{p.strikes_before}, {pt_name}{video_tag}"
+                side_tag = "Us pitching" if not p.is_our_team_batting else "Us batting"
+                choices[str(p.game_pitch_id)] = f"[{mark}] #{p.pitch_sequence} — Inn {p.inning}, {p.balls_before}-{p.strikes_before}, {side_tag}, {pt_name}{video_tag}"
             current = _vr_current_pitch_id()
             selected = str(current) if current is not None and str(current) in choices else None
             return ui.div(
                 ui.h5("Video Review — Actual Pitch Locations", class_="gbo-section-title"),
                 ui.p(
-                    "Step through the pitches we threw and mark where each one actually crossed, watching the "
+                    "Step through every pitch of the game and mark where it actually crossed, watching the "
                     "center-field angle (or the matched clip below, if there is one).",
                     class_="text-muted small",
                 ),
-                ui.p(f"{missing_count} of {len(pitches_we_threw)} pitch(es) we threw still need an actual location.", class_="text-muted small"),
+                ui.p(f"{missing_count} of {len(pitches_to_review)} pitch(es) still need an actual location.", class_="text-muted small"),
                 ui.input_select("vr_jump_select", "Jump to pitch", choices=choices, selected=selected),
             )
         finally:
@@ -2930,23 +2953,39 @@ def game_tracking_server(input, output, session, app_state):
         try:
             p = (
                 db.query(GamePitch)
-                .options(joinedload(GamePitch.pitch_type), joinedload(GamePitch.opponent_our_player), joinedload(GamePitch.opponent_player))
+                .options(joinedload(GamePitch.pitch_type), joinedload(GamePitch.opponent_our_player), joinedload(GamePitch.opponent_player), joinedload(GamePitch.our_player))
                 .filter(GamePitch.game_pitch_id == pitch_id).first()
             )
             if p is None:
                 return None
-            batter_label = (
+            # Video Review now covers every pitch, not just ones we threw --
+            # who's the "batter" vs. the "pitcher" flips depending on
+            # is_our_team_batting (see GamePitch's own docstring), and
+            # opponent_hand's meaning flips right along with it (it's
+            # always "the OTHER side's hand").
+            opponent_label = (
                 (f"{p.opponent_our_player.first_name} {p.opponent_our_player.last_name}" if p.opponent_our_player else None)
                 or (p.opponent_player.player_name if p.opponent_player else None)
-                or (f"batting order #{p.opponent_batting_order}" if p.opponent_batting_order else "unknown batter")
+                or (f"batting order #{p.opponent_batting_order}" if p.opponent_batting_order else None)
             )
-            hand_label = f" ({p.opponent_hand}HB)" if p.opponent_hand else ""
-            intended_label = (
-                f"intended {float(p.intended_plate_x):+.2f} ft, {float(p.intended_plate_z):.2f} ft high"
-                if p.intended_plate_x is not None else "no intended location was logged live"
-            )
+            our_label = f"{p.our_player.first_name} {p.our_player.last_name}" if p.our_player else None
+            if p.is_our_team_batting:
+                pitcher_label = (opponent_label or "opponent pitcher") + (f" ({p.opponent_hand}HP)" if p.opponent_hand else "")
+                batter_label = our_label or "unknown batter"
+                intended_label = (
+                    f"intended {float(p.intended_plate_x):+.2f} ft, {float(p.intended_plate_z):.2f} ft high"
+                    if p.intended_plate_x is not None
+                    else ("no intended location was logged live" if p.game.is_intrasquad else "intended location isn't tracked for opponent pitchers")
+                )
+            else:
+                pitcher_label = our_label or "unknown pitcher"
+                batter_label = (opponent_label or "unknown batter") + (f" ({p.opponent_hand}HB)" if p.opponent_hand else "")
+                intended_label = (
+                    f"intended {float(p.intended_plate_x):+.2f} ft, {float(p.intended_plate_z):.2f} ft high"
+                    if p.intended_plate_x is not None else "no intended location was logged live"
+                )
             children = [
-                ui.p(f"Pitch #{p.pitch_sequence} — Inning {p.inning}, {p.balls_before}-{p.strikes_before} count, vs. {batter_label}{hand_label}", class_="fw-bold mb-1"),
+                ui.p(f"Pitch #{p.pitch_sequence} — Inning {p.inning}, {p.balls_before}-{p.strikes_before} count — {pitcher_label} to {batter_label}", class_="fw-bold mb-1"),
                 ui.p(
                     f"Called: {p.pitch_type.type_name if p.pitch_type else 'unknown pitch'} — {intended_label}. "
                     f"Outcome: {p.pitch_outcome or '—'}" + (f", {p.ab_outcome}" if p.ab_outcome else ""),
@@ -3004,7 +3043,7 @@ def game_tracking_server(input, output, session, app_state):
         try:
             ids = [
                 p.game_pitch_id for p in
-                db.query(GamePitch).filter(GamePitch.game_id == game_id, GamePitch.is_our_team_batting.is_(False)).order_by(GamePitch.pitch_sequence).all()
+                db.query(GamePitch).filter(GamePitch.game_id == game_id).order_by(GamePitch.pitch_sequence).all()
             ]
             if pitch_id not in ids:
                 return None
@@ -3026,7 +3065,7 @@ def game_tracking_server(input, output, session, app_state):
         try:
             ids = [
                 p.game_pitch_id for p in
-                db.query(GamePitch).filter(GamePitch.game_id == game_id, GamePitch.is_our_team_batting.is_(False)).order_by(GamePitch.pitch_sequence).all()
+                db.query(GamePitch).filter(GamePitch.game_id == game_id).order_by(GamePitch.pitch_sequence).all()
             ]
             if pitch_id not in ids:
                 return
@@ -3064,12 +3103,12 @@ def game_tracking_server(input, output, session, app_state):
             p.pitch_zone = strike_zone.derive_old_zone(x, z)
             db.commit()
             game_id = p.game_id
-            pitches_we_threw = (
-                db.query(GamePitch).filter(GamePitch.game_id == game_id, GamePitch.is_our_team_batting.is_(False))
+            pitches_to_review = (
+                db.query(GamePitch).filter(GamePitch.game_id == game_id)
                 .order_by(GamePitch.pitch_sequence).all()
             )
-            ids = [pp.game_pitch_id for pp in pitches_we_threw]
-            still_missing = [pp.game_pitch_id for pp in pitches_we_threw if pp.actual_plate_x is None]
+            ids = [pp.game_pitch_id for pp in pitches_to_review]
+            still_missing = [pp.game_pitch_id for pp in pitches_to_review if pp.actual_plate_x is None]
             idx = ids.index(pitch_id)
             later_missing = [gpid for gpid in still_missing if ids.index(gpid) > idx]
             if later_missing:
