@@ -105,12 +105,23 @@ def pitcher_game_report_server(input, output, session, app_state):
 
         db = get_session()
         try:
-            pitcher_ids = [
+            our_pitcher_ids = {
                 pid for (pid,) in db.query(GamePitch.our_player_id)
                 .filter(GamePitch.game_id == selected_game_id, GamePitch.is_our_team_batting.is_(False))
                 .distinct().all()
                 if pid is not None
-            ]
+            }
+            # Intrasquad games: the "other side" is also our own roster (Squad B),
+            # recorded as opponent_our_player_id while we're batting -- include
+            # those pitchers too so BOTH squads' pitchers show up here, since in
+            # an intrasquad game every pitcher belongs to our own team either way.
+            other_squad_pitcher_ids = {
+                pid for (pid,) in db.query(GamePitch.opponent_our_player_id)
+                .filter(GamePitch.game_id == selected_game_id, GamePitch.is_our_team_batting.is_(True))
+                .distinct().all()
+                if pid is not None
+            }
+            pitcher_ids = our_pitcher_ids | other_squad_pitcher_ids
             if not pitcher_ids:
                 return ui_helpers.empty_state("No pitches recorded for any of our pitchers in this game yet.")
             pitchers = db.query(Player).filter(Player.player_id.in_(pitcher_ids)).order_by(Player.last_name, Player.first_name).all()
