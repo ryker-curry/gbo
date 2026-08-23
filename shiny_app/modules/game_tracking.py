@@ -3480,7 +3480,25 @@ def game_tracking_server(input, output, session, app_state):
             if game is None:
                 return None
             if game.status in ("Final", "Cancelled"):
-                return ui.p(f"Status: {game.status} (no further status changes available).", class_="text-muted small")
+                # Reopen exists purely as an undo for a mis-click -- Mark
+                # Final/Cancel Game are one click with no confirmation, and
+                # before this there was truly no way back short of deleting
+                # the whole game (see Ryker's 2026-08-23 accidental-Final
+                # report). Nothing else in the app branches on status ==
+                # "Final"/"Cancelled" (game_stats.py's get_pitching_pitches/
+                # get_batting_pitches and every report just query by
+                # game_id), so putting a game back to In Progress is fully
+                # safe -- Live Tracking, Video Review, and the Pitch Log all
+                # just start working again.
+                return ui.div(
+                    ui.p(f"Status: {game.status} (no further status changes available).", class_="text-muted small"),
+                    ui.p(
+                        "Marked this Final or Cancelled by mistake? Reopening puts it back In Progress so Live "
+                        "Tracking, Video Review, and the Pitch Log all work again.",
+                        class_="text-muted small",
+                    ),
+                    ui.input_action_button("reopen_game_btn", "Reopen game", class_="btn-outline-primary btn-sm"),
+                )
             row = []
             if game.status == "Scheduled":
                 row.append(ui.input_action_button("start_game_btn", "Start game", class_="btn-primary"))
@@ -3535,6 +3553,11 @@ def game_tracking_server(input, output, session, app_state):
     @reactive.event(input.cancel_game_btn)
     def _cancel_game():
         _set_game_status("Cancelled", "Game cancelled.")
+
+    @reactive.effect
+    @reactive.event(input.reopen_game_btn)
+    def _reopen_game():
+        _set_game_status("In Progress", "Game reopened -- back In Progress.")
 
     @render.ui
     def game_delete_section():
