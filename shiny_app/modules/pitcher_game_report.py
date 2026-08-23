@@ -331,6 +331,7 @@ def pitcher_game_report_server(input, output, session, app_state):
             children = [ui_helpers.render_kpi_cards([
                 {"label": "Located / Total", "value": f'{scorecard["located_pitches"]}/{scorecard["total_pitches"]}'},
                 {"label": "Avg Miss", "value": _cmd_fmt(scorecard["avg_miss_distance"], " in")},
+                {"label": "Danger-Adj. Miss", "value": _cmd_fmt(scorecard["avg_danger_adjusted_miss"], " in")},
                 {"label": "Median Miss", "value": _cmd_fmt(scorecard["median_miss_distance"], " in")},
                 {"label": "Precision %", "value": _cmd_fmt(scorecard["precision_pct"], "%")},
                 {"label": "Command Target %", "value": _cmd_fmt(scorecard["command_target_pct"], "%")},
@@ -347,6 +348,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                     "Pitch Type": row["Pitch Type"],
                     "Pitches": row["Pitches"],
                     "Avg Miss (in)": row["Avg Miss"] if row["Avg Miss"] is not None else "—",
+                    "Danger-Adj. Miss (in)": row["Danger-Adj. Miss"] if row["Danger-Adj. Miss"] is not None else "—",
                     "Precision %": row["Precision %"] if row["Precision %"] is not None else "—",
                     "Command %": row["Command Target %"] if row["Command Target %"] is not None else "—",
                     "Major Miss %": row["Major Miss %"] if row["Major Miss %"] is not None else "—",
