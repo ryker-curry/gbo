@@ -17,22 +17,25 @@ output).
 Deliberate UX simplifications made porting this page (disclosed here,
 same as every other such deviation elsewhere in this migration):
 
-  1. **Numeric coordinate entry, superseded by real click-to-place
-     (Milestone 2 -- see below).** This page originally paired a plain
-     ui.input_numeric() pair with a read-only static-preview image
-     instead of a true click interface, because shinywidgets'
-     FigureWidget.on_click() was untested anywhere else in this
-     migration. That's since been implemented (see
-     _build_clickable_widget/_register_click_to_numeric and
-     intended_location_widget/batted_ball_location_widget/
-     video_review_widget below) -- clicking anywhere on the zone/field
-     figure now writes the clicked coordinates straight into the same
-     numeric inputs the click-less version used, via ui.update_numeric().
-     Those numeric inputs are KEPT as the actual source of truth
-     (still directly typeable for fine correction or if a click misses)
-     -- nothing downstream (_do_record_pitch, _vr_save, execution %,
-     spray charts, etc.) changed at all, since it never read the click
-     event itself, only the numeric inputs the click now also fills in.
+  1. **Numeric coordinate entry, now paired with real click-to-place
+     (Milestone 2, revised Aug 2026 -- see below).** This page
+     originally paired a plain ui.input_numeric() pair with a
+     read-only static-preview image instead of a true click interface.
+     A first attempt at real clicking (shinywidgets' FigureWidget.
+     on_click()) looked right in code review but was never actually
+     live-tested end to end; it turned out to be broken (plotly 6.x's
+     anywidget-based FigureWidget rewrite -- see click_widgets.py's
+     module docstring for the live-debugging trail and the upstream
+     GitHub issues). It's since been replaced with a plain client-side
+     click listener (click_widgets.click_target/CLICK_CAPTURE_JS) that
+     writes the clicked coordinates straight into the same numeric
+     inputs the click-less version used, dispatching the same
+     input/change events a real keystroke would. Those numeric inputs
+     are KEPT as the actual source of truth (still directly typeable
+     for fine correction or if a click misses) -- nothing downstream
+     (_do_record_pitch, _vr_save, execution %, spray charts, etc.)
+     changed at all, since it never read the click event itself, only
+     the numeric inputs the click now also fills in.
   2. **Live cross-slot lineup exclusion IS implemented**, matching the
      original -- once a player is picked in one batting-order slot, he
      disappears from every OTHER slot's dropdown for that squad. This
@@ -170,17 +173,15 @@ those inputs changed:
     dense click-grid scatter trace at data index 0 specifically for
     this, left over from those modules' original Streamlit design) into
     a go.FigureWidget with the toolbar hidden.
-  - **_register_click_to_numeric** -- one long-lived @reactive.effect
-    per clickable figure, registered once at module-server setup time,
-    that reads the render function's `.widget` attribute (shinywidgets'
-    documented render_widget_base pattern -- None until first render,
-    invalidates on every new widget instance) and calls
-    `widget.data[0].on_click(...)` to re-attach a click handler each
-    time a fresh FigureWidget is produced. The handler reads the
-    clicked grid point's coordinates off plotly's own
-    `points.xs`/`points.ys`/`points.point_inds` (see
-    plotly.callbacks.Points) and writes them into the two numeric
-    inputs it's told to target via ui.update_numeric().
+  - **click_widgets.click_target()** -- wraps each output_widget(...)
+    call site so a plain client-side 'plotly_click' listener (installed
+    once, app-wide, by shiny_app/app.py's CLICK_CAPTURE_JS) knows which
+    two numeric inputs to write a click's coordinates into. Replaced
+    the original _register_click_to_numeric()/FigureWidget.on_click()
+    Python-side round-trip in Aug 2026 after live debugging showed that
+    round-trip never actually reached the browser (see
+    click_widgets.py's module docstring) -- no server-side click
+    handling code is involved at all any more.
   - **Three call sites**, all following the identical
     render_plotly-widget + caption-text pair shape (a render_plotly
     can't also return caption text, so each is split into a
@@ -846,62 +847,18 @@ def _upload_game_video_clip(file_info: dict, identifier: str):
         return None
 
 
-def _build_clickable_widget(fig):
-    """Wraps a plain plotly Figure (as returned by
-    strike_zone.build_zone_selector_figure/
-    field_location.build_field_selector_figure -- both pure,
-    framework-agnostic figure builders, see those modules' docstrings)
-    into a go.FigureWidget with the same mode-bar-hidden config the
-    original Streamlit click-selector used
-    (config={"displayModeBar": False} in strike_zone.render_zone_selector/
-    field_location.render_field_selector). shinywidgets' render_plotly
-    would auto-convert a plain go.Figure for us (see as_widget_plotly in
-    the shinywidgets package), but only this explicit path lets us also
-    set the widget's display config before it's returned."""
-    widget = go.FigureWidget(fig.data, fig.layout)
-    widget._config = {"displayModeBar": False}
-    return widget
-
-
-def _register_click_to_numeric(widget_render_fn, x_input_id, y_input_id, round_ndigits):
-    """Wires a clickable figure (built via _build_clickable_widget,
-    always with the invisible dense click-grid from
-    strike_zone.py/field_location.py at trace index 0 -- see those
-    modules' build_*_selector_figure docstrings) to a pair of existing
-    ui.input_numeric() fields: a click writes the clicked grid point's
-    coordinates into those inputs via ui.update_numeric(), exactly as
-    if the coach had typed them. The numeric inputs stay the source of
-    truth and the only thing _do_record_pitch/_vr_save ever read --
-    clicking is just a faster way to fill them in, so manual correction
-    (mis-clicks, fine adjustment) keeps working exactly as before, and
-    nothing downstream had to change.
-
-    Registered once, at module-server setup time, as a single
-    long-lived @reactive.effect that reads widget_render_fn.widget --
-    per shinywidgets' documented render_widget_base pattern, that
-    attribute is None until the widget has rendered at least once, and
-    invalidates (so this effect re-runs and re-attaches the click
-    handler) every time a NEW widget instance is produced. That happens
-    on every re-render of the figure -- including every keystroke in
-    the paired numeric inputs, since the figure reads them to position
-    the marker -- and on_click() must be re-registered against each
-    fresh FigureWidget instance every time; plotly.py doesn't carry
-    click callbacks over between separate FigureWidget objects."""
-    @reactive.effect
-    def _handler():
-        widget = widget_render_fn.widget
-        if widget is None:
-            return
-
-        def _on_click(trace, points, state):
-            if not points.point_inds:
-                return
-            idx = points.point_inds[0]
-            ui.update_numeric(x_input_id, value=round(float(points.xs[idx]), round_ndigits))
-            ui.update_numeric(y_input_id, value=round(float(points.ys[idx]), round_ndigits))
-
-        widget.data[0].on_click(_on_click)
-    return _handler
+# _build_clickable_widget used to be defined here directly -- moved to
+# the repo-root click_widgets.py (see that module's docstring, including
+# the Aug 2026 pivot away from register_click_to_numeric's broken
+# FigureWidget.on_click() round-trip to click_widgets.click_target()'s
+# plain client-side listener) so Command Tracker's location widgets can
+# reuse the exact same click-capture code instead of a second
+# copy-pasted implementation. build_clickable_widget aliased back to its
+# original name on import so every call site below is unchanged;
+# click_target() is used via the click_widgets module directly at each
+# output_widget(...) call site (see live_tracking_body/video review UI).
+import click_widgets  # noqa: E402
+from click_widgets import build_clickable_widget as _build_clickable_widget  # noqa: E402
 
 
 @module.ui
@@ -929,6 +886,19 @@ def game_tracking_server(input, output, session, app_state):
     _vr_current_pitch_id = reactive.Value(None)
     _registered_clip_match_ids = set()
     _is_submitting = reactive.Value(False)  # duplicate-submission guard for _record_pitch, see module docstring
+
+    # Pitch Log edit/delete -- same lazy per-row button registration shape
+    # as _registered_clip_match_ids above (and as Command Tracker's own
+    # pitch log, shiny_app/modules/command_tracker.py's
+    # _registered_pitch_row_ids), applied to GamePitch rows instead of
+    # video clips. Only one row can be mid-edit or mid-delete-confirm at
+    # once, so those two states are fixed-id reactive.Values rather than
+    # needing per-row storage themselves -- the per-row buttons only need
+    # to know their OWN pitch id, which they get via closure at
+    # registration time (see _register_pitch_row_handlers).
+    _registered_pitch_row_ids = set()
+    _gt_editing_pitch_id = reactive.Value(None)
+    _gt_pending_delete_pitch_id = reactive.Value(None)
 
     def _bump_refresh():
         _refresh_tick.set(_refresh_tick() + 1)
@@ -1698,10 +1668,10 @@ def game_tracking_server(input, output, session, app_state):
                 ui.output_ui("live_pitch_sequence_display"),
                 ui.hr(),
                 ui.output_ui("pitch_type_and_outcome_picker"),
-                output_widget("intended_location_widget"),
+                click_widgets.click_target(output_widget("intended_location_widget"), "intended_x_input", "intended_z_input"),
                 ui.output_ui("intended_location_caption"),
                 ui.output_ui("pitch_outcome_dependent_fields"),
-                output_widget("batted_ball_location_widget"),
+                click_widgets.click_target(output_widget("batted_ball_location_widget"), "batted_ball_x_input", "batted_ball_y_input", round_ndigits=1),
                 ui.output_ui("batted_ball_location_caption"),
                 ui.output_ui("result_ab_outcome_picker"),
                 ui.output_ui("result_fields_body"),
@@ -2279,8 +2249,8 @@ def game_tracking_server(input, output, session, app_state):
 
             if not state["is_our_batting"]:
                 children.append(ui.p(
-                    "Intended location -- enter where the pitch was supposed to go (numeric entry with a live "
-                    "preview below replaces the original's click-to-place; see the module note).",
+                    "Intended location -- click the zone below to place where the pitch was supposed to go, "
+                    "or type coordinates directly.",
                     class_="text-muted small",
                 ))
                 children.append(ui.layout_columns(
@@ -2299,10 +2269,11 @@ def game_tracking_server(input, output, session, app_state):
         numeric-entry + static-preview-image workaround (see module
         docstring's Milestone 2 note). Clicking anywhere in the zone
         writes the clicked point into intended_x_input/intended_z_input
-        via _register_click_to_numeric below -- those two numeric
-        inputs stay the actual source of truth (still directly typeable
-        for fine correction), so _do_record_pitch and everything else
-        downstream is completely unchanged."""
+        via the click_widgets.click_target() wrapper at this widget's
+        output_widget(...) call site (see live_tracking_body) -- those
+        two numeric inputs stay the actual source of truth (still
+        directly typeable for fine correction), so _do_record_pitch and
+        everything else downstream is completely unchanged."""
         if not _access_ok() or not _can_edit():
             return None
         game_id = _active_game_id()
@@ -2318,8 +2289,6 @@ def game_tracking_server(input, output, session, app_state):
         req("intended_x_input" in input)
         x, z = input.intended_x_input(), input.intended_z_input()
         return _build_clickable_widget(strike_zone.build_zone_selector_figure(marker_x=x, marker_z=z))
-
-    _register_click_to_numeric(intended_location_widget, "intended_x_input", "intended_z_input", 2)
 
     @render.ui
     def intended_location_caption():
@@ -2357,8 +2326,7 @@ def game_tracking_server(input, output, session, app_state):
         if outcome == "In Play":
             children.append(ui.input_select("batted_ball_type_select", "Batted ball type (optional)", choices=["-- N/A --", "Ground Ball", "Line Drive", "Fly Ball", "Pop Up"]))
             children.append(ui.p(
-                "Where did it land? Enter coordinates below (numeric entry with a live preview replaces the "
-                "original's click-to-place).",
+                "Where did it land? Click the field below, or type coordinates directly.",
                 class_="text-muted small",
             ))
             children.append(ui.layout_columns(
@@ -2385,8 +2353,6 @@ def game_tracking_server(input, output, session, app_state):
         req("batted_ball_x_input" in input)
         x, y = input.batted_ball_x_input(), input.batted_ball_y_input()
         return _build_clickable_widget(field_location.build_field_selector_figure(marker_x=x, marker_y=y))
-
-    _register_click_to_numeric(batted_ball_location_widget, "batted_ball_x_input", "batted_ball_y_input", 1)
 
     @render.ui
     def batted_ball_location_caption():
@@ -2753,7 +2719,7 @@ def game_tracking_server(input, output, session, app_state):
             ui.hr(),
             ui.output_ui("video_review_jump_picker"),
             ui.output_ui("video_review_detail"),
-            output_widget("video_review_widget"),
+            click_widgets.click_target(output_widget("video_review_widget"), "vr_actual_x_input", "vr_actual_z_input"),
             ui.output_ui("video_review_caption"),
             ui.output_ui("video_review_nav"),
         )
@@ -3012,8 +2978,6 @@ def game_tracking_server(input, output, session, app_state):
         x, z = input.vr_actual_x_input(), input.vr_actual_z_input()
         return _build_clickable_widget(strike_zone.build_zone_selector_figure(marker_x=x, marker_z=z))
 
-    _register_click_to_numeric(video_review_widget, "vr_actual_x_input", "vr_actual_z_input", 2)
-
     @render.ui
     def video_review_caption():
         if not _access_ok() or not _can_edit():
@@ -3123,6 +3087,36 @@ def game_tracking_server(input, output, session, app_state):
     # Pitch Log
     # -------------------------------------------------------------------
 
+    # -------------------------------------------------------------------
+    # Pitch Log edit/delete scope (deliberate, see task discussion):
+    # editable fields are pitch_type, pitch_outcome, intended/actual
+    # location (pitching pitches only), contact_quality, is_sword,
+    # batted_ball_type/x/y, and notes -- every one of these is a "leaf"
+    # value nothing else in the schema reads or derives from, so editing
+    # one row can never corrupt another row's data.
+    #
+    # Deliberately NOT editable here: balls_before/strikes_before/
+    # outs_before/bases_before, ends_plate_appearance, ab_outcome,
+    # outs_after/bases_after, run_value/re_before/re_after, inning,
+    # batter/pitcher identity, and pitch_sequence. Those fields together
+    # form this game's count/state/score history -- each pitch's stored
+    # "before" state reflects what was actually true in the live game at
+    # the moment it was recorded, and letting an edit rewrite that
+    # in isolation (without re-deriving every subsequent pitch's stored
+    # state and re-running the run-expectancy table) risks a row that's
+    # internally consistent but silently wrong relative to its
+    # neighbors. Fixing a genuinely wrong AB outcome/score/count still
+    # means deleting the pitch (which correctly reverses any runs it
+    # credited, see _confirm_pitch_log_delete) and re-entering it live.
+    #
+    # DELETE has no such restriction -- removing a row can't corrupt any
+    # OTHER row's already-stored data (nothing here is derived by
+    # replaying history), it only leaves a gap in pitch_sequence, which
+    # is already harmless since next_seq in _do_record_pitch is computed
+    # via max(pitch_sequence)+1, not len()+1 (same fix Command Tracker's
+    # pitch_number needed this session).
+    # -------------------------------------------------------------------
+
     @render.ui
     def pitch_log_body():
         _refresh_tick()
@@ -3142,28 +3136,251 @@ def game_tracking_server(input, output, session, app_state):
             )
             if not pitches:
                 return ui.div(ui.h5("Pitch log", class_="gbo-section-title"), ui_helpers.empty_state("No pitches logged yet for this game."))
-            rows = []
+
+            can_edit = _can_edit()
+            editing_id = _gt_editing_pitch_id() if can_edit else None
+            pending_delete_id = _gt_pending_delete_pitch_id() if can_edit else None
+            pitch_type_choices = {}
+            if editing_id is not None:
+                pitch_type_choices = {pt.type_name: pt.type_name for pt in db.query(PitchType).order_by(PitchType.pitch_type_id).all()}
+
+            rows = [ui.h5("Pitch log", class_="gbo-section-title")]
             for p in pitches:
-                rows.append({
-                    "#": p.pitch_sequence,
-                    "Inn": p.inning,
-                    "Side": "Us batting" if p.is_our_team_batting else "Us pitching",
-                    "Player": f"{p.our_player.first_name} {p.our_player.last_name}" if p.our_player else "—",
-                    "Opponent": (f"{p.opponent_our_player.first_name} {p.opponent_our_player.last_name}" if p.opponent_our_player else None) or (p.opponent_player.player_name if p.opponent_player else None) or (f"#{p.opponent_batting_order} ({p.opponent_hand})" if p.opponent_batting_order else "—"),
-                    "Pitch": p.pitch_type.type_name if p.pitch_type else "—",
-                    "Location": f"{float(p.actual_plate_x):+.2f}, {float(p.actual_plate_z):.2f}" if p.actual_plate_x is not None else "—",
-                    "Video": "✓" if p.video_url else "—",
-                    "Outcome": (p.pitch_outcome or "—") + (" (Sword)" if p.is_sword else ""),
-                    "Batted Ball": ((p.batted_ball_type or "") + (f" ({float(p.batted_ball_x):+.0f}, {float(p.batted_ball_y):.0f})" if p.batted_ball_x is not None else "")) if (p.batted_ball_type or p.batted_ball_x is not None) else "—",
-                    "AB Result": p.ab_outcome or "",
-                    "Runs": p.runs_scored_on_play,
-                    "RE Before": f"{float(p.re_before):.2f}" if p.re_before is not None else "—",
-                    "RE After": f"{float(p.re_after):.2f}" if p.re_after is not None else "—",
-                    "RV": f"{float(p.run_value):+.3f}" if p.run_value is not None else "—",
-                })
-            return ui.div(ui.h5("Pitch log", class_="gbo-section-title"), ui_helpers.render_dict_table(rows))
+                pt_name = p.pitch_type.type_name if p.pitch_type else "—"
+                opponent_label = (
+                    (f"{p.opponent_our_player.first_name} {p.opponent_our_player.last_name}" if p.opponent_our_player else None)
+                    or (p.opponent_player.player_name if p.opponent_player else None)
+                    or (f"#{p.opponent_batting_order} ({p.opponent_hand})" if p.opponent_batting_order else "—")
+                )
+                player_label = f"{p.our_player.first_name} {p.our_player.last_name}" if p.our_player else "—"
+
+                if can_edit and p.game_pitch_id == editing_id:
+                    edit_children = [
+                        ui.h6(f"Editing pitch #{p.pitch_sequence}", class_="mt-2"),
+                        ui.input_select("gt_pl_edit_pitch_type", "Pitch type", choices=pitch_type_choices, selected=pt_name if pt_name in pitch_type_choices else None),
+                        ui.input_select("gt_pl_edit_outcome", "Pitch outcome", choices=PITCH_OUTCOMES, selected=p.pitch_outcome if p.pitch_outcome in PITCH_OUTCOMES else None),
+                    ]
+                    if not p.is_our_team_batting:
+                        edit_children.append(ui.layout_columns(
+                            ui.input_numeric("gt_pl_edit_ix", "Intended plate side (ft, 0 = center)", value=float(p.intended_plate_x) if p.intended_plate_x is not None else 0.0, min=strike_zone.X_MIN, max=strike_zone.X_MAX, step=0.1),
+                            ui.input_numeric("gt_pl_edit_iz", "Intended plate height (ft)", value=float(p.intended_plate_z) if p.intended_plate_z is not None else 2.5, min=strike_zone.Z_MIN, max=strike_zone.Z_MAX, step=0.1),
+                        ))
+                        edit_children.append(ui.input_checkbox("gt_pl_edit_has_actual", "Actual location recorded", value=p.actual_plate_x is not None))
+                        edit_children.append(ui.layout_columns(
+                            ui.input_numeric("gt_pl_edit_ax", "Actual plate side (ft)", value=float(p.actual_plate_x) if p.actual_plate_x is not None else 0.0, min=strike_zone.X_MIN, max=strike_zone.X_MAX, step=0.1),
+                            ui.input_numeric("gt_pl_edit_az", "Actual plate height (ft)", value=float(p.actual_plate_z) if p.actual_plate_z is not None else 2.5, min=strike_zone.Z_MIN, max=strike_zone.Z_MAX, step=0.1),
+                        ))
+                    # These three fields aren't conditionally shown/hidden based
+                    # on the outcome dropdown the way live entry's
+                    # pitch_outcome_dependent_fields does -- this render block
+                    # doesn't re-run when gt_pl_edit_outcome changes (it's only
+                    # read at save time), so always showing them and saving only
+                    # what's relevant (see _save_pitch_log_edit) is the simpler,
+                    # safer choice here rather than a second nested render block.
+                    edit_children.append(ui.input_select("gt_pl_edit_cq", "Contact quality (optional -- only meaningful if swung at)", choices=["-- N/A --"] + CONTACT_QUALITY_OPTIONS, selected=p.contact_quality or "-- N/A --"))
+                    edit_children.append(ui.input_checkbox("gt_pl_edit_sword", "Sword (ugly, off-balance swing)", value=p.is_sword))
+                    edit_children.append(ui.input_select("gt_pl_edit_bbt", "Batted ball type (optional -- only meaningful if In Play)", choices=["-- N/A --", "Ground Ball", "Line Drive", "Fly Ball", "Pop Up"], selected=p.batted_ball_type or "-- N/A --"))
+                    edit_children.append(ui.layout_columns(
+                        ui.input_numeric("gt_pl_edit_bbx", "Feet right of CF line", value=float(p.batted_ball_x) if p.batted_ball_x is not None else 0.0, step=5.0),
+                        ui.input_numeric("gt_pl_edit_bby", "Feet from home toward OF", value=float(p.batted_ball_y) if p.batted_ball_y is not None else 150.0, step=5.0),
+                    ))
+                    edit_children.append(ui.input_text("gt_pl_edit_notes", "Notes (optional)", value=p.notes or ""))
+                    edit_children.append(ui.layout_columns(
+                        ui.input_action_button("gt_pl_save_edit_btn", "Save", class_="btn-primary btn-sm"),
+                        ui.input_action_button("gt_pl_cancel_edit_btn", "Cancel", class_="btn-outline-secondary btn-sm"),
+                        col_widths=[6, 6],
+                    ))
+                    rows.append(ui.div(*edit_children, class_="border rounded p-2 mb-2"))
+                    continue
+
+                if can_edit and p.game_pitch_id == pending_delete_id:
+                    warn = f"Delete pitch #{p.pitch_sequence} ({pt_name})? This can't be undone."
+                    if p.ends_plate_appearance and p.runs_scored_on_play:
+                        warn += f" This will also reverse {p.runs_scored_on_play} run(s) credited on this play."
+                    rows.append(ui.div(
+                        ui.p(warn, class_="text-danger mb-1"),
+                        ui.layout_columns(
+                            ui.input_action_button("gt_pl_confirm_delete_btn", "Confirm delete", class_="btn-danger btn-sm"),
+                            ui.input_action_button("gt_pl_cancel_delete_btn", "Cancel", class_="btn-outline-secondary btn-sm"),
+                            col_widths=[6, 6],
+                        ),
+                        class_="border border-danger rounded p-2 mb-2",
+                    ))
+                    continue
+
+                side = "Us batting" if p.is_our_team_batting else "Us pitching"
+                # Distinguish the three states a coach can hit here, rather
+                # than a bare "—" that reads the same whether location never
+                # applies (we were batting), or it applies but Video Review
+                # hasn't happened yet (intended IS already known -- only
+                # actual is pending, see _vr_save/video_review_body), or it's
+                # genuinely both missing. A plain dash for the "pending"
+                # case looked identical to "no data" and was confusing.
+                if p.is_our_team_batting:
+                    loc = "—"
+                else:
+                    intended_str = f"{float(p.intended_plate_x):+.2f}, {float(p.intended_plate_z):.2f}" if p.intended_plate_x is not None else "—"
+                    if p.actual_plate_x is not None:
+                        loc = f"Intended {intended_str} / Actual {float(p.actual_plate_x):+.2f}, {float(p.actual_plate_z):.2f}"
+                    else:
+                        loc = f"Intended {intended_str} / Actual: awaiting video review"
+                bb = ((p.batted_ball_type or "") + (f" ({float(p.batted_ball_x):+.0f}, {float(p.batted_ball_y):.0f})" if p.batted_ball_x is not None else "")) if (p.batted_ball_type or p.batted_ball_x is not None) else "—"
+                line1 = f"#{p.pitch_sequence} — Inn {p.inning}, {side} — {player_label} vs {opponent_label} — {pt_name}"
+                line2 = f"{(p.pitch_outcome or '—')}{' (Sword)' if p.is_sword else ''} — {loc} — Batted ball {bb}" + (" — 🎥" if p.video_url else "")
+                summary_children = [ui.p(line1, class_="mb-0 small"), ui.p(line2, class_="text-muted small mb-0")]
+                if p.ends_plate_appearance:
+                    re_before_str = f"{float(p.re_before):.2f}" if p.re_before is not None else "—"
+                    re_after_str = f"{float(p.re_after):.2f}" if p.re_after is not None else "—"
+                    rv_str = f"{float(p.run_value):+.3f}" if p.run_value is not None else "—"
+                    summary_children.append(ui.p(
+                        f"AB: {p.ab_outcome or '—'} — Runs {p.runs_scored_on_play} — RE {re_before_str}→{re_after_str} (RV {rv_str})",
+                        class_="text-muted small mb-0",
+                    ))
+                if p.notes:
+                    summary_children.append(ui.p(p.notes, class_="text-muted small mb-0 fst-italic"))
+
+                if can_edit:
+                    edit_btn_id = f"gt_pl_edit_btn_{p.game_pitch_id}"
+                    delete_btn_id = f"gt_pl_delete_btn_{p.game_pitch_id}"
+                    rows.append(ui.layout_columns(
+                        ui.div(*summary_children),
+                        ui.input_action_button(edit_btn_id, "Edit", class_="btn-outline-primary btn-sm"),
+                        ui.input_action_button(delete_btn_id, "Delete", class_="btn-outline-danger btn-sm"),
+                        col_widths=[8, 2, 2],
+                    ))
+                    if edit_btn_id not in _registered_pitch_row_ids:
+                        _registered_pitch_row_ids.add(edit_btn_id)
+                        _registered_pitch_row_ids.add(delete_btn_id)
+                        _register_pitch_row_handlers(p.game_pitch_id)
+                else:
+                    rows.append(ui.div(*summary_children))
+
+            return ui.div(*rows)
         finally:
             db.close()
+
+    def _register_pitch_row_handlers(pitch_id):
+        edit_btn_id = f"gt_pl_edit_btn_{pitch_id}"
+        delete_btn_id = f"gt_pl_delete_btn_{pitch_id}"
+
+        @reactive.effect
+        @reactive.event(input[edit_btn_id])
+        def _on_pitch_log_edit_trigger():
+            _gt_pending_delete_pitch_id.set(None)
+            _gt_editing_pitch_id.set(pitch_id)
+            _bump_refresh()
+
+        @reactive.effect
+        @reactive.event(input[delete_btn_id])
+        def _on_pitch_log_delete_trigger():
+            _gt_editing_pitch_id.set(None)
+            _gt_pending_delete_pitch_id.set(pitch_id)
+            _bump_refresh()
+
+    @reactive.effect
+    @reactive.event(input.gt_pl_cancel_edit_btn)
+    def _cancel_pitch_log_edit():
+        _gt_editing_pitch_id.set(None)
+        _bump_refresh()
+
+    @reactive.effect
+    @reactive.event(input.gt_pl_save_edit_btn)
+    def _save_pitch_log_edit():
+        pitch_id = _gt_editing_pitch_id()
+        if pitch_id is None:
+            return
+        req("gt_pl_edit_pitch_type" in input)
+        req("gt_pl_edit_outcome" in input)
+
+        pitch_type_name = input.gt_pl_edit_pitch_type()
+        outcome = input.gt_pl_edit_outcome()
+        notes = (input.gt_pl_edit_notes() or "").strip() or None
+
+        db = get_session()
+        try:
+            pitch = db.query(GamePitch).filter(GamePitch.game_pitch_id == pitch_id).first()
+            if pitch is None:
+                _gt_editing_pitch_id.set(None)
+                _bump_refresh()
+                return
+
+            pitch_type = db.query(PitchType).filter(PitchType.type_name == pitch_type_name).first()
+            pitch.pitch_type_id = pitch_type.pitch_type_id if pitch_type else None
+            pitch.pitch_outcome = outcome
+            pitch.notes = notes
+
+            if not pitch.is_our_team_batting and "gt_pl_edit_ix" in input:
+                intended_x, intended_z = input.gt_pl_edit_ix(), input.gt_pl_edit_iz()
+                has_actual = bool(input.gt_pl_edit_has_actual()) if "gt_pl_edit_has_actual" in input else pitch.actual_plate_x is not None
+                actual_x = input.gt_pl_edit_ax() if has_actual else None
+                actual_z = input.gt_pl_edit_az() if has_actual else None
+                pitch.intended_plate_x = intended_x
+                pitch.intended_plate_z = intended_z
+                pitch.actual_plate_x = actual_x
+                pitch.actual_plate_z = actual_z
+                pitch.intended_zone = strike_zone.derive_old_zone(intended_x, intended_z)
+                pitch.pitch_zone = strike_zone.derive_old_zone(actual_x, actual_z)
+
+            if outcome in ("In Play", "Foul", "Swing and Miss") and "gt_pl_edit_cq" in input:
+                raw_cq = input.gt_pl_edit_cq()
+                pitch.contact_quality = raw_cq if raw_cq and raw_cq != "-- N/A --" else None
+                pitch.is_sword = bool(input.gt_pl_edit_sword()) if "gt_pl_edit_sword" in input else False
+            else:
+                pitch.contact_quality = None
+                pitch.is_sword = False
+
+            if outcome == "In Play" and "gt_pl_edit_bbt" in input:
+                raw_bbt = input.gt_pl_edit_bbt()
+                pitch.batted_ball_type = raw_bbt if raw_bbt and raw_bbt != "-- N/A --" else None
+                pitch.batted_ball_x = input.gt_pl_edit_bbx() if "gt_pl_edit_bbx" in input else None
+                pitch.batted_ball_y = input.gt_pl_edit_bby() if "gt_pl_edit_bby" in input else None
+            else:
+                pitch.batted_ball_type = None
+                pitch.batted_ball_x = None
+                pitch.batted_ball_y = None
+
+            db.commit()
+            ui.notification_show(f"Updated pitch #{pitch.pitch_sequence}.", type="message", duration=6)
+        finally:
+            db.close()
+        _gt_editing_pitch_id.set(None)
+        _bump_pa()
+        _bump_refresh()
+
+    @reactive.effect
+    @reactive.event(input.gt_pl_cancel_delete_btn)
+    def _cancel_pitch_log_delete():
+        _gt_pending_delete_pitch_id.set(None)
+        _bump_refresh()
+
+    @reactive.effect
+    @reactive.event(input.gt_pl_confirm_delete_btn)
+    def _confirm_pitch_log_delete():
+        pitch_id = _gt_pending_delete_pitch_id()
+        if pitch_id is None:
+            return
+        db = get_session()
+        try:
+            pitch = db.query(GamePitch).filter(GamePitch.game_pitch_id == pitch_id).first()
+            if pitch is None:
+                _gt_pending_delete_pitch_id.set(None)
+                _bump_refresh()
+                return
+            game = db.query(Game).filter(Game.game_id == pitch.game_id).first()
+            if game is not None and pitch.ends_plate_appearance and pitch.runs_scored_on_play:
+                if pitch.is_our_team_batting:
+                    game.our_score = max(0, game.our_score - pitch.runs_scored_on_play)
+                else:
+                    game.opponent_score = max(0, game.opponent_score - pitch.runs_scored_on_play)
+            deleted_seq = pitch.pitch_sequence
+            db.delete(pitch)
+            db.commit()
+            ui.notification_show(f"Deleted pitch #{deleted_seq}.", type="message", duration=6)
+        finally:
+            db.close()
+        _gt_pending_delete_pitch_id.set(None)
+        _bump_pa()
+        _bump_refresh()
 
     # -------------------------------------------------------------------
     # Manage Game

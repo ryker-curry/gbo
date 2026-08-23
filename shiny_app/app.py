@@ -58,6 +58,7 @@ from auth import do_login, do_logout  # noqa: E402
 import nav  # noqa: E402
 import ui_helpers  # noqa: E402
 import theme  # noqa: E402
+import click_widgets  # noqa: E402
 from modules import (  # noqa: E402
     dashboard, player_schedule, player_stats, players, assessments, video_import,
     team_schedule, player_assignments, at_appointments, rapsodo_import,
@@ -65,7 +66,7 @@ from modules import (  # noqa: E402
     analytics, pitcher_game_report, hitter_game_report, bullpen_dashboard,
     user_management, staff_assignments, hitter_tracking,
     opponent_teams, bullpen_scripts, training_routines, idp, bullpen_tracking,
-    game_tracking,
+    game_tracking, command_tracker,
 )
 
 # Registry of page keys (see nav.NavPage.key) that have a real Shiny
@@ -101,6 +102,7 @@ MODULE_UI = {
     "idp": lambda: idp.idp_ui("idp"),
     "bullpen_tracking": lambda: bullpen_tracking.bullpen_tracking_ui("bullpen_tracking"),
     "game_tracking": lambda: game_tracking.game_tracking_ui("game_tracking"),
+    "command_tracker": lambda: command_tracker.command_tracker_ui("command_tracker"),
 }
 
 # Fix for "scrolling through a page feels like it keeps refreshing/
@@ -132,6 +134,13 @@ document.addEventListener('wheel', function (e) {
 app_ui = ui.page_fillable(
     ui.tags.style(theme.GLOBAL_CSS),
     ui.tags.script(_NO_WHEEL_SCROLL_JS),
+    # Installed once, app-wide, so every click_widgets.click_target()
+    # wrapper on every page (Command Tracker's two location widgets,
+    # Game Tracking's intended/batted-ball/video-review widgets) is
+    # covered by one shared listener -- see click_widgets.py's module
+    # docstring for why this replaced the old FigureWidget.on_click()
+    # Python round-trip.
+    ui.tags.script(click_widgets.CLICK_CAPTURE_JS),
     ui.div(
         ui.input_dark_mode(id="dark_mode", mode="dark"),
         class_="gbo-mode-toggle",
@@ -214,6 +223,7 @@ def server(input, output, session):
     idp.idp_server("idp", app_state)
     bullpen_tracking.bullpen_tracking_server("bullpen_tracking", app_state)
     game_tracking.game_tracking_server("game_tracking", app_state)
+    command_tracker.command_tracker_server("command_tracker", app_state)
 
     # --- Top-level shell: decide what to show, just like the original --
     @render.ui

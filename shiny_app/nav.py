@@ -77,6 +77,7 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
                 NavPage("bullpen_tracking", "Bullpen Tracking", "trophy"),
                 NavPage("bullpen_scripts", "Bullpen Scripts", "calendar-event"),
                 NavPage("bullpen_dashboard", "Bullpen Dashboard", "bar-chart"),
+                NavPage("command_tracker", "Command Tracker", "crosshair"),
             ])
 
         # Hitter Tracking is hitting-side -- mirror-opposite exclusion
