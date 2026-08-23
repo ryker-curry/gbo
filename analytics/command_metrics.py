@@ -207,6 +207,50 @@ def pitch_type_label(pitch):
     return pitch.pitch_type.type_name if pitch.pitch_type is not None else "Unspecified"
 
 
+class _GamePitchCommandView:
+    """Lightweight duck-typed stand-in for a CommandPitch row, built from
+    a GamePitch's own intended_plate_x/z/actual_plate_x/z columns -- lets
+    real game pitches feed every aggregate function below (and
+    visualizations/command_charts.py's command_chart()) exactly the way
+    a bullpen session's real CommandPitch rows do, with NO second,
+    parallel implementation of the miss/direction/target-band math and
+    NO CommandPitch schema change or mirrored rows. Attribute names
+    deliberately mirror CommandPitch's own column names 1:1 so every
+    consumer below stays completely unaware of the difference."""
+    __slots__ = (
+        "pitch_number", "pitch_type", "intended_x", "intended_z",
+        "actual_x", "actual_z", "horizontal_miss", "vertical_miss",
+        "miss_distance", "miss_direction",
+        "within_precision_target", "within_command_target", "within_competitive_target",
+    )
+
+    def __init__(self, game_pitch, throws):
+        p = game_pitch
+        self.pitch_number = p.pitch_sequence
+        self.pitch_type = p.pitch_type
+        self.intended_x = p.intended_plate_x
+        self.intended_z = p.intended_plate_z
+        self.actual_x = p.actual_plate_x
+        self.actual_z = p.actual_plate_z
+        derived = compute_command_pitch_fields(p.intended_plate_x, p.intended_plate_z, p.actual_plate_x, p.actual_plate_z, throws)
+        for field_name, field_value in derived.items():
+            setattr(self, field_name, field_value)
+
+
+def game_pitches_command_view(game_pitches, throws):
+    """Wrap a list of GamePitch ORM objects as command-view objects,
+    ready to pass straight into session_command_scorecard/miss_bias/
+    miss_direction_distribution/command_by_pitch_type/
+    individual_pitch_rows above, and into
+    visualizations/command_charts.py's command_chart(). Pitches with no
+    intended location at all (a real external opponent's pitcher, whose
+    intent GBO never captures -- see game_tracking.py's show_intended)
+    are silently excluded here, same as this module's own docstring:
+    command is fundamentally an intent-vs-actual comparison, not
+    computable without a known intent."""
+    return [_GamePitchCommandView(p, throws) for p in game_pitches if p.intended_plate_x is not None]
+
+
 # ---------------------------------------------------------------------------
 # Layer 2: aggregate reports -- read already-stored CommandPitch fields
 # ---------------------------------------------------------------------------
