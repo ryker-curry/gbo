@@ -38,7 +38,7 @@ access for dynamically-named inputs, same as input.name() for a static
 one) instead of a fixed list of input.<name>() calls.
 """
 
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
 from shiny import module, ui, render, reactive, req
 from sqlalchemy.orm import joinedload
@@ -46,12 +46,25 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from models import (
     Player, StaffPlayerAssignment, AssessmentCategory, AssessmentTestType,
-    Assessment, AssessmentResult, PitchType, IDPGoal, IDPStatus, BullpenPitch,
+    Assessment, AssessmentResult, PitchType, IDPGoal, IDPStatus, BullpenPitch, RapsodoPitch,
 )
 from bucket_system import BUCKET_RELEVANT_CATEGORIES, get_bucket_test_names_for_category, compute_bucket_system
+from analytics.rapsodo_goal_metrics import rapsodo_field_for_test_name, average_rapsodo_metric
 
 import ui_helpers
 import bucket_display
+
+
+def _recent_rapsodo_average(db, player_id, rapsodo_field, pitch_type_id, days):
+    """Same lookback-average helper idp.py's _rapsodo_avg uses for a
+    goal's live "Current" value -- kept in sync with that one on
+    purpose (see the fix note in top_section() below for why this
+    exists here too)."""
+    cutoff = datetime.combine(date.today() - timedelta(days=days), time.min)
+    q = db.query(RapsodoPitch).filter(RapsodoPitch.player_id == player_id, RapsodoPitch.pitch_date >= cutoff)
+    if pitch_type_id:
+        q = q.filter(RapsodoPitch.pitch_type_id == pitch_type_id)
+    return average_rapsodo_metric(q.all(), rapsodo_field)
 
 
 @module.ui
@@ -188,19 +201,39 @@ def assessments_server(input, output, session, app_state):
                 for g in open_goals:
                     unit = f" {g.target_test_type.unit}" if g.target_test_type.unit else ""
                     if g.category.category_name == "Pitcher-Specific":
-                        cutoff = date.today() - timedelta(days=30)
-                        recent_results = (
-                            db.query(AssessmentResult)
-                            .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
-                            .filter(
-                                Assessment.player_id == g.player_id,
-                                Assessment.category_id == g.category_id,
-                                Assessment.assessment_date >= cutoff,
-                                AssessmentResult.test_type_id == g.target_test_type_id,
+                        # Fix: Pitcher-Specific goals used to read this
+                        # "Current" value from AssessmentResult, but per
+                        # analytics/rapsodo_goal_metrics.py (and idp.py,
+                        # which already does this correctly) nothing
+                        # writes new AssessmentResult rows under
+                        # Pitcher-Specific any more -- real pitch data
+                        # lands in RapsodoPitch now. Reading the old
+                        # table silently showed "Current: -" for every
+                        # Pitcher-Specific goal here even when the
+                        # player had plenty of real bullpen data, which
+                        # the IDP page (same goal, same metric) showed
+                        # correctly the whole time. Mirrors idp.py's
+                        # _rapsodo_avg / goal-current-value branch.
+                        rapsodo_field = rapsodo_field_for_test_name(g.target_test_type.test_name)
+                        if rapsodo_field:
+                            current_value = _recent_rapsodo_average(db, g.player_id, rapsodo_field, g.target_pitch_type_id, 30)
+                        else:
+                            # Unmapped test (e.g. Spin Axis -- see that
+                            # module's docstring) still uses the legacy
+                            # AssessmentResult path, same as before.
+                            cutoff = date.today() - timedelta(days=30)
+                            recent_results = (
+                                db.query(AssessmentResult)
+                                .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
+                                .filter(
+                                    Assessment.player_id == g.player_id,
+                                    Assessment.category_id == g.category_id,
+                                    Assessment.assessment_date >= cutoff,
+                                    AssessmentResult.test_type_id == g.target_test_type_id,
+                                )
+                                .all()
                             )
-                            .all()
-                        )
-                        current_value = sum(float(r.value) for r in recent_results) / len(recent_results) if recent_results else None
+                            current_value = sum(float(r.value) for r in recent_results) / len(recent_results) if recent_results else None
                     else:
                         latest_pair = (
                             db.query(AssessmentResult, Assessment.assessment_date)
