@@ -23,12 +23,21 @@ silently dropped, still worth surfacing to the user in the UI):
 """
 
 from shiny import module, ui, render, reactive, req
+from shinywidgets import output_widget, render_plotly
 from sqlalchemy.orm import joinedload
 
 from database import get_session
 from models import Player, Game, GamePitch
 from game_stats import get_batting_pitches, compute_batting_line, compute_batted_ball_profile
 from plate_discipline import compute_hitter_discipline, compute_zone_tier_discipline
+# Reusing Hitter Tracking's own zone-score math/heatmap builder and its
+# CONTACT_QUALITY_SCORE/ZONE_LABELS constants -- rather than a second,
+# parallel implementation -- so a batter's "how well do I make contact
+# by zone" reads the same whether it comes from a simulated Hitter
+# Tracking session or, as of this section, real in-game at-bats.
+# _compute_zone_scores/_build_zone_heatmap_figure are generic over any
+# object exposing .pitch_zone/.contact_quality, which GamePitch does too.
+from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_figure, CONTACT_QUALITY_SCORE
 
 import ui_helpers
 
@@ -59,6 +68,7 @@ def hitter_game_report_ui():
         ui.output_ui("game_picker"),
         ui.output_ui("batter_picker"),
         ui.output_ui("report_body"),
+        ui.output_ui("contact_by_zone_section"),
         ui_helpers.page_footer(),
     )
 
@@ -233,5 +243,94 @@ def hitter_game_report_server(input, output, session, app_state):
                 sections.append(ui.p(f"Balls in Play: {profile['Balls in Play']} ({profile['Located']} with a recorded field location).", class_="text-muted small"))
 
             return ui.div(*sections)
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Contact Quality by Zone / Pitch Type -- simple first version (see
+    # task discussion): sourced from real game at-bats only via the same
+    # get_batting_pitches() call as report_body above, not from Hitter
+    # Tracking's simulated sessions. A separate top-level section (its
+    # own output_ui) rather than folded into report_body, since a
+    # render_plotly output needs its own registered function -- the
+    # nested-output_ui-inside-a-render.ui technique this whole migration
+    # already relies on elsewhere (see game_tracking.py's module
+    # docstring).
+    # -------------------------------------------------------------------
+
+    def _selected_batter_pitches(db):
+        if "game_select" not in input or "batter_select" not in input:
+            return None
+        game_id_raw, batter_id_raw = input.game_select(), input.batter_select()
+        if not game_id_raw or not batter_id_raw:
+            return None
+        return get_batting_pitches(db, int(batter_id_raw), game_id=int(game_id_raw))
+
+    @render.ui
+    def contact_by_zone_section():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        req("batter_select" in input)
+        db = get_session()
+        try:
+            pitches = _selected_batter_pitches(db)
+            if not pitches:
+                return None
+            located = [p for p in pitches if p.pitch_zone is not None and p.contact_quality in CONTACT_QUALITY_SCORE]
+            if not located:
+                return None
+            return ui.div(
+                ui.hr(),
+                ui.p(ui.strong("Contact Quality by Zone / Pitch Type")),
+                ui.p(
+                    "From this batter's actual game at-bats (located pitches only -- needs both a recorded zone and "
+                    "a contact-quality call). Same 0-3 Barrel/Solid/Weak/Miss scale Hitter Tracking uses.",
+                    class_="text-muted small",
+                ),
+                output_widget("contact_by_zone_chart"),
+                ui.output_ui("contact_by_pitch_type_table"),
+            )
+        finally:
+            db.close()
+
+    @render_plotly
+    def contact_by_zone_chart():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        db = get_session()
+        try:
+            pitches = _selected_batter_pitches(db)
+            if not pitches:
+                return None
+            scores, counts = _compute_zone_scores(pitches)
+            if not scores:
+                return None
+            return _build_zone_heatmap_figure("Contact Quality by Zone (this game)", scores, counts)
+        finally:
+            db.close()
+
+    @render.ui
+    def contact_by_pitch_type_table():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        db = get_session()
+        try:
+            pitches = _selected_batter_pitches(db)
+            if not pitches:
+                return None
+            by_type = {}
+            for p in pitches:
+                if p.contact_quality not in CONTACT_QUALITY_SCORE:
+                    continue
+                label = p.pitch_type.type_name if p.pitch_type else "Unspecified"
+                by_type.setdefault(label, []).append(CONTACT_QUALITY_SCORE[p.contact_quality])
+            if not by_type:
+                return None
+            rows = [
+                {"Pitch Type": label, "Avg Score": f"{sum(vals) / len(vals):.2f}", "Swings": len(vals)}
+                for label, vals in sorted(by_type.items(), key=lambda kv: -len(kv[1]))
+            ]
+            return ui_helpers.render_dict_table(rows)
         finally:
             db.close()
