@@ -252,6 +252,69 @@ def game_pitches_command_view(game_pitches, throws):
 
 
 # ---------------------------------------------------------------------------
+# Danger-adjusted miss -- 2026-08-23 Command+ design conversation with
+# Ryker: a miss that drifts AWAY from the heart of the zone is more
+# forgivable than one that drifts TOWARD it, even at an identical raw
+# miss_distance -- plain Euclidean miss distance can't tell the two apart.
+# This corrects for that, in the SAME inches unit as miss_distance so it
+# reads as directly comparable rather than a separate index (NOT yet a
+# true mean-100 Command+ index -- that needs a league/organizational
+# baseline to normalize against, which GBO doesn't have enough games
+# logged for yet; this is the inches-based building block for that,
+# usable right now with the data already on hand).
+#
+#   danger_delta = center_dist_actual - center_dist_intended
+#   danger_adjusted_miss = miss_distance - danger_delta   (k=1, linear --
+#       Ryker's own picks from that conversation: a fixed zone-center
+#       reference since GBO doesn't track individual batter height/stance
+#       anywhere to derive a batter-specific center from, a linear rather
+#       than escalating-near-the-heart curve, and direction weighted
+#       equally with raw distance rather than lighter or heavier)
+#
+# Bounded in [0, 2 x miss_distance] for k=1, by the reverse triangle
+# inequality (|center_dist_actual - center_dist_intended| <= miss_distance
+# always) -- 0 when the miss drifted directly away from center as far as
+# it possibly could have for that miss_distance, 2x miss_distance when it
+# drifted directly toward center as far as it possibly could have. No
+# separate floor/cap logic needed.
+#
+# Computed fresh from intended_x/z + actual_x/z rather than stored on
+# CommandPitch -- same no-migration precedent as game_pitches_command_view
+# above: no schema change, and it works identically for a real
+# CommandPitch row or a _GamePitchCommandView-adapted GamePitch, since
+# both already expose those same four attributes.
+# ---------------------------------------------------------------------------
+
+ZONE_CENTER_X_FT = 0.0
+ZONE_CENTER_Z_FT = 2.5  # ft -- matches strike_zone.py's ZONE_BOTTOM/ZONE_TOP midpoint (1.5/3.5 ft). Restated here rather than imported to avoid a new cross-module dependency for two constants -- must stay in sync if strike_zone.py's zone ever changes.
+
+
+def _center_distance_in(x, z):
+    """Euclidean distance from the zone center, in inches (x/z are feet,
+    GBO's usual plate_x/plate_z convention). None if either is missing."""
+    if x is None or z is None:
+        return None
+    return math.hypot((float(x) - ZONE_CENTER_X_FT) * FEET_TO_INCHES, (float(z) - ZONE_CENTER_Z_FT) * FEET_TO_INCHES)
+
+
+def danger_adjusted_miss(pitch):
+    """danger_delta/danger_adjusted_miss for one already-loaded pitch
+    (a CommandPitch row or a _GamePitchCommandView) -- see the module
+    comment just above for the formula and reasoning. None if the pitch
+    has no actual location yet (miss_distance is None), or, degenerately,
+    no intended location (shouldn't happen for anything that already has
+    a miss_distance, but checked rather than assumed)."""
+    if pitch.miss_distance is None:
+        return None
+    center_dist_intended = _center_distance_in(pitch.intended_x, pitch.intended_z)
+    center_dist_actual = _center_distance_in(pitch.actual_x, pitch.actual_z)
+    if center_dist_intended is None or center_dist_actual is None:
+        return None
+    danger_delta = center_dist_actual - center_dist_intended
+    return round(float(pitch.miss_distance) - danger_delta, 2)
+
+
+# ---------------------------------------------------------------------------
 # Layer 2: aggregate reports -- read already-stored CommandPitch fields
 # ---------------------------------------------------------------------------
 
@@ -273,6 +336,7 @@ def session_command_scorecard(pitches):
         "located_pitches": n,
         "avg_miss_distance": _avg([p.miss_distance for p in located]) if n else None,
         "median_miss_distance": _med([p.miss_distance for p in located]) if n else None,
+        "avg_danger_adjusted_miss": _avg([danger_adjusted_miss(p) for p in located]) if n else None,
         "precision_pct": _pct_true([p.within_precision_target for p in located]) if n else None,
         "command_target_pct": _pct_true([p.within_command_target for p in located]) if n else None,
         "competitive_pct": _pct_true([p.within_competitive_target for p in located]) if n else None,
@@ -352,6 +416,7 @@ def command_by_pitch_type(pitches, throws):
             "Pitches": len(group),
             "Located": n,
             "Avg Miss": _avg([p.miss_distance for p in located]) if n else None,
+            "Danger-Adj. Miss": _avg([danger_adjusted_miss(p) for p in located]) if n else None,
             "Median Miss": _med([p.miss_distance for p in located]) if n else None,
             "Precision %": _pct_true([p.within_precision_target for p in located]) if n else None,
             "Command Target %": _pct_true([p.within_command_target for p in located]) if n else None,
@@ -378,6 +443,7 @@ def individual_pitch_rows(pitches):
             "Intended": f"({float(p.intended_x):.2f}, {float(p.intended_z):.2f})",
             "Actual": f"({float(p.actual_x):.2f}, {float(p.actual_z):.2f})" if p.actual_x is not None else "—",
             "Miss (in)": float(p.miss_distance) if p.miss_distance is not None else None,
+            "Danger-Adj. Miss (in)": danger_adjusted_miss(p),
             "Direction": p.miss_direction or "—",
         })
     return rows

@@ -144,18 +144,6 @@ def command_tracker_server(input, output, session, app_state):
     def _bump_refresh():
         _refresh_tick.set(_refresh_tick() + 1)
 
-    def _next_pitch_number(pitches):
-        """max(pitch_number) + 1, not len(pitches) + 1 -- a per-row
-        Delete (Step 6) can remove a pitch that isn't the last one,
-        leaving a gap. len()+1 would then reuse an already-taken number
-        on the next save, producing two pitches with the same
-        pitch_number (ambiguous pitch log / chart labels, and a possible
-        IntegrityError on commit if pitch_number is uniquely constrained).
-        Returns 1 for an empty list."""
-        if not pitches:
-            return 1
-        return max(p.pitch_number for p in pitches) + 1
-
     def _access_ok():
         if not app_state.is_authenticated():
             return False
@@ -245,12 +233,6 @@ def command_tracker_server(input, output, session, app_state):
             _active_intended_z.set(2.5)
             _active_actual_x.set(0.0)
             _active_actual_z.set(2.5)
-            # Also don't carry over a mid-edit/mid-delete-confirm pitch
-            # log row from the old session -- without this, switching
-            # away and back silently reopened that row (or left a delete
-            # one click from firing) with no new Edit/Delete click.
-            _editing_pitch_id.set(None)
-            _pending_delete_pitch_id.set(None)
         _active_bullpen_id.set(new_bullpen_id)
 
     # -------------------------------------------------------------------
@@ -408,7 +390,7 @@ def command_tracker_server(input, output, session, app_state):
             active_session = db.query(BullpenSession).filter(BullpenSession.bullpen_id == bullpen_id).first()
             if active_session is None:
                 return None
-            next_pitch_number = _next_pitch_number(active_session.command_pitches)
+            next_pitch_number = len(active_session.command_pitches) + 1
         finally:
             db.close()
 
@@ -620,7 +602,7 @@ def command_tracker_server(input, output, session, app_state):
             if pitcher is None or active_session is None:
                 return
 
-            next_pitch_number = _next_pitch_number(active_session.command_pitches)
+            next_pitch_number = len(active_session.command_pitches) + 1
             derived = command_metrics.compute_command_pitch_fields(intended_x, intended_z, actual_x, actual_z, pitcher.throws)
 
             new_pitch = CommandPitch(
@@ -716,13 +698,6 @@ def command_tracker_server(input, output, session, app_state):
                             ui.input_numeric("cmd_pl_edit_ix", "Intended plate side", value=float(p.intended_x), min=strike_zone.X_MIN, max=strike_zone.X_MAX, step=0.1),
                             ui.input_numeric("cmd_pl_edit_iz", "Intended plate height", value=float(p.intended_z), min=strike_zone.Z_MIN, max=strike_zone.Z_MAX, step=0.1),
                         ),
-                        # Unchecked by default for a pitch that's never had
-                        # an actual location -- Save then leaves actual_x/z
-                        # (and every derived miss field) as None instead of
-                        # silently fabricating a (0.0, 2.5) "on target"
-                        # location, per CommandPitch's documented intent-
-                        # only-then-filled-in-later workflow (models.py).
-                        ui.input_checkbox("cmd_pl_edit_has_actual", "Actual location recorded", value=p.actual_x is not None),
                         ui.layout_columns(
                             ui.input_numeric("cmd_pl_edit_ax", "Actual plate side", value=float(p.actual_x) if p.actual_x is not None else 0.0, min=strike_zone.X_MIN, max=strike_zone.X_MAX, step=0.1),
                             ui.input_numeric("cmd_pl_edit_az", "Actual plate height", value=float(p.actual_z) if p.actual_z is not None else 2.5, min=strike_zone.Z_MIN, max=strike_zone.Z_MAX, step=0.1),
@@ -821,9 +796,7 @@ def command_tracker_server(input, output, session, app_state):
 
         pitch_type_name = input.cmd_pl_edit_pitch_type()
         intended_x, intended_z = input.cmd_pl_edit_ix(), input.cmd_pl_edit_iz()
-        has_actual = bool(input.cmd_pl_edit_has_actual()) if "cmd_pl_edit_has_actual" in input else True
-        actual_x = input.cmd_pl_edit_ax() if has_actual else None
-        actual_z = input.cmd_pl_edit_az() if has_actual else None
+        actual_x, actual_z = input.cmd_pl_edit_ax(), input.cmd_pl_edit_az()
         velocity_raw = (input.cmd_pl_edit_velocity() or "").strip()
         velocity = None
         if velocity_raw:
@@ -953,6 +926,7 @@ def command_tracker_server(input, output, session, app_state):
             children.append(ui_helpers.render_kpi_cards([
                 {"label": "Located / Total", "value": f'{scorecard["located_pitches"]}/{scorecard["total_pitches"]}'},
                 {"label": "Avg Miss", "value": _fmt(scorecard["avg_miss_distance"], " in")},
+                {"label": "Danger-Adj. Miss", "value": _fmt(scorecard["avg_danger_adjusted_miss"], " in")},
                 {"label": "Median Miss", "value": _fmt(scorecard["median_miss_distance"], " in")},
                 {"label": "Precision %", "value": _fmt(scorecard["precision_pct"], "%")},
                 {"label": "Command Target %", "value": _fmt(scorecard["command_target_pct"], "%")},
@@ -969,6 +943,7 @@ def command_tracker_server(input, output, session, app_state):
                     "Pitch Type": row["Pitch Type"],
                     "Pitches": row["Pitches"],
                     "Avg Miss (in)": row["Avg Miss"] if row["Avg Miss"] is not None else "—",
+                    "Danger-Adj. Miss (in)": row["Danger-Adj. Miss"] if row["Danger-Adj. Miss"] is not None else "—",
                     "Precision %": row["Precision %"] if row["Precision %"] is not None else "—",
                     "Command %": row["Command Target %"] if row["Command Target %"] is not None else "—",
                     "Major Miss %": row["Major Miss %"] if row["Major Miss %"] is not None else "—",
