@@ -277,13 +277,28 @@ CAPACITY_SUBGROUPS = {
 # limitation GIRD/Total Arc already had.
 MOBILITY_ROM_THRESHOLDS = {
     # Shoulder External Rotation (throwing arm, 90° abduction) --
-    # Wilk et al. 2011, uninjured high school pitchers: throwing-arm
-    # mean 130° ± 11°. Floor set ~2 SD below that mean.
+    # CITATION FIX (Aug 2026): this and the Internal Rotation floor
+    # below were previously attributed to "Wilk et al. 2011" (Am J
+    # Sports Med 39(2):329-335) -- that's a real paper, but it's about
+    # GIRD/total-rotation injury correlation in PROFESSIONAL pitchers
+    # and doesn't report these mean/SD values at all. The actual source
+    # is Hurd WJ, Kaplan KM, ElAttrache NS, Jobe FW, Morrey BF, Kaufman
+    # KR. "A Profile of Glenohumeral Internal and External Rotation
+    # Motion in the Uninjured High School Baseball Pitcher, Part I:
+    # Motion." J Athl Train. 2011;46(3):282-288. N=210 HS pitchers,
+    # PASSIVE ROM (goniometer, supine): throwing-arm mean ER 130° ±
+    # 11°. Floor set ~2 SD below that mean.
     "Shoulder: Right External Rotation": 110,
     "Shoulder: Left External Rotation": 110,
-    # Shoulder Internal Rotation (throwing arm, 90° abduction) -- Wilk
-    # 2011: throwing-arm mean 60° ± 11°; college/pro cohorts (IJSPT
-    # 2021) run closer to 62-65°. Floor set conservatively below both.
+    # Shoulder Internal Rotation (throwing arm, 90° abduction) -- same
+    # Hurd et al. 2011 source as External Rotation above: throwing-arm
+    # mean IR 60° ± 11° (HS pitchers, passive ROM). College/pro cohorts
+    # run closer to 62-65° per Wilcox CL, Plummer HA, Ostrander RV III.
+    # "Comparison of Glenohumeral Range of Motion Deficits in Youth,
+    # Collegiate, and Professional Baseball Players." Int J Sports Phys
+    # Ther. 2021;16(6):1485-1491 (passive ROM; small samples, n=9-12
+    # per group -- treat as supportive, not definitive). Floor set
+    # conservatively below both.
     # Note: a same-side absolute floor is a supplementary check only --
     # GIRD (IR deficit vs. the non-throwing arm, computed separately
     # below via compute_gird_percentiles) is the better-validated,
@@ -324,10 +339,24 @@ MOBILITY_ROM_THRESHOLDS = {
     "Hip: Plant Leg Internal Rotation": 20,
     "Hip: Drive Leg External Rotation": 18,
     "Hip: Plant Leg External Rotation": 24,
-    "Hip: Drive Leg Abduction": None,
-    "Hip: Plant Leg Abduction": None,
-    "Hip: Drive Leg Adduction": None,
-    "Hip: Plant Leg Adduction": None,
+    # Hip Abduction/Adduction -- Robb AJ, Fleisig G, Wilk K, Macrina L,
+    # Bolt B, Pajaczkowski J. "Passive Ranges of Motion of the Hips and
+    # Their Relationship With Pitching Biomechanics and Ball Velocity
+    # in Professional Baseball Pitchers." Am J Sports Med.
+    # 2010;38(12):2487-2493. N=19 pro pitchers, PASSIVE ROM (fluid
+    # goniometer), dominant (drive leg) vs. non-dominant (plant leg):
+    # Abduction 43.4° ± 12.0° (drive) / 35.7° ± 10.7° (plant) -- side
+    # difference was NOT quite statistically significant (p=.06), so
+    # take the drive/plant split here as weaker than the other hip
+    # metrics below. Adduction 50.8° ± 8.4° (drive) / 31.6° ± 6.2°
+    # (plant) -- side difference WAS significant (p<.001). Floors set
+    # ~1.5 SD below each leg's own mean, same approach as Hip Internal/
+    # External Rotation above. Smaller sample (n=19) than the rotation
+    # data (n=77/111) -- treat these floors as more provisional.
+    "Hip: Drive Leg Abduction": 25,
+    "Hip: Plant Leg Abduction": 20,
+    "Hip: Drive Leg Adduction": 38,
+    "Hip: Plant Leg Adduction": 22,
     "Hip: Drive Leg Flexion": None,
     "Hip: Plant Leg Flexion": None,
     "Hip: Drive Leg Extension": None,
@@ -712,6 +741,11 @@ SHOULDER_LEFT_FLEXION_TEST = "Shoulder: Left Flexion"
 SHOULDER_RIGHT_EXTENSION_TEST = "Shoulder: Right Extension"
 SHOULDER_LEFT_EXTENSION_TEST = "Shoulder: Left Extension"
 
+ELBOW_RIGHT_FLEXION_TEST = "Elbow: Right Flexion"
+ELBOW_LEFT_FLEXION_TEST = "Elbow: Left Flexion"
+ELBOW_RIGHT_EXTENSION_TEST = "Elbow: Right Extension"
+ELBOW_LEFT_EXTENSION_TEST = "Elbow: Left Extension"
+
 
 # ---------------------------------------------------------------------
 # Shoulder ROM compound classification (Aug 2026, per Ryker's detailed
@@ -1024,6 +1058,149 @@ def compute_shoulder_rom_profile(session, player_id, _cache=None, _throws_map=No
 
 
 # ---------------------------------------------------------------------
+# Elbow ROM compound classification (Aug 2026), per Wright RW,
+# Steger-May K, Wasserlauf BL, O'Neal ME, Weinberg BW, Paletta GA.
+# "Elbow Range of Motion in Professional Baseball Pitchers." Am J
+# Sports Med. 2006;34(2):190-193. N=33 pro pitchers, goniometer,
+# throwing arm vs. non-throwing arm: Extension loss 7.9° ± 7.4°,
+# Flexion loss 5.5° ± 7.8° (no correlation found with age, innings
+# pitched, or injury history in that sample).
+#
+# Same DERIVED/bilateral shape as Shoulder's Total Arc Deficit above
+# (a throwing-side loss vs. the non-throwing arm) -- NOT a flat
+# per-side floor, which is a different, still-unanswered question (see
+# MOBILITY_ROM_THRESHOLDS' "Elbow: Right/Left Extension" entries,
+# still None -- an absolute "normal" elbow extension number, as
+# opposed to a side-to-side loss, wasn't part of what Wright et al.
+# reports).
+#
+# IMPORTANT evidence caveat (per Ryker's "no injury WILL happen"
+# safety requirement, same as every other compound metric here):
+# unlike GIRD/Total Arc Deficit, which DO have an injury-correlation
+# literature behind them, Wright et al. 2006 explicitly found NO such
+# correlation for these two metrics. So this is presented as a
+# monitoring reference against a real baseball-pitcher population, not
+# a validated injury predictor -- status labels and explanation text
+# below are deliberately softer than Shoulder's ("Monitor Closely"
+# instead of "Red Flag — Priority Review") to avoid overstating that.
+ELBOW_ROM_STANDARDS = {
+    "Extension Loss": {
+        "variable": "Throwing Arm Elbow Extension Loss vs. Non-Throwing Arm",
+        "population": "Professional baseball pitchers",
+        "position": "Pitcher",
+        "level_of_play": "Professional (Wright et al. 2006 sample) -- applied here to college per Ryker's call, same as every other metric in this file",
+        "direction": "ceiling",
+        "green_threshold": 8,    # <=8 deg loss -- at/below the study's own sample mean (7.9°)
+        "yellow_threshold": 15,  # <=15 deg loss (~mean + 1 SD); >15 deg = red
+        "unit": "°",
+        "measurement_protocol": "Elbow Extension, dominant (throwing) arm minus non-dominant (non-throwing) arm, goniometer.",
+        "research_source": (
+            "Mean throwing-arm extension loss in pro pitchers: 7.9° ± 7.4° (n=33). Cut points here are "
+            "GBO's own interpretation (sample mean as the green ceiling, +1 SD as the yellow ceiling), "
+            "not numbers drawn directly from the study -- same approach used for Total Arc Deficit above."
+        ),
+        "citation": "Wright RW, Steger-May K, Wasserlauf BL, O'Neal ME, Weinberg BW, Paletta GA. Elbow range of motion in professional baseball pitchers. Am J Sports Med. 2006;34(2):190-193.",
+        "evidence_strength": "Low -- the source study found NO correlation between this loss and age, innings pitched, or injury history. Treat as a monitoring reference against a real pitcher population, not a validated injury predictor.",
+        "notes": "A throwing-arm elbow extension loss (\"flexion contracture\") is a well-documented finding in pitchers, believed related to repetitive valgus loading -- but this specific metric is not itself shown to predict injury.",
+    },
+    "Flexion Loss": {
+        "variable": "Throwing Arm Elbow Flexion Loss vs. Non-Throwing Arm",
+        "population": "Professional baseball pitchers",
+        "position": "Pitcher",
+        "level_of_play": "Professional (Wright et al. 2006 sample) -- applied here to college per Ryker's call, same as every other metric in this file",
+        "direction": "ceiling",
+        "green_threshold": 6,    # <=6 deg loss -- at/below the study's own sample mean (5.5°)
+        "yellow_threshold": 14,  # <=14 deg loss (~mean + 1 SD); >14 deg = red
+        "unit": "°",
+        "measurement_protocol": "Elbow Flexion, dominant (throwing) arm minus non-dominant (non-throwing) arm, goniometer.",
+        "research_source": (
+            "Mean throwing-arm flexion loss in pro pitchers: 5.5° ± 7.8° (n=33). Cut points here are "
+            "GBO's own interpretation, same approach as Extension Loss above."
+        ),
+        "citation": "Wright RW, Steger-May K, Wasserlauf BL, O'Neal ME, Weinberg BW, Paletta GA. Elbow range of motion in professional baseball pitchers. Am J Sports Med. 2006;34(2):190-193.",
+        "evidence_strength": "Low -- same caveat as Extension Loss: no injury correlation found in the source study.",
+        "notes": "Reported in the same study as Extension Loss; less commonly emphasized clinically than extension loss.",
+    },
+}
+
+_ELBOW_ROM_STATUS_LABELS = {"green": "Typical", "yellow": "Monitor", "red": "Notable — Monitor Closely"}
+
+
+def _elbow_rom_explanation(metric_key, raw, status):
+    """Same tone/format as _shoulder_rom_explanation -- numbers first,
+    short causal sentence, no "will happen" language -- but softer
+    red-tier wording than Shoulder's, since Wright et al. 2006 found no
+    injury correlation for these two metrics (see ELBOW_ROM_STANDARDS'
+    evidence_strength note)."""
+    loss = max(0, -raw)
+    joint_action = "extension" if metric_key == "Extension Loss" else "flexion"
+    sample_mean = "8" if joint_action == "extension" else "6"
+    if status == "green":
+        return (
+            f"Throwing-arm elbow {joint_action} is well-preserved versus the non-throwing arm "
+            f"(difference: {raw:+.0f}°).",
+            None,
+        )
+    if status == "yellow":
+        return (
+            f"The throwing elbow has {loss:.0f}° less {joint_action} than the non-throwing elbow -- "
+            f"somewhat more than the average loss reported in pro pitchers (~{sample_mean}°). Worth "
+            f"monitoring as part of this player's development plan.",
+            "Consider re-checking at the next testing cycle.",
+        )
+    return (
+        f"The throwing elbow has {loss:.0f}° less {joint_action} than the non-throwing elbow -- "
+        f"notably more than typically seen in pro pitchers. Not itself shown to predict injury in the "
+        f"source research, but worth a closer look.",
+        "Consider evaluation by appropriate performance/sports medicine staff if this persists or trends worse over time.",
+    )
+
+
+def compute_elbow_rom_profile(session, player_id, _cache=None, _throws_map=None):
+    """Elbow ROM compound classification -- Extension Loss and Flexion
+    Loss (throwing arm vs. non-throwing arm), per Wright et al. 2006.
+    Same derived/bilateral shape and Player.throws-based resolution as
+    compute_shoulder_rom_profile; see ELBOW_ROM_STANDARDS for the
+    evidence-strength caveat that makes this deliberately less
+    strongly worded than the Shoulder metrics.
+
+    Only includes a row for players who have both Right and Left
+    values on file for that specific test AND a known Player.throws
+    (same resolution limitation as everywhere else in this file)."""
+    throwing_flex, non_throwing_flex = resolve_side_by_throws(
+        session, ELBOW_RIGHT_FLEXION_TEST, ELBOW_LEFT_FLEXION_TEST, _cache=_cache, _throws_map=_throws_map
+    )
+    throwing_ext, non_throwing_ext = resolve_side_by_throws(
+        session, ELBOW_RIGHT_EXTENSION_TEST, ELBOW_LEFT_EXTENSION_TEST, _cache=_cache, _throws_map=_throws_map
+    )
+
+    out = []
+    if player_id in throwing_ext and player_id in non_throwing_ext:
+        raw = throwing_ext[player_id] - non_throwing_ext[player_id]
+        standard = ELBOW_ROM_STANDARDS["Extension Loss"]
+        status = _shoulder_rom_classify(max(0, -raw), standard)
+        explanation, recommendation = _elbow_rom_explanation("Extension Loss", raw, status)
+        out.append({
+            "test_name": "Elbow: Extension Loss (Throwing vs. Non-Throwing)", "raw": raw, "unit": "°",
+            "threshold": None, "status": status,
+            "status_label": _ELBOW_ROM_STATUS_LABELS[status],
+            "explanation": explanation, "recommendation": recommendation,
+        })
+    if player_id in throwing_flex and player_id in non_throwing_flex:
+        raw = throwing_flex[player_id] - non_throwing_flex[player_id]
+        standard = ELBOW_ROM_STANDARDS["Flexion Loss"]
+        status = _shoulder_rom_classify(max(0, -raw), standard)
+        explanation, recommendation = _elbow_rom_explanation("Flexion Loss", raw, status)
+        out.append({
+            "test_name": "Elbow: Flexion Loss (Throwing vs. Non-Throwing)", "raw": raw, "unit": "°",
+            "threshold": None, "status": status,
+            "status_label": _ELBOW_ROM_STATUS_LABELS[status],
+            "explanation": explanation, "recommendation": recommendation,
+        })
+    return out
+
+
+# ---------------------------------------------------------------------
 # Hip ROM derived metrics (Aug 2026, Phase 2 of Ryker's ROM redesign
 # spec). Unlike Shoulder Phase 1, NONE of these get a red/yellow/green
 # status -- per Ryker's own explicit instruction: "For hip ROM, do NOT
@@ -1170,30 +1347,36 @@ def compute_mobility_rom_report(session, player_id, _cache=None, _throws_map=Non
 
     Then appends Throwing Arm / Non-Throwing Arm Total Arc (External
     Rotation + Internal Rotation for that arm -- the standard "Total
-    Arc of Motion" shoulder ROM measure, per Wilk et al. 2011:
-    throwing-arm mean ~190° ± 15°, expected to stay roughly symmetric
-    with the non-throwing arm) as two more raw reference rows (always
+    Arc of Motion" shoulder ROM measure, per Hurd et al. 2011 (J Athl
+    Train 46(3):282-288 -- see MOBILITY_ROM_THRESHOLDS' citation-fix
+    comment; this Total Arc figure was also previously mis-attributed
+    to Wilk et al. 2011, same error, now corrected): throwing-arm mean
+    ~190° ± 15°, expected to stay roughly symmetric with the
+    non-throwing arm) as two more raw reference rows (always
     threshold=None/status=None).
 
-    Finally appends compute_shoulder_rom_profile's rows -- Total Arc
-    Deficit, GIRD (contextualized by Total Arc), External Rotation
-    Gain, and Flexion/Extension side-to-side differences (Aug 2026,
-    Ryker's ROM redesign spec, "Phase 1: Shoulder logic"). These carry
-    real red/yellow/green statuses plus "explanation"/"recommendation"/
-    "status_label" keys the plain rows above don't have -- see that
-    function's docstring. build_mobility_rom_report in bucket_display.py
-    renders whichever keys are present per row, so this doesn't break
-    the plain rows' simpler shape.
+    Finally appends compute_shoulder_rom_profile's rows (Total Arc
+    Deficit, GIRD, External Rotation Gain, Flexion/Extension side-to-
+    side differences -- Aug 2026, Ryker's ROM redesign spec "Phase 1:
+    Shoulder logic") and compute_elbow_rom_profile's rows (Extension
+    Loss, Flexion Loss -- per Wright et al. 2006, see that function's
+    docstring for the weaker-evidence caveat). Both carry real
+    red/yellow/green statuses plus "explanation"/"recommendation"/
+    "status_label" keys the plain rows above don't have -- see each
+    function's docstring. build_mobility_rom_report in
+    bucket_display.py renders whichever keys are present per row, so
+    this doesn't break the plain rows' simpler shape.
 
     Returns a list of dicts (only for metrics/sides with a raw value
     on file for this player -- no blank rows), each shaped at minimum:
       {"test_name": ..., "raw": ..., "unit": "°",
        "threshold": <float or None>, "status": "red"/"yellow"/"green"/None}
-    (compute_shoulder_rom_profile's rows add "status_label",
-    "explanation", "recommendation" on top of this). Ordered Shoulder,
-    Elbow, Hip (Drive Leg then Plant Leg per metric, in HIP_ROM_BASE_
-    METRICS' order), Total Arc reference rows, then the new compound
-    Shoulder rows last."""
+    (compute_shoulder_rom_profile's and compute_elbow_rom_profile's
+    rows add "status_label", "explanation", "recommendation" on top of
+    this). Ordered Shoulder, Elbow, Hip (Drive Leg then Plant Leg per
+    metric, in HIP_ROM_BASE_METRICS' order), Total Arc reference rows,
+    then the compound Shoulder rows, then the compound Elbow rows,
+    last."""
     out = []
     for test_name, threshold in MOBILITY_ROM_THRESHOLDS.items():
         if test_name.startswith("Hip:"):
@@ -1236,6 +1419,7 @@ def compute_mobility_rom_report(session, player_id, _cache=None, _throws_map=Non
         out.append({"test_name": "Non-Throwing Arm Total Arc", "raw": non_throwing_arc[player_id], "unit": "°", "threshold": None, "status": None})
 
     out.extend(compute_shoulder_rom_profile(session, player_id, _cache=_cache, _throws_map=_throws_map))
+    out.extend(compute_elbow_rom_profile(session, player_id, _cache=_cache, _throws_map=_throws_map))
     out.extend(compute_hip_rom_profile(session, player_id, _cache=_cache, _throws_map=_throws_map))
     return out
 
