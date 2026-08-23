@@ -335,6 +335,7 @@ role):
     and orthogonal.
 """
 
+import re
 import uuid
 from datetime import date
 
@@ -899,6 +900,7 @@ def game_tracking_server(input, output, session, app_state):
     _registered_pitch_row_ids = set()
     _gt_editing_pitch_id = reactive.Value(None)
     _gt_pending_delete_pitch_id = reactive.Value(None)
+    _pitch_log_limit = reactive.Value(50)  # "Load more" bumps this by 50 at a time -- see pitch_log_body
 
     def _bump_refresh():
         _refresh_tick.set(_refresh_tick() + 1)
@@ -1048,6 +1050,14 @@ def game_tracking_server(input, output, session, app_state):
         req("game_select" in input)
         raw = input.game_select()
         _active_game_id.set(int(raw) if raw else None)
+        # Per-game Pitch Log UI state shouldn't survive a switch to a
+        # different game -- same reasoning as Command Tracker's
+        # _sync_active_bullpen_id resetting its own editing/delete state
+        # on a real session switch (this session's earlier fix for a
+        # stale-state bug of the same shape).
+        _gt_editing_pitch_id.set(None)
+        _gt_pending_delete_pitch_id.set(None)
+        _pitch_log_limit.set(50)
 
     # -------------------------------------------------------------------
     # New game
@@ -2636,7 +2646,13 @@ def game_tracking_server(input, output, session, app_state):
                     return
                 ab_outcome = input.ab_outcome_select()
                 final_outs = int(input.final_outs_input())
-                final_bases = input.final_bases_input()
+                final_bases = (input.final_bases_input() or "").strip()
+                if not re.fullmatch(r"[01]{3}", final_bases):
+                    ui.notification_show(
+                        'Bases after must be exactly 3 characters of 0/1 (e.g. "010" = runner on 2nd only) -- pitch not recorded.',
+                        type="error", duration=10,
+                    )
+                    return
                 final_runs = int(input.final_runs_input())
 
             notes = ((input.pitch_notes_input() or "").strip() if "pitch_notes_input" in input else "")
@@ -3166,12 +3182,14 @@ def game_tracking_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
+            limit = _pitch_log_limit()
+            total_count = db.query(GamePitch).filter(GamePitch.game_id == game_id).count()
             pitches = (
                 db.query(GamePitch)
                 .options(joinedload(GamePitch.pitch_type), joinedload(GamePitch.our_player), joinedload(GamePitch.opponent_our_player), joinedload(GamePitch.opponent_player))
                 .filter(GamePitch.game_id == game_id)
                 .order_by(GamePitch.pitch_sequence.desc())
-                .limit(50).all()
+                .limit(limit).all()
             )
             if not pitches:
                 return ui.div(ui.h5("Pitch log", class_="gbo-section-title"), ui_helpers.empty_state("No pitches logged yet for this game."))
@@ -3183,7 +3201,7 @@ def game_tracking_server(input, output, session, app_state):
             if editing_id is not None:
                 pitch_type_choices = {pt.type_name: pt.type_name for pt in db.query(PitchType).order_by(PitchType.pitch_type_id).all()}
 
-            rows = [ui.h5("Pitch log", class_="gbo-section-title")]
+            rows = [ui.h5(f"Pitch log ({min(len(pitches), total_count)} of {total_count})", class_="gbo-section-title")]
             for p in pitches:
                 pt_name = p.pitch_type.type_name if p.pitch_type else "—"
                 opponent_label = (
@@ -3294,9 +3312,17 @@ def game_tracking_server(input, output, session, app_state):
                 else:
                     rows.append(ui.div(*summary_children))
 
+            if total_count > len(pitches):
+                rows.append(ui.input_action_button("gt_pl_load_more_btn", f"Load 50 more ({total_count - len(pitches)} older pitch(es) not shown)", class_="btn-outline-secondary btn-sm mt-2"))
+
             return ui.div(*rows)
         finally:
             db.close()
+
+    @reactive.effect
+    @reactive.event(input.gt_pl_load_more_btn)
+    def _load_more_pitch_log():
+        _pitch_log_limit.set(_pitch_log_limit() + 50)
 
     def _register_pitch_row_handlers(pitch_id):
         edit_btn_id = f"gt_pl_edit_btn_{pitch_id}"
