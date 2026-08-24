@@ -67,9 +67,34 @@ def rapsodo_import_ui():
 def rapsodo_import_server(input, output, session, app_state):
     _refresh_tick = reactive.Value(0)
     _last_import = reactive.Value(None)  # (import_record, target_bullpen) after a successful import
+    # Bug fix (Aug 2026, Ryker: "previous pitcher's data is still there"):
+    # Shiny's ui.input_file has no built-in way to clear a previously
+    # selected file, and _last_import above wasn't being reset when the
+    # pitcher changed -- so switching from Pitcher A to Pitcher B left
+    # Pitcher A's file still "selected" in the widget AND Pitcher A's
+    # "Imported pitches" summary still on screen. Worse: if someone
+    # switched pitchers and clicked Import again without deliberately
+    # re-choosing a file, Pitcher A's already-selected file would get
+    # imported and attributed to Pitcher B. Fix: give the file input a
+    # dynamic id keyed off this counter -- bumping it forces Shiny to
+    # mount a brand-new (empty) file widget, the standard reset trick
+    # since there's no ui.update_file(). Bumped whenever the pitcher
+    # changes (_reset_upload_on_pitcher_change below) and after every
+    # successful import (_do_import), so the next upload always starts
+    # from a clean slate.
+    _upload_key = reactive.Value(0)
 
     def _bump_refresh():
         _refresh_tick.set(_refresh_tick() + 1)
+
+    def _upload_input_id():
+        return f"rapsodo_file_{_upload_key()}"
+
+    @reactive.effect
+    @reactive.event(input.selected_pitcher_id)
+    def _reset_upload_on_pitcher_change():
+        _upload_key.set(_upload_key() + 1)
+        _last_import.set(None)
 
     def _blocked_for_role():
         role_name = app_state.role_name()
@@ -271,14 +296,15 @@ def rapsodo_import_server(input, output, session, app_state):
             return ui.p("Read-only access -- upload is disabled for your role.", class_="text-muted small")
 
         return ui.div(
-            ui.input_file("rapsodo_file", "Rapsodo CSV export", accept=[".csv"]),
+            ui.input_file(_upload_input_id(), "Rapsodo CSV export", accept=[".csv"]),
             ui.output_ui("upload_preview_and_import"),
         )
 
     @render.ui
     def upload_preview_and_import():
-        req("rapsodo_file" in input)
-        files = input.rapsodo_file()
+        upload_id = _upload_input_id()
+        req(upload_id in input)
+        files = input[upload_id]()
         if not files:
             return ui.p("Upload a Rapsodo CSV export to continue.", class_="text-muted small")
 
@@ -323,7 +349,8 @@ def rapsodo_import_server(input, output, session, app_state):
     def _do_import():
         selected_pitcher_id = int(input.selected_pitcher_id())
         target_bullpen_id = input.target_bullpen_choice()
-        files = input.rapsodo_file()
+        upload_id = _upload_input_id()
+        files = input[upload_id]() if upload_id in input else None
         if not files:
             return
         with open(files[0]["datapath"], "rb") as f:
@@ -371,6 +398,12 @@ def rapsodo_import_server(input, output, session, app_state):
 
             db.commit()
             _last_import.set((import_record.import_id, target_bullpen.bullpen_id, target_bullpen.session_date))
+            # Clear the file widget after every successful import (same
+            # reset trick as the pitcher-change handler above) -- without
+            # this, the just-imported file stays "selected," and a stray
+            # second click on Import would try to re-import the exact
+            # same file (caught by DuplicateImportError, but confusing).
+            _upload_key.set(_upload_key() + 1)
 
             summary_msg = f"Imported {import_record.imported_row_count} pitch(es) into the {target_bullpen.session_date.strftime('%Y-%m-%d (%a)')} session."
             if import_record.rejected_row_count:
