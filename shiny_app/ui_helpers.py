@@ -19,13 +19,17 @@ from shiny import ui
 import theme
 
 
-def page_header(title: str):
-    """Consistent page title with a crimson accent underline -- used in
-    place of a plain <h1> on every page for a unified look."""
-    return ui.div(
-        ui.div(title, class_="gbo-page-header"),
-        ui.div(class_="gbo-page-header-underline"),
-    )
+def page_header(title: str, subtitle: str = None, actions=None):
+    """Page title block (display face, uppercase). Optional subtitle
+    line and a right-aligned actions slot (buttons) -- see
+    GBO-DESIGN-SYSTEM.md section 5. Old one-arg calls keep working."""
+    left = [ui.div(title, class_="gbo-page-header")]
+    if subtitle:
+        left.append(ui.div(subtitle, class_="gbo-page-sub"))
+    children = [ui.div(*left)]
+    if actions:
+        children.append(ui.div(*(actions if isinstance(actions, (list, tuple)) else [actions]), class_="gbo-page-actions"))
+    return ui.div(*children, class_="gbo-page-head")
 
 
 def page_footer():
@@ -43,6 +47,111 @@ def empty_state(message: str, icon: str = ""):
         children.append(ui.div(icon, class_="icon"))
     children.append(message)
     return ui.div(*children, class_="gbo-empty-state")
+
+
+# ---------------------------------------------------------------------
+# v2 design-system components (GBO-DESIGN-SYSTEM.md section 6)
+# ---------------------------------------------------------------------
+
+STATUS_GOOD, STATUS_WATCH, STATUS_FLAG, STATUS_NEUTRAL = "good", "watch", "flag", "neutral"
+_STATUS_LABEL = {"good": "Good", "watch": "Attention", "flag": "Priority", "neutral": "—", "gold": "Elite"}
+
+
+def status_from_percentile(pct):
+    """Default status rule (design doc section 7): >=60 good, 35-59
+    attention, <35 priority, None -> neutral. Callers with a
+    threshold-based rule (ROM) map their own red/yellow/green instead."""
+    if pct is None:
+        return STATUS_NEUTRAL
+    if pct >= 60:
+        return STATUS_GOOD
+    if pct >= 35:
+        return STATUS_WATCH
+    return STATUS_FLAG
+
+
+def status_from_color_word(word):
+    """Maps the bucket system's 'green'/'yellow'/'orange'/'red' words
+    onto the three design-system statuses."""
+    return {"green": STATUS_GOOD, "yellow": STATUS_WATCH, "orange": STATUS_FLAG, "red": STATUS_FLAG}.get((word or "").lower(), STATUS_NEUTRAL)
+
+
+def status_chip(status: str, label: str = None):
+    """Pill with a dot + text label. status: good|watch|flag|neutral|gold|crimson."""
+    return ui.span(label or _STATUS_LABEL.get(status, status), class_=f"gbo-chip gbo-chip-{status}")
+
+
+def pill(text: str):
+    return ui.span(text, class_="gbo-pill")
+
+
+def card(*children, title: str = None, right=None, small: bool = False, class_: str = ""):
+    """Quiet surface card with an optional header row (title left,
+    anything -- text or a link -- right)."""
+    head = None
+    if title is not None or right is not None:
+        head = ui.div(ui.h3(title or ""), ui.div(right, class_="right") if right is not None else None, class_="gbo-card-head")
+    return ui.div(head, *children, class_=f"gbo-card {'sm' if small else ''} {class_}".strip())
+
+
+def section_title(title: str, right=None):
+    """In-page section heading with an optional right-aligned caption."""
+    return ui.div(ui.div(title, class_="gbo-section-title"), ui.div(right, class_="right") if right is not None else None, class_="gbo-section-title-row")
+
+
+def metric_bar(name: str, value_text: str, pct, status: str = None, percentile_text: str = None, unit: str = None):
+    """One metric row: name left, value right, status-colored 6px
+    track, optional caption. pct is the fill 0-100 (None -> 0)."""
+    st = status or status_from_percentile(pct)
+    width = max(0, min(100, float(pct or 0)))
+    raw = [value_text]
+    if unit:
+        raw.append(ui.span(unit, class_="unit"))
+    return ui.div(
+        ui.div(ui.span(name, class_="gbo-metric-bar-name"), ui.span(*raw, class_="gbo-metric-bar-raw"), class_="gbo-metric-bar-header"),
+        ui.div(ui.div(class_=f"gbo-metric-bar-fill {st}", style=f"width:{width:.0f}%"), class_="gbo-metric-bar-track"),
+        ui.div(percentile_text, class_="gbo-metric-bar-percentile") if percentile_text else None,
+        class_="gbo-metric-bar-row",
+    )
+
+
+def score_ring(value, label: str, status: str = None, sublabel: str = None, size_px: int = 96):
+    """Conic-gradient score ring, 0-100, colored by status (gold at
+    >=90 by default)."""
+    pct = max(0, min(100, float(value or 0)))
+    st = status or ("gold" if pct >= 90 else status_from_percentile(pct))
+    return ui.div(
+        ui.div(
+            ui.div(ui.div(f"{pct:.0f}", class_="gbo-ring-value"), ui.div(sublabel, class_="gbo-ring-sublabel") if sublabel else None, class_="gbo-ring-inner"),
+            class_=f"gbo-ring {st}", style=f"--gbo-ring-pct:{pct:.0f}; width:{size_px}px; height:{size_px}px;",
+        ),
+        ui.div(label, class_="gbo-ring-label"),
+        class_="gbo-ring-col",
+    )
+
+
+def kpi_tile(label: str, value, unit: str = None, delta: str = None, delta_positive=None, status: str = None):
+    """Single KPI tile. delta_positive: True (green), False (red), None (muted)."""
+    val = [ui.span(value if not isinstance(value, (int, float, str)) else str(value), class_="gbo-kpi-accent")]
+    if unit:
+        val.append(ui.tags.small(unit))
+    parts = [ui.div(label, class_="gbo-kpi-label"), ui.div(*val, class_="gbo-kpi-value")]
+    if delta:
+        arrow = "▲ " if delta_positive is True else "▼ " if delta_positive is False else "— "
+        cls = "positive" if delta_positive is True else "negative" if delta_positive is False else ""
+        parts.append(ui.div(arrow + delta, class_=f"gbo-kpi-delta {cls}"))
+    return ui.div(*parts, class_=f"gbo-kpi-card {status or ''}".strip())
+
+
+def bucket_card(title: str, score, status: str, why, right=None):
+    """Collapsed bucket summary row: score, title + one-line why, chip."""
+    sc = "gold" if (score is not None and float(score) >= 90) else status
+    return ui.div(
+        ui.div(f"{float(score):.0f}" if score is not None else "—", class_=f"gbo-bucket-score {sc}"),
+        ui.div(ui.div(title, class_="gbo-bucket-title"), ui.div(why, class_="gbo-bucket-why") if why else None),
+        right if right is not None else status_chip(status),
+        class_="gbo-bucket",
+    )
 
 
 def render_staff_profile_header(first_name: str, last_name: str, role_name: str, show_logo: bool = True, photo_url: str = None):
@@ -183,3 +292,59 @@ def remove_selected_grid_rows(rows: list, selected_records: list) -> list:
                 del remaining[i]
                 break
     return remaining
+
+
+def show_card(player, bucket_data, pitch_summary=None, flag="neutral"):
+    """MLB-The-Show-style player card (design doc section 8). Reads
+    only what the bucket system already computes:
+      Overall  = total_score
+      BODY/PWR/STR/SPD/ARM = bucket scores (percentile-based, 0-100)
+      ROM      = share of Mobility & ROM rows that are green (0-100)
+      Pitchers also get VELO/SPIN from the latest Rapsodo session
+      (shown as the raw mph/rpm, bar scaled 70-100 mph / 1500-2800 rpm).
+    Tier by overall: 90+ gold, 80-89 crimson, 70-79 silver, else slate.
+    Positions never get pitching rows; nothing is invented when data is
+    missing -- the row shows a dash."""
+    bd = bucket_data or {}
+    overall = bd.get("total_score")
+    tier = "gold" if (overall or 0) >= 90 else "crimson" if (overall or 0) >= 80 else "silver" if (overall or 0) >= 70 else "slate"
+    tier_color = {"gold": "var(--gbo-gold)", "crimson": "var(--gbo-crimson)", "silver": "var(--gbo-silver)", "slate": "var(--gbo-text-muted)"}[tier]
+    rom = bd.get("mobility_rom_report") or []
+    statused = [r for r in rom if r.get("status") in ("red", "yellow", "green")]
+    rom_score = round(100 * sum(1 for r in statused if r["status"] == "green") / len(statused)) if statused else None
+
+    def bar(label, value, display=None, lo=0, hi=100, status=None):
+        if value is None:
+            return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_="neutral", style="width:0"), class_="b"), ui.span("—", class_="v"), class_="gbo-at")
+        pct = max(0, min(100, (float(value) - lo) / (hi - lo) * 100))
+        st = status or ("gold" if pct >= 90 else status_from_percentile(pct))
+        return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_=st, style=f"width:{pct:.0f}%"), class_="b"), ui.span(display if display is not None else f"{float(value):.0f}", class_="v"), class_="gbo-at")
+
+    attrs = [
+        bar("BODY", bd.get("body_comp_score")), bar("PWR", bd.get("power_score")),
+        bar("STR", bd.get("strength_score")), bar("SPD", bd.get("speed_score")),
+        bar("ARM", bd.get("capacity_score")), bar("ROM", rom_score),
+    ]
+    if getattr(player, "is_pitcher", False):
+        ps = pitch_summary or {}
+        v, sp = ps.get("avg_velocity"), ps.get("avg_spin_rate")
+        attrs += [bar("VELO", v, f"{v:.1f}" if v else None, 70, 100), bar("SPIN", sp, f"{sp:,.0f}" if sp else None, 1500, 2800)]
+
+    pos = player.player_position.position_name if getattr(player, "player_position", None) else None
+    cls = player.player_class.class_name if getattr(player, "player_class", None) else None
+    cls_short = (cls or "").replace("Redshirt ", "RS ").replace("Freshman", "FR").replace("Sophomore", "SO").replace("Junior", "JR").replace("Senior", "SR").replace("Graduate", "GR")
+    meta = [pill(x) for x in [pos, f"{player.bats or '-'} / {player.throws or '-'}", cls_short] if x]
+    if flag and flag != "neutral":
+        meta.append(status_chip(flag))
+    photo = ui.tags.img(src=player.photo_url, class_="gbo-show-photo-img", alt="") if getattr(player, "photo_url", None) else ui.HTML('<svg viewBox="0 0 24 24" fill="currentColor" class="gbo-show-silhouette"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0z"/></svg>')
+    return ui.div(
+        ui.div(
+            ui.div(f"{overall:.0f}" if overall is not None else "—", ui.tags.small("Overall"), class_="gbo-show-ovr"),
+            ui.div(ui.div(player.first_name, class_="gbo-show-nm"), ui.div(player.last_name, class_="gbo-show-ln"), ui.div(*meta, class_="gbo-show-meta"), class_="gbo-show-who"),
+            class_="gbo-show-hd",
+        ),
+        ui.div(photo, ui.div(str(player.jersey_number) if player.jersey_number else "", class_="gbo-show-num"), class_="gbo-show-photo"),
+        ui.div(*attrs, class_="gbo-show-attrs"),
+        ui.div(ui.tags.img(src=theme.LOGO_URL, alt=""), ui.span("Pitt State"), ui.span(f"{tier} tier", class_="rt"), class_="gbo-show-ft"),
+        class_="gbo-show", style=f"--tier:{tier_color}",
+    )

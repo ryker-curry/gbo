@@ -30,7 +30,7 @@ import plotly.graph_objects as go
 
 from pitch_type_config import get_pitch_color
 from analytics.bullpen_metrics import pitch_type_label
-from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, TEXT_CREAM, GOLD
+from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, TEXT_CREAM, GOLD, MUTED_GRAY
 from strike_zone import ZONE_HALF_WIDTH, ZONE_BOTTOM, ZONE_TOP
 
 
@@ -140,8 +140,8 @@ def movement_chart(pitches, min_pitches_for_shading=2):
     # Bold gold reference lines through the origin -- drawn after the
     # cluster shading (so they sit on top of it) but before the data
     # points, same layering as the ring version.
-    fig.add_shape(type="line", x0=0, x1=0, y0=-y_extent, y1=y_extent, line=dict(color=GOLD, width=2.5))
-    fig.add_shape(type="line", x0=-x_extent, x1=x_extent, y0=0, y1=0, line=dict(color=GOLD, width=2.5))
+    fig.add_shape(type="line", x0=0, x1=0, y0=-y_extent, y1=y_extent, line=dict(color=MUTED_GRAY, width=2.5))
+    fig.add_shape(type="line", x0=-x_extent, x1=x_extent, y0=0, y1=0, line=dict(color=MUTED_GRAY, width=2.5))
 
     for label in order:
         group = groups[label]
@@ -155,7 +155,7 @@ def movement_chart(pitches, min_pitches_for_shading=2):
         ]
         fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="markers", name=label,
-            marker=dict(color=color, size=10, opacity=0.9, line=dict(color="#1E1E1E", width=1)),
+            marker=dict(color=color, size=10, opacity=0.9, line=dict(color="#171B21", width=1)),
             customdata=customdata,
             hovertemplate=(
                 f"{label}<br>Pitch #%{{customdata[0]}}<br>"
@@ -226,8 +226,8 @@ def release_point_chart(pitches, mode="individual"):
 
     # Bold gold crosshair at (0, 0) -- drawn first so it sits behind
     # the data points.
-    fig.add_shape(type="line", x0=0, x1=0, y0=Y_MIN, y1=Y_MAX, line=dict(color=GOLD, width=2.5))
-    fig.add_shape(type="line", x0=X_MIN, x1=X_MAX, y0=0, y1=0, line=dict(color=GOLD, width=2.5))
+    fig.add_shape(type="line", x0=0, x1=0, y0=Y_MIN, y1=Y_MAX, line=dict(color=MUTED_GRAY, width=2.5))
+    fig.add_shape(type="line", x0=X_MIN, x1=X_MAX, y0=0, y1=0, line=dict(color=MUTED_GRAY, width=2.5))
 
     if mode == "average":
         for label in order:
@@ -238,7 +238,7 @@ def release_point_chart(pitches, mode="individual"):
             avg_x, avg_y = sum(xs) / len(xs), sum(ys) / len(ys)
             fig.add_trace(go.Scatter(
                 x=[avg_x], y=[avg_y], mode="markers", name=label,
-                marker=dict(color=color, size=20, line=dict(color="#1E1E1E", width=1.5)),
+                marker=dict(color=color, size=20, line=dict(color="#171B21", width=1.5)),
                 hovertemplate=f"{label} average ({len(group)} pitches)<br>Side: %{{x:.2f}} ft<br>Height: %{{y:.2f}} ft<extra></extra>",
             ))
         title = "Release Point — Average by Pitch Type"
@@ -251,7 +251,7 @@ def release_point_chart(pitches, mode="individual"):
             customdata = [[p.pitch_number, float(p.velocity) if p.velocity is not None else None] for p in group]
             fig.add_trace(go.Scatter(
                 x=xs, y=ys, mode="markers", name=label,
-                marker=dict(color=color, size=10, opacity=0.75, line=dict(color="#1E1E1E", width=1)),
+                marker=dict(color=color, size=10, opacity=0.75, line=dict(color="#171B21", width=1)),
                 customdata=customdata,
                 hovertemplate=f"{label}<br>Pitch #%{{customdata[0]}}<br>Velocity: %{{customdata[1]:.1f}} mph<br>Side: %{{x:.2f}} ft<br>Height: %{{y:.2f}} ft<extra></extra>",
             ))
@@ -268,8 +268,8 @@ def release_point_chart(pitches, mode="individual"):
         # real screenshot Ryker sent. Push the legend further up and
         # widen the top margin so the two don't compete for the same
         # cramped default space.
-        legend=dict(orientation="h", yanchor="bottom", y=1.15, xanchor="left", x=0, bgcolor="rgba(0,0,0,0)"),
-        margin=dict(t=90, b=40, l=50, r=30),
+        legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0, bgcolor="rgba(0,0,0,0)"),
+        margin=dict(t=44, b=70, l=50, r=30),
     )
     return fig
 
@@ -299,7 +299,7 @@ def location_chart(pitches, mode="heatmap"):
             customdata = [[p.pitch_number, float(p.velocity) if p.velocity is not None else None] for p in group]
             fig.add_trace(go.Scatter(
                 x=xs, y=ys, mode="markers", name=label,
-                marker=dict(color=color, size=10, opacity=0.8, line=dict(color="#1E1E1E", width=1)),
+                marker=dict(color=color, size=10, opacity=0.8, line=dict(color="#171B21", width=1)),
                 customdata=customdata,
                 hovertemplate=f"{label}<br>Pitch #%{{customdata[0]}}<br>Velocity: %{{customdata[1]:.1f}} mph<br>Side: %{{x:.2f}} ft<br>Height: %{{y:.2f}} ft<extra></extra>",
             ))

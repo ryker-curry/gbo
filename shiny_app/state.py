@@ -51,6 +51,7 @@ class AppState:
     # render and immediately clears it back to None so revisiting the
     # page later doesn't keep jumping back to that same old session.
     deep_link_bullpen_id: reactive.Value
+    deep_link_player_id: reactive.Value   # set by Roster, consumed once by Player Profile
 
     def is_authenticated(self) -> bool:
         """True once Supabase login succeeded AND a matching, active GBO
@@ -77,6 +78,7 @@ class AppState:
         self.coach_specialty.set(None)
         self.is_pitcher.set(False)
         self.deep_link_bullpen_id.set(None)
+        self.deep_link_player_id.set(None)
 
 
 def new_app_state() -> AppState:
@@ -96,4 +98,5 @@ def new_app_state() -> AppState:
         is_pitcher=reactive.Value(False),
         dark_mode=reactive.Value("dark"),
         deep_link_bullpen_id=reactive.Value(None),
+        deep_link_player_id=reactive.Value(None),
     )
