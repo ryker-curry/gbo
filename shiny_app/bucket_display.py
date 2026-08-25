@@ -35,7 +35,6 @@ here calls it anymore) so callers didn't need to change.
 """
 
 from shiny import ui
-import ui_helpers
 
 from bucket_system import BODY_COMP_METRICS
 
@@ -253,7 +252,7 @@ def build_percentage_rings(metrics, key_prefix, show_ordinal=False, mode="dark")
             ]
         ring = ui.div(
             ui.div(*inner_children, class_="gbo-ring-inner"),
-            class_=f"gbo-ring {'gold' if pct >= 90 else ui_helpers.status_from_percentile(pct)}",
+            class_="gbo-ring",
             style=f"--gbo-ring-pct: {pct};",
         )
         children = [ring]
@@ -277,10 +276,17 @@ def build_score_rings(bucket_data, key_prefix, mode="dark"):
     return build_percentage_rings(specs, key_prefix, show_ordinal=True, mode=mode)
 
 
-def _ordinal(n):
+def ordinal(n):
     """11/12/13 stay "th" even though they end in 1/2/3 (11th, 12th,
     13th, not 11st/12nd/13rd) -- the usual English ordinal-suffix
-    exception."""
+    exception. Public (Aug 2026 -- was _ordinal, private/internal to
+    this module only): player_profile.py's own percentile captions
+    (Development priorities, Overview tab's "Lowest" line and metric
+    bars) were still hardcoding "{pct:.0f}th" everywhere, reading as
+    "72th"/"71th" instead of "72nd"/"71st" -- Ryker's call to fix.
+    Rather than a second copy of this logic there, this one function is
+    now the single source of truth every percentile caption in the app
+    goes through."""
     n = int(round(n))
     if 10 <= n % 100 <= 20:
         suffix = "th"
@@ -321,7 +327,7 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark"):
         pct = raw_percentile if raw_percentile is not None else 0
         pct = max(0, min(100, pct))
         raw_label = f"{d['raw']:.2f}{d['unit'] or ''}"
-        percentile_label = f"{_ordinal(raw_percentile)} percentile" if raw_percentile is not None else "No percentile data"
+        percentile_label = f"{ordinal(raw_percentile)} percentile" if raw_percentile is not None else "No percentile data"
         rows.append(ui.div(
             ui.div(
                 ui.span(name, class_="gbo-metric-bar-name"),
@@ -329,7 +335,7 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark"):
                 class_="gbo-metric-bar-header",
             ),
             ui.div(
-                ui.div(class_=f"gbo-metric-bar-fill {ui_helpers.status_from_percentile(raw_percentile)}", style=f"width: {pct}%;"),
+                ui.div(class_="gbo-metric-bar-fill", style=f"width: {pct}%;"),
                 class_="gbo-metric-bar-track",
             ),
             ui.p(percentile_label, class_="gbo-metric-bar-percentile"),
