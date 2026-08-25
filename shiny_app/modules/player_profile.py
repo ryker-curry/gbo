@@ -33,7 +33,7 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from models import (Player, StaffPlayerAssignment, Assessment, AssessmentCategory, BullpenSession,
                     RapsodoPitch, IDPGoal, Video)
-from bucket_system import compute_bucket_system
+from bucket_system import compute_bucket_system, list_seasons, current_season_label
 from analytics.bullpen_metrics import session_summary, pitch_type_summary
 from pitch_type_config import FASTBALL_TYPES
 import bucket_display
@@ -87,7 +87,7 @@ def _priorities(bd, limit=3):
 @module.ui
 def player_profile_ui():
     return ui.div(
-        ui.output_ui("picker"),
+        ui.div(ui.output_ui("picker"), ui.output_ui("season_picker"), style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;"),
         ui.output_ui("body"),
         ui_helpers.page_footer(),
     )
@@ -96,6 +96,13 @@ def player_profile_ui():
 @module.server
 def player_profile_server(input, output, session, app_state):
     _selected = reactive.Value(None)
+    # None = current season (compute_bucket_system's own default) --
+    # only set to something else once the coach actually picks a past
+    # season from season_picker() below. Aug 2026, Ryker: "coaches
+    # should be able to go back and look at a player's overall scores
+    # for previous seasons" -- see SEASONS/list_seasons in
+    # bucket_system.py for how a season's date window is defined.
+    _selected_season = reactive.Value(None)
 
     def _visible_players(db):
         q = db.query(Player).options(joinedload(Player.player_position), joinedload(Player.player_class), joinedload(Player.status))
@@ -137,6 +144,23 @@ def player_profile_server(input, output, session, app_state):
         except (TypeError, ValueError):
             pass
 
+    @render.ui
+    def season_picker():
+        # Unlike picker() above, NOT gated behind role -- a Player-role
+        # user should still be able to look back at their own past
+        # seasons, they just never see the player dropdown next to it.
+        if not app_state.is_authenticated():
+            return None
+        cur = current_season_label()
+        choices = {label: (f"{label} (current)" if label == cur else label) for label, _, _ in list_seasons()}
+        sel = _selected_season() if _selected_season() in choices else cur
+        return ui.div(ui.input_select("season", "Season", choices, selected=sel, width="220px"), style="margin-bottom:8px;")
+
+    @reactive.effect
+    @reactive.event(input.season)
+    def _on_season():
+        _selected_season.set(input.season())
+
     @reactive.effect
     @reactive.event(input.go_assess)
     def _go_assess():
@@ -176,7 +200,11 @@ def player_profile_server(input, output, session, app_state):
             p = db.query(Player).options(joinedload(Player.player_position), joinedload(Player.player_class), joinedload(Player.status)).filter(Player.player_id == pid).first()
             if p is None:
                 return ui_helpers.card(ui_helpers.empty_state("That player doesn't exist or you don't have access."))
-            bd = compute_bucket_system(db, pid) or {}
+            # season_label=None resolves to the current season inside
+            # compute_bucket_system -- _selected_season only holds a
+            # real value once the coach (or player) has actually picked
+            # a season from season_picker() above.
+            bd = compute_bucket_system(db, pid, season_label=_selected_season() or None) or {}
             last_by_cat = db.query(AssessmentCategory.category_name, func.max(Assessment.assessment_date)).join(Assessment, Assessment.category_id == AssessmentCategory.category_id).filter(Assessment.player_id == pid).group_by(AssessmentCategory.category_name).all()
             last_date = max((d for _, d in last_by_cat), default=None)
             last_cat = next((c for c, d in last_by_cat if d == last_date), None)
@@ -197,7 +225,14 @@ def player_profile_server(input, output, session, app_state):
                                       " ".join(x for x in [_fmt_height(p.height_in), f"{float(p.weight_lb):.0f} lb" if p.weight_lb else None] if x) or None, p.hometown] if x)
         can_edit = app_state.role_name() != "Player"
         actions = [ui.input_action_button("go_idp", "Add goal", class_="btn-outline-light"), ui.input_action_button("go_assess", "Log assessment", class_="btn-primary")] if can_edit else []
-        header = ui_helpers.page_header(f"{p.first_name} {p.last_name}", meta, actions=actions)
+        # Called out in the subtitle whenever the season picker isn't on
+        # "current" -- everything below (card, bucket scores, Mobility &
+        # ROM, Assessments tab) is scoped to that past season's data,
+        # not this player's live/current standing, and that's easy to
+        # miss without an explicit flag here.
+        season_label = bd.get("season_label")
+        season_note = f" · Viewing {season_label} (historical)" if season_label and season_label != current_season_label() else ""
+        header = ui_helpers.page_header(f"{p.first_name} {p.last_name}", meta + season_note, actions=actions)
 
         pris = _priorities(bd)
         flag = ui_helpers.STATUS_NEUTRAL if not bd.get("total_score") and not pris else (ui_helpers.STATUS_FLAG if any(s == "flag" for s, _, _ in pris) else ui_helpers.STATUS_WATCH if pris else ui_helpers.STATUS_GOOD)
