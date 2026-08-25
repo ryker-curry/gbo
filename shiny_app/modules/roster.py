@@ -25,7 +25,7 @@ from sqlalchemy.orm import joinedload
 
 from database import get_session
 from models import Player, StaffPlayerAssignment, Assessment
-from bucket_system import compute_bucket_system, list_seasons, current_season_label, season_date_range
+from bucket_system import compute_bucket_system, list_seasons, current_season_label, season_date_range, build_roster_batch_cache
 import ui_helpers
 
 
@@ -129,19 +129,31 @@ def roster_server(input, output, session, app_state):
             if season_end is not None:
                 last_q = last_q.filter(Assessment.assessment_date < season_end)
             last = dict(last_q.all())
+
+            # One shared batch fetch for the WHOLE team instead of
+            # once per player -- see build_roster_batch_cache's
+            # docstring. Without this, viewing a past season (which
+            # drops the active-roster-only filter and has no lower
+            # date bound for "Before 2026-2027") meant ~57 players x
+            # the same expensive whole-roster query repeated, slow
+            # enough to look like the page had hung (Aug 2026, Ryker).
+            pool_cache, pool_units, throws_map, active_only = build_roster_batch_cache(db, season_label=season_label)
+
             rows = []
             for p in players:
                 bd = None
                 try:
-                    # season_label=None (current season) is threaded
-                    # through unchanged; a past-season label makes
-                    # compute_bucket_system pull that season's own
-                    # roster-at-the-time comparison pool AND (per the
-                    # include_player_id fix) still score an inactive
-                    # player against his own data for that window --
-                    # Aug 2026, Ryker: "inactive players should have a
-                    # score."
-                    bd = compute_bucket_system(db, p.player_id, season_label=season_label)
+                    if active_only and not p.active:
+                        # Only case the shared cache above doesn't
+                        # already cover: an inactive player scored
+                        # against the CURRENT season, who needs his
+                        # own include_player_id carve-out (Aug 2026,
+                        # Ryker: "inactive players should have a
+                        # score") -- falls back to its own fetch since
+                        # no _cache is passed here.
+                        bd = compute_bucket_system(db, p.player_id, season_label=season_label)
+                    else:
+                        bd = compute_bucket_system(db, p.player_id, season_label=season_label, _cache=pool_cache, _units=pool_units, _throws_map=throws_map)
                 except Exception:
                     bd = None
                 flag, why = _flag_for(bd)

@@ -134,7 +134,16 @@ document.addEventListener('wheel', function (e) {
 """
 
 app_ui = ui.page_fluid(
-    ui.tags.head(theme.fonts_link(), ui.tags.style(theme.GLOBAL_CSS), chart_helpers.plotly_js_dep()),
+    # chart_helpers.plotly_js_dep() used to be included here for the
+    # brief window where fig_to_img() rendered live plotly.js in the
+    # browser -- that was reverted back to kaleido/static-PNG rendering
+    # ("Quiet Bullpen Dashboard chart warnings, fix pitch-color
+    # collisions"), which deleted plotly_js_dep() from chart_helpers.py
+    # but missed this call site, breaking app startup (AttributeError)
+    # the next time the server actually restarted. fig_to_img() no
+    # longer needs plotly.js in the page at all, so this is just
+    # removed rather than re-added.
+    ui.tags.head(theme.fonts_link(), ui.tags.style(theme.GLOBAL_CSS)),
     ui.tags.script(_NO_WHEEL_SCROLL_JS),
     ui.tags.script(theme.MOTION_JS),
     ui.output_ui("shell"),

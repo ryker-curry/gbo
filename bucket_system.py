@@ -1738,11 +1738,64 @@ def classify_development_profile(output_score, capacity_score, balance_pct):
     return "Output-Dominant" if balance_pct > 0 else "Capacity-Dominant"
 
 
-def compute_bucket_system(session, player_id, season_label=None):
+def build_roster_batch_cache(session, season_label=None):
+    """One shared batch-fetch for computing compute_bucket_system() for
+    EVERY player on the team at once, instead of once per player (Aug
+    2026, Ryker: Roster page's Season picker -- "view guys' scores
+    from last year"). Without this, a caller needing every player's
+    rollup (roster.py) would call compute_bucket_system() once per
+    player, and each call independently re-ran the exact same whole-
+    roster batch fetch -- fine (if wasteful) for the CURRENT season's
+    tighter active-roster-only window, but genuinely slow -- slow
+    enough to look hung -- for a past/"Before" season's wide-open,
+    unbounded date range times ~60 players.
+
+    Returns (cache, units, throws_map, active_only). Pass cache/units/
+    throws_map straight into compute_bucket_system's own _cache/
+    _units/_throws_map params -- safe to reuse AS-IS for every player
+    EXCEPT one case: an INACTIVE player being scored for the CURRENT
+    season still needs their own individual, uncached
+    compute_bucket_system(session, player_id, season_label=season_
+    label) call (no _cache/_units/_throws_map passed) so it falls back
+    to its own include_player_id carve-out fetch -- see compute_
+    bucket_system's docstring. That's active_only True (the returned
+    flag) and the player himself inactive; every other combination
+    (active_only False, i.e. any past season already including
+    everyone -- or the player being active) is identical to this
+    shared cache already, so reusing it is correct, not an
+    approximation."""
+    season_label = season_label or current_season_label()
+    season_start, season_end = season_date_range(season_label)
+    active_only = season_label == current_season_label()
+    cache, units = _batch_fetch_latest_values(session, _all_bucket_test_names(), season_start=season_start, season_end=season_end, active_only=active_only)
+    throws_map = get_player_throws_map(session)
+    return cache, units, throws_map, active_only
+
+
+def compute_bucket_system(session, player_id, season_label=None, _cache=None, _units=None, _throws_map=None):
     """The full rollup for one player: raw values + percentiles per
     metric, sub-group percentiles (Breakdown 1), bucket percentiles
     (Breakdown 2: Body Comp/Power/Strength/Speed), and the final Total
     (Breakdown 3, Body Comp + Power + Strength only).
+
+    _cache/_units/_throws_map: optional pre-fetched batch data (see
+    _batch_fetch_latest_values/get_player_throws_map) -- when all
+    three are provided, this SKIPS its own internal batch-fetch and
+    reads straight from what the caller already built. Aug 2026,
+    Ryker: the Roster page ("view guys' scores from last year") calls
+    this once per player on the team -- without this, each of those
+    ~57 calls independently re-ran the SAME whole-roster batch fetch
+    (identical query, 57 times over), which is merely wasteful for the
+    current season's tighter active-roster-only window but genuinely
+    slow -- slow enough to look hung -- for a past/"Before" season's
+    wide-open, unbounded date range. Roster now builds ONE shared
+    cache/units/throws_map for the whole team + season upfront and
+    passes it to every player whose own carve-out (see
+    include_player_id below) doesn't actually differ from that shared
+    pool -- see roster.py's _players(). Every other existing caller
+    (Player Profile, My Assessments, Dashboard) still calls this with
+    none of these three set, so it's unaffected and keeps doing its
+    own single-player fetch exactly as before.
 
     Also returns the Physical Development extension: capacity_score
     (new), output_score (= power_score/strength_score averaged, not a
@@ -1791,13 +1844,18 @@ def compute_bucket_system(session, player_id, season_label=None):
     # -- every downstream compute_metric_percentiles/resolve_side_by_
     # throws/etc. call below reads only from this cache (see
     # get_latest_values_by_player's docstring), so scoping it here is
-    # sufficient to scope the whole rollup.
-    _cache, _units = _batch_fetch_latest_values(session, _all_bucket_test_names(), season_start=season_start, season_end=season_end, active_only=active_only, include_player_id=player_id)
+    # sufficient to scope the whole rollup. Skipped entirely when the
+    # caller already passed in a pre-built _cache/_units (see this
+    # function's docstring) -- e.g. roster.py sharing one fetch across
+    # every player on the team instead of paying for it 57 times.
+    if _cache is None or _units is None:
+        _cache, _units = _batch_fetch_latest_values(session, _all_bucket_test_names(), season_start=season_start, season_end=season_end, active_only=active_only, include_player_id=player_id)
     # Player.throws lookup itself was never roster-scoped (see
     # get_player_throws_map's own docstring) -- it's a handedness
     # lookup, not a comparison pool, so it already covers inactive
-    # players with no change needed here.
-    _throws_map = get_player_throws_map(session)
+    # players with no change needed here. Also skippable via _throws_map.
+    if _throws_map is None:
+        _throws_map = get_player_throws_map(session)
 
     # Body Comp -- score is averaged from ONLY the 2 scoring metrics
     # (BODY_COMP_METRICS), but the metrics dict returned for display
