@@ -55,7 +55,7 @@ line just says "in the navigation" here.
 
 from datetime import date, timedelta
 
-from shiny import module, ui, render
+from shiny import module, ui, render, reactive
 from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
 
@@ -71,6 +71,7 @@ from game_stats import get_pitching_pitches, get_batting_pitches, compute_pitchi
 from bucket_system import compute_bucket_system
 
 import ui_helpers
+import team_overview
 import bucket_display
 
 # How many of the team's most recent completed games count as "recent
@@ -87,7 +88,6 @@ RECENT_GAMES_COUNT = 5
 @module.ui
 def dashboard_ui():
     return ui.div(
-        ui_helpers.page_header("Dashboard"),
         ui.output_ui("controls"),
         ui.output_ui("body"),
         ui_helpers.page_footer(),
@@ -121,6 +121,12 @@ def dashboard_server(input, output, session, app_state):
             )
         return None
 
+    @reactive.effect
+    @reactive.event(input.open_player)
+    def _open_player():
+        app_state.deep_link_player_id.set(int(input.open_player()))
+        ui.update_navs("main_nav", selected="Player Profile", session=session.root_scope())
+
     @render.ui
     def body():
         if not app_state.is_authenticated():
@@ -138,14 +144,13 @@ def dashboard_server(input, output, session, app_state):
                 return _player_dashboard_ui(db, current_user_id, mode)
 
             sections = [
-                _staff_header_ui(
-                    db, current_user_id,
-                    app_state.first_name() or "", app_state.last_name() or "",
-                    role_name,
-                )
+                ui_helpers.page_header(
+                    "Team dashboard",
+                    f"{date.today().strftime('%A, %b %d')} · {app_state.first_name()} {app_state.last_name()} · {role_name}",
+                ),
             ]
 
-            player_query = db.query(Player).options(joinedload(Player.status)).filter(Player.active.is_(True))
+            player_query = db.query(Player).options(joinedload(Player.status), joinedload(Player.player_position)).filter(Player.active.is_(True))
             if not can_view_all:
                 assigned_ids = [
                     a.player_id for a in
@@ -165,6 +170,13 @@ def dashboard_server(input, output, session, app_state):
 
             week_ago = date.today() - timedelta(days=7)
 
+            # v2: team overview block (flags, attention list, today,
+            # bucket status, coverage) ahead of the role-specific section.
+            try:
+                sections.append(team_overview.build(db, players, player_ids, session.ns))
+            except Exception as exc:  # never let the overview take the whole dashboard down
+                sections.append(ui_helpers.empty_state(f"Team overview unavailable: {exc}"))
+
             if role_name == "Athletic Trainer":
                 sections.append(_athletic_trainer_section(db, players, player_ids))
             elif role_name == "Strength Coach":
@@ -183,8 +195,9 @@ def dashboard_server(input, output, session, app_state):
                 sections.append(_hitter_staff_section(db, players, input.kpi_window()))
             elif role_name in ("Head Coach", "Coach"):
                 sections.append(_head_coach_section(db, players, player_ids, week_ago))
-            else:
-                sections.append(_general_section(db, players, player_ids, week_ago))
+            # (v2) the generic section's KPIs/recent lists are now covered by
+            # the team overview above, so Administrator / Data Analyst get
+            # nothing extra here.
 
             return ui.div(*sections)
         finally:

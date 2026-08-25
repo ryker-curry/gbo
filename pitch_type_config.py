@@ -89,20 +89,24 @@ _RAW_ALIASES = {
 # Canonical type -> chart color (hex). Every chart module should import
 # this dict rather than hardcoding or positionally cycling colors.
 PITCH_TYPE_COLORS = {
-    "4-Seam Fastball": "#BF1E2D",  # GBO crimson
-    "2-Seam Fastball": "#F76707",
-    "Cutter": "#D4AF37",  # GBO gold
-    "Slider": "#4C6EF5",
-    "Changeup": "#37B24D",
-    "Curveball": "#AE3EC9",
-    "Splitter": "#0CA678",
-    "Fastball": "#E64980",
+    # v2 design-system palette (GBO-DESIGN-SYSTEM.md section 2) -- validated
+    # for colorblind separation on the dark card surface. Crimson and gold
+    # are deliberately NOT pitch colors anymore: they're the app's action
+    # and rating colors, so a chart series shouldn't borrow them.
+    "4-Seam Fastball": "#3A8FE0",
+    "Fastball": "#3A8FE0",
+    "2-Seam Fastball": "#7F7EDB",
+    "Cutter": "#E0713F",
+    "Slider": "#B08618",
+    "Changeup": "#B85FC4",
+    "Curveball": "#2A9E7A",
+    "Splitter": "#49B0A0",
 }
 
 # Used for any pitch type that reaches a chart without a color assigned
 # above (a newly added PitchType row nobody's updated this dict for yet)
 # -- a chart should never fail to render for a missing color.
-DEFAULT_PITCH_COLOR = "#6B6B6B"
+DEFAULT_PITCH_COLOR = "#7A8594"
 
 
 def normalize_pitch_type(raw_label):

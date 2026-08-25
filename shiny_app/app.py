@@ -58,7 +58,7 @@ from auth import do_login, do_logout  # noqa: E402
 import nav  # noqa: E402
 import ui_helpers  # noqa: E402
 import theme  # noqa: E402
-import click_widgets  # noqa: E402
+import chart_helpers  # noqa: E402
 from modules import (  # noqa: E402
     dashboard, player_schedule, player_stats, players, assessments, video_import,
     team_schedule, player_assignments, at_appointments, rapsodo_import,
@@ -66,7 +66,7 @@ from modules import (  # noqa: E402
     analytics, pitcher_game_report, hitter_game_report, bullpen_dashboard,
     user_management, staff_assignments, hitter_tracking,
     opponent_teams, bullpen_scripts, training_routines, idp, bullpen_tracking,
-    game_tracking, command_tracker,
+    game_tracking, command_tracker, roster, player_profile,
 )
 
 # Registry of page keys (see nav.NavPage.key) that have a real Shiny
@@ -103,6 +103,8 @@ MODULE_UI = {
     "bullpen_tracking": lambda: bullpen_tracking.bullpen_tracking_ui("bullpen_tracking"),
     "game_tracking": lambda: game_tracking.game_tracking_ui("game_tracking"),
     "command_tracker": lambda: command_tracker.command_tracker_ui("command_tracker"),
+    "roster": lambda: roster.roster_ui("roster"),
+    "player_profile": lambda: player_profile.player_profile_ui("player_profile"),
 }
 
 # Fix for "scrolling through a page feels like it keeps refreshing/
@@ -131,27 +133,14 @@ document.addEventListener('wheel', function (e) {
 }, { passive: true, capture: true });
 """
 
-app_ui = ui.page_fillable(
-    ui.tags.style(theme.GLOBAL_CSS),
+app_ui = ui.page_fluid(
+    ui.tags.head(theme.fonts_link(), ui.tags.style(theme.GLOBAL_CSS), chart_helpers.plotly_js_dep()),
     ui.tags.script(_NO_WHEEL_SCROLL_JS),
-    # Installed once, app-wide, so every click_widgets.click_target()
-    # wrapper on every page (Command Tracker's two location widgets,
-    # Game Tracking's intended/batted-ball/video-review widgets) is
-    # covered by one shared listener -- see click_widgets.py's module
-    # docstring for why this replaced the old FigureWidget.on_click()
-    # Python round-trip.
-    ui.tags.script(click_widgets.CLICK_CAPTURE_JS),
-    ui.div(
-        ui.input_dark_mode(id="dark_mode", mode="dark"),
-        class_="gbo-mode-toggle",
-    ),
+    ui.tags.script(theme.MOTION_JS),
     ui.output_ui("shell"),
     title="Gorilla Baseball Operations",
-    fillable_mobile=True,
+    style="padding:0;",
     # No theme= here on purpose -- see theme.py's GBO_THEME comment.
-    # Styling comes entirely from the plain-CSS GLOBAL_CSS injected
-    # above, so there's no Sass compile step (and no libsass native
-    # dependency) at app startup.
 )
 
 
@@ -191,6 +180,17 @@ def server(input, output, session):
     def _on_logout():
         do_logout(app_state)
 
+    @reactive.effect
+    @reactive.event(input.sidebar_go)
+    def _on_sidebar_go():
+        ui.update_navs("main_nav", selected=input.sidebar_go())
+
+    @reactive.effect
+    async def _mirror_nav_to_sidebar():
+        title = input.main_nav()
+        if title:
+            await session.send_custom_message("gbo-nav-active", {"title": title})
+
     # --- Mount every page module's server ONCE, unconditionally --------
     # (see module docstring above for why always-mount is the safe
     # pattern here, and modules/dashboard.py for what an individual
@@ -224,6 +224,8 @@ def server(input, output, session):
     bullpen_tracking.bullpen_tracking_server("bullpen_tracking", app_state)
     game_tracking.game_tracking_server("game_tracking", app_state)
     command_tracker.command_tracker_server("command_tracker", app_state)
+    roster.roster_server("roster", app_state)
+    player_profile.player_profile_server("player_profile", app_state)
 
     # --- Top-level shell: decide what to show, just like the original --
     @render.ui
@@ -242,6 +244,7 @@ def _login_ui(app_state):
     error_html = ui.div(ui.tags.span(error, class_="text-danger small"), class_="mt-2 text-center") if error else ui.div()
 
     return ui.div(
+        ui.div(ui.input_dark_mode(id="dark_mode", mode="dark"), class_="gbo-mode-toggle", style="position:fixed;top:12px;right:16px;"),
         ui.div(
             theme.logo_img(css_class="gbo-auth-logo"),
             ui.div("Gorilla Baseball Operations", class_="gbo-page-header", style="text-align:center;"),
@@ -447,32 +450,165 @@ def _account_not_set_up_ui():
     )
 
 
+# --- v2 shell: left sidebar + top bar + hidden navset ------------------
+# Page modules still switch pages with ui.update_navs("main_nav",
+# selected=<page title>) -- the navset is now ui.navset_hidden with the
+# same id and the same nav_panel titles, so those calls keep working.
+# The sidebar is plain HTML; clicking a link sets the Shiny input
+# `sidebar_go` (page title) and the server calls update_navs. The
+# server also mirrors input.main_nav back to the sidebar so
+# programmatic jumps highlight the right link.
+
+# Regroup nav.py's role-gated pages into the design-system groups
+# (GBO-DESIGN-SYSTEM.md section 5). Unknown keys fall into "Other".
+_NAV_GROUPS = [
+    ("Overview", ["dashboard"]),
+    ("Roster", ["roster", "player_profile", "players"]),
+    ("Development", ["assessments", "idp", "training_routines", "player_assignments", "team_schedule", "at_appointments"]),
+    ("Pitching", ["bullpen_dashboard", "bullpen_tracking", "bullpen_scripts", "rapsodo_import"]),
+    ("Hitting", ["hitter_tracking"]),
+    ("Games", ["game_tracking", "pitcher_game_report", "hitter_game_report", "analytics"]),
+    ("Scouting", ["opponent_teams"]),
+    ("Admin", ["user_management", "staff_assignments", "video_import"]),
+    ("Me", ["player_profile", "player_schedule", "player_development", "player_stats", "player_game_stats", "player_hitting", "player_video", "player_bullpens"]),
+]
+_NAV_LABELS = {
+    "players": "Player setup", "roster": "Players", "idp": "Development plans", "rapsodo_import": "Import Rapsodo",
+    "analytics": "Player stats", "at_appointments": "AT appointments", "player_assignments": "Assignments",
+    "team_schedule": "Team schedule", "user_management": "Users", "staff_assignments": "Staff assignments",
+}
+_ICONS = {
+    "roster": '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0113 0M16 4a3.5 3.5 0 010 7M21.5 20a6.5 6.5 0 00-5-6.3"/>',
+    "player_profile": '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/>',
+    "dashboard": '<path d="M3 11l9-7 9 7v9a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z"/>',
+    "players": '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/>',
+    "assessments": '<path d="M9 4h6v3H9zM7 6H5v15h14V6h-2M8 13l2 2 5-5"/>',
+    "idp": '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1"/>',
+    "training_routines": '<path d="M4 12h3l2-6 4 12 2-6h5"/>',
+    "player_assignments": '<path d="M5 5h14v14H5zM8 12l3 3 5-6"/>',
+    "team_schedule": '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+    "at_appointments": '<path d="M12 4v16M4 12h16"/><rect x="3" y="3" width="18" height="18" rx="3"/>',
+    "bullpen_dashboard": '<path d="M4 20V9M10 20V4M16 20v-8M22 20H2"/>',
+    "bullpen_tracking": '<circle cx="12" cy="12" r="8"/><path d="M8 8c2 2 2 6 0 8M16 8c-2 2-2 6 0 8"/>',
+    "bullpen_scripts": '<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h6M9 17h6"/>',
+    "rapsodo_import": '<path d="M12 3v12M7 10l5 5 5-5M4 21h16"/>',
+    "hitter_tracking": '<path d="M4 20L18 6l2 2L6 22zM15 3l6 6"/>',
+    "game_tracking": '<path d="M12 3l8 8-8 10-8-10z"/><path d="M12 3v18M4 11h16"/>',
+    "pitcher_game_report": '<path d="M5 4h14v16H5zM8 9h8M8 13h8M8 17h5"/>',
+    "hitter_game_report": '<path d="M5 4h14v16H5zM8 9h8M8 13h8M8 17h5"/>',
+    "analytics": '<path d="M3 17l6-6 4 4 8-8M14 7h7v7"/>',
+    "opponent_teams": '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
+    "user_management": '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>',
+    "staff_assignments": '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>',
+    "video_import": '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/>',
+    "player_schedule": '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+    "player_development": '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>',
+    "player_stats": '<path d="M9 4h6v3H9zM7 6H5v15h14V6h-2M8 13l2 2 5-5"/>',
+    "player_game_stats": '<path d="M4 20V9M10 20V4M16 20v-8M22 20H2"/>',
+    "player_hitting": '<path d="M4 20L18 6l2 2L6 22zM15 3l6 6"/>',
+    "player_video": '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/>',
+    "player_bullpens": '<circle cx="12" cy="12" r="8"/><path d="M8 8c2 2 2 6 0 8M16 8c-2 2-2 6 0 8"/>',
+}
+
+_SIDEBAR_JS = """
+(function(){
+  function setActive(title){
+    document.querySelectorAll('.gbo-side-link[data-title]').forEach(function(b){
+      b.classList.toggle('active', b.getAttribute('data-title') === title);
+    });
+    var c = document.getElementById('gbo-crumb');
+    if (c) { c.innerHTML = '<b>' + title.replace(/</g,'&lt;') + '</b>'; }
+  }
+  document.addEventListener('click', function(e){
+    var b = e.target && e.target.closest ? e.target.closest('.gbo-side-link[data-title]') : null;
+    if (!b) return;
+    var t = b.getAttribute('data-title');
+    setActive(t);
+    if (window.Shiny) { Shiny.setInputValue('sidebar_go', t, {priority: 'event'}); }
+    var side = document.querySelector('.gbo-side'); if (side) side.classList.remove('open');
+  });
+  document.addEventListener('click', function(e){
+    var m = e.target && e.target.closest ? e.target.closest('.gbo-menu-btn') : null;
+    if (!m) return; var side = document.querySelector('.gbo-side'); if (side) side.classList.toggle('open');
+  });
+  if (window.Shiny) {
+    Shiny.addCustomMessageHandler('gbo-nav-active', function(msg){ setActive(msg.title); });
+  }
+})();
+"""
+
+
+def _icon(key):
+    path = _ICONS.get(key, '<circle cx="12" cy="12" r="3"/>')
+    return ui.HTML(f'<svg viewBox="0 0 24 24" aria-hidden="true">{path}</svg>')
+
+
+def _sidebar(app_state, sections):
+    pages_by_key = {}
+    for section in sections:
+        for page in section.pages:
+            pages_by_key.setdefault(page.key, page)
+    placed = set()
+    groups = []
+    for gtitle, keys in _NAV_GROUPS:
+        items = [pages_by_key[k] for k in keys if k in pages_by_key and k not in placed]
+        if items:
+            groups.append((gtitle, items)); placed.update(p.key for p in items)
+    leftovers = [p for k, p in pages_by_key.items() if k not in placed]
+    if leftovers:
+        groups.append(("Other", leftovers))
+
+    links = []
+    first_title = None
+    for gtitle, items in groups:
+        links.append(ui.div(gtitle, class_="gbo-side-group"))
+        for page in items:
+            if first_title is None:
+                first_title = page.title
+            label = _NAV_LABELS.get(page.key, page.title)
+            links.append(ui.tags.button(_icon(page.key), ui.span(label), class_="gbo-side-link" + (" active" if page.title == first_title else ""), type="button", **{"data-title": page.title}))
+
+    initials = (app_state.first_name() or "?")[:1] + (app_state.last_name() or "")[:1]
+    me = ui.div(
+        ui.div(initials.upper(), class_="gbo-avatar"),
+        ui.div(ui.div(f"{app_state.first_name()} {app_state.last_name()}", class_="gbo-side-me-name"), ui.span(app_state.role_name(), class_="gbo-role-badge")),
+        class_="gbo-side-me",
+    )
+    brand = ui.div(theme.logo_img(css_class=""), ui.div(ui.div("GBO", class_="gbo-brand-title"), ui.div("Gorilla Baseball Ops", class_="gbo-brand-sub")), class_="gbo-brand")
+    return ui.tags.aside(brand, *links, me, class_="gbo-side"), first_title
+
+
 def _app_shell_ui(app_state):
     sections = nav.build_nav_sections(
         app_state.role_name(), app_state.coach_specialty(), app_state.is_pitcher()
     )
+    sidebar, first_title = _sidebar(app_state, sections)
 
-    nav_items = []
+    panels = []
     for section in sections:
-        panels = [ui.nav_panel(page.title, _page_body(page)) for page in section.pages]
-        if len(panels) == 1 and len(section.pages) == 1 and section.title == "Dashboard":
-            nav_items.append(panels[0])
-        else:
-            nav_items.append(ui.nav_menu(section.title, *panels))
+        for page in section.pages:
+            panels.append(ui.nav_panel(page.title, _page_body(page)))
 
-    return ui.navset_bar(
-        *nav_items,
-        ui.nav_spacer(),
-        ui.nav_control(
-            ui.tags.span(
-                f"{app_state.first_name()} {app_state.last_name()} ",
-                ui.tags.span(app_state.role_name(), class_="gbo-role-badge ms-1"),
-                class_="navbar-text me-2",
-            )
+    topbar = ui.div(
+        ui.tags.button(ui.HTML('<svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2"><path d="M4 7h16M4 12h16M4 17h16"/></svg>'), class_="btn btn-outline-light gbo-menu-btn", type="button"),
+        ui.div(ui.HTML(f"<b>{first_title}</b>"), class_="gbo-crumb", id="gbo-crumb"),
+        ui.div(
+            ui.div(ui.input_dark_mode(id="dark_mode", mode="dark"), class_="gbo-mode-toggle"),
+            ui.input_action_button("logout_button", "Log out", class_="btn-sm btn-outline-light"),
+            class_="gbo-top-right",
         ),
-        ui.nav_control(ui.input_action_button("logout_button", "Log out", class_="btn-sm btn-outline-light")),
-        title=ui.div(theme.logo_img(), "GBO", class_="gbo-navbar-brand"),
-        id="main_nav",
+        class_="gbo-top",
+    )
+
+    return ui.div(
+        sidebar,
+        ui.div(
+            topbar,
+            ui.div(ui.navset_hidden(*panels, id="main_nav", selected=first_title), class_="gbo-content"),
+            class_="gbo-main",
+        ),
+        ui.tags.script(_SIDEBAR_JS),
+        class_="gbo-app",
     )
 
 

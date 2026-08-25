@@ -35,6 +35,7 @@ here calls it anymore) so callers didn't need to change.
 """
 
 from shiny import ui
+import ui_helpers
 
 from bucket_system import BODY_COMP_METRICS
 
@@ -252,7 +253,7 @@ def build_percentage_rings(metrics, key_prefix, show_ordinal=False, mode="dark")
             ]
         ring = ui.div(
             ui.div(*inner_children, class_="gbo-ring-inner"),
-            class_="gbo-ring",
+            class_=f"gbo-ring {'gold' if pct >= 90 else ui_helpers.status_from_percentile(pct)}",
             style=f"--gbo-ring-pct: {pct};",
         )
         children = [ring]
@@ -328,7 +329,7 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark"):
                 class_="gbo-metric-bar-header",
             ),
             ui.div(
-                ui.div(class_="gbo-metric-bar-fill", style=f"width: {pct}%;"),
+                ui.div(class_=f"gbo-metric-bar-fill {ui_helpers.status_from_percentile(raw_percentile)}", style=f"width: {pct}%;"),
                 class_="gbo-metric-bar-track",
             ),
             ui.p(percentile_label, class_="gbo-metric-bar-percentile"),

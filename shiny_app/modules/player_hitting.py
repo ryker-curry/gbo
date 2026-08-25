@@ -47,14 +47,14 @@ def _render_zone_heatmap(title, zone_scores, zone_counts, subtitle=None):
     fig = go.Figure(data=go.Heatmap(
         z=z, text=text, texttemplate="%{text}", textfont=dict(color="#111111", size=14),
         colorscale="RdYlGn", zmin=0, zmax=3, showscale=True,
-        colorbar=dict(title="Avg score", tickfont=dict(color="#FFFDE5"), title_font=dict(color="#FFFDE5")),
+        colorbar=dict(title="Avg score", tickfont=dict(color="#AEB6C2"), title_font=dict(color="#AEB6C2")),
         xgap=3, ygap=3,
     ))
     fig.update_layout(
         title=title,
         height=380,
-        plot_bgcolor="#1E1E1E", paper_bgcolor="#1E1E1E",
-        font=dict(color="#FFFDE5"),
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#AEB6C2"),
         xaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
         yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
         margin=dict(t=40, b=20, l=20, r=20),

@@ -44,7 +44,9 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
 
     if role_name in ("Administrator", "Head Coach", "Coach", "Strength Coach", "Athletic Trainer", "Sports Scientist", "Data Analyst"):
         pd_pages = [
-            NavPage("players", "Players", "person"),
+            NavPage("roster", "Roster", "people"),
+            NavPage("player_profile", "Player Profile", "person-badge"),
+            NavPage("players", "Player setup", "person"),
             NavPage("assessments", "Assessments", "clipboard-check"),
             NavPage("video_import", "Video Import", "camera-video"),
             NavPage("idp", "IDP", "bullseye"),
@@ -115,6 +117,7 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
 
     if role_name == "Player":
         my_dev_pages = [
+            NavPage("player_profile", "My Profile", "person-badge"),
             NavPage("player_schedule", "My Schedule", "calendar3"),
             NavPage("player_development", "My Development", "bullseye"),
             NavPage("player_stats", "My Assessments", "graph-up"),
