@@ -25,7 +25,7 @@ from sqlalchemy.orm import joinedload
 
 from database import get_session
 from models import Player, StaffPlayerAssignment, Assessment
-from bucket_system import compute_bucket_system
+from bucket_system import compute_bucket_system, list_seasons, current_season_label, season_date_range
 import ui_helpers
 
 
@@ -68,6 +68,7 @@ def roster_ui():
     return ui.div(
         ui.output_ui("head"),
         ui.div(
+            ui.div(ui.output_ui("season_picker"), class_="gbo-filter"),
             ui.div(ui.input_select("pos", "Position", {"all": "All positions", "P": "Pitchers", "C": "Catchers", "IF": "Infield", "OF": "Outfield"}), class_="gbo-filter"),
             ui.div(ui.input_select("status", "Status", {"active": "Active", "all": "All", "injured": "Injured / medical hold", "inactive": "Inactive"}), class_="gbo-filter"),
             ui.div(ui.input_select("flag", "Flag", {"any": "Any", "flag": "Priority only", "watch": "Attention + priority"}), class_="gbo-filter"),
@@ -82,11 +83,39 @@ def roster_ui():
 @module.server
 def roster_server(input, output, session, app_state):
     _rows = reactive.Value(None)
+    # Which season the roster is scoped to -- None means "current
+    # season" (the default every coach lands on). Aug 2026, Ryker:
+    # "i want to be able to view guys scores from last year" -- same
+    # season-picker pattern already built for Player Profile (see
+    # bucket_system.list_seasons/current_season_label/season_date_range
+    # and player_profile.py's own _selected_season/season_picker).
+    _selected_season = reactive.Value(None)
+
+    @render.ui
+    def season_picker():
+        if not app_state.is_authenticated():
+            return None
+        cur = current_season_label()
+        choices = {label: (f"{label} (current)" if label == cur else label) for label, _, _ in list_seasons()}
+        sel = _selected_season() if _selected_season() in choices else cur
+        return ui.input_select("season", "Season", choices, selected=sel)
+
+    @reactive.effect
+    @reactive.event(input.season)
+    def _on_season():
+        _selected_season.set(input.season())
 
     @reactive.calc
     def _players():
         if not app_state.is_authenticated():
             return []
+        season_label = _selected_season() or None
+        resolved_label = season_label or current_season_label()
+        # "Last test" should reflect that season's own window too --
+        # otherwise viewing a past season would still show today's
+        # date next to historical scores (Aug 2026, Ryker's follow-up
+        # to the season-picker request).
+        season_start, season_end = season_date_range(resolved_label)
         db = get_session()
         try:
             q = db.query(Player).options(joinedload(Player.player_position), joinedload(Player.player_class), joinedload(Player.status))
@@ -94,12 +123,25 @@ def roster_server(input, output, session, app_state):
                 ids = [a.player_id for a in db.query(StaffPlayerAssignment).filter(StaffPlayerAssignment.staff_user_id == app_state.user_id()).all()]
                 q = q.filter(Player.player_id.in_(ids))
             players = q.order_by(Player.last_name, Player.first_name).all()
-            last = dict(db.query(Assessment.player_id, func.max(Assessment.assessment_date)).group_by(Assessment.player_id).all())
+            last_q = db.query(Assessment.player_id, func.max(Assessment.assessment_date)).group_by(Assessment.player_id)
+            if season_start is not None:
+                last_q = last_q.filter(Assessment.assessment_date >= season_start)
+            if season_end is not None:
+                last_q = last_q.filter(Assessment.assessment_date < season_end)
+            last = dict(last_q.all())
             rows = []
             for p in players:
                 bd = None
                 try:
-                    bd = compute_bucket_system(db, p.player_id)
+                    # season_label=None (current season) is threaded
+                    # through unchanged; a past-season label makes
+                    # compute_bucket_system pull that season's own
+                    # roster-at-the-time comparison pool AND (per the
+                    # include_player_id fix) still score an inactive
+                    # player against his own data for that window --
+                    # Aug 2026, Ryker: "inactive players should have a
+                    # score."
+                    bd = compute_bucket_system(db, p.player_id, season_label=season_label)
                 except Exception:
                     bd = None
                 flag, why = _flag_for(bd)
@@ -115,7 +157,9 @@ def roster_server(input, output, session, app_state):
         n_inj = sum(1 for r in rows if r["player"].status is not None and r["player"].status.status_name in ("Injured", "Medical Hold"))
         n_flag = sum(1 for r in rows if r["flag"] == ui_helpers.STATUS_FLAG)
         actions = [ui.input_action_button("go_setup", "Add or edit player", class_="btn-primary")] if app_state.can_edit_assessments() or app_state.role_name() in ("Administrator", "Head Coach", "Coach") else []
-        return ui_helpers.page_header("Players", f"{n_active} active · {n_inj} injured or on hold · {n_flag} priority flags", actions=actions)
+        season_label = _selected_season() or None
+        season_note = f" · Viewing {season_label} (historical)" if season_label and season_label != current_season_label() else ""
+        return ui_helpers.page_header("Players", f"{n_active} active · {n_inj} injured or on hold · {n_flag} priority flags{season_note}", actions=actions)
 
     @reactive.effect
     @reactive.event(input.go_setup)

@@ -119,6 +119,7 @@ all, not a permanent decision):
 
 from datetime import date
 
+from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
 from models import Player, Assessment, AssessmentResult, AssessmentTestType
 
@@ -569,7 +570,7 @@ def get_bucket_test_names_for_category(category_name):
     return set()
 
 
-def get_latest_values_by_player(session, test_name, _cache=None, season_start=None, season_end=None, active_only=True):
+def get_latest_values_by_player(session, test_name, _cache=None, season_start=None, season_end=None, active_only=True, include_player_id=None):
     """{player_id: value} -- each player's most recent result for this
     test type. Returns {} if the test type doesn't exist yet (e.g. not
     seeded).
@@ -587,6 +588,17 @@ def get_latest_values_by_player(session, test_name, _cache=None, season_start=No
     team then." compute_bucket_system sets this automatically based on
     whether the requested season is the current one -- see its
     season_label param.
+
+    include_player_id: (Aug 2026, Ryker's follow-up call --
+    "inactive players should have a score") when active_only=True,
+    this SAME filter was also excluding an inactive SUBJECT player's
+    own results from the query, not just from the comparison pool --
+    so an inactive player could never get a score at all, even for a
+    season where he has real data on file. Passing his player_id here
+    carves out an exception so his own rows are always included,
+    while the comparison pool (everyone else) stays active-only.
+    compute_bucket_system always passes the player whose rollup is
+    being computed.
 
     season_start/season_end: optional date bounds (season_start
     inclusive, season_end EXCLUSIVE, same convention as season_date_
@@ -624,7 +636,10 @@ def get_latest_values_by_player(session, test_name, _cache=None, season_start=No
         .filter(AssessmentResult.test_type_id == test_type.test_type_id)
     )
     if active_only:
-        query = query.filter(Player.active == True)
+        if include_player_id is not None:
+            query = query.filter(or_(Player.active == True, Player.player_id == include_player_id))
+        else:
+            query = query.filter(Player.active == True)
     if season_start is not None:
         query = query.filter(Assessment.assessment_date >= season_start)
     if season_end is not None:
@@ -667,7 +682,7 @@ def _all_bucket_test_names():
     return names
 
 
-def _batch_fetch_latest_values(session, test_names, season_start=None, season_end=None, active_only=True):
+def _batch_fetch_latest_values(session, test_names, season_start=None, season_end=None, active_only=True, include_player_id=None):
     """Batched replacement for calling get_latest_values_by_player()
     once per metric -- the naive per-metric loop compute_bucket_system()
     used to run cost roughly 60 metrics x up to 2 queries each, more
@@ -689,6 +704,12 @@ def _batch_fetch_latest_values(session, test_names, season_start=None, season_en
     regardless of today's active/inactive status, since roster
     membership AT THE TIME is what a past season's "team" comparison
     pool should reflect (Aug 2026, Ryker's call).
+
+    include_player_id: same meaning as get_latest_values_by_player --
+    guarantees this player's own rows are fetched even when active_
+    only=True and he's since gone inactive, so he still gets a score
+    from his own current-season data (Aug 2026, Ryker's follow-up
+    call). compute_bucket_system always passes the subject player.
 
     Returns (values_by_test_name, units_by_test_name):
       - values_by_test_name: {test_name: {player_id: value}} -- every
@@ -724,7 +745,10 @@ def _batch_fetch_latest_values(session, test_names, season_start=None, season_en
         .filter(AssessmentResult.test_type_id.in_(type_ids))
     )
     if active_only:
-        result_query = result_query.filter(Player.active == True)
+        if include_player_id is not None:
+            result_query = result_query.filter(or_(Player.active == True, Player.player_id == include_player_id))
+        else:
+            result_query = result_query.filter(Player.active == True)
     if season_start is not None:
         result_query = result_query.filter(Assessment.assessment_date >= season_start)
     if season_end is not None:
@@ -1768,7 +1792,7 @@ def compute_bucket_system(session, player_id, season_label=None):
     # throws/etc. call below reads only from this cache (see
     # get_latest_values_by_player's docstring), so scoping it here is
     # sufficient to scope the whole rollup.
-    _cache, _units = _batch_fetch_latest_values(session, _all_bucket_test_names(), season_start=season_start, season_end=season_end, active_only=active_only)
+    _cache, _units = _batch_fetch_latest_values(session, _all_bucket_test_names(), season_start=season_start, season_end=season_end, active_only=active_only, include_player_id=player_id)
     # Player.throws lookup itself was never roster-scoped (see
     # get_player_throws_map's own docstring) -- it's a handedness
     # lookup, not a comparison pool, so it already covers inactive
