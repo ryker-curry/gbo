@@ -22,28 +22,37 @@ spreadsheet's actual data (not guessed):
     inputs, per Ryker's explicit call each time a new bucket's been
     added (Capacity, now Mobility/Shoulder Health) not to touch it.
 
-"Team" comparison population = every ACTIVE player (Player.active == True)
-with at least one result for that test type, using each player's most
-recent value per metric WITHIN THE SELECTED SEASON (see the Seasons
-section below) -- an ongoing system scoped to one season's window at a
-time, not a one-time snapshot like the original spreadsheet and not (as
-of Aug 2026) an all-time "most recent ever" either. Inactive/departed
-players are excluded from the comparison pool as of Aug 2026 (Ryker's
-call, see get_latest_values_by_player's docstring) -- current-team
-percentiles shouldn't be set by someone no longer on the roster.
+"Team" comparison population = every player with at least one result for
+that test type WITHIN THE SELECTED SEASON (see the Seasons section
+below), using each player's most recent value per metric within that
+same window -- an ongoing system scoped to one season at a time, not a
+one-time snapshot like the original spreadsheet and not (as of Aug
+2026) an all-time "most recent ever" either.
 
-Season scoping (Aug 2026, Ryker's second call the same week as the
-active-roster change above): a player's OLD data from a prior season
-was still counting as their "current" value indefinitely under the
-active-roster-only fix -- a player tested once last August and never
-again still looked freshly current a year later, and worse, that stale
-value could still be setting the team max/min other players were
-percentile-ranked against. Every percentile/ROM/GIRD computation in this
-file is now scoped to one season's date window, CURRENT season by
-default -- see SEASONS/current_season_label/season_date_range/
-list_seasons below, and compute_bucket_system's season_label param for
-how a caller (e.g. the Player Profile page) looks at a past season
-instead.
+Whether "every player" means active-only or everyone depends on WHICH
+season: the CURRENT season is active-roster-only (Player.active ==
+True, Ryker's Aug 2026 call) -- current-team percentiles shouldn't be
+set by someone no longer on the roster. Any OTHER (past) season
+includes inactive players too (Ryker's follow-up call, same week): a
+guy who's since gone inactive was still genuinely on the roster during
+that earlier season, so excluding him from THAT season's standard would
+compare last season's results against today's active list instead of
+who was actually there at the time. See active_only on
+get_latest_values_by_player/_batch_fetch_latest_values, and
+compute_bucket_system's season_label param for how this gets decided
+automatically per season.
+
+Season scoping (Aug 2026, Ryker's call, the same week as the active-
+roster change above): a player's OLD data from a prior season was still
+counting as their "current" value indefinitely under the active-roster-
+only fix alone -- a player tested once last August and never again
+still looked freshly current a year later, and worse, that stale value
+could still be setting the team max/min other players were percentile-
+ranked against. Every percentile/ROM/GIRD computation in this file is
+now scoped to one season's date window, CURRENT season by default --
+see SEASONS/current_season_label/season_date_range/list_seasons below,
+and compute_bucket_system's season_label param for how a caller (e.g.
+the Player Profile page) looks at a past season instead.
 
 ---
 
@@ -560,14 +569,24 @@ def get_bucket_test_names_for_category(category_name):
     return set()
 
 
-def get_latest_values_by_player(session, test_name, _cache=None, season_start=None, season_end=None):
+def get_latest_values_by_player(session, test_name, _cache=None, season_start=None, season_end=None, active_only=True):
     """{player_id: value} -- each player's most recent result for this
-    test type, ACTIVE ROSTER ONLY (Ryker's call, Aug 2026, superseding
-    the earlier "active and inactive both count" behavior: a departed
-    player's old mark was setting the ceiling for a team he's no
-    longer part of, which doesn't reflect "where do I stand against my
-    current teammates"). Returns {} if the test type doesn't exist yet
-    (e.g. not seeded).
+    test type. Returns {} if the test type doesn't exist yet (e.g. not
+    seeded).
+
+    active_only: True (the default) restricts to ACTIVE ROSTER ONLY
+    (Ryker's call, Aug 2026, superseding the earlier "active and
+    inactive both count" behavior: a departed player's old mark was
+    setting the ceiling for a team he's no longer part of, which
+    doesn't reflect "where do I stand against my current teammates").
+    Pass False when scoping to a PAST season (Aug 2026, Ryker's
+    follow-up call): a player who's since gone inactive was still on
+    the roster during that earlier season, so excluding him from THAT
+    season's comparison pool would be comparing today's active list
+    against yesterday's results, not "who else was actually on the
+    team then." compute_bucket_system sets this automatically based on
+    whether the requested season is the current one -- see its
+    season_label param.
 
     season_start/season_end: optional date bounds (season_start
     inclusive, season_end EXCLUSIVE, same convention as season_date_
@@ -577,7 +596,7 @@ def get_latest_values_by_player(session, test_name, _cache=None, season_start=No
     _cache already has this test_name, it's trusted as-is, since
     whoever built it (compute_bucket_system, via
     _batch_fetch_latest_values) already applied the same season bounds
-    when it ran that query.
+    (and the same active_only choice) when it ran that query.
 
     _cache: an optional pre-fetched {test_name: {player_id: value}}
     dict from _batch_fetch_latest_values() -- when provided and this
@@ -603,8 +622,9 @@ def get_latest_values_by_player(session, test_name, _cache=None, season_start=No
         .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
         .join(Player, Assessment.player_id == Player.player_id)
         .filter(AssessmentResult.test_type_id == test_type.test_type_id)
-        .filter(Player.active == True)
     )
+    if active_only:
+        query = query.filter(Player.active == True)
     if season_start is not None:
         query = query.filter(Assessment.assessment_date >= season_start)
     if season_end is not None:
@@ -647,7 +667,7 @@ def _all_bucket_test_names():
     return names
 
 
-def _batch_fetch_latest_values(session, test_names, season_start=None, season_end=None):
+def _batch_fetch_latest_values(session, test_names, season_start=None, season_end=None, active_only=True):
     """Batched replacement for calling get_latest_values_by_player()
     once per metric -- the naive per-metric loop compute_bucket_system()
     used to run cost roughly 60 metrics x up to 2 queries each, more
@@ -663,6 +683,13 @@ def _batch_fetch_latest_values(session, test_names, season_start=None, season_en
     it's threaded through) is scoped to the same season window
     together.
 
+    active_only: same meaning as get_latest_values_by_player -- True
+    (current season) restricts to today's active roster, False (a past
+    season) includes everyone who has a result in that season's window
+    regardless of today's active/inactive status, since roster
+    membership AT THE TIME is what a past season's "team" comparison
+    pool should reflect (Aug 2026, Ryker's call).
+
     Returns (values_by_test_name, units_by_test_name):
       - values_by_test_name: {test_name: {player_id: value}} -- every
         SEEDED test_name from the input is guaranteed a key here (an
@@ -674,9 +701,6 @@ def _batch_fetch_latest_values(session, test_names, season_start=None, season_en
       - units_by_test_name: {test_name: unit_or_None}, for the same
         seeded names -- avoids a second redundant per-metric query
         compute_metric_percentiles used to run just to read the unit.
-
-    ACTIVE ROSTER ONLY, same Aug 2026 scope change as
-    get_latest_values_by_player -- see that function's docstring.
     """
     test_names = list(set(test_names))
     if not test_names:
@@ -698,8 +722,9 @@ def _batch_fetch_latest_values(session, test_names, season_start=None, season_en
         .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
         .join(Player, Assessment.player_id == Player.player_id)
         .filter(AssessmentResult.test_type_id.in_(type_ids))
-        .filter(Player.active == True)
     )
+    if active_only:
+        result_query = result_query.filter(Player.active == True)
     if season_start is not None:
         result_query = result_query.filter(Assessment.assessment_date >= season_start)
     if season_end is not None:
@@ -1714,9 +1739,20 @@ def compute_bucket_system(session, player_id, season_label=None):
     label quietly falls back to current -- see season_date_range).
     Every percentile/ROM/GIRD/movement-flag number below is scoped
     together to that one season's date window -- nothing here mixes
-    seasons."""
+    seasons.
+
+    Comparison pool (Aug 2026, Ryker's follow-up call): the CURRENT
+    season stays active-roster-only (today's Player.active == True) --
+    "where do I stand against my current teammates." Any OTHER
+    (past) season includes inactive players too -- a guy who's since
+    graduated or left was still really on the roster during last
+    season, so the 2025-2026 standard he's being measured against
+    should include everyone who actually had 2025-2026 results, not
+    just whoever happens to still be active today. See active_only on
+    get_latest_values_by_player/_batch_fetch_latest_values."""
     season_label = season_label or current_season_label()
     season_start, season_end = season_date_range(season_label)
+    active_only = season_label == current_season_label()
 
     # Batch-fetch every metric this whole rollup could possibly need in
     # 2 queries total (plus 1 for player throwing hands), instead of
@@ -1726,12 +1762,17 @@ def compute_bucket_system(session, player_id, season_label=None):
     # Assessments/Dashboard/My Assessments feeling slow (and sometimes
     # disconnecting): a single player's rollup used to cost 100+
     # sequential round trips to the hosted database; now it costs 3.
-    # season_start/season_end scope this same batch to one season's
-    # window -- every downstream compute_metric_percentiles/
-    # resolve_side_by_throws/etc. call below reads only from this
-    # cache (see get_latest_values_by_player's docstring), so scoping
-    # it here is sufficient to scope the whole rollup.
-    _cache, _units = _batch_fetch_latest_values(session, _all_bucket_test_names(), season_start=season_start, season_end=season_end)
+    # season_start/season_end/active_only scope this same batch to one
+    # season's window (and the right comparison pool for that window)
+    # -- every downstream compute_metric_percentiles/resolve_side_by_
+    # throws/etc. call below reads only from this cache (see
+    # get_latest_values_by_player's docstring), so scoping it here is
+    # sufficient to scope the whole rollup.
+    _cache, _units = _batch_fetch_latest_values(session, _all_bucket_test_names(), season_start=season_start, season_end=season_end, active_only=active_only)
+    # Player.throws lookup itself was never roster-scoped (see
+    # get_player_throws_map's own docstring) -- it's a handedness
+    # lookup, not a comparison pool, so it already covers inactive
+    # players with no change needed here.
     _throws_map = get_player_throws_map(session)
 
     # Body Comp -- score is averaged from ONLY the 2 scoring metrics
