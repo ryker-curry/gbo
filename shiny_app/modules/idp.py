@@ -52,8 +52,58 @@ so they get the LAZY REGISTRATION treatment training_routines.py's
 per-exercise video-save buttons establish (_registered_goal_ids /
 _register_goal_handlers): each goal's three handlers are registered the
 first time that goal_id appears in a render pass, not up front.
+
+v2 REDESIGN (Aug 2026, Ryker: "I want to be able to see a player's
+flags, priorities, lowest hanging fruit to decide what we need to
+create a development plan for"): added a Flags/Priorities/Lowest-
+hanging-fruit panel between the player picker and the goals accordion,
+plus a full v2 visual pass over the rest of the page (this file's mtime
+predated the "Apply v2 design system" commit, so it had never been
+brought in line with Roster/Player Profile/Dashboard).
+
+_priority_pool() below is deliberately a NEW function rather than a
+reuse of player_profile._priorities() -- it walks the same bucket_data
+(mobility_rom_report + body/speed/power/strength/capacity metrics,
+same BODY_COMP_BAR_NAMES exclusion) but resolves each flagged metric to
+its AssessmentCategory + AssessmentTestType (one query per distinct
+metric name, cached in a dict) so a priority row can drive the
+click-to-prefill flow below. player_profile._priorities()'s flat
+(status, title, detail) tuples throw that linkage away, so extending it
+in place would've broken its existing callers (the profile hero card's
+own priorities panel, its flag calculation) for no reason -- easier and
+safer to keep that function as-is and add a second one here with the
+extra data this page specifically needs. category_name comes straight
+from the DB (not a hand-maintained mapping of bucket-group -> category)
+so it can't drift if a metric is ever recategorized.
+
+Click-to-prefill wiring: clicking a priority/lowest-hanging-fruit row
+sets a `priority_click` input (JSON {category, metric} via a
+click-delegation <script>, same .gbo-*-link / Shiny.setInputValue
+pattern Roster/Team Overview already use for player-name links). That
+input's handler stores (category, metric) in `_pending_prefill` and
+calls ui.update_select() on the ALREADY-RENDERED "new_goal_category"
+select to change its value -- it does NOT rebuild that select (learned
+the hard way on Roster's season picker earlier this session: a
+render.ui that rebuilds itself in reaction to its own input's value
+change races the client's value-change round trip and visibly
+flip-flops). new_goal_metric_picker() reacts normally to the resulting
+input.new_goal_category() change and, in that SAME render pass, reads
+_pending_prefill() via reactive.isolate() (a non-reactive read -- it
+must NOT be a tracked dependency of this function, or the metric select
+would re-render a second time right after _pending_prefill.set() fires,
+using the stale pre-update category and flashing the wrong metric list
+before immediately correcting itself) to decide the new select's
+`selected=` at construction time. Choices and selected are therefore
+always computed together in the one render pass that's genuinely
+triggered by the category change -- no separate update_select call is
+needed (or safe) for the metric level. _pending_prefill is cleared on
+player change and on goal creation so a stale click doesn't keep
+re-applying itself if the coach returns to that category later in the
+same session; leaving it un-cleared otherwise is a harmless "remembers
+your last click in this category" nicety, not a bug.
 """
 
+import json
 from datetime import date, datetime, time, timedelta
 
 from shiny import module, ui, render, reactive, req
@@ -66,6 +116,9 @@ from models import (
     TrainingSession, PlayerAssignment,
 )
 from analytics.rapsodo_goal_metrics import rapsodo_field_for_test_name, average_rapsodo_metric
+from bucket_system import compute_bucket_system
+from modules.roster import _flag_for
+import bucket_display
 
 import ui_helpers
 
@@ -132,16 +185,131 @@ def _target_metric_info(db, category, metric_choice):
     return test_type, rapsodo_field is not None, rapsodo_field
 
 
+def _priority_pool(db, bd):
+    """Every flagged/watch metric for this player's current bucket_data,
+    resolved to its category + test name for goal-linking. Same source
+    data player_profile._priorities() walks (mobility_rom_report,
+    body_comp_metrics filtered to BODY_COMP_BAR_NAMES, speed_metrics,
+    and the power/strength/capacity subgroup dicts flattened) -- see
+    this module's docstring for why this is a separate function rather
+    than a reuse of that one.
+
+    Each item: {"scale": float 0-100 (LOWER = worse/farther from
+    passing, same direction as a percentile), "status": "flag"|"watch",
+    "title": str, "detail": str, "category_name": str|None,
+    "metric_name": str|None}. category_name/metric_name are None only
+    if a metric's name doesn't resolve to a real AssessmentTestType
+    (shouldn't happen for anything bucket_system already scored, but
+    the panel below just renders those rows non-clickable rather than
+    assuming).
+
+    ROM rows aren't percentile-based (see MOBILITY_ROM_THRESHOLDS in
+    bucket_system.py -- pass/fail against a fixed floor, not a team
+    ranking), so they get a synthetic 0-59 "scale" from how close raw
+    is to its threshold (raw/threshold, clamped) when both are numbers,
+    or a flat 10 (red) / 40 (yellow) fallback otherwise -- close enough
+    to sit sensibly alongside percentile-based rows in one merged,
+    ranked list without pretending ROM degrees and percentiles are the
+    same unit.
+    """
+    items = []
+    test_type_cache = {}
+
+    def _category_for(test_name):
+        if test_name not in test_type_cache:
+            test_type_cache[test_name] = (
+                db.query(AssessmentTestType)
+                .options(joinedload(AssessmentTestType.category))
+                .filter(AssessmentTestType.test_name == test_name)
+                .first()
+            )
+        return test_type_cache[test_name]
+
+    for row in bd.get("mobility_rom_report") or []:
+        st = row.get("status")
+        if st not in ("red", "yellow"):
+            continue
+        name = row.get("test_name") or row.get("name") or row.get("label") or "Mobility"
+        raw, unit, thr = row.get("raw"), row.get("unit") or "", row.get("threshold")
+        detail = row.get("explanation") or row.get("recommendation") or ""
+        if not detail and raw is not None:
+            detail = f"{raw:g}{unit}" + (f" · threshold {thr:g}{unit}" if thr is not None else "")
+        if raw is not None and thr:
+            scale = max(0.0, min(59.0, 59.0 * float(raw) / float(thr)))
+        else:
+            scale = 10.0 if st == "red" else 40.0
+        tt = _category_for(name)
+        items.append({
+            "scale": scale,
+            "status": ui_helpers.status_from_color_word(st),
+            "title": name.replace(": ", " — "),
+            "detail": detail.strip(),
+            "category_name": tt.category.category_name if tt and tt.category else None,
+            "metric_name": tt.test_name if tt else None,
+        })
+
+    groups = [("body_comp_metrics", None), ("speed_metrics", None), ("power_subgroup_metrics", "sub"), ("strength_subgroup_metrics", "sub"), ("capacity_subgroup_metrics", "sub")]
+    for key, kind in groups:
+        data = bd.get(key) or {}
+        metrics = {}
+        if kind == "sub":
+            for sub, m in data.items():
+                metrics.update(m)
+        else:
+            metrics = data
+        if key == "body_comp_metrics":
+            # Same BODY_COMP_BAR_NAMES split every other percentile-scoring
+            # context in this app uses -- Body Fat Mass/% stay reference-only.
+            metrics = {n: d for n, d in metrics.items() if n in bucket_display.BODY_COMP_BAR_NAMES}
+        for name, d in metrics.items():
+            pct = d.get("percentile")
+            if pct is None:
+                continue
+            st = ui_helpers.status_from_percentile(pct)
+            if st not in (ui_helpers.STATUS_FLAG, ui_helpers.STATUS_WATCH):
+                continue
+            tt = _category_for(name)
+            items.append({
+                "scale": float(pct),
+                "status": st,
+                "title": name,
+                "detail": f"{d.get('raw')}{(' ' + d['unit']) if d.get('unit') else ''} · {bucket_display.ordinal(pct)} percentile on team",
+                "category_name": tt.category.category_name if tt and tt.category else None,
+                "metric_name": tt.test_name if tt else None,
+            })
+    return items
+
+
+def _priorities_view(pool, limit=6):
+    """Worst-first slice of the pool -- what to work on, most urgent."""
+    return sorted(pool, key=lambda x: x["scale"])[:limit]
+
+
+def _lowest_hanging_fruit_view(pool, limit=6):
+    """Closest-to-passing-first slice -- prefers Attention-status metrics
+    (already closer to Good than a Priority-status one) and, among
+    those, the highest scale (nearest the threshold). Falls back to the
+    whole pool sorted the same way if nothing is Attention-status, so
+    it's never empty just because everything on file is a hard flag."""
+    watch = [i for i in pool if i["status"] == ui_helpers.STATUS_WATCH]
+    return sorted(watch or pool, key=lambda x: -x["scale"])[:limit]
+
+
 @module.ui
 def idp_ui():
     return ui.div(
-        ui_helpers.page_header("Individual Development Plan"),
-        ui.output_ui("player_picker"),
+        ui_helpers.page_header("Individual Development Plan", "Flags, priorities, and lowest-hanging fruit -- click a row below to start a goal for that metric."),
+        ui.div(ui.output_ui("player_picker"), class_="gbo-filter"),
+        ui.output_ui("player_flags_panel"),
         ui.output_ui("goals_section"),
-        ui.output_ui("new_goal_category_picker"),
-        ui.output_ui("new_goal_metric_picker"),
-        ui.output_ui("new_goal_context_inputs"),
-        ui.output_ui("new_goal_form_and_submit"),
+        ui_helpers.card(
+            ui.output_ui("new_goal_category_picker"),
+            ui.output_ui("new_goal_metric_picker"),
+            ui.output_ui("new_goal_context_inputs"),
+            ui.output_ui("new_goal_form_and_submit"),
+            title="New development goal",
+            right="pick a category, or click a priority above to prefill",
+        ),
         ui_helpers.page_footer(),
     )
 
@@ -189,9 +357,90 @@ def idp_server(input, output, session, app_state):
                     "No players to show yet." if app_state.can_view_all_players() else "No players are currently assigned to you."
                 )
             choices = {str(p.player_id): f"{p.first_name} {p.last_name}" for p in players}
-            return ui.div(ui.input_select("player_select", "Player", choices=choices), ui.hr())
+            return ui.input_select("player_select", "Player", choices=choices)
         finally:
             db.close()
+
+    # -------------------------------------------------------------------
+    # Flags / Priorities / Lowest-hanging-fruit panel
+    # -------------------------------------------------------------------
+
+    _pending_prefill = reactive.Value(None)  # (category_name, metric_name) or None -- see module docstring
+
+    @render.ui
+    def player_flags_panel():
+        _refresh_tick()
+        if not app_state.is_authenticated():
+            return None
+        req("player_select" in input)
+        selected_player_id = int(input.player_select())
+        can_click = _can_create_goals()
+
+        db = get_session()
+        try:
+            bd = compute_bucket_system(db, selected_player_id) or {}
+            flag, why = _flag_for(bd)
+            pool = _priority_pool(db, bd)
+            pris = _priorities_view(pool)
+            fruit = _lowest_hanging_fruit_view(pool)
+
+            def row(item, idx):
+                inner = ui.div(
+                    ui.div(str(idx), class_=f"gbo-pri-i {item['status']}"),
+                    ui.div(ui.tags.b(item["title"]), ui.span(item["detail"])),
+                )
+                if can_click and item["category_name"] and item["metric_name"]:
+                    return ui.tags.a(
+                        inner, href="#", class_="gbo-pri gbo-idp-pri-link",
+                        **{"data-category": item["category_name"], "data-metric": item["metric_name"]},
+                    )
+                return ui.div(inner, class_="gbo-pri")
+
+            pri_rows = [row(it, i) for i, it in enumerate(pris, 1)] or [ui_helpers.empty_state("No flagged metrics right now.")]
+            fruit_rows = [row(it, i) for i, it in enumerate(fruit, 1)] or [ui_helpers.empty_state("Nothing close to passing right now.")]
+
+            flag_tile = ui.div(
+                ui_helpers.kpi_tile("Overall flag", ui_helpers.status_chip(flag), delta=why or "No flags"),
+                ui_helpers.kpi_tile("Priorities", str(len(pool)), delta=f"{sum(1 for i in pool if i['status'] == 'flag')} flag · {sum(1 for i in pool if i['status'] == 'watch')} attention" if pool else "None on file"),
+                class_="gbo-kpi-row", style="margin-bottom:16px;",
+            )
+            panel = ui.div(
+                flag_tile,
+                ui.div(
+                    ui_helpers.card(*pri_rows, title="Priorities", right="worst metrics first"),
+                    ui_helpers.card(*fruit_rows, title="Lowest-hanging fruit", right="closest to passing first"),
+                    class_="gbo-grid gbo-grid-2",
+                ),
+                id=session.ns("flags_panel"),
+                style="margin-bottom:24px;",
+            )
+            js = ui.tags.script(f"""
+            (function(){{
+              var root = document.getElementById('{session.ns("flags_panel")}');
+              if (!root || root.__gboBound) return; root.__gboBound = true;
+              root.addEventListener('click', function(e){{
+                var a = e.target.closest ? e.target.closest('.gbo-idp-pri-link') : null;
+                if (!a) return; e.preventDefault();
+                Shiny.setInputValue('{session.ns("priority_click")}', JSON.stringify({{category: a.getAttribute('data-category'), metric: a.getAttribute('data-metric')}}), {{priority:'event'}});
+              }});
+            }})();""")
+            return ui.div(panel, js)
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.priority_click)
+    def _consume_priority_click():
+        try:
+            payload = json.loads(input.priority_click())
+        except (TypeError, ValueError):
+            return
+        category, metric = payload.get("category"), payload.get("metric")
+        if not category:
+            return
+        _pending_prefill.set((category, metric))
+        ui.update_select("new_goal_category", selected=category)
+        ui.notification_show(f"Prefilled a new goal for {metric} ({category}) -- see New development goal below.", type="message", duration=6)
 
     # -------------------------------------------------------------------
     # Goals accordion for the selected player
@@ -235,7 +484,7 @@ def idp_server(input, output, session, app_state):
                 .all()
             )
 
-            header = [ui.h5(f"Goals — {selected_player.first_name} {selected_player.last_name}", class_="gbo-section-title")]
+            header = [ui_helpers.section_title(f"Goals — {selected_player.first_name} {selected_player.last_name}", right=f"{len(goals)} goal(s)" if goals else None)]
             if not goals:
                 return ui.div(*header, ui_helpers.empty_state("No development goals yet for this player."))
 
@@ -243,7 +492,11 @@ def idp_server(input, output, session, app_state):
             for goal in goals:
                 status_label = goal.status.status_name if goal.status else "—"
                 truncated = goal.description[:60] + ("..." if len(goal.description) > 60 else "")
-                title = f"{goal.category.category_name} — {truncated}  ·  {status_label}"
+                title = ui.div(
+                    ui.span(f"{goal.category.category_name} — {truncated}", class_="gbo-accordion-title-text"),
+                    ui_helpers.status_chip("good" if status_label == "Completed" else "neutral", status_label),
+                    style="display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%;",
+                )
 
                 body = [ui.p(goal.description)]
 
@@ -446,7 +699,7 @@ def idp_server(input, output, session, app_state):
             if not categories:
                 return None
             choices = {c.category_name: c.category_name for c in categories}
-            return ui.div(ui.hr(), ui.h5("New development goal", class_="gbo-section-title"), ui.input_select("new_goal_category", "Category", choices=choices))
+            return ui.input_select("new_goal_category", "Category", choices=choices)
         finally:
             db.close()
 
@@ -467,7 +720,13 @@ def idp_server(input, output, session, app_state):
             if not test_types:
                 return ui.p("No specific tests defined yet for this category -- target metric isn't available until they are.", class_="text-muted small")
             choices = ["-- No specific metric --"] + [t.test_name for t in test_types]
-            return ui.input_select("new_goal_target_metric", "Target metric (optional)", choices=choices)
+            # Non-reactive read -- must NOT become a tracked dependency of
+            # this function (see module docstring's click-to-prefill
+            # section for the race that creates if it is).
+            with reactive.isolate():
+                pending = _pending_prefill()
+            pending_metric = pending[1] if pending and pending[0] == category_choice and pending[1] in choices else None
+            return ui.input_select("new_goal_target_metric", "Target metric (optional)", choices=choices, selected=pending_metric)
         finally:
             db.close()
 
@@ -657,6 +916,12 @@ def idp_server(input, output, session, app_state):
             db.add(new_goal)
             db.commit()
             ui.notification_show(f"Created goal for {selected_player.first_name} {selected_player.last_name}.", type="message", duration=8)
+            _pending_prefill.set(None)
             _bump_refresh()
         finally:
             db.close()
+
+    @reactive.effect
+    @reactive.event(input.player_select)
+    def _on_player_change():
+        _pending_prefill.set(None)
