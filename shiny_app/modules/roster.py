@@ -63,12 +63,42 @@ def _score_cell(v):
     return ui.tags.td(f"{v:.0f}", class_="text-end gbo-num", style=f"color:{color}; font-family:var(--gbo-mono);")
 
 
+def _season_choices():
+    """{label: display_text} for every season, "(current)" appended to
+    whichever one is current right now -- shared by the static select
+    below and by roster_server's _on_season effect. Built ONCE at UI-
+    definition time (not a @render.ui) since list_seasons()/current_
+    season_label() are pure functions of the hardcoded SEASONS list +
+    today's date, not per-session state -- see the module docstring
+    below for why re-rendering this as a reactive select caused the
+    picker to visibly flip back and forth."""
+    cur = current_season_label()
+    return {label: (f"{label} (current)" if label == cur else label) for label, _, _ in list_seasons()}
+
+
 @module.ui
 def roster_ui():
     return ui.div(
         ui.output_ui("head"),
         ui.div(
-            ui.div(ui.output_ui("season_picker"), class_="gbo-filter"),
+            # Static input_select, NOT a @render.ui rebuilt from
+            # _selected_season() -- Aug 2026, Ryker: picking "Before
+            # 2026-2027" made the page go dim and the Season dropdown
+            # itself flip back and forth between the two options.
+            # Root cause: the picker used to be a @render.ui that
+            # rebuilt this same <select> every time _selected_season()
+            # changed (mirroring Player Profile's picker) -- but
+            # replacing an input's own DOM element in response to that
+            # same input's value changing causes Shiny's client-side
+            # binding to rebind the fresh element and re-announce its
+            # value, which can race with (and stomp) the value the
+            # user actually just picked, especially once the
+            # server-side recompute is slow enough (a whole season's
+            # roster) for that race window to matter. A plain static
+            # select has no such loop -- season_label is tracked
+            # separately in _selected_season via the _on_season effect
+            # below, same as before.
+            ui.div(ui.input_select("season", "Season", _season_choices(), selected=current_season_label()), class_="gbo-filter"),
             ui.div(ui.input_select("pos", "Position", {"all": "All positions", "P": "Pitchers", "C": "Catchers", "IF": "Infield", "OF": "Outfield"}), class_="gbo-filter"),
             ui.div(ui.input_select("status", "Status", {"active": "Active", "all": "All", "injured": "Injured / medical hold", "inactive": "Inactive"}), class_="gbo-filter"),
             ui.div(ui.input_select("flag", "Flag", {"any": "Any", "flag": "Priority only", "watch": "Attention + priority"}), class_="gbo-filter"),
@@ -90,15 +120,6 @@ def roster_server(input, output, session, app_state):
     # bucket_system.list_seasons/current_season_label/season_date_range
     # and player_profile.py's own _selected_season/season_picker).
     _selected_season = reactive.Value(None)
-
-    @render.ui
-    def season_picker():
-        if not app_state.is_authenticated():
-            return None
-        cur = current_season_label()
-        choices = {label: (f"{label} (current)" if label == cur else label) for label, _, _ in list_seasons()}
-        sel = _selected_season() if _selected_season() in choices else cur
-        return ui.input_select("season", "Season", choices, selected=sel)
 
     @reactive.effect
     @reactive.event(input.season)
