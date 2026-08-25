@@ -476,6 +476,8 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-pri-i { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; font-family: var(--gbo-display); font-weight: 700; font-size: .9rem; }
 .gbo-pri-i.flag { background: var(--gbo-status-flag-soft); color: var(--gbo-status-flag); } .gbo-pri-i.watch { background: var(--gbo-status-watch-soft); color: var(--gbo-status-watch); } .gbo-pri-i.good { background: var(--gbo-status-good-soft); color: var(--gbo-status-good); }
 .gbo-pri b { display: block; color: var(--gbo-text); font-weight: 600; } .gbo-pri span { color: var(--gbo-text-muted); font-size: .8rem; }
+a.gbo-pri { text-decoration: none; color: inherit; cursor: pointer; border-radius: 8px; margin: 0 -8px; padding: 6px 8px; }
+a.gbo-pri:hover { background: var(--gbo-bg-raised); }
 .gbo-li { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--gbo-border); color: var(--gbo-text-2); }
 .gbo-li:last-child { border-bottom: 0; } .gbo-li b { color: var(--gbo-text); font-weight: 600; }
 .gbo-li-dt { font-family: var(--gbo-mono); font-size: .75rem; color: var(--gbo-text-muted); width: 96px; flex: none; padding-top: 2px; }
