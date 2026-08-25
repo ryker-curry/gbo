@@ -73,6 +73,14 @@ def _priorities(bd, limit=3):
                 metrics.update(m)
         else:
             metrics = data
+        if key == "body_comp_metrics":
+            # Body Fat Mass / Percent Body Fat are reference-only, same
+            # BODY_COMP_BAR_NAMES split bucket_display.py already uses
+            # for the Assessments tab (Aug 2026, Ryker: they shouldn't
+            # show up as a percentile OR as a Development priority --
+            # a lean-team player's fat % looking "low percentile" isn't
+            # a deficiency the way a weak lift is).
+            metrics = {n: d for n, d in metrics.items() if n in bucket_display.BODY_COMP_BAR_NAMES}
         for name, d in metrics.items():
             pct = d.get("percentile")
             if pct is None:
@@ -303,8 +311,15 @@ def player_profile_server(input, output, session, app_state):
             m = {}
             for s, mm in (sub or {}).items(): m.update(mm)
             return m
+        # Body Fat Mass / Percent Body Fat are reference-only (same
+        # BODY_COMP_BAR_NAMES split bucket_display.py's Assessments-tab
+        # breakdown already uses) -- excluded here too so they can't
+        # show up as a percentile bar, drag the Body composition
+        # panel's flagged/watch count, or win the "Lowest" caption
+        # below (Aug 2026, Ryker's call).
+        body_comp_bar_metrics = {n: d for n, d in (bd.get("body_comp_metrics") or {}).items() if n in bucket_display.BODY_COMP_BAR_NAMES}
         buckets = [
-            ("Body composition", bd.get("body_comp_score"), bd.get("body_comp_metrics") or {}),
+            ("Body composition", bd.get("body_comp_score"), body_comp_bar_metrics),
             ("Explosive & rotational power", bd.get("power_score"), flat(bd.get("power_subgroup_metrics"))),
             ("Strength", bd.get("strength_score"), flat(bd.get("strength_subgroup_metrics"))),
             ("Speed", bd.get("speed_score"), bd.get("speed_metrics") or {}),
