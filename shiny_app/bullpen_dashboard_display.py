@@ -94,7 +94,7 @@ import ui_helpers
 import chart_helpers
 
 GOLD = "#D4AF37"
-TEXT_CREAM = "#AEB6C2"
+TEXT_CREAM = "#FFFDE5"
 
 
 def _pitch_type_legend(summary_rows, total_pitches):
@@ -111,9 +111,9 @@ def _pitch_type_legend(summary_rows, total_pitches):
         color = color_for_pitch_label(label)
         cells.append(ui.div(
             ui.div(style=f"width:28px; height:14px; border-radius:7px; background:{color}; margin:0 auto 6px auto;"),
-            ui.div(label, style="color:var(--gbo-text); font-weight:600; font-size:0.85rem;"),
-            ui.div(f"{usage_pct:g}%", style="color:var(--gbo-text-2); font-size:0.8rem; margin-top:2px;", class_="gbo-num"),
-            ui.div(f"{avg_velo} mph", style="color:var(--gbo-text-muted); font-size:0.75rem;"),
+            ui.div(label, style=f"color:{TEXT_CREAM}; font-weight:700; font-size:0.85rem;"),
+            ui.div(f"{usage_pct:g}%", style=f"color:{GOLD}; font-size:0.8rem; margin-top:2px;"),
+            ui.div(f"{avg_velo} mph", style="color:#B8B8B8; font-size:0.75rem;"),
             style="text-align:center; min-width:90px;",
         ))
     return ui.div(*cells, style="display:flex; justify-content:center; gap:22px; flex-wrap:wrap; margin:6px 0 14px 0;")
@@ -121,9 +121,14 @@ def _pitch_type_legend(summary_rows, total_pitches):
 
 def _section_label(number, text):
     """Shiny port of bullpen_dashboard_style.py's section_label."""
-    # v2: plain card title (design system section 6); the step number is
-    # dropped -- these sections aren't a sequence the user follows.
-    return ui.div(ui.h3(text), class_="gbo-card-head")
+    return ui.div(
+        ui.div(style=f"width:32px; height:2px; background:{GOLD};"),
+        ui.div(
+            f"{number:02d} · {text}",
+            style=f"color:{GOLD}; font-size:0.8rem; font-weight:700; text-transform:uppercase; letter-spacing:0.14em;",
+        ),
+        style="display:flex; align-items:center; gap:12px; margin: 8px 0 14px 0;",
+    )
 
 
 def _card(*children):
@@ -131,7 +136,7 @@ def _card(*children):
     inside bullpen_dashboard_style.py's dark-card theme."""
     return ui.div(
         *children,
-        class_="gbo-card", style="margin-bottom:20px;",
+        style="background:#161010; border:1px solid rgba(212,175,55,0.28); border-radius:14px; padding:16px; margin-bottom:14px;",
     )
 
 
@@ -404,7 +409,7 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
             return ui.div(*children)
 
         key = (movement_chart_id, _target_key(target), min_shading)
-        return chart_helpers.render_chart_async(_chart_cache, key, _build)
+        return chart_helpers.render_chart_async(_chart_cache, key, _build, sync=True)
 
     @output(id=release_chart_id)
     @render.ui
@@ -420,7 +425,7 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
             )
 
         key = (release_chart_id, _target_key(target))
-        return chart_helpers.render_chart_async(_chart_cache, key, _build)
+        return chart_helpers.render_chart_async(_chart_cache, key, _build, sync=True)
 
     @output(id=location_chart_id)
     @render.ui
@@ -436,7 +441,7 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
             )
 
         key = (location_chart_id, _target_key(target), location_mode)
-        return chart_helpers.render_chart_async(_chart_cache, key, _build)
+        return chart_helpers.render_chart_async(_chart_cache, key, _build, sync=True)
 
     @output(id=spin_chart_id)
     @render.ui
@@ -459,6 +464,6 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
             return ui.div(*children)
 
         key = (spin_chart_id, _target_key(target), selected_type, spin_axis_mode)
-        return chart_helpers.render_chart_async(_chart_cache, key, _build)
+        return chart_helpers.render_chart_async(_chart_cache, key, _build, sync=True)
 
     return ui.output_ui(controls_id)
