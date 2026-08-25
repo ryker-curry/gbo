@@ -87,7 +87,7 @@ def _priorities(bd, limit=3):
                 continue
             st = ui_helpers.status_from_percentile(pct)
             if st in (ui_helpers.STATUS_FLAG, ui_helpers.STATUS_WATCH):
-                items.append((pct, st, name, f"{d.get('raw')}{(' ' + d['unit']) if d.get('unit') else ''} · {pct:.0f}th percentile on team"))
+                items.append((pct, st, name, f"{d.get('raw')}{(' ' + d['unit']) if d.get('unit') else ''} · {bucket_display.ordinal(pct)} percentile on team"))
     items.sort(key=lambda x: x[0])
     return [(st, t, dt) for _, st, t, dt in items[:limit]]
 
@@ -306,7 +306,7 @@ def player_profile_server(input, output, session, app_state):
                     worst = (name, pct, d)
             if not worst: return None
             n, pct, d = worst
-            return ui.span("Lowest: ", ui.tags.b(n), f" {d.get('raw')}{(' ' + d['unit']) if d.get('unit') else ''} · {pct:.0f}th pct")
+            return ui.span("Lowest: ", ui.tags.b(n), f" {d.get('raw')}{(' ' + d['unit']) if d.get('unit') else ''} · {bucket_display.ordinal(pct)} pct")
         def flat(sub):
             m = {}
             for s, mm in (sub or {}).items(): m.update(mm)
@@ -334,7 +334,7 @@ def player_profile_server(input, output, session, app_state):
             watch = sum(1 for d in metrics.values() if d.get("percentile") is not None and 35 <= d["percentile"] < 60)
             if flagged: st = ui_helpers.STATUS_FLAG
             elif watch and st == ui_helpers.STATUS_GOOD: st = ui_helpers.STATUS_WATCH
-            rows = [ui_helpers.metric_bar(n, f"{d.get('raw')}", d.get("percentile"), unit=d.get("unit"), percentile_text=f"{d['percentile']:.0f}th percentile" if d.get("percentile") is not None else "No team comparison yet") for n, d in metrics.items()]
+            rows = [ui_helpers.metric_bar(n, f"{d.get('raw')}", d.get("percentile"), unit=d.get("unit"), percentile_text=f"{bucket_display.ordinal(d['percentile'])} percentile" if d.get("percentile") is not None else "No team comparison yet") for n, d in metrics.items()]
             bucket_cards.append(ui.accordion_panel(
                 ui.div(ui.span(f"{score:.0f}" if score is not None else "—", class_=f"gbo-bucket-score {('gold' if (score or 0) >= 90 else ui_helpers.status_from_percentile(score))}"),
                        ui.div(ui.div(title, class_="gbo-bucket-title"), ui.div(why(metrics) or "No team comparison yet", class_="gbo-bucket-why")),
