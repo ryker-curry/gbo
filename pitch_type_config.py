@@ -88,19 +88,40 @@ _RAW_ALIASES = {
 
 # Canonical type -> chart color (hex). Every chart module should import
 # this dict rather than hardcoding or positionally cycling colors.
+#
+# Sept 2026: replaced the v2 design-system palette shipped in
+# GBO-DESIGN-SYSTEM.md -- Ryker flagged Curveball/Splitter as reading
+# as the same color on Bullpen Dashboard, and running that palette
+# through the dataviz skill's validator (scripts/validate_palette.js)
+# confirmed real, measurable problems, not just those two: Curveball
+# vs Splitter scored a normal-vision Delta E of 7.3 (below the 15
+# floor -- hard to tell apart even with full color vision), and
+# 4-Seam Fastball vs 2-Seam Fastball scored a deutan (colorblind) Delta
+# E of 1.1 (effectively identical for that kind of color blindness),
+# neither of which anyone had actually flagged yet.
+#
+# These 7 colors are slots 1-7 of the skill's validated default
+# categorical theme (references/palette.md), taken in its fixed
+# published order (never cycled/reordered -- that order IS the
+# colorblind-safety mechanism) and validated together as a set:
+# adjacent-pair CVD Delta E >= 8.4, adjacent-pair normal-vision Delta E
+# >= 19.3, all >= 3:1 contrast on the dark card surface. (7
+# simultaneous series can't clear the strict ALL-PAIRS floor no matter
+# the ordering -- the skill documents that as a hard limit past 3
+# series -- but every chart these colors appear on already carries a
+# legend and a hover tooltip naming the pitch type, which is exactly
+# the secondary encoding the skill requires to make that acceptable.)
+# Crimson and gold are still deliberately excluded: those are the
+# app's action and rating colors, not chart series colors.
 PITCH_TYPE_COLORS = {
-    # v2 design-system palette (GBO-DESIGN-SYSTEM.md section 2) -- validated
-    # for colorblind separation on the dark card surface. Crimson and gold
-    # are deliberately NOT pitch colors anymore: they're the app's action
-    # and rating colors, so a chart series shouldn't borrow them.
-    "4-Seam Fastball": "#3A8FE0",
-    "Fastball": "#3A8FE0",
-    "2-Seam Fastball": "#7F7EDB",
-    "Cutter": "#E0713F",
-    "Slider": "#B08618",
-    "Changeup": "#B85FC4",
-    "Curveball": "#2A9E7A",
-    "Splitter": "#49B0A0",
+    "4-Seam Fastball": "#3987E5",
+    "Fastball": "#3987E5",
+    "2-Seam Fastball": "#D95926",
+    "Cutter": "#199E70",
+    "Slider": "#C98500",
+    "Changeup": "#D55181",
+    "Curveball": "#008300",
+    "Splitter": "#9085E9",
 }
 
 # Used for any pitch type that reaches a chart without a color assigned

@@ -20,7 +20,7 @@ kaleido/base64 logic a third time.
 import base64
 
 
-def render_chart_async(cache, key, builder, label="Loading chart…"):
+def render_chart_async(cache, key, builder, label="Loading chart…", sync=False):
     """Render a chart's UI (via `builder`, a zero-arg callable) so a
     spinner + placeholder shows first, before the actual (still
     synchronous) render happens.
@@ -31,6 +31,28 @@ def render_chart_async(cache, key, builder, label="Loading chart…"):
     this same two-tick pattern to avoid a blank gap while its own
     pitch-list query runs) -- defaults to "Loading chart…" for the
     common case.
+
+    `sync=True` skips the placeholder/`invalidate_later` step entirely
+    and just calls `builder()` immediately (Sept 2026, Ryker: client-
+    side "output is in an unexpected state" warnings on Bullpen
+    Dashboard). Root cause: the scheduled `invalidate_later(0.1)`
+    below re-invalidates this specific output on a 100ms wall-clock
+    timer, independent of Shiny's normal input-driven invalidation --
+    when both fire close together (e.g. switching pitcher right as
+    that timer is about to land), the client can receive two
+    overlapping recalculation cycles for the same output id and its
+    state tracker throws this warning. It's harmless (the content
+    itself is always correct), but it was silent before because
+    fig_to_img() used to go through kaleido, which took long enough
+    that the two triggers rarely landed close together. Now that
+    fig_to_img() renders live plotly.js (near-instant, no subprocess),
+    the two-tick delay isn't buying anything for a plain chart build
+    anymore -- it was only ever there to keep kaleido off the main
+    thread (see below) -- so for that case it's simpler and safer to
+    just skip the timer than to fight its timing. Left off by default
+    so callers whose builder() is still a real, potentially-slow
+    operation (e.g. this module's own DB-query-backed session header)
+    keep the loading placeholder.
 
     This deliberately does NOT use a background thread. An earlier
     version offloaded `builder()` to a ThreadPoolExecutor so the main
@@ -74,6 +96,9 @@ def render_chart_async(cache, key, builder, label="Loading chart…"):
     output id."""
     from shiny import reactive, ui
 
+    if sync:
+        return builder()
+
     state = cache()
     entry = state.get(key)
 
@@ -94,47 +119,22 @@ def render_chart_async(cache, key, builder, label="Loading chart…"):
     return entry
 
 
-PLOTLY_JS_URL = "https://cdn.plot.ly/plotly-2.35.2.min.js"
-
-
-def plotly_js_dep():
-    """<script> tag for plotly.js -- include once in the page head
-    (shiny_app/app.py). Charts rendered by fig_to_img() rely on it."""
-    from shiny import ui
-    return ui.tags.script(src=PLOTLY_JS_URL, charset="utf-8")
-
-
 def fig_to_img(fig, width=None, height=None, scale=1):
-    """v2: render a plotly Figure as a LIVE, responsive plotly.js chart
-    (hover tooltips, zoom) instead of a kaleido PNG.
+    """Render a plotly Figure to a static PNG and wrap it in an <img> tag.
 
-    Why the change: kaleido v1 needs a Chrome install on the server.
-    Posit Connect Cloud doesn't have one, so every chart on the Bullpen
-    Dashboard rendered as an empty box in production (the "blank
-    charts" bug). Inlining the figure JSON and letting the browser draw
-    it needs no Chrome, costs the server nothing, and every mark gets a
-    hover tooltip for free.
-
-    Kept the name and signature so the 20+ existing call sites don't
-    change. width is ignored (charts fill their card); height is
-    honored. Paper/plot backgrounds are forced transparent so the card
-    surface shows through in both themes."""
+    scale defaults to 1 (standard resolution) rather than 2 (double/
+    retina resolution) -- each Plotly-to-PNG export goes through
+    kaleido, which has real per-image CPU cost, and that cost scales
+    with pixel count (scale=2 renders 4x the pixels of scale=1). On
+    Posit Connect Cloud's shared, limited CPU, a page rendering several
+    charts at once at scale=2 was slow enough to occasionally trip the
+    browser's websocket timeout ("Disconnected from the server") --
+    most visible on Bullpen Dashboard, which renders up to 6 charts per
+    section. Pass scale=2 explicitly for a specific chart if a caller
+    ever needs retina-sharp output badly enough to accept the extra
+    render time."""
     from shiny import ui
-    import json
-    import uuid
-    import plotly.io as pio
 
-    h = int(height or (fig.layout.height or 420))
-    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", autosize=True, width=None, height=h)
-    div_id = f"gbo-plot-{uuid.uuid4().hex[:10]}"
-    spec = json.loads(pio.to_json(fig, validate=False))
-    config = {"displayModeBar": False, "responsive": True, "displaylogo": False, "scrollZoom": False}
-    js = (
-        "(function(){var run=function(){var el=document.getElementById(%s);if(!el||!window.Plotly){return setTimeout(run,60);}"
-        "Plotly.newPlot(el,%s,%s,%s);};run();})();"
-    ) % (json.dumps(div_id), json.dumps(spec["data"]), json.dumps(spec["layout"]), json.dumps(config))
-    return ui.div(
-        ui.div(id=div_id, class_="gbo-plot", style=f"width:100%; height:{h}px;"),
-        ui.tags.script(js),
-        class_="gbo-plot-wrap",
-    )
+    png_bytes = fig.to_image(format="png", width=width, height=height, scale=scale)
+    b64 = base64.b64encode(png_bytes).decode("ascii")
+    return ui.tags.img(src=f"data:image/png;base64,{b64}", style="max-width:100%; height:auto; display:block; margin:0 auto;")
