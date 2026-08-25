@@ -129,6 +129,16 @@ PITCH_TYPE_COLORS = {
 # -- a chart should never fail to render for a missing color.
 DEFAULT_PITCH_COLOR = "#7A8594"
 
+# Canonical fastball-family types -- single source of truth for "is this
+# pitch a fastball" (Aug 2026, Ryker: the player card's VELO stat should
+# read as average FASTBALL velocity, not an average across every pitch
+# type a pitcher threw that session -- a bullpen heavy on changeups/
+# breaking stuff was dragging VELO down and misrepresenting what the
+# pitcher's fastball actually sits at). Deliberately excludes Cutter --
+# it's its own canonical type above, not folded into "fastball" here,
+# same judgment call as everywhere else in this file.
+FASTBALL_TYPES = {"Fastball", "4-Seam Fastball", "2-Seam Fastball"}
+
 
 def normalize_pitch_type(raw_label):
     """Raw pitch-type text from any source -> canonical PitchType.type_name,

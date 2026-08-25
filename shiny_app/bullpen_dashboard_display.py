@@ -215,7 +215,13 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
     # to have, just one step earlier in the flow. A distinct cache
     # (not reused from _chart_cache) since the keys are shaped
     # differently and there's no reason for a chart re-render to
-    # invalidate the session header or vice versa.
+    # invalidate the session header or vice versa. Still used as
+    # render_chart_async's required cache arg even now that _controls
+    # calls it with sync=True (see below) -- sync=True returns before
+    # ever touching this cache, so it's just unused dead weight in that
+    # path today, but left in place rather than restructuring the
+    # signature, in case a future slow-session case brings the
+    # placeholder back for this output specifically.
     _controls_cache = reactive.Value({})
 
     def _target_key(target):
@@ -293,7 +299,30 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
             return _build_controls(target, pitches)
 
         key = (controls_id, _target_key(target))
-        return chart_helpers.render_chart_async(_controls_cache, key, _build, label="Loading session data…")
+        # sync=True (Aug 2026, Ryker: this output was the one chart_
+        # helpers.render_chart_async call site deliberately left on the
+        # two-tick/invalidate_later path when the other 4 chart outputs
+        # on this page got the same fix -- reasoning at the time was
+        # that this one's builder does a real DB query
+        # (_target_and_pitches -> _load_pitches), unlike the charts,
+        # which by then were fast in-process plotly.js renders with
+        # nothing left for the placeholder to usefully cover. Ryker
+        # confirmed (screenshot) the "output is in an unexpected state"
+        # warning was STILL showing up specifically on this output after
+        # that first round -- i.e. the invalidate_later(0.1) timer race
+        # described in render_chart_async's docstring was never actually
+        # about kaleido/chart-render time, it's a race against Shiny's
+        # own input-driven invalidation that any two-tick output can hit,
+        # DB query or not. Since switching pitcher/session already
+        # re-triggers this output through the normal reactive graph,
+        # dropping the extra timer-based tick removes the race without
+        # losing the "show something on pitcher switch" behavior. Trade-
+        # off: a genuinely large pitch history's DB query now blocks
+        # this output with no placeholder in between, same as the 4
+        # chart outputs already accepted -- revisit with a real debounce
+        # (not another invalidate_later) if that turns out to matter in
+        # practice.
+        return chart_helpers.render_chart_async(_controls_cache, key, _build, label="Loading session data…", sync=True)
 
     def _build_controls(target, pitches):
         db = get_session()
