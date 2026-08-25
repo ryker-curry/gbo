@@ -22,10 +22,13 @@ spreadsheet's actual data (not guessed):
     inputs, per Ryker's explicit call each time a new bucket's been
     added (Capacity, now Mobility/Shoulder Health) not to touch it.
 
-"Team" comparison population = every player (active and inactive) with
-at least one result for that test type, using each player's most recent value per
-metric (an ongoing system, not a one-time snapshot like the original
-spreadsheet).
+"Team" comparison population = every ACTIVE player (Player.active == True)
+with at least one result for that test type, using each player's most
+recent value per metric (an ongoing system, not a one-time snapshot like
+the original spreadsheet). Inactive/departed players are excluded from
+the comparison pool as of Aug 2026 (Ryker's call, see
+get_latest_values_by_player's docstring) -- current-team percentiles
+shouldn't be set by someone no longer on the roster.
 
 ---
 
@@ -467,12 +470,12 @@ def get_bucket_test_names_for_category(category_name):
 
 def get_latest_values_by_player(session, test_name, _cache=None):
     """{player_id: value} -- each player's most recent result for this
-    test type, across the whole roster -- ACTIVE AND INACTIVE both
-    count toward the comparison pool (Ryker's explicit call, so last
-    year's players' data still contributes to percentiles even though
-    they're hidden from the current roster everywhere else in the
-    app). Returns {} if the test type doesn't exist yet (e.g. not
-    seeded).
+    test type, ACTIVE ROSTER ONLY (Ryker's call, Aug 2026, superseding
+    the earlier "active and inactive both count" behavior: a departed
+    player's old mark was setting the ceiling for a team he's no
+    longer part of, which doesn't reflect "where do I stand against my
+    current teammates"). Returns {} if the test type doesn't exist yet
+    (e.g. not seeded).
 
     _cache: an optional pre-fetched {test_name: {player_id: value}}
     dict from _batch_fetch_latest_values() -- when provided and this
@@ -498,6 +501,7 @@ def get_latest_values_by_player(session, test_name, _cache=None):
         .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
         .join(Player, Assessment.player_id == Player.player_id)
         .filter(AssessmentResult.test_type_id == test_type.test_type_id)
+        .filter(Player.active == True)
         .all()
     )
     latest = {}
@@ -558,6 +562,9 @@ def _batch_fetch_latest_values(session, test_names):
       - units_by_test_name: {test_name: unit_or_None}, for the same
         seeded names -- avoids a second redundant per-metric query
         compute_metric_percentiles used to run just to read the unit.
+
+    ACTIVE ROSTER ONLY, same Aug 2026 scope change as
+    get_latest_values_by_player -- see that function's docstring.
     """
     test_names = list(set(test_names))
     if not test_names:
@@ -577,7 +584,9 @@ def _batch_fetch_latest_values(session, test_names):
     result_rows = (
         session.query(AssessmentResult.test_type_id, AssessmentResult.value, Assessment.player_id, Assessment.assessment_date)
         .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
+        .join(Player, Assessment.player_id == Player.player_id)
         .filter(AssessmentResult.test_type_id.in_(type_ids))
+        .filter(Player.active == True)
         .all()
     )
 
@@ -645,9 +654,13 @@ def compute_metric_percentiles(session, player_id, metrics, _cache=None, _units=
 
 def get_player_throws_map(session):
     """{player_id: 'R'/'L'/None} for every player -- active and
-    inactive, matching get_latest_values_by_player's scope. Used to
-    resolve anatomical Right/Left mobility entries to throwing/
-    non-throwing arm per player."""
+    inactive both included here (this is just a handedness lookup, not
+    itself a comparison pool -- resolve_side_by_throws below only ever
+    keeps entries for players who also show up in the now-active-only
+    right_by_player/left_by_player dicts, so an inactive player's
+    handedness being present here is harmless). Used to resolve
+    anatomical Right/Left mobility entries to throwing/non-throwing
+    arm per player."""
     return {p.player_id: p.throws for p in session.query(Player).all()}
 
 
