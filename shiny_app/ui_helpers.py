@@ -301,8 +301,12 @@ def show_card(player, bucket_data, pitch_summary=None, flag="neutral", fastball_
       BODY/PWR/STR/SPD/ARM = bucket scores (percentile-based, 0-100)
       ROM      = movement_flag's deficit-count-based color (red/orange/
       yellow/green), NOT a percentile -- see flag_bar() below.
-      FAT/BF%  = Body Fat Mass / Percent Body Fat, raw reference values
-      only -- see raw_row() below.
+      Body Fat Mass / Percent Body Fat do NOT appear on the card at all
+      (Aug 2026, Ryker: reversing an earlier "show them as raw
+      reference numbers" request -- he doesn't want them on the card
+      in any form now). They're still visible elsewhere (Overview tab,
+      Development priorities) just never percentile-scored there --
+      see BODY_COMP_BAR_NAMES in bucket_display.py.
       Pitchers also get VELO (average FASTBALL-only velocity, from
       fastball_summary) and SPIN (average spin rate across the whole
       latest session) -- shown as the raw mph/rpm, bar scaled
@@ -317,9 +321,6 @@ def show_card(player, bucket_data, pitch_summary=None, flag="neutral", fastball_
     mf = bd.get("movement_flag") or {}
     rom_color = mf.get("color")
     rom_deficits = mf.get("deficit_count")
-    bcm = bd.get("body_comp_metrics") or {}
-    fat_mass = (bcm.get("Body Fat Mass") or {}).get("raw")
-    pct_fat = (bcm.get("Percent Body Fat") or {}).get("raw")
 
     def bar(label, value, display=None, lo=0, hi=100, status=None):
         if value is None:
@@ -346,21 +347,10 @@ def show_card(player, bucket_data, pitch_summary=None, flag="neutral", fastball_
         st = status_from_color_word(color)
         return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_=st, style="width:100%"), class_="b"), ui.span(str(count) if count is not None else "—", class_="v"), class_="gbo-at")
 
-    def raw_row(label, value, digits=1):
-        """Plain reference-value row -- no percentile, no status color,
-        empty bar track (same "reference only, not scored" visual
-        language as build_raw_metrics in bucket_display.py). For Body
-        Fat Mass / Percent Body Fat (Aug 2026, Ryker: show them on the
-        card for awareness, but never percentile-score them or imply
-        either one "needs attention")."""
-        display = f"{float(value):.{digits}f}" if value is not None else "—"
-        return ui.div(ui.span(label, class_="l"), ui.div(class_="b"), ui.span(display, class_="v"), class_="gbo-at")
-
     attrs = [
         bar("BODY", bd.get("body_comp_score")), bar("PWR", bd.get("power_score")),
         bar("STR", bd.get("strength_score")), bar("SPD", bd.get("speed_score")),
         bar("ARM", bd.get("capacity_score")), flag_bar("ROM", rom_color, rom_deficits),
-        raw_row("FAT", fat_mass), raw_row("BF%", pct_fat),
     ]
     if getattr(player, "is_pitcher", False):
         ps = pitch_summary or {}
