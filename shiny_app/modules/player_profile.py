@@ -35,6 +35,7 @@ from models import (Player, StaffPlayerAssignment, Assessment, AssessmentCategor
                     RapsodoPitch, IDPGoal, Video)
 from bucket_system import compute_bucket_system
 from analytics.bullpen_metrics import session_summary, pitch_type_summary
+from pitch_type_config import FASTBALL_TYPES
 import bucket_display
 import ui_helpers
 
@@ -202,8 +203,18 @@ def player_profile_server(input, output, session, app_state):
         flag = ui_helpers.STATUS_NEUTRAL if not bd.get("total_score") and not pris else (ui_helpers.STATUS_FLAG if any(s == "flag" for s, _, _ in pris) else ui_helpers.STATUS_WATCH if pris else ui_helpers.STATUS_GOOD)
         mf = bd.get("movement_flag") or {}
         summ = session_summary(pitches) if pitches else None
+        # Fastball-only slice of the same latest-session pitch list, for
+        # the card's VELO stat (Aug 2026, Ryker: VELO should read as
+        # average fastball velocity, not an average across every pitch
+        # type thrown that session -- see FASTBALL_TYPES in
+        # pitch_type_config.py). pitch_type is already joinedloaded on
+        # `pitches` above, so this doesn't cost another query. None (not
+        # an all-zero summary) when the pitcher threw no fastballs that
+        # session, so the card shows "—" rather than a misleading 0.
+        fastball_pitches = [pt for pt in pitches if pt.pitch_type and pt.pitch_type.type_name in FASTBALL_TYPES]
+        fastball_summ = session_summary(fastball_pitches) if fastball_pitches else None
 
-        card = ui_helpers.show_card(p, bd, summ, flag)
+        card = ui_helpers.show_card(p, bd, summ, flag, fastball_summary=fastball_summ)
         tiles = ui.div(
             ui_helpers.kpi_tile("Status", ui_helpers.status_chip(flag), delta=f"{sum(1 for s,_,_ in pris if s=='flag')} priority · {sum(1 for s,_,_ in pris if s=='watch')} attention" if pris else "No flags"),
             ui_helpers.kpi_tile("Last assessed", last_date.strftime("%b %d") if last_date else "—", delta=f"{last_cat} · {(date.today()-last_date).days} days ago" if last_date else "No assessments yet"),

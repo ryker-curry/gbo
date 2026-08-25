@@ -294,14 +294,19 @@ def remove_selected_grid_rows(rows: list, selected_records: list) -> list:
     return remaining
 
 
-def show_card(player, bucket_data, pitch_summary=None, flag="neutral"):
+def show_card(player, bucket_data, pitch_summary=None, flag="neutral", fastball_summary=None):
     """MLB-The-Show-style player card (design doc section 8). Reads
     only what the bucket system already computes:
       Overall  = total_score
       BODY/PWR/STR/SPD/ARM = bucket scores (percentile-based, 0-100)
-      ROM      = share of Mobility & ROM rows that are green (0-100)
-      Pitchers also get VELO/SPIN from the latest Rapsodo session
-      (shown as the raw mph/rpm, bar scaled 70-100 mph / 1500-2800 rpm).
+      ROM      = movement_flag's deficit-count-based color (red/orange/
+      yellow/green), NOT a percentile -- see flag_bar() below.
+      FAT/BF%  = Body Fat Mass / Percent Body Fat, raw reference values
+      only -- see raw_row() below.
+      Pitchers also get VELO (average FASTBALL-only velocity, from
+      fastball_summary) and SPIN (average spin rate across the whole
+      latest session) -- shown as the raw mph/rpm, bar scaled
+      70-100 mph / 1500-2800 rpm.
     Tier by overall: 90+ gold, 80-89 crimson, 70-79 silver, else slate.
     Positions never get pitching rows; nothing is invented when data is
     missing -- the row shows a dash."""
@@ -309,9 +314,12 @@ def show_card(player, bucket_data, pitch_summary=None, flag="neutral"):
     overall = bd.get("total_score")
     tier = "gold" if (overall or 0) >= 90 else "crimson" if (overall or 0) >= 80 else "silver" if (overall or 0) >= 70 else "slate"
     tier_color = {"gold": "var(--gbo-gold)", "crimson": "var(--gbo-crimson)", "silver": "var(--gbo-silver)", "slate": "var(--gbo-text-muted)"}[tier]
-    rom = bd.get("mobility_rom_report") or []
-    statused = [r for r in rom if r.get("status") in ("red", "yellow", "green")]
-    rom_score = round(100 * sum(1 for r in statused if r["status"] == "green") / len(statused)) if statused else None
+    mf = bd.get("movement_flag") or {}
+    rom_color = mf.get("color")
+    rom_deficits = mf.get("deficit_count")
+    bcm = bd.get("body_comp_metrics") or {}
+    fat_mass = (bcm.get("Body Fat Mass") or {}).get("raw")
+    pct_fat = (bcm.get("Percent Body Fat") or {}).get("raw")
 
     def bar(label, value, display=None, lo=0, hi=100, status=None):
         if value is None:
@@ -320,14 +328,44 @@ def show_card(player, bucket_data, pitch_summary=None, flag="neutral"):
         st = status or ("gold" if pct >= 90 else status_from_percentile(pct))
         return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_=st, style=f"width:{pct:.0f}%"), class_="b"), ui.span(display if display is not None else f"{float(value):.0f}", class_="v"), class_="gbo-at")
 
+    def flag_bar(label, color, count):
+        """Solid-color status bar, NOT a percentile fill (Aug 2026,
+        Ryker: ROM shouldn't be a 0-100 "% of rows green" number on the
+        card -- he just wants the red/yellow/green flag). Reuses
+        bd["movement_flag"] (compute_movement_flag in bucket_system.py)
+        -- the SAME deficit-count-based flag already shown on the
+        Dashboard/Roster/Player Profile's Movement Flag ring, so the
+        card never disagrees with the rest of the app about a player's
+        ROM status. Bar is always full width, colored by status
+        (orange folds into the same "flag"/red color as true red here,
+        same as everywhere else status_from_color_word is used --
+        the card only has 3 status colors to work with); the value
+        column shows the raw deficit count rather than a percentile."""
+        if color is None:
+            return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_="neutral", style="width:0"), class_="b"), ui.span("—", class_="v"), class_="gbo-at")
+        st = status_from_color_word(color)
+        return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_=st, style="width:100%"), class_="b"), ui.span(str(count) if count is not None else "—", class_="v"), class_="gbo-at")
+
+    def raw_row(label, value, digits=1):
+        """Plain reference-value row -- no percentile, no status color,
+        empty bar track (same "reference only, not scored" visual
+        language as build_raw_metrics in bucket_display.py). For Body
+        Fat Mass / Percent Body Fat (Aug 2026, Ryker: show them on the
+        card for awareness, but never percentile-score them or imply
+        either one "needs attention")."""
+        display = f"{float(value):.{digits}f}" if value is not None else "—"
+        return ui.div(ui.span(label, class_="l"), ui.div(class_="b"), ui.span(display, class_="v"), class_="gbo-at")
+
     attrs = [
         bar("BODY", bd.get("body_comp_score")), bar("PWR", bd.get("power_score")),
         bar("STR", bd.get("strength_score")), bar("SPD", bd.get("speed_score")),
-        bar("ARM", bd.get("capacity_score")), bar("ROM", rom_score),
+        bar("ARM", bd.get("capacity_score")), flag_bar("ROM", rom_color, rom_deficits),
+        raw_row("FAT", fat_mass), raw_row("BF%", pct_fat),
     ]
     if getattr(player, "is_pitcher", False):
         ps = pitch_summary or {}
-        v, sp = ps.get("avg_velocity"), ps.get("avg_spin_rate")
+        fb = fastball_summary or {}
+        v, sp = fb.get("avg_velocity"), ps.get("avg_spin_rate")
         attrs += [bar("VELO", v, f"{v:.1f}" if v else None, 70, 100), bar("SPIN", sp, f"{sp:,.0f}" if sp else None, 1500, 2800)]
 
     pos = player.player_position.position_name if getattr(player, "player_position", None) else None
