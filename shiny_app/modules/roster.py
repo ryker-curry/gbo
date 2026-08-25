@@ -160,8 +160,30 @@ def roster_server(input, output, session, app_state):
             # enough to look like the page had hung (Aug 2026, Ryker).
             pool_cache, pool_units, throws_map, active_only = build_roster_batch_cache(db, season_label=season_label)
 
+            # Viewing a past season should only show players who were
+            # actually around for it -- otherwise, e.g., a freshman who
+            # joined for 2026-2027 shows up in "Before 2026-2027" too,
+            # just with blank scores. Aug 2026, Ryker: "if they weren't
+            # on the roster before that point then they don't show up
+            # ... from here on out each year will have a roster."
+            # There's no separately-tracked roster-membership history
+            # (Player.active is only ever "right now," not "as of a
+            # past date"), so this uses the same signal already on
+            # screen as the proxy: had at least one assessment result
+            # recorded during that season's own window (`last`, above)
+            # -- confirmed with Ryker as the simplest option over
+            # building a real per-season roster list, since the team
+            # already gets tested regularly each season. The one
+            # tradeoff: a player who was genuinely on the roster but
+            # never got assessed that season (hurt all year, etc.)
+            # won't show up for it either. Doesn't apply to the CURRENT
+            # season -- everyone on today's roster still belongs there
+            # regardless of whether they've been tested yet.
+            is_past_season = not active_only
             rows = []
             for p in players:
+                if is_past_season and last.get(p.player_id) is None:
+                    continue
                 bd = None
                 try:
                     if active_only and not p.active:
