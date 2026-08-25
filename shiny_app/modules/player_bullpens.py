@@ -28,7 +28,7 @@ import plotly.graph_objects as go
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import Player, User, BullpenSession, HitterSwing, RapsodoPitch, BullpenPitch, Assessment, AssessmentResult
+from models import Player, User, BullpenSession, RapsodoPitch, BullpenPitch, Assessment, AssessmentResult
 
 import ui_helpers
 import chart_helpers
@@ -47,8 +47,6 @@ FULL_ZONE_HEIGHT = (ZONE_HEIGHT_BOUNDS[0] - _HEIGHT_THIRD, ZONE_HEIGHT_BOUNDS[1]
 PITCH_TYPE_COLORS = [
     "#BF1E2D", "#D4AF37", "#4C6EF5", "#37B24D", "#F76707", "#AE3EC9", "#0CA678", "#E64980",
 ]
-
-CONTACT_QUALITY_SCORE = {"Barrel": 3, "Solid": 2, "Weak": 1, "Miss": 0}
 
 
 def _render_strike_zone_plot(title, data_by_type):
@@ -119,81 +117,6 @@ def _render_scatter_with_averages(title, x_label, y_label, data_by_type, x_key, 
         margin=dict(t=40, b=40, l=40, r=40),
     )
     return chart_helpers.fig_to_img(fig, width=700, height=420)
-
-
-def _compute_zone_scores(swings):
-    by_zone = {}
-    for s in swings:
-        if s.pitch_zone is None or s.contact_quality not in CONTACT_QUALITY_SCORE:
-            continue
-        by_zone.setdefault(s.pitch_zone, []).append(CONTACT_QUALITY_SCORE[s.contact_quality])
-    scores = {z: sum(vals) / len(vals) for z, vals in by_zone.items()}
-    counts = {z: len(vals) for z, vals in by_zone.items()}
-    return scores, counts
-
-
-def _render_zone_heatmap(title, zone_scores, zone_counts, invert_colors=False, subtitle=None):
-    zone_grid = [[7, 8, 9], [4, 5, 6], [1, 2, 3]]
-    z = [[zone_scores.get(zid) for zid in row] for row in zone_grid]
-    text = [[f"{zone_scores[zid]:.1f}<br>({zone_counts[zid]})" if zid in zone_scores else "—" for zid in row] for row in zone_grid]
-
-    colorscale = "RdYlGn_r" if invert_colors else "RdYlGn"
-    fig = go.Figure(data=go.Heatmap(
-        z=z, text=text, texttemplate="%{text}", textfont=dict(color="#111111", size=14),
-        colorscale=colorscale, zmin=0, zmax=3, showscale=True,
-        colorbar=dict(title="Avg score", tickfont=dict(color="#FFFDE5"), title_font=dict(color="#FFFDE5")),
-        xgap=3, ygap=3,
-    ))
-    fig.update_layout(
-        title=title,
-        height=380,
-        plot_bgcolor="#1E1E1E", paper_bgcolor="#1E1E1E",
-        font=dict(color="#FFFDE5"),
-        xaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-        margin=dict(t=40, b=20, l=20, r=20),
-    )
-    children = [chart_helpers.fig_to_img(fig, width=700, height=380)]
-    if subtitle:
-        children.append(ui.p(subtitle, class_="text-muted small"))
-    return ui.div(*children)
-
-
-def _render_execution_heatmap(title, zone_rates, zone_counts, subtitle=None):
-    zone_grid = [[7, 8, 9], [4, 5, 6], [1, 2, 3]]
-    z = [[zone_rates.get(zid) for zid in row] for row in zone_grid]
-    text = [[f"{zone_rates[zid]:.0f}%<br>({zone_counts[zid]})" if zid in zone_rates else "—" for zid in row] for row in zone_grid]
-
-    fig = go.Figure(data=go.Heatmap(
-        z=z, text=text, texttemplate="%{text}", textfont=dict(color="#111111", size=14),
-        colorscale="RdYlGn", zmin=0, zmax=100, showscale=True,
-        colorbar=dict(title="Hit rate %", tickfont=dict(color="#FFFDE5"), title_font=dict(color="#FFFDE5")),
-        xgap=3, ygap=3,
-    ))
-    fig.update_layout(
-        title=title,
-        height=380,
-        plot_bgcolor="#1E1E1E", paper_bgcolor="#1E1E1E",
-        font=dict(color="#FFFDE5"),
-        xaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-        margin=dict(t=40, b=20, l=20, r=20),
-    )
-    children = [chart_helpers.fig_to_img(fig, width=700, height=380)]
-    if subtitle:
-        children.append(ui.p(subtitle, class_="text-muted small"))
-    return ui.div(*children)
-
-
-def _compute_execution_accuracy(swings):
-    by_zone = {}
-    for s in swings:
-        if s.intended_zone is None or s.pitch_zone is None:
-            continue
-        by_zone.setdefault(s.intended_zone, []).append(1 if s.intended_zone == s.pitch_zone else 0)
-    rates = {z: 100 * sum(vals) / len(vals) for z, vals in by_zone.items()}
-    counts = {z: len(vals) for z, vals in by_zone.items()}
-    return rates, counts
 
 
 def _compute_actual_zone(plate_side_ft, plate_height_ft):
@@ -531,10 +454,6 @@ def player_bullpens_server(input, output, session, app_state):
 
             sections.append(ui.accordion(*panels, open=False, id=None))
 
-            sections.append(ui.hr())
-            sections.append(ui.h5("My zone heatmap", class_="gbo-section-title"))
-            sections.append(ui.output_ui("my_zone_heatmap_section"))
-
             return ui.div(*sections)
         finally:
             db.close()
@@ -671,46 +590,3 @@ def player_bullpens_server(input, output, session, app_state):
             if p.notes:
                 children.append(ui.p(p.notes, class_="text-muted small"))
             return ui.div(*children)
-
-    @render.ui
-    def my_zone_heatmap_section():
-        _refresh_tick()
-        if not app_state.is_authenticated() or app_state.role_name() != "Player":
-            return None
-        db = get_session()
-        try:
-            my_player = _my_player(db)
-            if my_player is None or not my_player.is_pitcher:
-                return None
-
-            my_pitcher_swings = (
-                db.query(HitterSwing)
-                .filter(HitterSwing.pitcher_player_id == my_player.player_id)
-                .all()
-            )
-            if not my_pitcher_swings:
-                return ui_helpers.empty_state("No swings logged against you yet on Hitter Tracking.")
-
-            sections = []
-            my_zone_scores, my_zone_counts = _compute_zone_scores(my_pitcher_swings)
-            if not my_zone_scores:
-                sections.append(ui_helpers.empty_state("No swings with both a zone and contact quality recorded against you yet."))
-            else:
-                sections.append(_render_zone_heatmap(
-                    "Opponent contact quality by zone", my_zone_scores, my_zone_counts, invert_colors=True,
-                    subtitle="Green = pitches hardest to hit here (good for you), red = hit hardest here. Number in parentheses is swing count.",
-                ))
-
-                sections.append(ui.hr())
-                sections.append(ui.p("How well you execute to your intended locations with a hitter in the box (from Hitter Tracking).", class_="text-muted small"))
-                my_exec_rates, my_exec_counts = _compute_execution_accuracy(my_pitcher_swings)
-                if not my_exec_rates:
-                    sections.append(ui_helpers.empty_state("No swings with both an intended and actual zone recorded for you yet."))
-                else:
-                    sections.append(_render_execution_heatmap(
-                        "Live execution accuracy by intended zone", my_exec_rates, my_exec_counts,
-                        subtitle="Green = you hit your spot most often when you aim here, red = you miss most often. Number in parentheses is attempt count.",
-                    ))
-            return ui.div(*sections)
-        finally:
-            db.close()
