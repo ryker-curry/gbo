@@ -11,7 +11,10 @@ What changed from v1 ("Bold Athletic") and why:
   - Crimson is now the ACTION color only (primary buttons, active nav,
     links). It no longer paints every KPI border, every progress bar,
     the navbar, or the profile card. Gold is reserved for ratings and
-    tiers (>= 90, the player card). Everything else is a quiet neutral
+    the player card's tier system (Diamond/Gold/Silver/Bronze by
+    Overall score -- see --gbo-diamond/--gbo-bronze below, added Aug
+    2026 when the tiers were renamed from gold/crimson/silver/slate).
+    Everything else is a quiet neutral
     so the green/amber/red status system is the thing a coach's eye
     lands on first.
   - Status tokens (--gbo-status-good / -watch / -flag) are the new
@@ -118,6 +121,8 @@ GLOBAL_CSS = """
   --gbo-caution: var(--gbo-status-watch);
   --gbo-orange: #D9782A;
   --gbo-silver: #BDBCB6;
+  --gbo-diamond: #5FD9F0;                 /* player card tier (Aug 2026, Ryker: Diamond/Gold/Silver/Bronze) -- icy cyan, distinct from --gbo-gold so the top tier doesn't read as a duplicate of the gold tier below it */
+  --gbo-bronze: #C9793D;                  /* player card tier -- bottom tier, replaces the old flat-gray "slate" */
   --gbo-focus: #6FB1FF;
   --gbo-shadow: 0 8px 24px rgba(0,0,0,.35);
 }
@@ -152,6 +157,8 @@ GLOBAL_CSS = """
   --gbo-caution: var(--gbo-status-watch);
   --gbo-orange: #A3550F;
   --gbo-silver: #6B7280;
+  --gbo-diamond: #0E7A96;                 /* player card tier -- see dark theme's --gbo-diamond comment */
+  --gbo-bronze: #935423;                  /* player card tier */
   --gbo-focus: #2563EB;
   --gbo-shadow: 0 8px 24px rgba(0,0,0,.12);
 }

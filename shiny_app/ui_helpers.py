@@ -311,13 +311,17 @@ def show_card(player, bucket_data, pitch_summary=None, flag="neutral", fastball_
       fastball_summary) and SPIN (average spin rate across the whole
       latest session) -- shown as the raw mph/rpm, bar scaled
       70-100 mph / 1500-2800 rpm.
-    Tier by overall: 90+ gold, 80-89 crimson, 70-79 silver, else slate.
+    Tier by overall: 90+ diamond, 80-89 gold, 70-79 silver, else bronze
+    (Aug 2026, Ryker: renamed from gold/crimson/silver/slate to the
+    more trading-card-standard Diamond/Gold/Silver/Bronze -- see
+    --gbo-diamond/--gbo-bronze in theme.py; --gbo-gold/--gbo-silver are
+    reused as-is since those names already lined up).
     Positions never get pitching rows; nothing is invented when data is
     missing -- the row shows a dash."""
     bd = bucket_data or {}
     overall = bd.get("total_score")
-    tier = "gold" if (overall or 0) >= 90 else "crimson" if (overall or 0) >= 80 else "silver" if (overall or 0) >= 70 else "slate"
-    tier_color = {"gold": "var(--gbo-gold)", "crimson": "var(--gbo-crimson)", "silver": "var(--gbo-silver)", "slate": "var(--gbo-text-muted)"}[tier]
+    tier = "diamond" if (overall or 0) >= 90 else "gold" if (overall or 0) >= 80 else "silver" if (overall or 0) >= 70 else "bronze"
+    tier_color = {"diamond": "var(--gbo-diamond)", "gold": "var(--gbo-gold)", "silver": "var(--gbo-silver)", "bronze": "var(--gbo-bronze)"}[tier]
     mf = bd.get("movement_flag") or {}
     rom_color = mf.get("color")
     rom_deficits = mf.get("deficit_count")
