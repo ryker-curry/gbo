@@ -141,7 +141,13 @@ def video_import_server(input, output, session, app_state):
         if not app_state.is_authenticated():
             return None
         req("player_select" in input)
-        if not app_state.can_edit_assessments():
+        # Video Coordinator gets upload rights here without the
+        # role-level can_edit_assessments flag -- that flag also gates
+        # assessment CRUD (assessments.py) and the "Add or edit player"
+        # button (roster.py), neither of which this role was scoped to
+        # touch. Checked by role name instead, mirroring the Data-Analyst
+        # special case in game_tracking.py's _can_edit().
+        if not app_state.can_edit_assessments() and app_state.role_name() != "Video Coordinator":
             return None
 
         return ui.div(

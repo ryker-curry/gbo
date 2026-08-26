@@ -69,7 +69,7 @@ def analytics_ui():
 
 @module.server
 def analytics_server(input, output, session, app_state):
-    ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst")
+    ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
 
     @render.ui
     def player_picker():
