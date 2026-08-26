@@ -965,6 +965,7 @@ def game_tracking_server(input, output, session, app_state):
     _gt_editing_pitch_id = reactive.Value(None)
     _gt_pending_delete_pitch_id = reactive.Value(None)
     _pitch_log_limit = reactive.Value(50)  # "Load more" bumps this by 50 at a time -- see pitch_log_body
+    _runner_event_form_open = reactive.Value(False)  # collapsed by default -- see runner_events_panel (Ryker, 2026-08-26)
 
     def _bump_refresh():
         _refresh_tick.set(_refresh_tick() + 1)
@@ -1977,6 +1978,16 @@ def game_tracking_server(input, output, session, app_state):
             occupied_bases = [i + 1 for i, c in enumerate(state["bases"]) if c == "1"]
             if not occupied_bases:
                 children.append(ui.p("No runners on base right now.", class_="text-muted small"))
+            elif not _runner_event_form_open():
+                # Collapsed by default -- the full Event/Runner-on/Advances-to
+                # form only takes up space on the page once someone actually
+                # asks for it. Reopened by _open_runner_event_form below, and
+                # closed again by _record_runner_event/_undo_last_runner_event/
+                # _close_runner_event_form so it doesn't linger after use.
+                # (Ryker, 2026-08-26: "make it a dropdown to where they can
+                # click a runner event and then select it" instead of the
+                # form always being visible.)
+                children.append(ui.input_action_button("open_runner_event_form_btn", "+ Log a runner event", class_="btn-outline-light btn-sm mt-1"))
             else:
                 from_choices = {str(b): base_label[b] for b in occupied_bases}
                 children.append(ui.layout_columns(
@@ -1985,6 +1996,7 @@ def game_tracking_server(input, output, session, app_state):
                     col_widths=[7, 5],
                 ))
                 children.append(ui.output_ui("runner_event_fields"))
+                children.append(ui.input_action_link("close_runner_event_form_btn", "Cancel", class_="text-muted small d-block mt-1"))
 
             if pending:
                 children.append(ui.input_action_button("undo_last_runner_event_btn", "Undo last runner event", class_="btn-outline-danger btn-sm mt-1"))
@@ -1992,6 +2004,16 @@ def game_tracking_server(input, output, session, app_state):
             return ui.div(*children)
         finally:
             db.close()
+
+    @reactive.effect
+    @reactive.event(input.open_runner_event_form_btn)
+    def _open_runner_event_form():
+        _runner_event_form_open.set(True)
+
+    @reactive.effect
+    @reactive.event(input.close_runner_event_form_btn)
+    def _close_runner_event_form():
+        _runner_event_form_open.set(False)
 
     @render.ui
     def runner_event_fields():
@@ -2091,6 +2113,7 @@ def game_tracking_server(input, output, session, app_state):
                     game.opponent_score += 1
             db.commit()
             ui.notification_show(f"{event_type} recorded.", type="message", duration=6)
+            _runner_event_form_open.set(False)  # collapse back down -- see runner_events_panel
             _bump_pa()
             _bump_refresh()
         finally:
@@ -2122,6 +2145,7 @@ def game_tracking_server(input, output, session, app_state):
             db.delete(last_event)
             db.commit()
             ui.notification_show("Last runner event undone.", type="message", duration=6)
+            _runner_event_form_open.set(False)  # collapse back down -- see runner_events_panel
             _bump_pa()
             _bump_refresh()
         finally:
@@ -3048,6 +3072,7 @@ def game_tracking_server(input, output, session, app_state):
             db.commit()
 
             ui.notification_show("Pitch recorded.", type="message", duration=6)
+            _runner_event_form_open.set(False)  # fresh pitch -- collapse the runner-event form back down, see runner_events_panel
             _bump_pa()
             _bump_refresh()
         finally:
