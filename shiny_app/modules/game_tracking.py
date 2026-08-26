@@ -351,7 +351,7 @@ import field_location
 from models import (
     Player, Position, PitchType, Game, GameLineupSlot, GamePitch, RunExpectancy,
     OpponentTeam, OpponentPlayer, Season, PitchingChange, PlayerPitchArsenal, OpponentLineupSlot,
-    GameVideoClip, LineupSubstitution,
+    GameVideoClip, LineupSubstitution, GameRunnerEvent,
 )
 from game_stats import (
     get_pitching_pitches, get_batting_pitches, compute_pitching_line, compute_batting_line,
@@ -368,6 +368,16 @@ AB_OUTCOMES = [
     "Sac Bunt", "Sac Fly", "Groundout", "Flyout", "Lineout", "Double Play",
 ]
 CONTACT_QUALITY_OPTIONS = ["Barrel", "Solid", "Weak", "Miss"]
+
+# Mid-plate-appearance base-running events -- see GameRunnerEvent's
+# docstring in models.py for the full "why" (bases_before/outs_before
+# previously had no way to change except on a pitch that ends the PA).
+# RUNNER_EVENT_OUT_TYPES are the two that end in an out with no
+# advance; every other type always advances (never an out) -- so the
+# UI only ever needs to show a to-base picker OR an "out" note, never
+# both, per event type.
+RUNNER_EVENT_TYPES = ["Stolen Base", "Caught Stealing", "Picked Off", "Wild Pitch", "Passed Ball", "Balk", "Defensive Indifference"]
+RUNNER_EVENT_OUT_TYPES = ("Caught Stealing", "Picked Off")
 
 GAME_VIDEO_SUBFOLDER = "pitch-videos/"  # same folder Bullpen/Hitter Tracking's clips upload into, inside the one shared R2 bucket
 
@@ -698,46 +708,100 @@ def suggest_after_state(ab_outcome, bases_before, outs_before):
     return outs, "".join(b), runs
 
 
-def compute_current_state(pitches):
+def apply_runner_events(bases, outs, events):
+    """Folds a chronological list of GameRunnerEvent rows onto a
+    (bases, outs) pair -- from_base's bit always clears (the runner
+    leaves that base, whether by advancing, scoring, or being put out);
+    to_base's bit sets only when there IS one (an out, or a run scored
+    via to_base == 4, leaves no base occupied). Each is_out event adds
+    one out. Does NOT itself roll to the next half-inning -- callers
+    (compute_current_state) apply that uniformly, the same way whether
+    the 3rd out came from a PA-ending pitch or a runner event."""
+    b = list(bases or "000")
+    for ev in events:
+        idx = ev.from_base - 1
+        if 0 <= idx < 3:
+            b[idx] = "0"
+        if not ev.is_out and ev.to_base in (2, 3):
+            b[ev.to_base - 1] = "1"
+        if ev.is_out:
+            outs += 1
+    return "".join(b), outs
+
+
+def compute_current_state(pitches, runner_events=None):
+    """runner_events: every GameRunnerEvent for this game (any order --
+    this function sorts and filters). Folded in AFTER the pitch-derived
+    state below, using the SAME rollover rule (outs >= 3 -> next half-
+    inning) whether the pitch-derived state or a runner event supplied
+    the 3rd out -- see GameRunnerEvent's docstring in models.py for why
+    this exists at all (mid-PA base-running events previously had no
+    way to change bases/outs)."""
+    runner_events = runner_events or []
     if not pitches:
-        return {
+        state = {
             "inning": 1, "is_our_batting": True, "outs": 0, "bases": "000",
             "balls": 0, "strikes": 0, "pa_pitch_number": 1, "new_pa": True,
         }
-    last = pitches[-1]
-    if not last.ends_plate_appearance:
-        balls = (last.balls_before or 0) + (1 if last.pitch_outcome == "Ball" else 0)
-        strikes = (last.strikes_before or 0)
-        if last.pitch_outcome in ("Called Strike", "Swing and Miss"):
-            strikes += 1
-        elif last.pitch_outcome == "Foul" and strikes < 2:
-            strikes += 1
-        return {
-            "inning": last.inning, "is_our_batting": last.is_our_team_batting,
-            "outs": last.outs_before, "bases": last.bases_before,
-            "balls": balls, "strikes": strikes,
-            "pa_pitch_number": (last.pa_pitch_number or 1) + 1, "new_pa": False,
-            "current_our_player": last.our_player_id,
-            "current_opp_hand": last.opponent_hand,
-            "current_opp_order": last.opponent_batting_order,
-            "current_opp_player": last.opponent_player_id,
-            "current_opp_our_player": last.opponent_our_player_id,
-        }
+        anchor = 0
     else:
-        outs = last.outs_after if last.outs_after is not None else last.outs_before
-        bases = last.bases_after if last.bases_after is not None else "000"
-        inning = last.inning
-        is_our_batting = last.is_our_team_batting
+        last = pitches[-1]
+        anchor = last.pitch_sequence
+        if not last.ends_plate_appearance:
+            balls = (last.balls_before or 0) + (1 if last.pitch_outcome == "Ball" else 0)
+            strikes = (last.strikes_before or 0)
+            if last.pitch_outcome in ("Called Strike", "Swing and Miss"):
+                strikes += 1
+            elif last.pitch_outcome == "Foul" and strikes < 2:
+                strikes += 1
+            state = {
+                "inning": last.inning, "is_our_batting": last.is_our_team_batting,
+                "outs": last.outs_before, "bases": last.bases_before,
+                "balls": balls, "strikes": strikes,
+                "pa_pitch_number": (last.pa_pitch_number or 1) + 1, "new_pa": False,
+                "current_our_player": last.our_player_id,
+                "current_opp_hand": last.opponent_hand,
+                "current_opp_order": last.opponent_batting_order,
+                "current_opp_player": last.opponent_player_id,
+                "current_opp_our_player": last.opponent_our_player_id,
+            }
+        else:
+            outs = last.outs_after if last.outs_after is not None else last.outs_before
+            bases = last.bases_after if last.bases_after is not None else "000"
+            inning = last.inning
+            is_our_batting = last.is_our_team_batting
+            if outs >= 3:
+                inning += 1
+                is_our_batting = not is_our_batting
+                outs = 0
+                bases = "000"
+            state = {
+                "inning": inning, "is_our_batting": is_our_batting,
+                "outs": outs, "bases": bases,
+                "balls": 0, "strikes": 0, "pa_pitch_number": 1, "new_pa": True,
+            }
+
+    pending = sorted(
+        [e for e in runner_events if e.pitch_sequence_after == anchor],
+        key=lambda e: e.created_at,
+    )
+    if pending:
+        bases, outs = apply_runner_events(state["bases"], state["outs"], pending)
         if outs >= 3:
-            inning += 1
-            is_our_batting = not is_our_batting
-            outs = 0
-            bases = "000"
-        return {
-            "inning": inning, "is_our_batting": is_our_batting,
-            "outs": outs, "bases": bases,
-            "balls": 0, "strikes": 0, "pa_pitch_number": 1, "new_pa": True,
-        }
+            # A runner event (caught stealing / picked off) supplied the
+            # 3rd out mid-PA -- the batter's partial plate appearance
+            # (whatever count he'd worked to) just ends with no
+            # ends_plate_appearance row of its own, same as any other
+            # incomplete trailing PA this schema already tolerates.
+            state["inning"] += 1
+            state["is_our_batting"] = not state["is_our_batting"]
+            outs, bases = 0, "000"
+            state["balls"], state["strikes"], state["pa_pitch_number"], state["new_pa"] = 0, 0, 1, True
+            for k in ("current_our_player", "current_opp_hand", "current_opp_order", "current_opp_player", "current_opp_our_player"):
+                state.pop(k, None)
+        state["outs"], state["bases"] = outs, bases
+
+    return state
 
 
 def _current_pa_pitches(pitches):
@@ -942,13 +1006,14 @@ def game_tracking_server(input, output, session, app_state):
     def _load_tracking_context(db, game_id):
         game = (
             db.query(Game)
-            .options(joinedload(Game.pitching_changes))
+            .options(joinedload(Game.pitching_changes), joinedload(Game.runner_events))
             .filter(Game.game_id == game_id)
             .first()
         )
         if game is None:
             return None
         pitches = sorted(game.pitches, key=lambda p: p.pitch_sequence)
+        runner_events = sorted(game.runner_events, key=lambda e: (e.pitch_sequence_after, e.created_at))
         squad_a_slots = (
             db.query(GameLineupSlot).options(joinedload(GameLineupSlot.player), joinedload(GameLineupSlot.substitutions))
             .filter(GameLineupSlot.game_id == game_id, GameLineupSlot.squad == "A")
@@ -964,7 +1029,7 @@ def game_tracking_server(input, output, session, app_state):
             .filter(OpponentLineupSlot.game_id == game_id)
             .order_by(OpponentLineupSlot.batting_order).all()
         )
-        state = compute_current_state(pitches)
+        state = compute_current_state(pitches, runner_events)
         return game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state
 
     # -------------------------------------------------------------------
@@ -1714,6 +1779,7 @@ def game_tracking_server(input, output, session, app_state):
                 ui.output_ui("live_game_dashboard"),
                 ui.hr(),
                 ui.output_ui("game_state_display"),
+                ui.output_ui("runner_events_panel"),
                 ui.hr(),
                 ui.h5("Who's Up", class_="gbo-section-title"),
                 ui.output_ui("who_is_up_identity_picker"),
@@ -1842,6 +1908,222 @@ def game_tracking_server(input, output, session, app_state):
             if state["outs"] >= 3:
                 children.append(ui.p("3 outs reached but the inning hasn't advanced yet -- this shouldn't normally happen; check the last pitch logged.", class_="text-warning small"))
             return ui.div(*children)
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Runner events (steal / caught stealing / pickoff / wild pitch /
+    # passed ball / balk) -- see GameRunnerEvent's docstring in
+    # models.py. Two-stage render chain (runner_events_panel defines
+    # runner_event_type_select/runner_event_from_base_select ->
+    # runner_event_fields reads them to build the to-base picker and
+    # optional runner picker) -- same "never read an input from the
+    # block that defines it" rule this whole file already follows for
+    # pitch_type_and_outcome_picker -> pitch_outcome_dependent_fields,
+    # etc. runner_event_fields is nested inside runner_events_panel's
+    # own output via ui.output_ui(), the same nesting technique this
+    # module's docstring documents (bullpen_tracking.py precedent).
+    # -------------------------------------------------------------------
+
+    @render.ui
+    def runner_events_panel():
+        _pa_tick()
+        if not _access_ok() or not _can_edit():
+            return None
+        game_id = _active_game_id()
+        if game_id is None:
+            return None
+        db = get_session()
+        try:
+            ctx = _load_tracking_context(db, game_id)
+            if ctx is None:
+                return None
+            game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state = ctx
+            if game.status != "In Progress":
+                return None
+
+            anchor = pitches[-1].pitch_sequence if pitches else 0
+            pending = (
+                db.query(GameRunnerEvent)
+                .filter(GameRunnerEvent.game_id == game_id, GameRunnerEvent.pitch_sequence_after == anchor)
+                .order_by(GameRunnerEvent.created_at)
+                .all()
+            )
+
+            base_label = {1: "1st", 2: "2nd", 3: "3rd"}
+            children = [ui.h5("Runner events since last pitch", class_="gbo-section-title")]
+            if pending:
+                for ev in pending:
+                    who = None
+                    if ev.our_player_id:
+                        p = db.query(Player).filter(Player.player_id == ev.our_player_id).first()
+                        who = f"{p.first_name} {p.last_name} — " if p else None
+                    elif ev.opponent_player_id:
+                        op = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == ev.opponent_player_id).first()
+                        who = f"{op.player_name} — " if op else None
+                    outcome = "out" if ev.is_out else {2: "2nd", 3: "3rd", 4: "home"}.get(ev.to_base, "?")
+                    children.append(ui.p(f"{ev.event_type}: {who or ''}{base_label.get(ev.from_base, '?')} → {outcome}", class_="text-muted small"))
+            else:
+                children.append(ui.p(
+                    "None yet -- log a steal, caught stealing, pickoff, wild pitch, passed ball, or balk here before recording the next pitch.",
+                    class_="text-muted small",
+                ))
+
+            # state["bases"] already reflects any pending events (folded
+            # in by compute_current_state), so this list shrinks/grows
+            # live as events are recorded/undone -- a double steal's
+            # SECOND event correctly offers the runner's new base, not
+            # the pre-event one.
+            occupied_bases = [i + 1 for i, c in enumerate(state["bases"]) if c == "1"]
+            if not occupied_bases:
+                children.append(ui.p("No runners on base right now.", class_="text-muted small"))
+            else:
+                from_choices = {str(b): base_label[b] for b in occupied_bases}
+                children.append(ui.layout_columns(
+                    ui.input_select("runner_event_type_select", "Event", choices=RUNNER_EVENT_TYPES),
+                    ui.input_select("runner_event_from_base_select", "Runner on", choices=from_choices),
+                    col_widths=[7, 5],
+                ))
+                children.append(ui.output_ui("runner_event_fields"))
+
+            if pending:
+                children.append(ui.input_action_button("undo_last_runner_event_btn", "Undo last runner event", class_="btn-outline-danger btn-sm mt-1"))
+
+            return ui.div(*children)
+        finally:
+            db.close()
+
+    @render.ui
+    def runner_event_fields():
+        if not _access_ok() or not _can_edit():
+            return None
+        game_id = _active_game_id()
+        if game_id is None:
+            return None
+        req("runner_event_from_base_select" in input)
+        req("runner_event_type_select" in input)
+        db = get_session()
+        try:
+            ctx = _load_tracking_context(db, game_id)
+            if ctx is None:
+                return None
+            game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state = ctx
+            if game.status != "In Progress":
+                return None
+
+            event_type = input.runner_event_type_select()
+            from_base_val = int(input.runner_event_from_base_select())
+            is_out_type = event_type in RUNNER_EVENT_OUT_TYPES
+            base_label = {1: "1st", 2: "2nd", 3: "3rd"}
+
+            fields = []
+            if is_out_type:
+                fields.append(ui.p(f"Recorded as an out at {base_label.get(from_base_val, '?')}.", class_="text-muted small"))
+            else:
+                to_choices = {str(b): ("Home" if b == 4 else base_label[b]) for b in (2, 3, 4) if b > from_base_val}
+                fields.append(ui.input_select("runner_event_to_base_select", "Advances to", choices=to_choices))
+
+            # Optional runner identity -- same "always overridable, don't
+            # force a pick you don't have" pattern as who_is_up_identity_picker.
+            slots = squad_a_slots if state["is_our_batting"] else (squad_b_slots if game.is_intrasquad else None)
+            if slots:
+                ids = [get_current_slot_occupant_id(s) for s in slots]
+                players_by_id = {p.player_id: p for p in db.query(Player).filter(Player.player_id.in_(ids)).all()}
+                choices = {"": "-- Unspecified --"}
+                choices.update({str(pid): f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}" for pid in ids if pid in players_by_id})
+                fields.append(ui.input_select("runner_event_our_player_select", "Runner (optional)", choices=choices))
+            elif not state["is_our_batting"] and not game.is_intrasquad:
+                opp_roster = game.opponent_team.roster if game.opponent_team else []
+                if opp_roster:
+                    choices = {"": "-- Unspecified --"}
+                    choices.update({str(p.opponent_player_id): p.player_name for p in opp_roster})
+                    fields.append(ui.input_select("runner_event_opponent_player_select", "Runner (optional)", choices=choices))
+
+            fields.append(ui.input_action_button("record_runner_event_btn", "Log runner event", class_="btn-outline-light btn-sm mt-1"))
+            return ui.div(*fields)
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.record_runner_event_btn)
+    def _record_runner_event():
+        game_id = _active_game_id()
+        if game_id is None:
+            return
+        req("runner_event_from_base_select" in input)
+        req("runner_event_type_select" in input)
+        db = get_session()
+        try:
+            ctx = _load_tracking_context(db, game_id)
+            if ctx is None:
+                return
+            game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state = ctx
+
+            event_type = input.runner_event_type_select()
+            from_base = int(input.runner_event_from_base_select())
+            is_out = event_type in RUNNER_EVENT_OUT_TYPES
+            to_base = None
+            if not is_out:
+                if "runner_event_to_base_select" not in input or not input.runner_event_to_base_select():
+                    ui.notification_show("Pick where the runner advances to.", type="error", duration=8)
+                    return
+                to_base = int(input.runner_event_to_base_select())
+
+            our_player_id = None
+            opponent_player_id = None
+            if "runner_event_our_player_select" in input and input.runner_event_our_player_select():
+                our_player_id = int(input.runner_event_our_player_select())
+            elif "runner_event_opponent_player_select" in input and input.runner_event_opponent_player_select():
+                opponent_player_id = int(input.runner_event_opponent_player_select())
+
+            anchor = pitches[-1].pitch_sequence if pitches else 0
+            db.add(GameRunnerEvent(
+                game_id=game_id, pitch_sequence_after=anchor,
+                is_our_team_batting=state["is_our_batting"],
+                event_type=event_type, from_base=from_base, to_base=to_base, is_out=is_out,
+                our_player_id=our_player_id, opponent_player_id=opponent_player_id,
+                created_by_user_id=app_state.user_id(),
+            ))
+            if to_base == 4:
+                if state["is_our_batting"]:
+                    game.our_score += 1
+                else:
+                    game.opponent_score += 1
+            db.commit()
+            ui.notification_show(f"{event_type} recorded.", type="message", duration=6)
+            _bump_pa()
+            _bump_refresh()
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.undo_last_runner_event_btn)
+    def _undo_last_runner_event():
+        game_id = _active_game_id()
+        if game_id is None:
+            return
+        db = get_session()
+        try:
+            last_event = (
+                db.query(GameRunnerEvent)
+                .filter(GameRunnerEvent.game_id == game_id)
+                .order_by(GameRunnerEvent.created_at.desc())
+                .first()
+            )
+            if last_event is None:
+                return
+            if last_event.to_base == 4:
+                game = db.query(Game).filter(Game.game_id == game_id).first()
+                if game is not None:
+                    if last_event.is_our_team_batting:
+                        game.our_score = max(0, game.our_score - 1)
+                    else:
+                        game.opponent_score = max(0, game.opponent_score - 1)
+            db.delete(last_event)
+            db.commit()
+            ui.notification_show("Last runner event undone.", type="message", duration=6)
+            _bump_pa()
+            _bump_refresh()
         finally:
             db.close()
 

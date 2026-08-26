@@ -1127,6 +1127,7 @@ class Game(Base):
     pitching_changes = relationship("PitchingChange", back_populates="game", cascade="all, delete-orphan", order_by="PitchingChange.pitch_sequence_at_entry")
     lineup_substitutions = relationship("LineupSubstitution", back_populates="game", cascade="all, delete-orphan", order_by="LineupSubstitution.pitch_sequence_at_entry")
     video_clips = relationship("GameVideoClip", back_populates="game", cascade="all, delete-orphan", order_by="GameVideoClip.uploaded_at")
+    runner_events = relationship("GameRunnerEvent", back_populates="game", cascade="all, delete-orphan", order_by="GameRunnerEvent.pitch_sequence_after")
 
 
 class GameLineupSlot(Base):
@@ -1420,6 +1421,69 @@ class GamePitch(Base):
     pitch_type = relationship("PitchType")
     opponent_player = relationship("OpponentPlayer")
     batting_slot = relationship("GameLineupSlot", foreign_keys=[batting_slot_id])
+
+
+class GameRunnerEvent(Base):
+    """A base-running event that happens BETWEEN two pitches to the same
+    batter -- a stolen base, caught stealing, pickoff, wild pitch,
+    passed ball, or balk (Aug 2026, Ryker: "we need to be able to put
+    if a guy steals a base, gets picked off etc.").
+
+    GamePitch.bases_before/outs_before only ever change on a pitch that
+    ENDS the plate appearance (see game_tracking.py's result_fields_body
+    -- the "Bases after" field only shows up then); compute_current_state()
+    otherwise just carries outs_before/bases_before straight forward
+    from the previous pitch. That left literally no way to record
+    something that happens MID-plate-appearance -- a runner stealing
+    second on ball two, say. This table is the fix: a small,
+    separately-recorded event, ordered by pitch_sequence_after (the
+    pitch_sequence of the last GamePitch actually recorded when this
+    happened -- 0 if it happened before the game's first pitch), the
+    same "small event table keyed by pitch_sequence_at_entry" pattern
+    PitchingChange/LineupSubstitution already use in this exact file.
+    compute_current_state() folds every event matching the current gap
+    on top of the pitch-derived state, including rolling to the next
+    half-inning if an event's out pushes the count to 3 -- see that
+    function's docstring in game_tracking.py.
+
+    from_base/to_base: 1/2/3 for a base, 4 for home (the runner scored).
+    to_base is NULL when is_out is True (Caught Stealing/Picked Off --
+    Wild Pitch/Passed Ball/Balk/Stolen Base always advance, never out).
+    Runs scored via to_base == 4 are added to Game.our_score/
+    opponent_score at the moment the event is recorded (mirroring how
+    record_pitch() bumps the score for a live-ball run), NOT re-derived
+    every render -- compute_current_state()'s fold-forward only touches
+    bases/outs, never the score total.
+
+    our_player_id/opponent_player_id: OPTIONAL identification of the
+    runner -- same "always overridable, don't force a pick you don't
+    have" philosophy as GamePitch.opponent_player_id. A coach can log
+    "runner on 2nd stole 3rd" without naming who if the opponent roster
+    isn't built out; both may be left NULL to just tag the base-state
+    change itself. Deliberately NOT a fully automated rules engine (no
+    attempt to track which specific player occupies which base across
+    the whole game) -- same human-judgment principle GamePitch's own
+    docstring states for base/out entry generally."""
+    __tablename__ = "game_runner_events"
+
+    runner_event_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id"), nullable=False)
+    pitch_sequence_after = Column(Integer, nullable=False)  # the pitch_sequence of the last actual pitch recorded before this event; 0 if none yet this game
+    is_our_team_batting = Column(Boolean, nullable=False)  # which side had the runner -- same convention as GamePitch.is_our_team_batting, stored (not just used transiently) so an undo can reverse a scored run against the right side's total without re-deriving it
+    event_type = Column(String(30), nullable=False)  # "Stolen Base" / "Caught Stealing" / "Picked Off" / "Wild Pitch" / "Passed Ball" / "Balk" / "Defensive Indifference"
+    from_base = Column(Integer, nullable=False)  # 1, 2, or 3
+    to_base = Column(Integer, nullable=True)  # 2, 3, or 4 (home) -- NULL when is_out
+    is_out = Column(Boolean, default=False, nullable=False)
+    our_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)  # the runner, if a real Player (Squad A or intrasquad Squad B)
+    opponent_player_id = Column(Integer, ForeignKey("opponent_players.opponent_player_id"), nullable=True)  # the runner, if a named external-opponent player
+    notes = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    game = relationship("Game", back_populates="runner_events")
+    our_player = relationship("Player")
+    opponent_player = relationship("OpponentPlayer")
+    created_by = relationship("User")
 
 
 class GameVideoClip(Base):
