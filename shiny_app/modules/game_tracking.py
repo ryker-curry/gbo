@@ -42,10 +42,23 @@ same as every other such deviation elsewhere in this migration):
      was initially simplified away (Shiny doesn't rerun the whole page
      on every keystroke the way Streamlit does) in favor of a save-time
      duplicate check alone; `_sync_lineup_exclusions` (inside
-     `_register_squad_lineup`) restores the live behavior via a plain
-     effect that watches every slot's current pick and pushes filtered
-     choices to the others through `ui.update_select()`. The save-time
+     `_register_squad_lineup`) restores the live behavior via an effect
+     that watches every slot's current pick and pushes filtered choices
+     to the others through `ui.update_select()`. The save-time
      duplicate check stays in place too, as a second line of defense.
+     **This effect is debounced** (`_lineup_last_change_time`/
+     `_lineup_track_change`, 2026-08-26) -- a real bug Ryker hit (already-
+     filled slots randomly going blank while filling in later ones)
+     turned out to be a race between overlapping invocations of this
+     effect whenever it's still mid-DB-query when the user edits another
+     slot; two or more such invocations racing can drive the client/
+     server into a self-sustaining oscillation, not just a one-off
+     glitch. Debouncing so the effect's real body only runs once edits
+     go quiet for `_LINEUP_DEBOUNCE_SECONDS` guarantees no two
+     invocations ever overlap, which is what actually fixed it (confirmed
+     against a sandboxed reproduction of the exact failure before this
+     shipped -- see `_sync_lineup_exclusions`'s own docstring for the
+     full root-cause writeup).
 
 Feature addition beyond the original page (requested after the initial
 port): Squad B now gets a saved starting pitcher too, mirroring Squad
@@ -336,6 +349,7 @@ role):
 """
 
 import re
+import time
 import uuid
 from datetime import date
 
@@ -1478,44 +1492,51 @@ def game_tracking_server(input, output, session, app_state):
             finally:
                 db.close()
 
-        @reactive.effect
-        def _sync_lineup_exclusions():
-            """Live cross-slot exclusion: once a player -- or a
-            defensive position -- is picked in one slot, every OTHER
-            slot's dropdown stops offering it. Not a @render.ui block
-            (that would hit the "read a client input from the block
-            that defines it" hazard, since it would be reading every
-            slot_player_i/slot_position_i to decide what to show for
-            slot_player_i/slot_position_i itself) -- instead a plain
-            effect that reads every slot's CURRENT value (registering
-            all of them as dependencies, so this reruns whenever ANY
-            one changes) and pushes fresh, mutually-exclusive choices
-            to every slot via ui.update_select(). This restores the
-            original Streamlit page's live-filtering behavior (each
-            pick immediately removed that player from every other slot)
-            that the initial port had simplified away in favor of a
-            save-time duplicate check -- both protections are kept:
-            this prevents the duplicate from being pickable in the
-            first place, and _save below still double-checks in case a
-            slot's stale choice list briefly allowed one through
-            mid-interaction.
+        # ---------------------------------------------------------------
+        # _sync_lineup_exclusions used to be a single plain @reactive.effect
+        # that read every slot on every keystroke and immediately pushed
+        # fresh choices to all of them. That caused a real, reproducible
+        # bug Ryker hit (2026-08-26): already-filled slots would randomly
+        # revert to blank while filling in later ones. Root-caused via a
+        # sandboxed reproduction of this exact pattern (see chat) -- it's
+        # NOT a duplicate-player edge case (that's the separate carve-out
+        # below), it's this: the effect's own DB query takes real wall-
+        # clock time, and if the user edits ANOTHER slot while a previous
+        # invocation is still mid-query, the two invocations' ui.update_
+        # select() calls interleave and race. Confirmed in the sandbox
+        # that touching 2+ selects from one effect, back to back, with
+        # ANY latency in between, can drive the client and server into a
+        # self-sustaining oscillation (each invocation's stale push gets
+        # echoed back as a fresh "change", re-triggering the effect again
+        # with a NOW-stale snapshot, indefinitely) -- not just a one-time
+        # glitch. A per-slot "does the live value still match what I
+        # think it is" recheck does NOT fix this, because Shiny only
+        # applies queued client messages at flush boundaries, so a still-
+        # running invocation can't see a newer edit no matter how it
+        # rechecks mid-run.
+        #
+        # The fix that actually held up under the sandboxed adversarial
+        # test (rapid edits + an artificial slow DB call, both human-
+        # paced and rapid-fire): debounce this effect so its real body
+        # only ever runs once edits have been quiet for DEBOUNCE_SECONDS.
+        # That guarantees no two invocations ever overlap, so there's
+        # nothing left to race -- by construction, not by getting lucky
+        # on timing. _lineup_last_change_time/_lineup_track_change below
+        # implement the debounce (shiny.reactive has no built-in
+        # debounce/throttle as of the version this project pins);
+        # _lineup_last_synced skips redoing the DB query + push when nothing
+        # actually changed since the last successful sync, so this doesn't
+        # needlessly re-hit Supabase forever once things settle.
+        # ---------------------------------------------------------------
+        _lineup_last_change_time = reactive.Value(0.0)
+        _lineup_last_synced = {"v": None}
+        _LINEUP_DEBOUNCE_SECONDS = 0.6
 
-            Position exclusion is the same idea, added per Ryker's
-            explicit ask (2026-08-23): once one slot is set to Catcher,
-            no other slot can also be set to Catcher, matching real
-            baseball -- exactly one player occupies each position at a
-            time. Applies to every row in the Positions table (RHP,
-            LHP, C, 1B, 2B, 3B, SS, LF, CF, RF, DH, UTL), not just the
-            obvious fielding spots -- no exception was asked for and
-            none seemed clearly warranted; easy to carve one out later
-            if a position turns out to need to repeat."""
-            game_id = _active_game_id()
-            if game_id is None:
-                return
+        @reactive.calc
+        def _lineup_raw_picks():
             req(f"{prefix}_num_spots" in input)
             num_spots = int(input[f"{prefix}_num_spots"]())
             include_pitchers = input[f"{prefix}_include_pitchers"]() if f"{prefix}_include_pitchers" in input else False
-
             current_player_picks = {}
             current_position_picks = {}
             for i in range(1, num_spots + 1):
@@ -1529,7 +1550,50 @@ def game_tracking_server(input, output, session, app_state):
                     raw = input[position_key]()
                     if raw:
                         current_position_picks[i] = int(raw)
+            return (num_spots, include_pitchers, current_player_picks, current_position_picks)
+
+        @reactive.effect
+        def _lineup_track_change():
+            _lineup_raw_picks()  # depend on every slot -- this is the "did anything change" tripwire
+            _lineup_last_change_time.set(time.monotonic())
+
+        @reactive.effect
+        def _sync_lineup_exclusions():
+            """See the block comment above _lineup_raw_picks for why this
+            is debounced. Live cross-slot exclusion: once a player -- or
+            a defensive position -- is picked in one slot, every OTHER
+            slot's dropdown stops offering it. This restores the
+            original Streamlit page's live-filtering behavior (each pick
+            immediately removed that player from every other slot) that
+            the initial port had simplified away in favor of a save-time
+            duplicate check -- both protections are kept: this prevents
+            the duplicate from being pickable in the first place, and
+            _save below still double-checks in case a slot's stale
+            choice list briefly allowed one through mid-interaction.
+
+            Position exclusion is the same idea, added per Ryker's
+            explicit ask (2026-08-23): once one slot is set to Catcher,
+            no other slot can also be set to Catcher, matching real
+            baseball -- exactly one player occupies each position at a
+            time. Applies to every row in the Positions table (RHP,
+            LHP, C, 1B, 2B, 3B, SS, LF, CF, RF, DH, UTL), not just the
+            obvious fielding spots -- no exception was asked for and
+            none seemed clearly warranted; easy to carve one out later
+            if a position turns out to need to repeat."""
+            game_id = _active_game_id()
+            if game_id is None:
+                return
+            elapsed = time.monotonic() - _lineup_last_change_time()
+            if elapsed < _LINEUP_DEBOUNCE_SECONDS:
+                reactive.invalidate_later(_LINEUP_DEBOUNCE_SECONDS - elapsed)
+                return  # still mid-edit -- check again once things go quiet
+            with reactive.isolate():
+                num_spots, include_pitchers, current_player_picks, current_position_picks = _lineup_raw_picks()
+            snapshot = (num_spots, include_pitchers, current_player_picks, current_position_picks)
+            if snapshot == _lineup_last_synced["v"]:
+                return  # already synced this exact state, nothing to do
             if not current_player_picks and not current_position_picks:
+                _lineup_last_synced["v"] = snapshot
                 return
 
             db = get_session()
@@ -1552,19 +1616,50 @@ def game_tracking_server(input, output, session, app_state):
             for i in range(1, num_spots + 1):
                 player_key = f"{prefix}_slot_player_{i}"
                 if player_key in input:
+                    current_val = current_player_picks.get(i)
                     taken_elsewhere = {pid for slot, pid in current_player_picks.items() if slot != i}
                     choices = {"": "-- Select --"}
-                    choices.update({str(pid): name for pid, name in names_by_id.items() if pid not in taken_elsewhere})
-                    current_val = current_player_picks.get(i)
+                    # A slot's own current pick must ALWAYS survive into its
+                    # own choices dict, even if that same player_id also
+                    # happens to be sitting in another slot right now. That
+                    # can genuinely happen for a moment -- e.g. slot 2's
+                    # dropdown still listed a player as available because
+                    # this effect hadn't caught up yet, and the user picked
+                    # them there right after already picking them in slot 1.
+                    # Without this `or pid == current_val` carve-out, BOTH
+                    # slots would exclude that player from their own
+                    # choices (each sees the other's pick as "taken
+                    # elsewhere"), so the selected= value below would point
+                    # at an option that no longer exists in the list --
+                    # Shiny's <select> can't select a missing option and
+                    # silently falls back to blank. That's the exact bug
+                    # Ryker reported (2026-08-26): already-filled slots
+                    # reverting to blank as later slots are edited. The
+                    # save-time duplicate check further down still catches
+                    # and rejects a real duplicate before it's persisted --
+                    # this carve-out only stops the LIVE dropdown from
+                    # erasing a valid pick out from under the user while
+                    # they're mid-interaction.
+                    choices.update({
+                        str(pid): name for pid, name in names_by_id.items()
+                        if pid not in taken_elsewhere or pid == current_val
+                    })
                     ui.update_select(player_key, choices=choices, selected=str(current_val) if current_val else "")
 
                 position_key = f"{prefix}_slot_position_{i}"
                 if position_key in input:
+                    current_val = current_position_picks.get(i)
                     taken_elsewhere = {pid for slot, pid in current_position_picks.items() if slot != i}
                     choices = {"": "-- Position --"}
-                    choices.update({str(pid): name for pid, name in position_names_by_id.items() if pid not in taken_elsewhere})
-                    current_val = current_position_picks.get(i)
+                    # Same carve-out as the player select above, for the
+                    # same reason -- see the comment there.
+                    choices.update({
+                        str(pid): name for pid, name in position_names_by_id.items()
+                        if pid not in taken_elsewhere or pid == current_val
+                    })
                     ui.update_select(position_key, choices=choices, selected=str(current_val) if current_val else "")
+
+            _lineup_last_synced["v"] = snapshot
 
         @reactive.effect
         @reactive.event(input[f"{prefix}_save_btn"])
