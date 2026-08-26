@@ -374,7 +374,7 @@ from game_stats import (
 
 import ui_helpers
 
-ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst")
+ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
 
 PITCH_OUTCOMES = ["Ball", "Called Strike", "Swing and Miss", "Foul", "In Play", "HBP"]
 AB_OUTCOMES = [
@@ -993,7 +993,7 @@ def game_tracking_server(input, output, session, app_state):
         return app_state.role_name() in ALLOWED_ROLES
 
     def _can_edit():
-        return app_state.can_edit_sessions() or app_state.role_name() == "Data Analyst"
+        return app_state.can_edit_sessions() or app_state.role_name() in ("Data Analyst", "Video Coordinator")
 
     def _resolve_current_opponent_batter_id(game, state):
         """Milestone 3 -- see module docstring. Which OpponentPlayer is

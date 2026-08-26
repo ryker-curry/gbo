@@ -98,7 +98,7 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
     # gets real edit rights on Game Tracking/Opponent Teams specifically
     # (a page-level override inside those two pages once migrated, not
     # a nav-level concern). Sports Scientist stays read-only.
-    if role_name in ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst"):
+    if role_name in ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator"):
         sections.append(NavSection("Game Operations", [NavPage("game_tracking", "Game Tracking", "clipboard-data")]))
         sections.append(NavSection("Scouting", [NavPage("opponent_teams", "Opponent Teams", "people")]))
         sections.append(NavSection("Analytics", [
@@ -106,6 +106,17 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             NavPage("pitcher_game_report", "Pitcher Game Report", "file-text"),
             NavPage("hitter_game_report", "Hitter Game Report", "trophy"),
         ]))
+
+    # Video Coordinator -- deliberately its own small section rather than
+    # folding into the big Player Development tuple above: Ryker asked
+    # for video + analytics + full Game Tracking access specifically,
+    # not Assessments/IDP/Training Routines/Roster management, so this
+    # role gets exactly Video Import here plus Game Ops/Scouting/
+    # Analytics from the block just above (Opponent Teams is bundled in
+    # only because that's how the existing tuple groups those three --
+    # flagged for Ryker to correct if he'd rather it be excluded).
+    if role_name == "Video Coordinator":
+        sections.append(NavSection("Video", [NavPage("video_import", "Video Import", "camera-video")]))
 
     if role_name == "Administrator":
         sections.append(NavSection("Administration", [

@@ -35,7 +35,11 @@ from database import Base
 # ---------------------------------------------------------------------------
 
 class Role(Base):
-    """The 8 finalized MVP roles and what each is allowed to touch.
+    """The finalized MVP roles and what each is allowed to touch (8
+    originally; "Video Coordinator" added 2026-08-26 -- see game_tracking.py,
+    analytics.py, pitcher_game_report.py, hitter_game_report.py,
+    opponent_teams.py, video_import.py, and nav.py for where it's
+    special-cased).
 
     permission_scope is a short machine-readable tag the app layer uses to
     decide read/edit access per module. It is enforced in application code

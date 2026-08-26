@@ -75,7 +75,7 @@ def hitter_game_report_ui():
 
 @module.server
 def hitter_game_report_server(input, output, session, app_state):
-    ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst")
+    ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
 
     @render.ui
     def game_picker():

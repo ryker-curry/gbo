@@ -87,7 +87,7 @@ def opponent_teams_server(input, output, session, app_state):
     def _bump_refresh():
         _refresh_tick.set(_refresh_tick() + 1)
 
-    ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst")
+    ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
 
     def _access_ok():
         return app_state.is_authenticated() and app_state.role_name() in ALLOWED_ROLES
