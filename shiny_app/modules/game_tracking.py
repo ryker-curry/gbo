@@ -1554,29 +1554,16 @@ def game_tracking_server(input, output, session, app_state):
                     taken_elsewhere = {pid for slot, pid in current_player_picks.items() if slot != i}
                     choices = {"": "-- Select --"}
                     choices.update({str(pid): name for pid, name in names_by_id.items() if pid not in taken_elsewhere})
-                    # Deliberately NOT passing selected= here (2026-08-26 fix).
-                    # This slot's own current pick is always excluded from
-                    # taken_elsewhere above, so it's always still present in
-                    # `choices` -- Shiny's update_select leaves the client's
-                    # current selection alone when selected= is omitted. The
-                    # original code re-asserted selected=current_val on EVERY
-                    # slot on EVERY keystroke, using a value read at the top
-                    # of this effect; when several slots were edited in quick
-                    # succession (a fast user, or automation), a stale read
-                    # from an earlier-queued effect run could arrive at the
-                    # client AFTER a newer pick and silently blank it back
-                    # out. Letting Shiny preserve the selection itself avoids
-                    # the race entirely -- reproduced and confirmed fixed via
-                    # live browser testing (Ryker, 2026-08-26).
-                    ui.update_select(player_key, choices=choices)
+                    current_val = current_player_picks.get(i)
+                    ui.update_select(player_key, choices=choices, selected=str(current_val) if current_val else "")
 
                 position_key = f"{prefix}_slot_position_{i}"
                 if position_key in input:
                     taken_elsewhere = {pid for slot, pid in current_position_picks.items() if slot != i}
                     choices = {"": "-- Position --"}
                     choices.update({str(pid): name for pid, name in position_names_by_id.items() if pid not in taken_elsewhere})
-                    # See comment above -- same race, same fix.
-                    ui.update_select(position_key, choices=choices)
+                    current_val = current_position_picks.get(i)
+                    ui.update_select(position_key, choices=choices, selected=str(current_val) if current_val else "")
 
         @reactive.effect
         @reactive.event(input[f"{prefix}_save_btn"])
