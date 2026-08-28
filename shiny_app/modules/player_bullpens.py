@@ -28,7 +28,8 @@ import plotly.graph_objects as go
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import Player, User, BullpenSession, RapsodoPitch, BullpenPitch, Assessment, AssessmentResult
+from models import Player, User, BullpenSession, RapsodoPitch, BullpenPitch, Assessment, AssessmentResult, Video
+from video_helpers import render_video_clip
 
 import ui_helpers
 import chart_helpers
@@ -327,6 +328,24 @@ def player_bullpens_server(input, output, session, app_state):
             # session with a same-type predecessor.
             summaries_by_id = {b.bullpen_id: _summarize(b) for b in sessions}
 
+            # Aug 2026 addition: general (Video Import) clips for this
+            # player, grouped by recorded_date -- Ryker's call: match
+            # purely by same player + same date, no explicit per-clip
+            # linking step. One query for every session on this page
+            # (not one per session in the loop below), same "avoid N+1"
+            # discipline as summaries_by_id just above -- there's only
+            # ever one player here (my_player), so this is a single
+            # query regardless of how many sessions/clips exist.
+            # KNOWN TRADEOFF (flagged per that decision, not a bug):
+            # Video Import clips aren't tagged by activity type, so a
+            # same-day clip from something other than this bullpen (a BP
+            # round, side work) would also show up here -- there's no way
+            # to tell those apart from just player+date.
+            videos_by_date = {}
+            for v in db.query(Video).filter(Video.player_id == my_player.player_id).all():
+                if v.recorded_date:
+                    videos_by_date.setdefault(v.recorded_date, []).append(v)
+
             sections = [ui.output_ui("bp_dashboard_body")]
 
             panels = []
@@ -336,6 +355,28 @@ def player_bullpens_server(input, output, session, app_state):
                 panel_children = []
                 if b.overall_notes:
                     panel_children.append(ui.p(b.overall_notes, class_="text-muted small"))
+
+                # --- General video (Video Import clips, same-day match) ---
+                # Deliberately OUTSIDE the has-pitches if/else below --
+                # this was originally nested inside the "has pitches"
+                # branch and silently never rendered for any session
+                # with 0 logged/linked pitches (exactly the case for a
+                # session whose only data source is a same-day Video
+                # Import clip, e.g. a bullpen thrown but not yet
+                # Rapsodo-imported). Video shouldn't depend on pitch
+                # data existing at all.
+                session_videos = videos_by_date.get(b.session_date, [])
+                if session_videos:
+                    panel_children.append(ui.p(ui.strong(f"Video ({len(session_videos)} clip{'s' if len(session_videos) != 1 else ''} from this date)")))
+                    for v in session_videos:
+                        if v.description:
+                            panel_children.append(ui.p(v.description, class_="text-muted small mb-1"))
+                        panel_children.append(render_video_clip(v.video_url))
+                    panel_children.append(ui.p(
+                        "Matched by date, not tied to this specific session -- if this looks like it's from "
+                        "something else recorded the same day, that's why.",
+                        class_="text-muted small mt-1",
+                    ))
 
                 if not b.pitches:
                     panel_children.append(ui.p("No pitches recorded for this session.", class_="text-muted small"))

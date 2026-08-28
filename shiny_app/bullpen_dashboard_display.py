@@ -93,6 +93,7 @@ from pitch_type_config import FASTBALL_TYPES
 from visualizations.bullpen_charts import movement_chart, release_point_chart, location_chart, color_for_pitch_label
 from visualizations.spin_axis_chart import individual_spin_axis_chart, average_spin_axis_chart
 from visualizations.release_silhouette import render_release_silhouette_svg
+from video_helpers import render_video_clip
 
 import ui_helpers
 import chart_helpers
@@ -359,7 +360,15 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
                 if active_bullpen.overall_notes:
                     header.append(ui.p(active_bullpen.overall_notes, class_="text-muted small"))
                 if active_bullpen.video_url:
-                    header.append(ui.accordion(ui.accordion_panel("Session video", ui.tags.video(ui.tags.source(src=active_bullpen.video_url), controls=True, style="max-width:100%;")), open=False, id=None))
+                    # Aug 2026 fix: this was a raw <video> tag, which can
+                    # only ever play a direct file URL -- session video is
+                    # now saved as a pasted Google Drive link (see Bullpen
+                    # Tracking's "Session video" control), which needs
+                    # Drive's iframe embed instead. render_video_clip()
+                    # (shared with video_import.py/hitter_tracking.py)
+                    # handles both correctly, so this silently worked for
+                    # no one until now despite the field having a value.
+                    header.append(ui.accordion(ui.accordion_panel("Session video", render_video_clip(active_bullpen.video_url)), open=False, id=None))
             else:
                 player = target["player"]
                 header.append(ui.h5(f"Overall Pitch Tracking — {player.first_name} {player.last_name}", style=f"color:{TEXT_CREAM};"))
