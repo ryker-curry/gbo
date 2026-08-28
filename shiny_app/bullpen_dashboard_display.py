@@ -86,9 +86,13 @@ from database import get_session
 from models import BullpenSession, RapsodoPitch
 from analytics.bullpen_metrics import (
     session_summary, pitch_type_summary, individual_pitch_rows, filter_pitches, pitch_type_label,
+    release_trajectory_summary, fastball_trajectory_diagnostic, average_estimated_arm_angle,
 )
+from analytics.pitch_trajectory import calculate_estimated_arm_angle
+from pitch_type_config import FASTBALL_TYPES
 from visualizations.bullpen_charts import movement_chart, release_point_chart, location_chart, color_for_pitch_label
 from visualizations.spin_axis_chart import individual_spin_axis_chart, average_spin_axis_chart
+from visualizations.release_silhouette import render_release_silhouette_svg
 
 import ui_helpers
 import chart_helpers
@@ -141,17 +145,24 @@ def _card(*children):
 
 
 def _load_pitches(db, target):
+    # joinedload(.player) added Aug 2026 (arm-angle/VAA feature): every
+    # pitch in one target belongs to the same one pitcher, so eager-
+    # loading it here means any downstream code can just read
+    # pitches[0].player for that pitcher's height/throws with zero
+    # extra queries -- cheaper than a second lookup, and avoids the
+    # detached-object gotcha (touching a lazy relationship after
+    # db.close(), a documented recurring bug class in this app).
     if target["kind"] == "session":
         return (
             db.query(RapsodoPitch)
-            .options(joinedload(RapsodoPitch.pitch_type))
+            .options(joinedload(RapsodoPitch.pitch_type), joinedload(RapsodoPitch.player))
             .filter(RapsodoPitch.bullpen_id == target["bullpen_id"])
             .order_by(RapsodoPitch.pitch_number)
             .all()
         )
     return (
         db.query(RapsodoPitch)
-        .options(joinedload(RapsodoPitch.pitch_type))
+        .options(joinedload(RapsodoPitch.pitch_type), joinedload(RapsodoPitch.player))
         .filter(RapsodoPitch.bullpen_id.in_(target["bullpen_ids"]))
         .order_by(RapsodoPitch.pitch_date)
         .all()
@@ -341,7 +352,8 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
                 )
                 if active_bullpen is None:
                     return ui.p("That session either doesn't exist, has no Rapsodo data yet, or you don't have access to it.", class_="text-warning")
-                player_name = f"{active_bullpen.player.first_name} {active_bullpen.player.last_name}" if active_bullpen.player else "—"
+                player = active_bullpen.player
+                player_name = f"{player.first_name} {player.last_name}" if player else "—"
                 type_label = active_bullpen.bullpen_type.type_name if active_bullpen.bullpen_type else "—"
                 header.append(ui.h5(f"{player_name} — {active_bullpen.session_date.strftime('%Y-%m-%d (%a)')} — {type_label}", style=f"color:{TEXT_CREAM};"))
                 if active_bullpen.overall_notes:
@@ -352,13 +364,29 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
                 player = target["player"]
                 header.append(ui.h5(f"Overall Pitch Tracking — {player.first_name} {player.last_name}", style=f"color:{TEXT_CREAM};"))
 
-            header.append(ui_helpers.render_kpi_cards([
+            kpi_cards = [
                 {"label": "Total Pitches", "value": str(summary["total_pitches"])},
                 {"label": "Pitch Types", "value": str(len(summary["pitch_type_names"]))},
                 {"label": "Avg Velocity", "value": f"{summary['avg_velocity']:.1f} mph" if summary["avg_velocity"] is not None else "—"},
                 {"label": "Max Velocity", "value": f"{summary['max_velocity']:.1f} mph" if summary["max_velocity"] is not None else "—"} if target["kind"] == "session" else {"label": "Sessions", "value": str(len(target["bullpen_ids"]))},
                 {"label": "Avg Spin Rate", "value": f"{summary['avg_spin_rate']:.0f} rpm" if summary["avg_spin_rate"] is not None else "—"},
-            ]))
+            ]
+            # Aug 2026 addition: Estimated Arm Angle KPI tile, geometric
+            # estimate from this pitcher's existing Player.height_in (see
+            # analytics/pitch_trajectory.py) -- never a new height input,
+            # never asked for again. "N/A" (with the specific missing
+            # piece) rather than a fabricated number when height/release
+            # data isn't there yet, same as every other KPI's "—" for no
+            # data, just with a more specific reason attached as a tooltip.
+            if player is not None and pitches:
+                arm_angle_summary = release_trajectory_summary(pitches, player)
+                kpi_cards.append({"label": "Est. Arm Angle", "value": arm_angle_summary["Average Estimated Arm Angle"]})
+            header.append(ui_helpers.render_kpi_cards(kpi_cards))
+            if player is not None and player.height_in is None and pitches:
+                # Specific reason for the "N/A" above -- a plain caption
+                # rather than overloading render_kpi_cards' delta field
+                # (which always prepends an up/down arrow, wrong here).
+                header.append(ui.p("Estimated Arm Angle needs this pitcher's height — add it on the Players page.", class_="text-muted small"))
 
             return ui.div(
                 *header,
@@ -382,7 +410,14 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
         if not filtered_pitches:
             return ui_helpers.empty_state("No pitches match the selected filters.")
 
-        summary_rows = pitch_type_summary(filtered_pitches)
+        # player, Aug 2026 addition: every pitch in filtered_pitches
+        # belongs to the same one pitcher, and RapsodoPitch.player is
+        # eager-loaded by _load_pitches -- reading it off the first
+        # pitch costs nothing extra and needs no signature changes to
+        # _target_and_pitches/_filtered above.
+        player = filtered_pitches[0].player if filtered_pitches else None
+
+        summary_rows = pitch_type_summary(filtered_pitches, player=player)
         pitches_by_type = {}
         for p in filtered_pitches:
             pitches_by_type.setdefault(pitch_type_label(p), []).append(p)
@@ -390,16 +425,94 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
         summary_section = _card(
             _section_label(2, "Pitch Summary"),
             ui_helpers.render_dict_table(summary_rows),
-            ui.p("Expand a pitch type below to see every individual pitch.", class_="text-muted small"),
+            ui.p("Expand a pitch type below to see every individual pitch. \"Est. VAA\"/\"Est. Arm Angle\" are geometric/trajectory ESTIMATES, not direct Rapsodo measurements — see the note below the charts.", class_="text-muted small"),
             ui.accordion(*[
-                ui.accordion_panel(f"{row['Pitch Type']} ({row['#']} pitches)", ui_helpers.render_dict_table(individual_pitch_rows(pitches_by_type[row["Pitch Type"]])))
+                ui.accordion_panel(f"{row['Pitch Type']} ({row['#']} pitches)", ui_helpers.render_dict_table(individual_pitch_rows(pitches_by_type[row["Pitch Type"]], player=player)))
                 for row in summary_rows
             ], open=False, id=None),
         )
 
+        # Release / Trajectory Summary (spec Section 22) + one Fastball
+        # Trajectory diagnostic card per fastball-family type actually
+        # present (Section 18) -- both need `player` for Est. Arm Angle,
+        # so both render nothing (not an empty card) when there's no
+        # linked player.
+        trajectory_cards = []
+        if player is not None:
+            rt_summary = release_trajectory_summary(filtered_pitches, player)
+            per_type_rows = pitch_type_summary(filtered_pitches, player=player)
+            angle_by_type_block = None
+            if per_type_rows:
+                # Aug 2026, Ryker: Release Angle shouldn't sit crammed
+                # together with Est. Arm Angle here -- Release Angle now
+                # lives in the pitch-type legend below the charts
+                # (alongside usage % and avg velo, see _pitch_type_legend),
+                # so this dedicated section stays Arm-Angle-only, per the
+                # earlier "its own separate line showing that arm angle" ask.
+                angle_by_type_block = ui.div(
+                    ui.div(
+                        "ESTIMATED ARM ANGLE BY PITCH TYPE",
+                        style=f"color:{GOLD}; font-size:0.72rem; font-weight:700; text-transform:uppercase; letter-spacing:0.1em; margin:14px 0 6px 0;",
+                    ),
+                    *[
+                        ui.div(
+                            ui.div(style=f"width:10px; height:10px; border-radius:5px; background:{color_for_pitch_label(row['Pitch Type'])}; flex-shrink:0;"),
+                            ui.div(row["Pitch Type"], style=f"color:{TEXT_CREAM}; font-weight:600; min-width:110px;"),
+                            ui.div(f"Est. Arm Angle: {row['Est. Arm Angle']}" if row.get("Est. Arm Angle") else "Est. Arm Angle: N/A", class_="text-muted small"),
+                            style="display:flex; align-items:center; gap:10px; padding:6px 0; border-top:1px solid rgba(212,175,55,0.12);",
+                        )
+                        for row in per_type_rows
+                    ],
+                )
+            trajectory_cards.append(_card(
+                _section_label(3, "Release / Trajectory Summary"),
+                ui.div(*[
+                    ui.div(ui.div(label, class_="text-muted small"), ui.div(value, style=f"color:{TEXT_CREAM}; font-weight:600;"))
+                    for label, value in rt_summary.items()
+                ], style="display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px;"),
+                *([angle_by_type_block] if angle_by_type_block is not None else []),
+                ui.p(
+                    "Estimated Arm Angle is a geometric estimate from release point and estimated shoulder height "
+                    "(70% of this pitcher's Body Comp/Players-page height) — not a direct biomechanical measurement. "
+                    "Estimated VAA/HAA are calculated from release + actual plate-crossing data because Rapsodo's own "
+                    "exported VAA/HAA columns are blank in these files — not a directly measured Rapsodo VAA/HAA.",
+                    class_="text-muted small", style="margin-top:10px;",
+                ),
+            ))
+            present_fastball_types = [t for t in FASTBALL_TYPES if any(pitch_type_label(p) == t for p in filtered_pitches)]
+            for canonical_type in present_fastball_types:
+                diag = fastball_trajectory_diagnostic(filtered_pitches, player, canonical_pitch_type=canonical_type)
+                if diag is None:
+                    continue
+                trajectory_cards.append(_card(
+                    ui.div(
+                        ui.div(style=f"width:32px; height:2px; background:{GOLD};"),
+                        ui.div(
+                            f"FASTBALL TRAJECTORY · {canonical_type} (n={diag['n']})",
+                            style=f"color:{GOLD}; font-size:0.8rem; font-weight:700; text-transform:uppercase; letter-spacing:0.14em;",
+                        ),
+                        style="display:flex; align-items:center; gap:12px; margin: 8px 0 14px 0;",
+                    ),
+                    ui.div(
+                        ui.div(f"Velocity: {diag['Velocity']:.1f} mph" if diag["Velocity"] is not None else "Velocity: —"),
+                        ui.div(f"VB: {diag['VB']:.1f}\"" if diag["VB"] is not None else "VB: —"),
+                        ui.div(f"VAA: {diag['VAA']}"),
+                        ui.div(f"Release Height: {diag['Release Height']:.2f} ft" if diag["Release Height"] is not None else "Release Height: —"),
+                        ui.div(f"Extension: {diag['Extension']:.2f} ft" if diag["Extension"] is not None else "Extension: —"),
+                        ui.div(f"Arm Angle: {diag['Arm Angle']}"),
+                        style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; margin-bottom:10px;",
+                    ),
+                    ui.div(
+                        "Trajectory: ",
+                        ui.tags.b(diag["Trajectory"], style=f"color:{GOLD};"),
+                        style=f"color:{TEXT_CREAM};",
+                    ),
+                ))
+
         if _charts_shown_for() != _target_key(target):
             return ui.div(
                 summary_section,
+                *trajectory_cards,
                 ui.input_action_button(show_charts_key, "Show charts", class_="btn-outline-secondary mt-2"),
             )
 
@@ -407,11 +520,11 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
         # output (registered below) so they can stream in independently
         # instead of this one output blocking until all four are done.
         charts_section = _card(
-            _section_label(3, "Charts"),
+            _section_label(4, "Charts"),  # was 3 -- bumped to make room for section 3, Release / Trajectory Summary, above
             ui.input_slider(shading_key, "Minimum pitches to shade a pitch type's cluster", min=1, max=10, value=2),
             ui.output_ui(movement_chart_id),
             ui.p("Centered on release point; color-coded by pitch type.", class_="text-muted small"),
-            ui.p("Left: every pitch's release point. Right: each pitch type's average.", class_="text-muted small"),
+            ui.p("Left: every pitch's release point. Right: each pitch type's average release point, illustrated.", class_="text-muted small"),
             ui.output_ui(release_chart_id),
             ui.input_radio_buttons(location_mode_key, "Location view", ["Heat Map", "Individual Pitches"], inline=True),
             ui.output_ui(location_chart_id),
@@ -419,7 +532,7 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
             ui.output_ui(spin_chart_id),
         )
 
-        return ui.div(summary_section, charts_section)
+        return ui.div(summary_section, *trajectory_cards, charts_section)
 
     @output(id=movement_chart_id)
     @render.ui
@@ -428,16 +541,60 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
         if not _charts_ready(target, filtered_pitches):
             return None
         min_shading = input[shading_key]() if shading_key in input else 2
+        player = filtered_pitches[0].player if filtered_pitches else None
+        throws = player.throws if player is not None else None
+
+        # One Estimated Arm Angle ray per pitch type (Aug 2026, Ryker:
+        # "i want one for each pitch [type]... color of the line to
+        # match the color for that pitch in the charts") -- grouped and
+        # colored the same way the Release Point silhouette's per-type
+        # markers already group/color, so every panel agrees on both
+        # the grouping and the color for a given type. Types with no
+        # computable angle (e.g. no release-point data yet) are simply
+        # left out rather than shown as a fabricated 0.
+        type_groups = {}
+        type_order = []
+        for p in filtered_pitches:
+            label = pitch_type_label(p)
+            if label not in type_groups:
+                type_groups[label] = []
+                type_order.append(label)
+            type_groups[label].append(p)
+
+        per_type_angles = []  # (label, color, angle_degrees, n) -- for the caption
+        for label in type_order:
+            group = type_groups[label]
+            angle, n = average_estimated_arm_angle(group, player)
+            if angle is not None:
+                per_type_angles.append((label, color_for_pitch_label(label), angle, n))
+
+        arm_angles_by_type = [(label, color, angle) for label, color, angle, n in per_type_angles]
 
         def _build():
-            children = [chart_helpers.fig_to_img(movement_chart(filtered_pitches, min_pitches_for_shading=min_shading), width=700, height=420)]
+            movement_fig = movement_chart(
+                filtered_pitches, min_pitches_for_shading=min_shading,
+                arm_angles_by_type=arm_angles_by_type, throws=throws,
+            )
+            children = [chart_helpers.fig_to_img(movement_fig, width=700, height=420)]
             summary_rows = pitch_type_summary(filtered_pitches)
             legend = _pitch_type_legend(summary_rows, len(filtered_pitches))
             if legend is not None:
                 children.append(legend)
+            if per_type_angles:
+                angle_items = [
+                    ui.div(
+                        ui.div(style=f"width:10px; height:10px; border-radius:5px; background:{color}; display:inline-block; margin-right:5px;"),
+                        f"{label}: {round(angle)}° (n={n})",
+                        style="display:inline-flex; align-items:center; color:#B8B8B8; font-size:0.78rem; margin:2px 8px;",
+                    )
+                    for label, color, angle, n in per_type_angles
+                ]
+                children.append(ui.div(*angle_items, style="display:flex; flex-wrap:wrap; justify-content:center; margin-top:6px;"))
+            elif player is not None and player.height_in is None:
+                children.append(ui.p("Estimated Arm Angle needs this pitcher's height — add it on the Players page.", class_="text-muted small", style="text-align:center;"))
             return ui.div(*children)
 
-        key = (movement_chart_id, _target_key(target), min_shading)
+        key = (movement_chart_id, _target_key(target), min_shading, tuple(arm_angles_by_type), throws)
         return chart_helpers.render_chart_async(_chart_cache, key, _build, sync=True)
 
     @output(id=release_chart_id)
@@ -446,11 +603,60 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
         target, filtered_pitches = _filtered()
         if not _charts_ready(target, filtered_pitches):
             return None
+        player = filtered_pitches[0].player if filtered_pitches else None
 
         def _build():
+            # One marker + "arm" line per PITCH TYPE (Aug 2026, second
+            # revision -- Ryker: average release point per pitch type,
+            # not one dot per individual pitch). Grouped and colored the
+            # same way release_point_chart's own "average" mode already
+            # groups/colors its dots, so the two panels always agree.
+            type_groups = {}
+            type_order = []
+            for p in filtered_pitches:
+                label = pitch_type_label(p)
+                if label not in type_groups:
+                    type_groups[label] = []
+                    type_order.append(label)
+                type_groups[label].append(p)
+
+            release_points = []
+            for label in type_order:
+                group = type_groups[label]
+                heights = [float(p.release_height) for p in group if p.release_height is not None]
+                sides = [float(p.release_side) for p in group if p.release_side is not None]
+                avg_h = sum(heights) / len(heights) if heights else None
+                avg_s = sum(sides) / len(sides) if sides else None
+                release_points.append((avg_h, avg_s, color_for_pitch_label(label), label, len(group)))
+
+            n_types_plotted = sum(1 for h, s, *_ in release_points if h is not None and s is not None)
+            player_height_in = float(player.height_in) if player is not None and player.height_in is not None else None
+            throws = player.throws if player is not None else None
+
+            svg, caption = render_release_silhouette_svg(release_points, player_height_in, throws)
+            silhouette_children = [ui.HTML(svg)]
+            if caption:
+                silhouette_children.append(ui.p(caption, class_="text-muted small", style="text-align:center;"))
+            if n_types_plotted:
+                legend_items = [
+                    ui.div(
+                        ui.div(style=f"width:10px; height:10px; border-radius:5px; background:{color}; display:inline-block; margin-right:5px;"),
+                        f"{label} (n={n})",
+                        style="display:inline-flex; align-items:center; color:#B8B8B8; font-size:0.78rem; margin:2px 8px;",
+                    )
+                    for h, s, color, label, n in release_points if h is not None and s is not None
+                ]
+                silhouette_children.append(ui.div(*legend_items, style="display:flex; flex-wrap:wrap; justify-content:center; margin-top:6px;"))
+            silhouette_panel = ui.div(
+                ui.p("Release Point", style=f"color:{TEXT_CREAM}; font-weight:700; text-align:center; margin-bottom:4px;"),
+                *silhouette_children,
+                style="display:flex; flex-direction:column; align-items:center; justify-content:flex-start; height:100%;",
+            )
+
             return ui.layout_columns(
                 chart_helpers.fig_to_img(release_point_chart(filtered_pitches, mode="individual"), width=450, height=420),
-                chart_helpers.fig_to_img(release_point_chart(filtered_pitches, mode="average"), width=450, height=420),
+                silhouette_panel,
+                col_widths=[6, 6],
             )
 
         key = (release_chart_id, _target_key(target))

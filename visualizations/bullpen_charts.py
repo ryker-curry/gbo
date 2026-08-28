@@ -24,7 +24,19 @@ Movement (IVB/HB) uses vb_spin/hb_spin (Rapsodo's spin-induced break
 columns) -- matches the mapping already established in Phase 1's
 importer and Phase 2's pitch-type summary table, not the trajectory-
 fit or seam-shifted-wake break columns also preserved on RapsodoPitch.
+
+Aug 2026 addition: movement_chart() takes optional arm_angle_degrees/
+throws kwargs (both default None -- every existing call site,
+including the legacy Streamlit pages, is unaffected and renders
+pixel-identical output to before). When given, an Estimated-Arm-Angle
+ray is drawn from the origin via _add_arm_angle_ray() below -- pure
+visualization, the actual geometric estimate is computed elsewhere
+(analytics/pitch_trajectory.calculate_estimated_arm_angle), per the
+existing "calculations separate from visualization" rule this module
+already follows.
 """
+
+import math
 
 import plotly.graph_objects as go
 
@@ -58,7 +70,105 @@ def color_for_pitch_label(label):
     return get_pitch_color(label)
 
 
-def movement_chart(pitches, min_pitches_for_shading=2):
+def _add_arm_angle_ray(fig, arm_angle_degrees, throws, extent):
+    """Overlay a ray from (0,0) representing Estimated Arm Angle onto an
+    already-built movement_chart figure -- drawn as a real plotly shape
+    (not a separate image), so it rides along with the same single
+    kaleido render movement_chart already pays for, no extra chart/
+    render cost.
+
+    Handedness: RHP points into +X, LHP mirrors into -X. This is a
+    clean, self-consistent, DOCUMENTED convention picked independently
+    of HB's own sign meaning -- movement_chart's own docstring already
+    flags that Rapsodo's HB sign convention (which side is "arm side"
+    for a given hand) is still unconfirmed in this codebase. Arm angle
+    is a property of the throwing arm's slot, not of pitch movement, so
+    there's no existing convention to inherit here; RHP=+X/LHP=-X is
+    simply the choice made, applied consistently, and it only needs to
+    be internally consistent (both hands mirror each other) to satisfy
+    the "handedness-aware, positive magnitude either way" requirement --
+    it does not need to line up with HB's sign one way or the other.
+
+    Ray length is fixed at 80% of the chart's half-extent (so, for the
+    current +/-25" axis, an 20" ray) -- comfortably inside the plot
+    area with room left for the label, and independent of any actual
+    pitch data (this is a geometric overlay, not a data series, so it
+    doesn't auto-scale to the session's movement spread the ray sits
+    on top of)."""
+    if arm_angle_degrees is None:
+        return
+    angle_rad = math.radians(float(arm_angle_degrees))
+    ray_length = extent * 0.8
+    end_x = ray_length * math.cos(angle_rad)
+    end_y = ray_length * math.sin(angle_rad)
+    if throws == "L":
+        end_x = -end_x
+
+    fig.add_shape(
+        type="line", xref="x", yref="y", x0=0, y0=0, x1=end_x, y1=end_y,
+        line=dict(color=GOLD, width=3),
+    )
+    fig.add_annotation(
+        x=end_x, y=end_y, xref="x", yref="y",
+        text=f"Estimated Arm Angle: {round(float(arm_angle_degrees))}°",
+        showarrow=False, font=dict(color=GOLD, size=12, family="inherit"),
+        xanchor="right" if throws == "L" else "left",
+        yanchor="bottom" if end_y >= 0 else "top",
+        xshift=6 if throws != "L" else -6,
+    )
+
+
+def _add_arm_angle_rays(fig, arm_angles_by_type, throws, extent):
+    """Multi-ray sibling of _add_arm_angle_ray() above (Aug 2026): one
+    ray per pitch type instead of a single blended-average ray, each
+    colored to match that type's own established chart color (via
+    color_for_pitch_label -- same convention movement_chart's dots,
+    release_point_chart, and the release-point silhouette all already
+    use) rather than a single gold line for everything. Ryker's
+    reference image (a competing product's Movement Profile panel)
+    showed one thin ray fanning out per pitch type in that type's own
+    color -- this mirrors that idea with GBO's own styling, not a copy
+    of that product's artwork.
+
+    Same handedness convention and ray-length rule as
+    _add_arm_angle_ray() -- see its docstring for the reasoning; not
+    repeated here since both must stay in lockstep.
+
+    arm_angles_by_type: list of (label, color, angle_degrees) tuples,
+    one per pitch type the pitcher threw that has a computable
+    Estimated Arm Angle (types with no release-point/height data to
+    estimate from are simply absent from the list -- never a fabricated
+    0 or blended-in average). throws: single value, same for every ray
+    since it's a property of the pitcher, not the pitch type.
+
+    No per-ray text label here (Aug 2026, Ryker: "the wording that
+    shows the angles all overlaps") -- when two pitch types have close
+    arm angles (common: a pitcher's fastball/sinker/cutter often sit
+    within a couple degrees of each other), their ray-tip labels landed
+    on top of each other and were unreadable. The rays alone still show
+    each type's direction/color at a glance; the numeric angle per type
+    already has a clean, non-overlapping home in the caption list the
+    caller (_chart_movement) renders below this chart -- no information
+    is lost, just the colliding on-chart text."""
+    if not arm_angles_by_type:
+        return
+    ray_length = extent * 0.8
+    for label, color, angle_degrees in arm_angles_by_type:
+        if angle_degrees is None:
+            continue
+        angle_rad = math.radians(float(angle_degrees))
+        end_x = ray_length * math.cos(angle_rad)
+        end_y = ray_length * math.sin(angle_rad)
+        if throws == "L":
+            end_x = -end_x
+
+        fig.add_shape(
+            type="line", xref="x", yref="y", x0=0, y0=0, x1=end_x, y1=end_y,
+            line=dict(color=color, width=2.5),
+        )
+
+
+def movement_chart(pitches, min_pitches_for_shading=2, arm_angle_degrees=None, throws=None, arm_angles_by_type=None):
     """Horizontal Break (x) vs. Induced Vertical Break (y) -- a plain
     Cartesian grid with real tick labels on both axes, matching Rapsodo's
     own native movement plot rather than a Baseball-Savant-style radial
@@ -92,8 +202,17 @@ def movement_chart(pitches, min_pitches_for_shading=2):
 
     Deliberately still not included, same as before: an MLB/league-
     average reference overlay (no real external benchmark dataset to
-    draw from) and an arm-angle/pitcher-silhouette indicator (needs the
-    same physics review already deferred to Phase 4). The horizontal
+    draw from). An arm-angle indicator (previously deferred here
+    pending the "physics review") is now available via the optional
+    arm_angle_degrees/throws kwargs below -- see _add_arm_angle_ray().
+    Aug 2026: an arm_angles_by_type kwarg was added alongside it -- a
+    list of (label, color, angle_degrees) tuples -- to draw one ray per
+    pitch type (each in that type's own chart color) instead of a
+    single blended-average ray; see _add_arm_angle_rays(). When given,
+    arm_angles_by_type takes priority over arm_angle_degrees for what
+    gets drawn (both kwargs stay available -- no existing call site,
+    including the legacy Streamlit pages, passes either one, so nothing
+    else is affected). The horizontal
     axis also still keeps its plain "Horizontal Break (in)" label rather
     than a hand-dependent "1B / 3B" label, pending Ryker confirming
     Rapsodo's HB sign convention -- unaffected by this rings-to-grid
@@ -142,6 +261,14 @@ def movement_chart(pitches, min_pitches_for_shading=2):
     # points, same layering as the ring version.
     fig.add_shape(type="line", x0=0, x1=0, y0=-y_extent, y1=y_extent, line=dict(color=MUTED_GRAY, width=2.5))
     fig.add_shape(type="line", x0=-x_extent, x1=x_extent, y0=0, y1=0, line=dict(color=MUTED_GRAY, width=2.5))
+
+    # Arm-angle ray -- drawn after the origin lines (so it reads as part
+    # of the same "reference geometry" layer) but before the actual
+    # pitch data points (so real data always sits visually on top).
+    if arm_angles_by_type:
+        _add_arm_angle_rays(fig, arm_angles_by_type, throws, MOVEMENT_EXTENT)
+    else:
+        _add_arm_angle_ray(fig, arm_angle_degrees, throws, MOVEMENT_EXTENT)
 
     for label in order:
         group = groups[label]

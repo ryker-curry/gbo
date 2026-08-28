@@ -385,6 +385,16 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-metric-bar-fill.gold { background: var(--gbo-gold); }
 .gbo-metric-bar-fill.neutral { background: var(--gbo-border-strong); }
 .gbo-metric-bar-percentile { color: var(--gbo-text-muted); font-size: .72rem; margin: 4px 0 0; font-variant-numeric: tabular-nums; }
+/* External reference-standard tier badges (Aug 2026, AdaptPTPD force-plate
+   sheet -- see force_plate_standards.py). Appended next to a metric's raw
+   value in build_metric_bars for the handful of metrics that have an
+   MLB/reference tier; reuses the existing status-color vocabulary
+   (good/watch/flag) so it reads as one system with everything else here,
+   not a bolted-on second one. */
+.gbo-tier-badge { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 10px; font-size: .68rem; font-weight: 600; letter-spacing: .02em; vertical-align: middle; white-space: nowrap; }
+.gbo-tier-badge.good { background: var(--gbo-status-good-soft); color: var(--gbo-status-good); }
+.gbo-tier-badge.watch { background: var(--gbo-status-watch-soft); color: var(--gbo-status-watch); }
+.gbo-tier-badge.flag { background: var(--gbo-status-flag-soft); color: var(--gbo-status-flag); }
 
 /* ROM rows (threshold-based) */
 .gbo-rom-group { display: flex; flex-direction: column; gap: 0; margin: 4px 0 10px; }
