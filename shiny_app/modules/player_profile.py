@@ -264,13 +264,11 @@ def player_profile_server(input, output, session, app_state):
             ui_helpers.kpi_tile("Movement flag", (mf.get("color") or "—").title(), delta=mf.get("reason") or ("Score " + str(mf.get("score")) if mf.get("score") is not None else "Not assessed"), status="flag" if mf.get("color") == "red" else "watch" if mf.get("color") in ("yellow", "orange") else None),
             class_="gbo-kpi-row", style="margin-bottom:16px;",
         )
-        if pris:
-            pri_rows = []
-            for i, (st, title, detail) in enumerate(pris, 1):
-                pri_rows.append(ui.div(ui.div(str(i), class_=f"gbo-pri-i {st}"), ui.div(ui.tags.b(title), ui.span(detail)), class_="gbo-pri"))
-            priorities = ui_helpers.card(*pri_rows, title="Development priorities", right="worst metrics, most recent tests")
-        else:
-            priorities = ui_helpers.card(ui_helpers.empty_state("No flagged metrics. Priorities appear here once an assessment falls below the team range."), title="Development priorities")
+        # Left blank for now (Aug 2026, Ryker's call) -- was populated
+        # from _priorities(bd) (worst bucket-system/ROM metrics). pris
+        # is still computed above and still drives the Status tile and
+        # the hero card's flag color, just no longer rendered here.
+        priorities = ui_helpers.card(title="Development priorities")
         hero = ui.div(card, ui.div(tiles, priorities), class_="gbo-profile-hero")
 
         # --- tabs ---
@@ -297,16 +295,6 @@ def player_profile_server(input, output, session, app_state):
         return ui.div(header, hero, ui.div(tabs, style="margin-top:24px;"))
 
     def _overview_tab(bd, summ, pitches, bullpen, goals, mode):
-        def why(metrics):
-            worst = None
-            for name, d in metrics.items():
-                pct = d.get("percentile")
-                if pct is None: continue
-                if worst is None or pct < worst[1]:
-                    worst = (name, pct, d)
-            if not worst: return None
-            n, pct, d = worst
-            return ui.span("Lowest: ", ui.tags.b(n), f" {d.get('raw')}{(' ' + d['unit']) if d.get('unit') else ''} · {bucket_display.ordinal(pct)} pct")
         def flat(sub):
             m = {}
             for s, mm in (sub or {}).items(): m.update(mm)
@@ -314,9 +302,8 @@ def player_profile_server(input, output, session, app_state):
         # Body Fat Mass / Percent Body Fat are reference-only (same
         # BODY_COMP_BAR_NAMES split bucket_display.py's Assessments-tab
         # breakdown already uses) -- excluded here too so they can't
-        # show up as a percentile bar, drag the Body composition
-        # panel's flagged/watch count, or win the "Lowest" caption
-        # below (Aug 2026, Ryker's call).
+        # show up as a percentile bar or drag the Body composition
+        # panel's flagged/watch count (Aug 2026, Ryker's call).
         body_comp_bar_metrics = {n: d for n, d in (bd.get("body_comp_metrics") or {}).items() if n in bucket_display.BODY_COMP_BAR_NAMES}
         buckets = [
             ("Body composition", bd.get("body_comp_score"), body_comp_bar_metrics),
@@ -337,7 +324,7 @@ def player_profile_server(input, output, session, app_state):
             rows = [ui_helpers.metric_bar(n, f"{d.get('raw')}", d.get("percentile"), unit=d.get("unit"), percentile_text=f"{bucket_display.ordinal(d['percentile'])} percentile" if d.get("percentile") is not None else "No team comparison yet") for n, d in metrics.items()]
             bucket_cards.append(ui.accordion_panel(
                 ui.div(ui.span(f"{score:.0f}" if score is not None else "—", class_=f"gbo-bucket-score {('gold' if (score or 0) >= 90 else ui_helpers.status_from_percentile(score))}"),
-                       ui.div(ui.div(title, class_="gbo-bucket-title"), ui.div(why(metrics) or "No team comparison yet", class_="gbo-bucket-why")),
+                       ui.div(title, class_="gbo-bucket-title"),
                        ui_helpers.status_chip(st, f"{flagged} priority · {watch} attention" if (flagged or watch) else None), class_="gbo-bucket-head"),
                 ui.div(*rows, class_="gbo-metric-bar-group") if rows else ui_helpers.empty_state("No metrics recorded."),
                 value=title,

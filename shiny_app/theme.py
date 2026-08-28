@@ -121,8 +121,9 @@ GLOBAL_CSS = """
   --gbo-caution: var(--gbo-status-watch);
   --gbo-orange: #D9782A;
   --gbo-silver: #BDBCB6;
-  --gbo-diamond: #5FD9F0;                 /* player card tier (Aug 2026, Ryker: Diamond/Gold/Silver/Bronze) -- icy cyan, distinct from --gbo-gold so the top tier doesn't read as a duplicate of the gold tier below it */
-  --gbo-bronze: #C9793D;                  /* player card tier -- bottom tier, replaces the old flat-gray "slate" */
+  --gbo-diamond: #5FD9F0;                 /* player card tier (Aug 2026, Ryker: Diamond/Gold/Silver/Bronze/Common) -- icy cyan, distinct from --gbo-gold so the top tier doesn't read as a duplicate of the gold tier below it */
+  --gbo-bronze: #C9793D;                  /* player card tier */
+  --gbo-common: #6E6E72;                  /* player card tier -- bottom tier (added Aug 2026 when Ryker split the old bronze catch-all into Bronze 75-79 + Common <75), flat gray like the old "slate" this whole system replaced */
   --gbo-focus: #6FB1FF;
   --gbo-shadow: 0 8px 24px rgba(0,0,0,.35);
 }
@@ -159,6 +160,7 @@ GLOBAL_CSS = """
   --gbo-silver: #6B7280;
   --gbo-diamond: #0E7A96;                 /* player card tier -- see dark theme's --gbo-diamond comment */
   --gbo-bronze: #935423;                  /* player card tier */
+  --gbo-common: #5B6270;                  /* player card tier -- bottom tier, see dark theme's --gbo-common comment */
   --gbo-focus: #2563EB;
   --gbo-shadow: 0 8px 24px rgba(0,0,0,.12);
 }
@@ -416,6 +418,7 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-ring-col { text-align: center; }
 .gbo-ring { --gbo-ring-color: var(--gbo-status-good); width: 96px; height: 96px; border-radius: 50%; margin: 0 auto; display: flex; align-items: center; justify-content: center; background: conic-gradient(var(--gbo-ring-color) calc(var(--gbo-ring-pct) * 1%), var(--gbo-bg-raised) 0); }
 .gbo-ring.good { --gbo-ring-color: var(--gbo-status-good); } .gbo-ring.watch { --gbo-ring-color: var(--gbo-status-watch); } .gbo-ring.flag { --gbo-ring-color: var(--gbo-status-flag); } .gbo-ring.gold { --gbo-ring-color: var(--gbo-gold); }
+.gbo-ring.diamond { --gbo-ring-color: var(--gbo-diamond); } .gbo-ring.silver { --gbo-ring-color: var(--gbo-silver); } .gbo-ring.bronze { --gbo-ring-color: var(--gbo-bronze); } .gbo-ring.common { --gbo-ring-color: var(--gbo-common); }  /* Total ring's tier coloring, Aug 2026 -- see build_score_rings/_tier_for_total in bucket_display.py */
 .gbo-ring-inner { width: 82%; height: 82%; border-radius: 50%; background: var(--gbo-bg-card); display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .gbo-ring-value { color: var(--gbo-text); font-family: var(--gbo-display); font-size: 1.75rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
 .gbo-ring-sublabel { color: var(--gbo-text-muted); font-size: .66rem; margin-top: 3px; text-align: center; padding: 0 8px; line-height: 1.2; }
