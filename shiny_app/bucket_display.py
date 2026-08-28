@@ -101,13 +101,15 @@ def build_mobility_rom_report(report):
 
             # Rows from compute_shoulder_rom_profile (Total Arc Deficit,
             # GIRD, ERG, Flexion/Extension Difference -- Ryker's Aug
-            # 2026 ROM redesign spec) carry "explanation"/"recommendation"
-            # keys the plain absolute-threshold rows above don't have --
-            # that key's presence is the signal to render this row with
-            # the spec's own status wording ("Good"/"Monitor"/"Red Flag —
-            # Priority Review") and an expanded "why this matters" block,
-            # instead of the simpler existing "Clear"/"Caution"/"Below
-            # threshold" pill.
+            # 2026 ROM redesign spec) carry an "explanation"/
+            # "recommendation" pair the plain absolute-threshold rows
+            # above don't have -- that key's presence is the signal to
+            # render this row with the spec's own status wording
+            # ("Good"/"Monitor"/"Red Flag — Priority Review") instead of
+            # the simpler existing "Clear"/"Caution"/"Below threshold"
+            # pill. The explanation/recommendation prose itself is
+            # deliberately not rendered (Ryker's call, Aug 2026) -- only
+            # the raw value and status pill show.
             if "explanation" in row:
                 # signed by default (these are almost all differences/deficits/gains, direction
                 # matters) -- a row can opt out via "signed": False for a plain magnitude (e.g.
@@ -120,17 +122,12 @@ def build_mobility_rom_report(report):
                 else:
                     status_label, status_class = row["status_label"], f"gbo-rom-status-{status}"
 
-                row_children = [
+                row_els.append(ui.div(
                     ui.span(display_name, class_="gbo-rom-name"),
                     ui.span(raw_label, class_="gbo-rom-raw"),
                     ui.span(status_label, class_=f"gbo-rom-status {status_class}"),
-                ]
-                block_children = [ui.div(*row_children, class_="gbo-rom-row")]
-                if row.get("explanation"):
-                    block_children.append(ui.p(row["explanation"], class_="gbo-rom-explanation"))
-                if row.get("recommendation"):
-                    block_children.append(ui.p(ui.strong("Recommendation: "), row["recommendation"], class_="gbo-rom-recommendation"))
-                row_els.append(ui.div(*block_children, class_="gbo-rom-compound-row"))
+                    class_="gbo-rom-row",
+                ))
                 continue
 
             raw_label = f"{row['raw']:.1f}{unit}"
@@ -217,7 +214,7 @@ def build_movement_flag_ring(movement_flag, mobility_rom_report, key_prefix, mod
     return ui.div(*children, class_="gbo-ring-col")
 
 
-def build_percentage_rings(metrics, key_prefix, show_ordinal=False, mode="dark"):
+def build_percentage_rings(metrics, key_prefix, show_ordinal=False, mode="dark", status_fn=None):
     """Generic full-circle percentage ring display -- metrics is a list
     of (label, value) tuples, value 0-100 or None. show_ordinal=True
     displays just the plain rounded number ("45") centered in the ring
@@ -226,6 +223,17 @@ def build_percentage_rings(metrics, key_prefix, show_ordinal=False, mode="dark")
     in-ring sub-label (direct-percentage KPIs). Returns None (renders
     nothing) if every value is None -- same "show nothing" rule as the
     original's False return.
+
+    status_fn: optional callable(label, value) -> a CSS class name (any
+    of "good"/"watch"/"flag"/"gold"/"diamond"/"silver"/"bronze"/
+    "common") or None, applied as a class on the ring so it tints
+    accordingly instead of the flat default green every ring used to
+    render (.gbo-ring's base --gbo-ring-color, see theme.py). None (the
+    default) keeps that old always-green look -- only callers that
+    pass status_fn opt into coloring, so this stays a no-op everywhere
+    that hasn't asked for it (Aug 2026, Ryker: added for build_score_
+    rings' composite scores; see _score_ring_status/_composite_score_
+    status/_tier_for_total below).
 
     Each ring is a CSS conic-gradient circle (.gbo-ring in GLOBAL_CSS)
     -- var(--gbo-ring-pct) set inline per ring drives how much of the
@@ -251,9 +259,10 @@ def build_percentage_rings(metrics, key_prefix, show_ordinal=False, mode="dark")
                 ui.span(f"{value:.0f}%", class_="gbo-ring-value"),
                 ui.span(label, class_="gbo-ring-sublabel"),
             ]
+        status = status_fn(label, value) if status_fn else None
         ring = ui.div(
             ui.div(*inner_children, class_="gbo-ring-inner"),
-            class_="gbo-ring",
+            class_=f"gbo-ring {status}" if status else "gbo-ring",
             style=f"--gbo-ring-pct: {pct};",
         )
         children = [ring]
@@ -264,17 +273,69 @@ def build_percentage_rings(metrics, key_prefix, show_ordinal=False, mode="dark")
     return ui.layout_columns(*cols, col_widths=[col_width] * len(cols))
 
 
+def _composite_score_status(value):
+    """Color rule for build_score_rings' Body Comp/Power/Strength rings
+    -- NOT the app-wide status_from_percentile 35/60 split used for
+    individual metric percentiles elsewhere (ui_helpers.status_from_
+    percentile), and NOT the Total ring, which uses _tier_for_total
+    instead (Ryker's call, Aug 2026, split from an earlier version that
+    used this same rule for Total too). Ryker's call (Aug 2026): the
+    roster's composite scores cluster tightly (e.g. nobody under 60),
+    so the 35/60 split rendered everyone green/gold and didn't
+    actually separate anyone -- these cut points are tuned to that
+    real spread instead: below 80 flag (red), 80-84 watch (yellow),
+    85+ good (green). Revisit if the roster's score distribution
+    shifts."""
+    if value is None:
+        return None
+    if value >= 85:
+        return "good"
+    if value >= 80:
+        return "watch"
+    return "flag"
+
+
+def _tier_for_total(value):
+    """Total ring color = the same Diamond/Gold/Silver/Bronze/Common
+    tiers as the player card's Overall rating (show_card in ui_helpers.
+    py) -- Ryker's call (Aug 2026): Total should read as the identical
+    tier everywhere it appears, not a separate red/yellow/green scale
+    just for this one ring. Keep these cut points in sync with
+    show_card's tier= line if either one changes."""
+    if value is None:
+        return None
+    if value >= 90:
+        return "diamond"
+    if value >= 85:
+        return "gold"
+    if value >= 80:
+        return "silver"
+    if value >= 75:
+        return "bronze"
+    return "common"
+
+
+def _score_ring_status(label, value):
+    """build_score_rings' status_fn -- Total gets the player-card tier
+    scale (_tier_for_total), Body Comp/Power/Strength keep the red/
+    yellow/green scale (_composite_score_status). See each function's
+    docstring."""
+    return _tier_for_total(value) if label == "Total" else _composite_score_status(value)
+
+
 def build_score_rings(bucket_data, key_prefix, mode="dark"):
     """Total/Body Comp/Power/Strength as full-circle percentage rings.
     Returns None (renders nothing) if there's no data yet for any of
-    them."""
+    them. Colored via _score_ring_status: Total uses the player card's
+    Diamond/Gold/Silver/Bronze/Common tiers, the other three use red/
+    yellow/green (see _tier_for_total / _composite_score_status)."""
     specs = [
         ("Total", bucket_data["total_score"]),
         ("Body Comp", bucket_data["body_comp_score"]),
         ("Power", bucket_data["power_score"]),
         ("Strength", bucket_data["strength_score"]),
     ]
-    return build_percentage_rings(specs, key_prefix, show_ordinal=True, mode=mode)
+    return build_percentage_rings(specs, key_prefix, show_ordinal=True, mode=mode, status_fn=_score_ring_status)
 
 
 def ordinal(n):
