@@ -117,6 +117,7 @@ from models import (
 )
 from analytics.rapsodo_goal_metrics import rapsodo_field_for_test_name, average_rapsodo_metric
 from bucket_system import compute_bucket_system
+import force_plate_standards
 from modules.roster import _flag_for
 import bucket_display
 
@@ -850,10 +851,35 @@ def idp_server(input, output, session, app_state):
                             baseline_value = float(matching_result.value)
                             preview.append(ui.p(f"Baseline auto-filled from the linked assessment: {baseline_value} {unit}", class_="text-muted small"))
 
+            # Force-plate reference-standard target suggestion (Aug 2026,
+            # AdaptPTPD sheet -- see force_plate_standards.py). Only fires
+            # for the 2 metrics that module covers (mRSI, Avg RSI multi-
+            # rebound); every other metric's Target field keeps its old
+            # 0.0 default, coach fills it in by hand exactly as before.
+            suggested_target = None
+            if target_test_type is not None and target_test_type.test_name in force_plate_standards.REFERENCE_TEST_NAMES:
+                ref_unit = target_test_type.unit or ""
+                ref_player = db.query(Player).filter(Player.player_id == selected_player_id).first()
+                ref_is_pitcher = bool(ref_player.is_pitcher) if ref_player else False
+                ref_tier = force_plate_standards.classify(target_test_type.test_name, baseline_value, ref_is_pitcher)
+                if ref_tier is not None:
+                    if ref_tier["next_tier_target"] is not None:
+                        suggested_target = ref_tier["next_tier_target"]
+                        preview.append(ui.p(
+                            f"Reference standard ({ref_tier['badge_source']}): baseline is '{ref_tier['tier_label']}' tier -- "
+                            f"target below is pre-filled at {suggested_target}{ref_unit}, the floor of '{ref_tier['next_tier_label']}'. Edit freely.",
+                            class_="text-muted small",
+                        ))
+                    else:
+                        preview.append(ui.p(
+                            f"Reference standard ({ref_tier['badge_source']}): baseline is already '{ref_tier['tier_label']}', the top tier -- no higher tier to suggest a target from.",
+                            class_="text-muted small",
+                        ))
+
             fields = list(preview)
             if target_test_type is not None:
                 fields.append(ui.input_numeric("new_goal_baseline_value", f"Baseline value{f' ({unit})' if unit else ''}", value=baseline_value if baseline_value is not None else 0.0, step=0.1))
-                fields.append(ui.input_numeric("new_goal_target_value", f"Target value{f' ({unit})' if unit else ''}", value=0.0, step=0.1))
+                fields.append(ui.input_numeric("new_goal_target_value", f"Target value{f' ({unit})' if unit else ''}", value=suggested_target if suggested_target is not None else 0.0, step=0.1))
                 fields.append(ui.input_date("new_goal_target_date", "Target date", value=date.today() + timedelta(days=60)))
             fields.append(ui.input_text_area("new_goal_description", "Goal description"))
             fields.append(ui.input_select("new_goal_status", "Initial status", choices=[s.status_name for s in statuses]))

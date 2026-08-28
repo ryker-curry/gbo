@@ -1831,6 +1831,14 @@ def compute_bucket_system(session, player_id, season_label=None, _cache=None, _u
     season_start, season_end = season_date_range(season_label)
     active_only = season_label == current_season_label()
 
+    # Force-plate reference standards (Aug 2026, AdaptPTPD sheet -- see
+    # force_plate_standards.py) need Pitcher vs Position Player. Cheap
+    # single-row PK lookup, unrelated to the batch-fetch optimization
+    # below (that one's amortizing O(1-per-metric) team-wide percentile
+    # queries, not a lookup this cheap).
+    player = session.query(Player).filter(Player.player_id == player_id).first()
+    is_pitcher = bool(player.is_pitcher) if player else False
+
     # Batch-fetch every metric this whole rollup could possibly need in
     # 2 queries total (plus 1 for player throwing hands), instead of
     # each of the ~20 compute_metric_percentiles()/resolve_side_by_throws()
@@ -1949,4 +1957,5 @@ def compute_bucket_system(session, player_id, season_label=None, _cache=None, _u
         "shoulder_health_score": shoulder_health_score,
         "shoulder_health_metrics": shoulder_health_metrics,
         "season_label": season_label,
+        "is_pitcher": is_pitcher,
     }

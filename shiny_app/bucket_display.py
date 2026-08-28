@@ -37,6 +37,7 @@ here calls it anymore) so callers didn't need to change.
 from shiny import ui
 
 from bucket_system import BODY_COMP_METRICS
+import force_plate_standards
 
 BODY_COMP_BAR_NAMES = {name for name, _ in BODY_COMP_METRICS}
 
@@ -295,7 +296,7 @@ def ordinal(n):
     return f"{n}{suffix}"
 
 
-def build_metric_bars(metrics_dict, chart_key, mode="dark"):
+def build_metric_bars(metrics_dict, chart_key, mode="dark", is_pitcher=None):
     """One row per metric: name + raw value on a line, a thin colored
     progress bar underneath sized to the percentile (0-100), with the
     percentile itself labeled below the bar. Always returns something
@@ -317,7 +318,17 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark"):
     bars are real CSS (styled via GLOBAL_CSS's --gbo-* custom
     properties, see theme.py), so they already track the live
     dark/light toggle for free instead of needing a server-side
-    re-render."""
+    re-render.
+
+    is_pitcher: when not None, each row is also checked against
+    force_plate_standards.FORCE_PLATE_STANDARDS -- a metric covered
+    there (currently just mRSI and the multi-rebound Avg RSI) gets a
+    small tier badge appended to its header (e.g. "MLB tier: Good").
+    Purely additive/display-only -- doesn't touch the percentile bar
+    or this function's "no data" behavior. Left None by any caller
+    that doesn't know the player's position (or is rendering a
+    section, like Body Comp, where neither covered metric ever
+    appears), which just means no badges render -- same as today."""
     if not metrics_dict:
         return ui.p("No data yet.", class_="text-muted small")
 
@@ -328,12 +339,18 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark"):
         pct = max(0, min(100, pct))
         raw_label = f"{d['raw']:.2f}{d['unit'] or ''}"
         percentile_label = f"{ordinal(raw_percentile)} percentile" if raw_percentile is not None else "No percentile data"
+        header_children = [
+            ui.span(name, class_="gbo-metric-bar-name"),
+            ui.span(raw_label, class_="gbo-metric-bar-raw"),
+        ]
+        tier = force_plate_standards.classify(name, d["raw"], is_pitcher) if is_pitcher is not None else None
+        if tier is not None:
+            header_children.append(ui.span(
+                f"{tier['badge_source']} tier: {tier['tier_label']}",
+                class_=f"gbo-tier-badge {tier['status']}",
+            ))
         rows.append(ui.div(
-            ui.div(
-                ui.span(name, class_="gbo-metric-bar-name"),
-                ui.span(raw_label, class_="gbo-metric-bar-raw"),
-                class_="gbo-metric-bar-header",
-            ),
+            ui.div(*header_children, class_="gbo-metric-bar-header"),
             ui.div(
                 ui.div(class_="gbo-metric-bar-fill", style=f"width: {pct}%;"),
                 class_="gbo-metric-bar-track",
@@ -359,11 +376,12 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark"):
     Comp, Power, Strength, and (if present) Speed/Capacity/Mobility/
     Shoulder Health -- all reference-only sections shown exactly when
     the original showed them (same presence checks)."""
+    is_pitcher = bucket_data.get("is_pitcher")  # None for any pre-Aug-2026 caller's bucket_data that predates this key -- build_metric_bars treats None as "skip badges", same as before this feature existed
     sections = [ui.p(f"Body Comp — {bucket_data['body_comp_score'] if bucket_data['body_comp_score'] is not None else '—'}", class_="gbo-category-title")]
     body_comp_metrics = bucket_data["body_comp_metrics"]
     bar_metrics = {name: v for name, v in body_comp_metrics.items() if name in BODY_COMP_BAR_NAMES}
     raw_only_metrics = {name: v for name, v in body_comp_metrics.items() if name not in BODY_COMP_BAR_NAMES}
-    sections.append(build_metric_bars(bar_metrics, f"{key_prefix}_body_comp", mode=mode))
+    sections.append(build_metric_bars(bar_metrics, f"{key_prefix}_body_comp", mode=mode, is_pitcher=is_pitcher))
     raw_ui = build_raw_metrics(raw_only_metrics)
     if raw_ui is not None:
         sections.append(raw_ui)
@@ -374,7 +392,7 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark"):
         if not metrics:
             continue
         sections.append(ui.p(f"{sub_name} — {sub_score if sub_score is not None else '—'}", class_="gbo-subgroup-label"))
-        sections.append(build_metric_bars(metrics, f"{key_prefix}_power_{sub_name}", mode=mode))
+        sections.append(build_metric_bars(metrics, f"{key_prefix}_power_{sub_name}", mode=mode, is_pitcher=is_pitcher))
 
     sections.append(ui.p(f"Strength — {bucket_data['strength_score'] if bucket_data['strength_score'] is not None else '—'}", class_="gbo-category-title"))
     for sub_name, sub_score in bucket_data["strength_subgroup_scores"].items():
@@ -382,11 +400,11 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark"):
         if not metrics:
             continue
         sections.append(ui.p(f"{sub_name} — {sub_score if sub_score is not None else '—'}", class_="gbo-subgroup-label"))
-        sections.append(build_metric_bars(metrics, f"{key_prefix}_strength_{sub_name}", mode=mode))
+        sections.append(build_metric_bars(metrics, f"{key_prefix}_strength_{sub_name}", mode=mode, is_pitcher=is_pitcher))
 
     if bucket_data["speed_metrics"]:
         sections.append(ui.p(f"Speed (reference only, not in Total) — {bucket_data['speed_score'] if bucket_data['speed_score'] is not None else '—'}", class_="gbo-category-title"))
-        sections.append(build_metric_bars(bucket_data["speed_metrics"], f"{key_prefix}_speed", mode=mode))
+        sections.append(build_metric_bars(bucket_data["speed_metrics"], f"{key_prefix}_speed", mode=mode, is_pitcher=is_pitcher))
 
     capacity_metrics_present = any(bucket_data.get("capacity_subgroup_metrics", {}).values())
     if capacity_metrics_present:
@@ -396,7 +414,7 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark"):
             if not metrics:
                 continue
             sections.append(ui.p(f"{sub_name} — {sub_score if sub_score is not None else '—'}", class_="gbo-subgroup-label"))
-            sections.append(build_metric_bars(metrics, f"{key_prefix}_capacity_{sub_name}", mode=mode))
+            sections.append(build_metric_bars(metrics, f"{key_prefix}_capacity_{sub_name}", mode=mode, is_pitcher=is_pitcher))
 
     mobility_rom_report = bucket_data.get("mobility_rom_report", [])
     mobility_rom_ui = build_mobility_rom_report(mobility_rom_report)
@@ -419,7 +437,7 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark"):
 
     if bucket_data.get("shoulder_health_metrics"):
         sections.append(ui.p(f"Shoulder Health (reference only, not in Total) — {bucket_data['shoulder_health_score'] if bucket_data['shoulder_health_score'] is not None else '—'}", class_="gbo-category-title"))
-        sections.append(build_metric_bars(bucket_data["shoulder_health_metrics"], f"{key_prefix}_shoulder_health", mode=mode))
+        sections.append(build_metric_bars(bucket_data["shoulder_health_metrics"], f"{key_prefix}_shoulder_health", mode=mode, is_pitcher=is_pitcher))
 
     return ui.div(*sections)
 
