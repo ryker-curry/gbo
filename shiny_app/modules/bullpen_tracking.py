@@ -92,6 +92,7 @@ from models import (
     BullpenScript, RapsodoPitch, RapsodoImport,
 )
 from services.rapsodo_import import delete_rapsodo_import, RapsodoImportError
+from video_helpers import drive_file_id, render_video_clip
 
 import ui_helpers
 import chart_helpers
@@ -596,6 +597,43 @@ def bullpen_tracking_server(input, output, session, app_state):
             if has_rapsodo_data:
                 children.append(ui.input_action_button("open_bullpen_dashboard_btn", "Open Rapsodo Bullpen Dashboard for this session", class_="btn-outline-primary btn-sm mb-2"))
 
+            # Aug 2026 addition: session-level video via a pasted Google
+            # Drive link (Ryker: coaches currently film the whole bullpen
+            # as one continuous video, not per-pitch clips -- clipping
+            # individual pitches out of it is extra work nobody's doing
+            # today). This is deliberately Drive-paste ONLY, no file-
+            # upload alternative: a full bullpen video is a much bigger
+            # file than a single pitch clip (see BullpenPitch.video_url's
+            # file-upload path just below), and Drive-paste is exactly
+            # how video_import.py/hitter_tracking.py already avoid that
+            # problem elsewhere in this app. render_video_clip() (shared
+            # with those pages) renders whatever's already stored in
+            # active_bullpen.video_url correctly either way -- it was
+            # already being read on the Bullpen Dashboard, just via a
+            # raw <video> tag that could never actually play a Drive
+            # link; that display bug is fixed as part of this change too
+            # (see bullpen_dashboard_display.py).
+            video_section = [ui.h6("Session video", class_="mt-2 mb-1")]
+            if active_bullpen.video_url:
+                video_section.append(render_video_clip(active_bullpen.video_url, height="320"))
+            if app_state.can_edit_sessions():
+                video_section.append(ui.p(
+                    "Paste a Google Drive share link for this session's full bullpen video. "
+                    "Make sure sharing is set to \"Anyone with the link can view\" so it plays inline.",
+                    class_="text-muted small mt-1",
+                ))
+                video_section.append(ui.input_text(
+                    "bp_session_video_link", None,
+                    value=active_bullpen.video_url or "",
+                    placeholder="https://drive.google.com/file/d/.../view?usp=sharing",
+                ))
+                video_section.append(ui.input_action_button(
+                    "bp_session_video_save_btn",
+                    "Replace video" if active_bullpen.video_url else "Save video",
+                    class_="btn-primary btn-sm mt-1",
+                ))
+            children.append(ui.div(*video_section, class_="mb-2"))
+
             if app_state.can_edit_sessions():
                 pitch_count = len(active_bullpen.pitches)
                 children.append(ui.accordion(
@@ -983,6 +1021,34 @@ def bullpen_tracking_server(input, output, session, app_state):
                 children.append(ui.accordion(ui.accordion_panel(f"Link pitches to Rapsodo data ({len(unlinked_pitches)} not yet linked)", *link_children), open=False, id=None))
 
             return ui.div(*children)
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.bp_session_video_save_btn)
+    def _save_session_video():
+        bullpen_id = _active_bullpen_id()
+        if bullpen_id is None:
+            return
+        link = (input.bp_session_video_link() or "").strip()
+        if not link:
+            ui.notification_show("Paste a Google Drive link first.", type="error", duration=8)
+            return
+        if drive_file_id(link) is None:
+            ui.notification_show(
+                "That doesn't look like a standard Google Drive file link -- it'll still be saved, but it may not "
+                "play inline (an \"Open in a new tab\" link will show alongside it either way).",
+                type="warning", duration=10,
+            )
+        db = get_session()
+        try:
+            active_bullpen = db.query(BullpenSession).filter(BullpenSession.bullpen_id == bullpen_id).first()
+            if active_bullpen is None:
+                return
+            active_bullpen.video_url = link
+            db.commit()
+            ui.notification_show("Saved session video.", type="message", duration=6)
+            _bump_refresh()
         finally:
             db.close()
 
