@@ -286,7 +286,7 @@ def bullpen_tracking_ui():
 def bullpen_tracking_server(input, output, session, app_state):
     _refresh_tick = reactive.Value(0)
     _active_bullpen_id = reactive.Value(None)
-    _target_zone = reactive.Value(5)
+    _target_zone = reactive.Value(None)  # None = no location picked -- Command Tracker already owns precise intended-location entry, so this defaults to "not tracked" instead of a misleading zone 5 (Aug 2026, per Ryker)
     _registered_assignment_ids = set()
     _registered_link_ids = set()
 
@@ -340,7 +340,15 @@ def bullpen_tracking_server(input, output, session, app_state):
             if not pitchers:
                 return ui_helpers.empty_state("No pitchers to show yet." if app_state.can_view_all_players() else "No pitchers are currently assigned to you.")
             choices = {str(p.player_id): f"{p.first_name} {p.last_name}" for p in pitchers}
-            return ui.input_select("pitcher_select", "Pitcher", choices=choices)
+            # Preserve the current pitcher across _refresh_tick-triggered rebuilds
+            # (e.g. every time a pitch is recorded) -- without this, the widget was
+            # rebuilt with no `selected=`, so it silently snapped back to the first
+            # pitcher in the list on every save. That cascaded into session_picker
+            # re-rendering with the WRONG pitcher's session list, which is what made
+            # it look like recording a pitch "kicked you out" of the active session.
+            current = input.pitcher_select() if "pitcher_select" in input else None
+            selected = current if current in choices else None
+            return ui.input_select("pitcher_select", "Pitcher", choices=choices, selected=selected)
         finally:
             db.close()
 
@@ -790,14 +798,18 @@ def bullpen_tracking_server(input, output, session, app_state):
                 link_block = [ui.p("No Rapsodo pitches imported yet for this pitcher on this date -- you can link one later once imported.", class_="text-muted small")]
 
             return ui.div(
-                ui.h5(f"Pitch #{len(active_bullpen.pitches) + 1} — call the intent", class_="gbo-section-title"),
+                ui.h5(f"Pitch #{len(active_bullpen.pitches) + 1}", class_="gbo-section-title"),
                 ui.input_select("bp_pitch_type", "Pitch type", choices=[pt.type_name for pt in pitch_types]),
-                ui.p(f"Intended zone ({input.bp_zone_view().lower()})", class_="text-muted small"),
+                ui.p(f"Intended zone ({input.bp_zone_view().lower()}) -- optional, skip this if you're already calling location in Command Tracker", class_="text-muted small"),
                 _zone_grid_buttons(_target_zone(), catcher_view),
-                ui.p(f"Selected intended zone: {_target_zone()} ({zone_labels[_target_zone()]})", class_="text-muted small"),
+                ui.p(
+                    f"Selected intended zone: {_target_zone()} ({zone_labels.get(_target_zone(), '—')})"
+                    if _target_zone() is not None else "No location selected -- this pitch will log as a count only.",
+                    class_="text-muted small",
+                ),
                 *link_block,
                 ui.input_text("bp_pitch_notes", "Notes (optional)"),
-                ui.input_action_button("record_pitch_btn", "Record intended pitch", class_="btn-primary mt-2"),
+                ui.input_action_button("record_pitch_btn", "Record pitch", class_="btn-primary mt-2"),
             )
         finally:
             db.close()
@@ -821,14 +833,16 @@ def bullpen_tracking_server(input, output, session, app_state):
                 bullpen_id=bullpen_id,
                 pitch_number=len(active_bullpen.pitches) + 1,
                 pitch_type_id=pitch_type_id,
-                target_zone=_target_zone(),
+                target_zone=_target_zone(),  # None unless a zone was actually clicked -- see reactive.Value(None) above
                 linked_assessment_id=int(link_raw) if link_raw else None,
                 notes=(input.bp_pitch_notes() or "").strip() or None,
             ))
+            had_zone = _target_zone() is not None
             db.commit()
-            _target_zone.set(5)
+            _target_zone.set(None)
             ui.update_select("bp_pitch_type", selected="4-Seam Fastball")
-            ui.notification_show(f"Recorded intent for pitch #{len(active_bullpen.pitches) + 1}.", type="message", duration=6)
+            msg = "Recorded intent" if had_zone else "Recorded pitch"
+            ui.notification_show(f"{msg} for pitch #{len(active_bullpen.pitches) + 1}.", type="message", duration=6)
             _bump_refresh()
         finally:
             db.close()
