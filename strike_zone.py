@@ -174,7 +174,15 @@ def build_zone_selector_figure(marker_x=None, marker_z=None):
         yaxis=dict(range=[Z_MIN, Z_MAX], visible=False, fixedrange=True, scaleanchor="x", scaleratio=1),
         paper_bgcolor=BG_DARK, plot_bgcolor=BG_DARK,
         height=350, margin=dict(l=0, r=0, t=0, b=0),
-        clickmode="event+select",
+        # "event" only, not "event+select" -- the active Shiny click
+        # capture (click_widgets.py) only ever listens for the plain
+        # plotly_click event and writes coordinates manually; native
+        # Plotly "select" mode was only needed by the old Streamlit
+        # on_select="rerun" path below (frozen/reference-only), and its
+        # default click-dims-the-point selection styling was causing a
+        # dead-looking click in Command Tracker (Aug 2026, Ryker report:
+        # "click one and the dot goes dim and nothing happens").
+        clickmode="event",
         dragmode=False,
     )
     return fig

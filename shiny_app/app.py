@@ -59,6 +59,7 @@ import nav  # noqa: E402
 import ui_helpers  # noqa: E402
 import theme  # noqa: E402
 import chart_helpers  # noqa: E402
+import click_widgets  # noqa: E402
 from modules import (  # noqa: E402
     dashboard, player_schedule, player_stats, players, assessments, video_import,
     team_schedule, player_assignments, at_appointments, rapsodo_import,
@@ -146,6 +147,16 @@ app_ui = ui.page_fluid(
     ui.tags.head(theme.fonts_link(), ui.tags.style(theme.GLOBAL_CSS)),
     ui.tags.script(_NO_WHEEL_SCROLL_JS),
     ui.tags.script(theme.MOTION_JS),
+    # Shared click-to-place capture for every click_widgets.click_target()
+    # widget app-wide (Command Tracker's intended/actual location, Game
+    # Tracking's pitch/batted-ball/video-review location) -- see
+    # click_widgets.py's module docstring. This was previously never
+    # actually wired in here despite that module's docstring claiming it
+    # was (Aug 29 2026 finding, live-confirmed: the script was completely
+    # absent from the rendered page, so no click-to-place widget anywhere
+    # in the app could ever have worked, regardless of the clickmode fix
+    # in strike_zone.py/field_location.py made the same day).
+    ui.tags.script(click_widgets.CLICK_CAPTURE_JS),
     ui.output_ui("shell"),
     title="Gorilla Baseball Operations",
     style="padding:0;",
