@@ -145,22 +145,58 @@ def bullpen_ids_for_player(db, player_id, date_from=None, date_to=None):
     return [bid for (bid,) in query.all()]
 
 
-def team_stuff_plus_baselines(db):
-    """{pitch_type_label: baseline} across EVERY pitcher's RapsodoPitch
-    rows team-wide (bullpen + game-linked alike, all-time) -- same
-    'the team' population convention as command_metrics.py's Command+:
-    not scoped to the viewing page's own filters, a stable roster-wide
-    reference every profile page's Stuff+ scores are measured against.
-    Groups by canonical pitch type first since
-    pitch_grading.team_stuff_plus_baseline expects one type's pitches
-    at a time (see its own docstring)."""
-    from analytics.pitch_grading import team_stuff_plus_baseline
-    rows = db.query(RapsodoPitch).options(joinedload(RapsodoPitch.pitch_type)).filter(RapsodoPitch.pitch_type_id.isnot(None)).all()
+def team_stuff_plus_training_pitches(db):
+    """{pitch_type_label: [(RapsodoPitch, run_value), ...]} -- every
+    RapsodoPitch reading team-wide that IS linked to a real game outcome
+    (RapsodoPitch.game_pitch_id set, joined GamePitch.run_value not
+    null), all-time, grouped by canonical pitch type. This is the
+    TRAINING population for pitch_grading.fit_stuff_plus_model -- a
+    bullpen-only reading has no run_value and is correctly excluded here
+    (it can still be SCORED once a model exists, just never used to fit
+    one -- see that function's docstring). Same team-wide/all-time
+    population convention as team_location_plus_baseline below, which
+    Stuff+'s training population deliberately mirrors now that both are
+    genuinely outcome-based."""
+    rows = (
+        db.query(RapsodoPitch, GamePitch.run_value)
+        .join(GamePitch, RapsodoPitch.game_pitch_id == GamePitch.game_pitch_id)
+        .options(joinedload(RapsodoPitch.pitch_type))
+        .filter(RapsodoPitch.pitch_type_id.isnot(None))
+        .filter(GamePitch.run_value.isnot(None))
+        .all()
+    )
     by_type = {}
-    for r in rows:
-        label = r.pitch_type.type_name if r.pitch_type else "Unspecified"
-        by_type.setdefault(label, []).append(r)
-    return {label: team_stuff_plus_baseline(pitches) for label, pitches in by_type.items()}
+    for rapsodo_pitch, run_value in rows:
+        label = rapsodo_pitch.pitch_type.type_name if rapsodo_pitch.pitch_type else "Unspecified"
+        by_type.setdefault(label, []).append((rapsodo_pitch, run_value))
+    return by_type
+
+
+def team_stuff_plus_baselines(db):
+    """{pitch_type_label: model} across every canonical pitch type that
+    has enough real-game training data -- see
+    pitch_grading.fit_stuff_plus_model / MIN_STUFF_TRAINING_PITCHES. A
+    type with too little real-game data simply doesn't appear in the
+    returned dict; callers already treat a missing key as "no model" via
+    `.get(label)` (not `.get(label, {})` -- pitch_grading.stuff_plus
+    expects None, not an empty dict, when nothing was fit yet).
+
+    Aug 31 2026 methodology fix (Ryker's call): this used to build a
+    plain mean/stdev baseline off EVERY RapsodoPitch team-wide, bullpen
+    and game-linked pooled together with no outcome involved at all --
+    see pitch_grading.py's module docstring for the full reasoning on
+    why that wasn't actually "Stuff+" in any trained sense. Training now
+    comes only from team_stuff_plus_training_pitches above (real-game,
+    run-value-bearing pitches); the fitted model this returns can still
+    score ANY pitch of that type, bullpen included, once it exists."""
+    from analytics.pitch_grading import fit_stuff_plus_model
+    training_by_type = team_stuff_plus_training_pitches(db)
+    models = {}
+    for label, pairs in training_by_type.items():
+        model = fit_stuff_plus_model(pairs)
+        if model is not None:
+            models[label] = model
+    return models
 
 
 def team_location_plus_baseline(db):

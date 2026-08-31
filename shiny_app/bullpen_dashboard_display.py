@@ -641,13 +641,15 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
                 releases.append({
                     "label": label,
                     "color": color_for_pitch_label(label),
-                    # pitcher_release_svg wants catcher-view side_ft (+ =
-                    # catcher's right); GBO's release_side is raw Rapsodo
-                    # (pitcher-view, + = pitcher's own right/throwing
-                    # side -- see rapsodo_conventions.py), so negate here,
-                    # same sign flip already established for plate_x
-                    # elsewhere (Aug 31 2026 convention fix).
-                    "side_ft": -avg_s,
+                    # pitcher_release_svg now renders BACK VIEW (from
+                    # behind the pitcher looking toward the plate --
+                    # Ryker's call, Aug 31 2026), where + = pitcher's own
+                    # right/throwing side -- exactly Rapsodo's native raw
+                    # release_side convention (see rapsodo_conventions.py),
+                    # so no sign flip is needed here (unlike plate_x,
+                    # which stays flipped for the catcher-view convention
+                    # used elsewhere).
+                    "side_ft": avg_s,
                     "height_ft": avg_h,
                     "count": len(group),
                 })

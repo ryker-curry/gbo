@@ -635,7 +635,20 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator { filter: inv
 .gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-plot-output,
 .gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output,
 .gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .bslib-grid,
-.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-input-container:has(textarea) {
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-input-container:has(textarea),
+/* Shiny wraps every @render.ui/ui.output_ui() block in a
+   .shiny-html-output element that computes to display:contents -- a
+   real DOM node, so it breaks the ">" direct-child match above, and
+   grid-column has no effect on the wrapper itself (spec: a
+   display:contents box takes no part in grid placement, only its
+   children do). Reach through it explicitly so a chart/graphic
+   rendered via output_ui still gets rescued from the two-up grid. */
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > svg,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > img,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > .shiny-plot-output,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > .bslib-grid,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > table,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > .table-responsive {
   grid-column: 1 / -1;
 }
 .gbo-content .shiny-html-output:has(.shiny-input-container) .btn-primary { margin-top: .55rem; }

@@ -225,16 +225,19 @@ def pitcher_release_svg(releases, throws="R", height_in=73,
                         show_legend=True, jersey_number=None):
     if not releases:
         return (f'<svg viewBox="0 0 {W} {H}" '
+                f'style="width:100%;height:auto;display:block;max-width:340px;margin:0 auto;" '
                 f'xmlns="http://www.w3.org/2000/svg"></svg>')
     releases = sorted(releases, key=lambda r: -(r.get("count") or 0))
     primary = releases[0]
-    # FRONT VIEW (catcher's perspective): a RIGHT-handed pitcher's
-    # throwing arm appears on the catcher's LEFT (-x); a lefty's on the
-    # right (+x). The traced photo is a LHP, so lefties render natively
-    # and righties mirror. side_ft is catcher-view too (+ = catcher's
-    # right); if a Rapsodo export uses the pitcher's view, negate
-    # side_ft when building `releases`.
-    sign = -1 if (throws or "R").upper() == "R" else 1
+    # BACK VIEW (viewed from behind the pitcher, looking toward home
+    # plate -- Ryker's call, Aug 31 2026): a RIGHT-handed pitcher's
+    # throwing arm appears on the viewer's RIGHT (+x); a lefty's on the
+    # LEFT (-x). The traced photo is a LHP, so lefties render natively
+    # and righties mirror. side_ft is back-view too (+ = pitcher's own
+    # right/throwing side), which matches Rapsodo's native raw
+    # release_side convention directly -- no negation needed when
+    # building `releases` (see rapsodo_conventions.py).
+    sign = 1 if (throws or "R").upper() == "R" else -1
 
     uid = "pg%05d" % (abs(hash((throws, int(height_in or 73),
                                 int(primary["side_ft"] * 10),
@@ -429,6 +432,7 @@ def pitcher_release_svg(releases, throws="R", height_in=73,
             connector = hand_pt
     d = []
     d.append(f'<svg viewBox="0 0 {W} {H}" '
+             f'style="width:100%;height:auto;display:block;max-width:340px;margin:0 auto;" '
              f'xmlns="http://www.w3.org/2000/svg" role="img" '
              f'aria-label="Release point illustration">')
     d.append(

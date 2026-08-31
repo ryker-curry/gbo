@@ -32,14 +32,29 @@ own average," never "better or worse than a real MLB Stuff+/Pitching+
 number." The Lab page's footer badge should always make that framing
 explicit, same as Command+ already does.
 
+Aug 31 2026 methodology fix (Ryker's call): Stuff+ used to be a fixed
+equal-weighted composite -- never trained on anything, so it silently
+scored bullpen and game pitches identically with no connection to
+run value at all. That's now corrected: Stuff+'s weights are fit by
+regressing run_value on the physical features, same "team-relative
+z-score, no league benchmark" spirit as everything else in this
+module, just scaled down from a decision tree to a linear fit given
+GBO's data volume (see fit_stuff_plus_model's docstring for the full
+reasoning). Training a type's weights needs real-game pitches (a
+run_value to learn from); SCORING a pitch with an already-fitted model
+needs only its physical readings, so a bullpen pitch can still get a
+Stuff+ number once its pitch type has enough real-game data to have
+been fit -- until then, that type's Stuff+ is None (not a guess) for
+every pitch of that type, bullpen or game alike.
+
 V1 simplifications, called out explicitly rather than silently guessed
 at (see plan doc sections 4 and 8 for the open items these map to):
-  - Stuff+ uses an equal-weighted-by-default composite of velocity,
-    |induced vertical break|, |horizontal break|, and total spin,
-    per canonical pitch type -- not the fastball-differential-weighted
-    design the plan doc sketched. STUFF_PLUS_WEIGHTS below is the one
-    place to tune this once real scores exist to sanity-check against
-    what Ryker's eyes tell him about the staff.
+  - Stuff+'s regression is a simple per-type linear fit, not the
+    fastball-differential-weighted design the plan doc sketched, and
+    nowhere near the real FanGraphs decision-tree model -- GBO's pitcher
+    count can't support anything more complex without overfitting to
+    this specific roster. Revisit once there's a full season or more of
+    real-game Rapsodo data to check how well this actually predicts.
   - Location+ buckets by (attack zone tier x pitch type) only -- it
     skips the count-group split the plan doc flagged as a possible
     refinement, to avoid spreading GBO's early game-pitch volume across
@@ -55,6 +70,8 @@ at (see plan doc sections 4 and 8 for the open items these map to):
 
 from statistics import mean, stdev
 
+import numpy as np
+
 from strike_zone import classify_attack_zone
 
 # Same floor as command_metrics.py's MIN_BASELINE_PITCHES, same caveat:
@@ -62,29 +79,32 @@ from strike_zone import classify_attack_zone
 # pitch logged and isn't trustworthy yet. 20 is a starting floor, not a
 # statistically rigorous minimum -- easy to raise once GBO has more of a
 # season's worth of data to see how noisy these scores actually are
-# below that in practice.
+# below that in practice. Used by Location+ and by arsenal_summary's
+# per-pitcher "Reliable" flag -- NOT by Stuff+ anymore, which fits real
+# parameters and needs a bigger floor (see MIN_STUFF_TRAINING_PITCHES).
 MIN_BASELINE_PITCHES = 20
 
+# Fitting Stuff+'s regression needs enough RUN-VALUE-BEARING (real-game)
+# pitches to trust 5 fitted parameters (4 features + intercept) --
+# roughly 8-10 observations per parameter is a standard rule of thumb
+# for a linear fit, rounded up to a clean number here. This is a team-
+# wide, PER PITCH TYPE floor (see fit_stuff_plus_model) -- distinct from
+# MIN_BASELINE_PITCHES above, which just gates a plain mean/stdev.
+MIN_STUFF_TRAINING_PITCHES = 40
+
 
 # ---------------------------------------------------------------------------
-# Stuff+ -- physical characteristics only (no location, no outcome, no
-# count -- matches the real Stuff+ definition).
+# Stuff+ -- physical characteristics only (no location, no count -- matches
+# the real Stuff+ definition). See module docstring for the Aug 31 2026
+# methodology fix: weights are fit from real run value, not assumed equal.
 # ---------------------------------------------------------------------------
 
-# Equal-weighted V1 default (see module docstring). Kept as a plain dict
-# rather than a hardcoded formula so it's the one obvious place to change
-# once real Stuff+ scores exist to tune against.
-STUFF_PLUS_WEIGHTS = {
-    "velocity": 0.25,
-    "vb_spin": 0.25,
-    "hb_spin": 0.25,
-    "total_spin": 0.25,
-}
+STUFF_PLUS_FEATURE_NAMES = ("velocity", "vb_spin", "hb_spin", "total_spin")
 
 
 def _stuff_plus_features(rapsodo_pitch):
     """Extract Stuff+'s physical inputs from one RapsodoPitch, in the form
-    used consistently for BOTH baselining and scoring. vb_spin/hb_spin
+    used consistently for BOTH fitting and scoring. vb_spin/hb_spin
     (induced vertical/horizontal break) are taken as magnitude (abs) --
     raw sign encodes break DIRECTION (arm-side vs. glove-side, rise vs.
     drop), which varies by pitch type and pitcher handedness and isn't
@@ -100,55 +120,128 @@ def _stuff_plus_features(rapsodo_pitch):
     }
 
 
-def team_stuff_plus_baseline(rapsodo_pitches_for_type):
-    """Mean+stdev of each Stuff+ input feature, across every already-loaded
-    RapsodoPitch of ONE canonical pitch type -- caller groups by
-    pitch_type_id/normalized name before calling (a slider is judged
-    against other sliders, not fastballs -- see plan doc's Stuff+
-    section). Same caller-owns-the-query convention as
-    command_metrics.py's team_command_plus_baseline.
+def fit_stuff_plus_model(training_pairs):
+    """training_pairs: list of (RapsodoPitch, run_value) for ONE
+    canonical pitch type -- caller groups by pitch_type_id/normalized
+    name first (same convention every baseline in this module uses) and
+    supplies ONLY pitches that have a real run_value, i.e. a RapsodoPitch
+    linked to a GamePitch whose run_value is set (see
+    profile_queries.team_stuff_plus_training_pitches). A bullpen-only
+    reading has no run_value to learn from and must never appear here --
+    that's what makes this "trained to RV" rather than the old fixed
+    equal-weighted guess.
 
-    Returns {feature_name: (mean, stdev, n)}. A feature with fewer than 2
-    pitches carrying a value gets (None, None, n) -- can't take a stdev
-    of fewer than 2 points."""
-    values_by_feature = {}
-    for pitch in rapsodo_pitches_for_type:
-        for name, value in _stuff_plus_features(pitch).items():
-            values_by_feature.setdefault(name, []).append(value)
+    Fits a linear regression of run_value on this type's 4 standardized
+    physical features via ordinary least squares (numpy.linalg.lstsq).
+    A full decision-tree model (what real FanGraphs Stuff+ uses) needs
+    far more distinct pitchers than GBO has without just memorizing this
+    roster; a simple per-type linear fit is the most that's honestly
+    supportable at this sample size (see module docstring). Training
+    rows missing ANY of the 4 features are dropped (listwise) --
+    imputing a value into an already-small sample would just be
+    inventing data.
 
-    baseline = {}
-    for name, raw_values in values_by_feature.items():
-        vals = [v for v in raw_values if v is not None]
-        n = len(vals)
-        baseline[name] = (round(mean(vals), 3), round(stdev(vals), 3), n) if n >= 2 else (None, None, n)
-    return baseline
+    Lower run_value is better for the pitcher (same sign convention as
+    location_plus), so every fitted coefficient is NEGATED before being
+    stored as that feature's "quality weight" -- a positive quality
+    weight means more of that feature predicts BETTER outcomes, matching
+    the "higher composite = better" convention every other score in this
+    module uses.
+
+    Returns None if fewer than MIN_STUFF_TRAINING_PITCHES complete rows
+    are available -- not enough to trust 5 fitted parameters yet.
+    Otherwise a model dict:
+        {"feature_baseline": {feature: (mean, stdev)},
+         "quality_weights": {feature: float},
+         "prediction_baseline": (mean, stdev),
+         "n": int}
+    feature_baseline is this type's training-population mean/stdev per
+    feature (needed to standardize any future pitch, bullpen or game,
+    the same way the training data was standardized). prediction_baseline
+    is the mean/stdev of the fitted composite ACROSS the training
+    population -- it's what lets a raw composite be re-centered so 100 =
+    this type's own team average and 10 points = 1 SD, same scale as
+    every other score in this module."""
+    rows = []
+    for rapsodo_pitch, run_value in training_pairs:
+        if run_value is None:
+            continue
+        features = _stuff_plus_features(rapsodo_pitch)
+        if any(features[name] is None for name in STUFF_PLUS_FEATURE_NAMES):
+            continue
+        rows.append((features, float(run_value)))
+
+    n = len(rows)
+    if n < MIN_STUFF_TRAINING_PITCHES:
+        return None
+
+    feature_baseline = {}
+    for name in STUFF_PLUS_FEATURE_NAMES:
+        vals = [f[name] for f, _rv in rows]
+        # `or 1e-9` guards a (practically impossible, for continuous
+        # physical readings) exactly-zero-variance feature from a
+        # division-by-zero -- when every value is identical, (value -
+        # mean) is also 0 for every row, so the guard changes nothing.
+        feature_baseline[name] = (mean(vals), stdev(vals) or 1e-9)
+
+    x = np.ones((n, len(STUFF_PLUS_FEATURE_NAMES) + 1))
+    for j, name in enumerate(STUFF_PLUS_FEATURE_NAMES):
+        b_mean, b_sd = feature_baseline[name]
+        x[:, j + 1] = [(f[name] - b_mean) / b_sd for f, _rv in rows]
+    y = np.array([rv for _f, rv in rows])
+
+    coeffs, *_rest = np.linalg.lstsq(x, y, rcond=None)
+    quality_weights = {name: -float(coeffs[j + 1]) for j, name in enumerate(STUFF_PLUS_FEATURE_NAMES)}
+
+    composites = [
+        sum(quality_weights[name] * (f[name] - feature_baseline[name][0]) / feature_baseline[name][1]
+            for name in STUFF_PLUS_FEATURE_NAMES)
+        for f, _rv in rows
+    ]
+    prediction_baseline = (mean(composites), stdev(composites))
+
+    return {
+        "feature_baseline": feature_baseline,
+        "quality_weights": quality_weights,
+        "prediction_baseline": prediction_baseline,
+        "n": n,
+    }
 
 
-def stuff_plus(rapsodo_pitch, baseline):
-    """One RapsodoPitch -> Stuff+ against `baseline` (see
-    team_stuff_plus_baseline) -- baseline MUST be for the same canonical
-    pitch type as this pitch; that scoping is the caller's responsibility,
-    same as command_plus's baseline-scoping convention.
+def stuff_plus(rapsodo_pitch, model):
+    """One RapsodoPitch -- bullpen OR game-linked, scoring never needs an
+    outcome, only the fitted model does -- against a fitted `model` (see
+    fit_stuff_plus_model) for the SAME canonical pitch type; that scoping
+    is the caller's responsibility, same as every other grade in this
+    module. Returns None if no model exists yet for this pitch type (not
+    enough real-game data to fit it -- see MIN_STUFF_TRAINING_PITCHES) or
+    this pitch has none of the features the model needs.
 
-    Weighted composite of per-feature z-scores (STUFF_PLUS_WEIGHTS),
-    renormalized over only the features that have both a value on this
-    pitch AND a usable (n>=2) baseline entry -- a missing Rapsodo field
-    (e.g. spin data dropped for one pitch) reduces the composite's inputs
-    rather than zeroing out the whole score. Returns None if no feature
-    qualifies at all."""
+    Composite is the raw weighted sum of standardized features (a
+    feature this pitch is missing simply drops out of the sum, same as
+    assuming that feature sits at its own team average -- there's no
+    dividing-by-partial-weight renormalization here, unlike the old
+    equal-weights version, since these weights no longer sum to 1 and
+    dividing by whatever subset is present would shift the scale
+    inconsistently pitch to pitch)."""
+    if model is None:
+        return None
     features = _stuff_plus_features(rapsodo_pitch)
-    weighted_sum, weight_total = 0.0, 0.0
-    for name, weight in STUFF_PLUS_WEIGHTS.items():
+    composite = 0.0
+    used_any = False
+    for name, weight in model["quality_weights"].items():
         value = features.get(name)
-        b_mean, b_sd, _b_n = baseline.get(name, (None, None, 0))
+        b_mean, b_sd = model["feature_baseline"].get(name, (None, None))
         if value is None or b_mean is None or not b_sd:
             continue
-        z = (value - b_mean) / b_sd
-        weighted_sum += z * weight
-        weight_total += weight
-    if weight_total == 0:
+        composite += weight * (value - b_mean) / b_sd
+        used_any = True
+    if not used_any:
         return None
-    return round(100 + 10 * (weighted_sum / weight_total), 1)
+    p_mean, p_sd = model["prediction_baseline"]
+    if not p_sd:
+        return None
+    return round(100 + 10 * (composite - p_mean) / p_sd, 1)
 
 
 # ---------------------------------------------------------------------------
