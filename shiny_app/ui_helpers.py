@@ -14,6 +14,8 @@ gets a cream-plus-glow treatment there instead, and literal crimson in
 light mode, via the --gbo-accent-ink token).
 """
 
+from statistics import NormalDist
+
 from shiny import ui
 
 import theme
@@ -128,6 +130,87 @@ def score_ring(value, label: str, status: str = None, sublabel: str = None, size
         ui.div(label, class_="gbo-ring-label"),
         class_="gbo-ring-col",
     )
+
+
+def mean100_ring_status(label, value):
+    """V1 color cut points for the mean-100/10-per-SD grade scale
+    (Stuff+/Location+/Pitching+/Command+/Performance) -- NOT
+    score_ring's/bucket_display.py's 0-100 percentile cut points.
+    >=110 (roughly 1+ SD above the team) reads good, <90 (1+ SD below)
+    flags, in between stays the neutral default look. Unvalidated V1
+    guess, same as every other new cut point in this build -- revisit
+    once real scores exist to check against Ryker's own read of the
+    staff. Shared by pitcher_profile.py and hitter_profile.py (moved
+    here from pitcher_profile.py's original _grade_ring_status so
+    hitter_profile.py's new Performance ring can reuse it without a
+    cross-module import)."""
+    if value is None:
+        return None
+    if value >= 110:
+        return "good"
+    if value < 90:
+        return "flag"
+    return None
+
+
+def mean100_to_percentile(value):
+    """Approximate 0-100 percentile for a mean-100/10-per-SD grade
+    (Stuff+/Location+/Command+/Pitching+/Performance -- analytics/
+    command_metrics.py, pitch_grading.py, performance_score.py), via
+    the standard normal CDF on z = (value-100)/10. This assumes the
+    underlying population is roughly normal around the team mean --
+    the same unvalidated V1 assumption every other cut point in this
+    build makes -- and is NOT a true rank-based percentile against the
+    live roster (that would need the caller to pass the whole
+    population, not one player's value). Revisit once real
+    distributions exist to check against normality. None in, None out."""
+    if value is None:
+        return None
+    z = (float(value) - 100) / 10
+    return round(NormalDist().cdf(z) * 100)
+
+
+def render_percentile_bars(specs):
+    """Horizontal percentile bar per (label, value) -- Ryker's Aug 31
+    2026 reference is mlbpitchprofiler.com's pitcher-page rows (a
+    colored bar + a circular percentile badge riding the fill edge +
+    the raw stat printed alongside). value is a mean-100/10-per-SD
+    grade, same input shape render_mean100_rings used to take: the
+    badge shows mean100_to_percentile(value), the bar fills to that
+    same position, and the raw grade itself -- not the percentile --
+    prints in the right-hand column, mirroring that site's own layout
+    (its percentile badge sits beside the player's actual "+" stat,
+    not a second percentile). Colored via the same good/flag status
+    tiers mean100_ring_status already defines for the ring family,
+    rather than adopting that site's continuous red-to-blue scale --
+    keeps this component inside GBO's existing traffic-light color
+    language instead of a one-off palette. specs: list of (label,
+    value) tuples, value may be None ('not enough baseline yet')."""
+    if not any(v is not None for _, v in specs):
+        return None
+    rows = []
+    for label, value in specs:
+        if value is None:
+            rows.append(ui.div(
+                ui.div(label, class_="gbo-pctbar-label"),
+                ui.div("Not enough data yet", class_="gbo-pctbar-empty"),
+                class_="gbo-pctbar-row",
+            ))
+            continue
+        pct = mean100_to_percentile(value)
+        status = mean100_ring_status(label, value)
+        cls = f" {status}" if status else ""
+        rows.append(ui.div(
+            ui.div(label, class_="gbo-pctbar-label"),
+            ui.div(
+                ui.div(class_=f"gbo-pctbar-fill{cls}", style=f"width:{pct}%"),
+                ui.div(str(pct), class_=f"gbo-pctbar-badge{cls}", style=f"left:{pct}%"),
+                class_="gbo-pctbar-track",
+            ),
+            ui.div(f"{value:.0f}", class_="gbo-pctbar-raw"),
+            class_="gbo-pctbar-row",
+        ))
+    return ui.div(*rows, class_="gbo-pctbar-group")
 
 
 def kpi_tile(label: str, value, unit: str = None, delta: str = None, delta_positive=None, status: str = None):

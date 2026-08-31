@@ -185,3 +185,102 @@ def team_location_plus_baseline(db):
         .all()
     )
     return _baseline(pitches)
+
+
+def team_pitching_lines(db, date_from=None, date_to=None):
+    """List of per-pitcher line dicts (one per pitcher who threw at
+    least one pitch in this population), each a
+    game_stats.compute_pitching_line() dict merged with a "CSW %" key
+    (analytics.performance_score.csw_pct) -- the query-layer input
+    analytics.performance_score.team_pitcher_results_baseline() expects.
+    Same team population union as team_location_plus_baseline above
+    (real Squad-A outings + intrasquad Squad-B reps, external
+    opponents' own pitchers excluded), grouped by whichever id field is
+    actually OUR pitcher on each row (our_player_id when we're pitching,
+    opponent_our_player_id when we're the intrasquad 'opponent').
+
+    Unlike team_stuff_plus_baselines/team_location_plus_baseline above
+    (deliberately all-time, a stable roster-wide reference for a
+    per-pitch grade), date_from/date_to default to None (all-time) but
+    are meant to be passed -- Ryker's Aug 31 2026 call: Results/
+    Performance is built from box-score outcomes (FIP, WHIP, wOBA...),
+    which mix fall and spring ball into a meaningless number if pooled
+    together the way a release-point grade can tolerate. Callers
+    (pitcher_profile.py's pp_body) pass the page's own date filter so
+    the team baseline and the one pitcher's own line it's compared
+    against cover the SAME window -- a fall-only filter yields a fall
+    Performance score, a spring-only filter a separate spring one."""
+    from game_stats import compute_pitching_line
+    from analytics.performance_score import csw_pct
+    query = (
+        db.query(GamePitch)
+        .join(Game, GamePitch.game_id == Game.game_id)
+        .options(joinedload(GamePitch.pitch_type), joinedload(GamePitch.game))
+        .filter(
+            (GamePitch.is_our_team_batting.is_(False))
+            | ((GamePitch.is_our_team_batting.is_(True)) & (GamePitch.opponent_our_player_id.isnot(None)))
+        )
+    )
+    if date_from is not None:
+        query = query.filter(Game.game_date >= date_from)
+    if date_to is not None:
+        query = query.filter(Game.game_date <= date_to)
+    pitches = query.all()
+    by_player = {}
+    for p in pitches:
+        pid = p.opponent_our_player_id if p.is_our_team_batting else p.our_player_id
+        if pid is None:
+            continue
+        by_player.setdefault(pid, []).append(p)
+    lines = []
+    for pid, ps in by_player.items():
+        line = compute_pitching_line(ps)
+        line["CSW %"] = csw_pct(ps)
+        lines.append(line)
+    return lines
+
+
+def team_hitting_lines(db, date_from=None, date_to=None):
+    """List of per-hitter line dicts (one per hitter with at least one
+    plate-appearance pitch in this population), each a
+    game_stats.compute_batting_line() dict merged with
+    plate_discipline.compute_hitter_discipline()'s "Chase %"/"Whiff %"/
+    "Zone Swing %" for the same pitches -- the query-layer input
+    analytics.performance_score.team_hitter_results_baseline() expects.
+    Mirrors team_pitching_lines' population/grouping logic (and its
+    same date_from/date_to fall-vs-spring reasoning -- see that
+    docstring), on the batting side of the same union
+    _base_batting_query uses per-player (our_player_id when we're
+    batting, opponent_our_player_id when we're the intrasquad
+    'opponent')."""
+    from game_stats import compute_batting_line
+    from plate_discipline import compute_hitter_discipline
+    query = (
+        db.query(GamePitch)
+        .join(Game, GamePitch.game_id == Game.game_id)
+        .options(joinedload(GamePitch.pitch_type), joinedload(GamePitch.game))
+        .filter(
+            (GamePitch.is_our_team_batting.is_(True))
+            | ((GamePitch.is_our_team_batting.is_(False)) & (GamePitch.opponent_our_player_id.isnot(None)))
+        )
+    )
+    if date_from is not None:
+        query = query.filter(Game.game_date >= date_from)
+    if date_to is not None:
+        query = query.filter(Game.game_date <= date_to)
+    pitches = query.all()
+    by_player = {}
+    for p in pitches:
+        pid = p.opponent_our_player_id if not p.is_our_team_batting else p.our_player_id
+        if pid is None:
+            continue
+        by_player.setdefault(pid, []).append(p)
+    lines = []
+    for pid, ps in by_player.items():
+        line = compute_batting_line(ps)
+        discipline = compute_hitter_discipline(ps)
+        line["Chase %"] = discipline["Chase %"]
+        line["Whiff %"] = discipline["Whiff %"]
+        line["Zone Swing %"] = discipline["Zone Swing %"]
+        lines.append(line)
+    return lines

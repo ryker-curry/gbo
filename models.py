@@ -1407,6 +1407,21 @@ class GamePitch(Base):
     outs_after = Column(Integer, nullable=True)
     bases_after = Column(String(3), nullable=True)
     runs_scored_on_play = Column(Integer, default=0, nullable=False)
+    # Of runs_scored_on_play, how many were UNEARNED -- manual per-play
+    # tagging (Ryker's explicit call, Aug 31 2026, over trying to derive
+    # this automatically: real earned-run scoring means reconstructing
+    # the inning as if no error had happened, a genuine judgment call
+    # even for human official scorers, not something derivable from
+    # pitch-by-pitch data alone -- same "deliberately not a fully
+    # automated rules engine" philosophy as this class's own docstring
+    # above already states for base/out state). Defaults to 0, i.e. "all
+    # earned" -- the common case -- and the coach bumps it up live only
+    # when an error (ab_outcome == "E" on this or an earlier pitch of
+    # the inning, a dropped third strike, etc.) caused a run that
+    # wouldn't have scored on clean defense. Always <= runs_scored_on_play
+    # (enforced at entry in game_tracking.py, not at the DB level).
+    # earned_runs_on_play property below is the derived complement.
+    unearned_runs_on_play = Column(Integer, default=0, nullable=False)
 
     # Run Expectancy / Run Value -- computed from RunExpectancy at save
     # time using Ryker's own table: re_before = lookup(outs_before,
@@ -1429,6 +1444,15 @@ class GamePitch(Base):
     pitch_type = relationship("PitchType")
     opponent_player = relationship("OpponentPlayer")
     batting_slot = relationship("GameLineupSlot", foreign_keys=[batting_slot_id])
+
+    @property
+    def earned_runs_on_play(self):
+        """Derived complement of unearned_runs_on_play -- never stored
+        separately so the two can't drift. Clamped at 0 as a defensive
+        floor only (unearned_runs_on_play should never legitimately
+        exceed runs_scored_on_play; game_tracking.py's entry form
+        enforces that at save time)."""
+        return max(0, (self.runs_scored_on_play or 0) - (self.unearned_runs_on_play or 0))
 
 
 class GameRunnerEvent(Base):
