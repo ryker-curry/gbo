@@ -81,7 +81,7 @@ def _pitch_type_breakdown_with_stuff(pitches_subset, rap_by_gp, stuff_baselines)
         if rap is None:
             continue
         label = p.pitch_type.type_name
-        s_val = stuff_plus(rap, stuff_baselines.get(label, {}))
+        s_val = stuff_plus(rap, stuff_baselines.get(label))
         if s_val is None:
             continue
         pitch_type_grades.setdefault(label, {"n": 0, "stuff_plus": []})

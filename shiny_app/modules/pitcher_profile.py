@@ -320,7 +320,7 @@ def pitcher_profile_server(input, output, session, app_state):
                 usage_counts[label] = usage_counts.get(label, 0) + 1
 
                 rap = rap_by_gp.get(p.game_pitch_id)
-                s_val = stuff_plus(rap, stuff_baselines.get(label, {})) if rap is not None else None
+                s_val = stuff_plus(rap, stuff_baselines.get(label)) if rap is not None else None
                 l_val = location_plus(p, location_baseline)
                 pi_val = pitching_plus(s_val, l_val)
 
@@ -358,12 +358,20 @@ def pitcher_profile_server(input, output, session, app_state):
             # grade) or a spot in the game-pitch-driven Individual
             # Pitches table above (that table's backbone is GamePitch,
             # since "Result" only exists there -- see module docstring).
+            # Aug 31 2026: this is now correct by construction rather
+            # than a loose convenience -- stuff_baselines holds fitted
+            # MODELS (pitch_grading.fit_stuff_plus_model), trained only
+            # on real-game pitches, but a fitted model scores any pitch
+            # from just its physical readings. A bullpen rep here either
+            # gets a real, outcome-validated Stuff+ or (no model yet for
+            # that type) stuff_plus() itself returns None -- never a
+            # guess.
             linked_rapsodo_ids = {r.rapsodo_pitch_id for r in rap_by_gp.values()}
             for r in rapsodo_pitches:
                 if r.rapsodo_pitch_id in linked_rapsodo_ids:
                     continue
                 label = _type_label(r.pitch_type)
-                s_val = stuff_plus(r, stuff_baselines.get(label, {}))
+                s_val = stuff_plus(r, stuff_baselines.get(label))
                 if s_val is None:
                     continue
                 grp = pitch_type_grades.setdefault(label, {"n": 0, "stuff_plus": [], "location_plus": [], "pitching_plus": []})
@@ -537,7 +545,7 @@ def pitcher_profile_server(input, output, session, app_state):
             for p in game_pitches:
                 label = p.pitch_type.type_name if p.pitch_type else "Unspecified"
                 rap = rap_by_gp.get(p.game_pitch_id)
-                s_val = stuff_plus(rap, stuff_baselines.get(label, {})) if rap is not None else None
+                s_val = stuff_plus(rap, stuff_baselines.get(label)) if rap is not None else None
                 l_val = location_plus(p, location_baseline)
                 pi_val = pitching_plus(s_val, l_val)
                 if pi_val is not None and p.game is not None:
