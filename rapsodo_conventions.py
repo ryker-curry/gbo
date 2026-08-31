@@ -66,16 +66,38 @@ def strike_zone_inches_to_plate_feet(strike_zone_side_in, strike_zone_height_in)
         real pitch locations relative to the ground (zone bottom ~1.5 ft,
         top ~3.5 ft per strike_zone.py), not some other reference point.
 
-    What's NOT yet confirmed and should be spot-checked against real
-    video/known locations before this is treated as ground truth: the
-    LEFT/RIGHT sign convention (which side of plate_x is negative for a
-    given pitcher's arm side). The magnitude/vertical mapping checks out
-    arithmetically; the horizontal sign does not have an independent
-    confirmation yet.
+    LEFT/RIGHT sign convention -- confirmed by Ryker (Aug 31 2026):
+    Rapsodo's horizontal fields (Strike Zone Side, Release Side,
+    Horizontal Angle) are all reported from the pitcher's own body
+    frame -- positive = the pitcher's throwing/right side facing home
+    plate, negative = the pitcher's glove/left side (equivalently:
+    "arm side" for a RHP / "glove side" for a LHP is positive; "glove
+    side" for a RHP / "arm side" for a LHP is negative). Cross-checked
+    against 296 real bullpen RapsodoPitch rows: release_side is
+    reliably positive for every R-throws pitcher and reliably negative
+    for every L-throws pitcher regardless of pitch type, and
+    horizontal-break signs line up with known arm-side/glove-side
+    shapes per pitch type -- both consistent with this reading.
+
+    GBO's plate_x (Statcast/Trackman convention, see strike_zone.py) is
+    a FIXED field-relative axis instead: positive = first-base side
+    (catcher's right, facing the pitcher), negative = third-base side.
+    Facing the catcher, the pitcher's right side is the catcher's LEFT
+    (they face each other) -- i.e. third-base side -- so Rapsodo's
+    positive (pitcher's right) is GBO's NEGATIVE plate_x, for both a
+    RHP and a LHP alike. Hence the negation below.
+
+    `_pitch_level_haa` in analytics/bullpen_metrics.py negates
+    release_side/horizontal_angle the same way when combining them with
+    this function's now-GBO-convention plate_x_ft, so that computation
+    stays internally consistent -- see its comment. Nothing else that
+    reads RapsodoPitch.release_side or .horizontal_angle directly
+    (Release Point chart, arm-angle calc) needs to change, since those
+    never mix with plate_x.
 
     Returns (plate_x_ft, plate_z_ft), either of which may be None if the
     corresponding input is None.
     """
-    plate_x_ft = round(float(strike_zone_side_in) / 12, 3) if strike_zone_side_in is not None else None
+    plate_x_ft = round(-float(strike_zone_side_in) / 12, 3) if strike_zone_side_in is not None else None
     plate_z_ft = round(float(strike_zone_height_in) / 12, 3) if strike_zone_height_in is not None else None
     return plate_x_ft, plate_z_ft

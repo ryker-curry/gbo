@@ -38,7 +38,8 @@ from pitch_location_stats import compute_command_precision, compute_attack_zones
 # Command Precision/Attack Zones above are untouched, computed the way
 # they always have been -- this is a new, additional section, not a
 # replacement.
-from analytics import command_metrics
+from analytics import command_metrics, profile_queries
+from analytics.pitch_grading import stuff_plus, arsenal_summary, MIN_BASELINE_PITCHES
 from visualizations import command_charts
 
 import ui_helpers
@@ -46,6 +47,63 @@ import ui_helpers
 
 def _fmt_pct(value):
     return f"{value:.1f}%" if value is not None else "—"
+
+
+def _fmt_grade(value):
+    return f"{value:.1f}" if value is not None else "—"
+
+
+def _pitch_type_breakdown_with_stuff(pitches_subset, rap_by_gp, stuff_baselines):
+    """compute_pitch_type_breakdown()'s rows, with a "Stuff+"/"Stuff+
+    Reliable" column merged on by matching "Pitch Type" -- the Pitch
+    Frequency by handedness panel from STUFF-LOCATION-PITCHING-PLUS-
+    PLAN.md section 10, minus the Location+/Pitching+ half (Attack
+    Zones below already covers location; Stuff+ is what's genuinely
+    new here). rap_by_gp/stuff_baselines are precomputed once by the
+    caller (analytics/profile_queries.py, same team-wide baseline
+    Pitcher Profile's Arsenal table uses) and reused across all three
+    tabs rather than requeried per tab.
+
+    Reuses pitch_grading.arsenal_summary() for the per-type average +
+    MIN_BASELINE_PITCHES reliability flag instead of a second rollup
+    implementation -- same "n pitches of that type in THIS window"
+    floor as the Arsenal table, which for a single outing will read
+    "No" for most types (a start rarely throws 20+ of a given
+    secondary pitch) -- shown anyway, not hidden, same small-sample
+    philosophy as everywhere else this scale is used."""
+    base_rows = compute_pitch_type_breakdown(pitches_subset)
+
+    pitch_type_grades = {}
+    for p in pitches_subset:
+        if p.pitch_type is None:
+            continue
+        rap = rap_by_gp.get(p.game_pitch_id)
+        if rap is None:
+            continue
+        label = p.pitch_type.type_name
+        s_val = stuff_plus(rap, stuff_baselines.get(label, {}))
+        if s_val is None:
+            continue
+        pitch_type_grades.setdefault(label, {"n": 0, "stuff_plus": []})
+        pitch_type_grades[label]["n"] += 1
+        pitch_type_grades[label]["stuff_plus"].append(s_val)
+
+    stuff_by_label = {row["Pitch Type"]: (row["Stuff+"], row["Reliable"]) for row in arsenal_summary(pitch_type_grades)} if pitch_type_grades else {}
+    all_stuff_vals = [v for g in pitch_type_grades.values() for v in g["stuff_plus"]]
+    total_stuff = round(sum(all_stuff_vals) / len(all_stuff_vals), 1) if all_stuff_vals else None
+    total_reliable = len(all_stuff_vals) >= MIN_BASELINE_PITCHES
+
+    out_rows = []
+    for row in base_rows:
+        row = dict(row)
+        if row["Pitch Type"] == "Total":
+            s_val, reliable = total_stuff, total_reliable
+        else:
+            s_val, reliable = stuff_by_label.get(row["Pitch Type"], (None, False))
+        row["Stuff+"] = _fmt_grade(s_val)
+        row["Stuff+ Reliable"] = "Yes" if (s_val is not None and reliable) else "No"
+        out_rows.append(row)
+    return out_rows
 
 
 def _fmt(value, decimals=2):
@@ -205,12 +263,21 @@ def pitcher_game_report_server(input, output, session, app_state):
 
             sections.append(ui.hr())
             sections.append(ui.p(ui.strong("Pitch Type Breakdown")))
+            sections.append(ui.p(
+                f"Stuff+ is team-relative (100 = your staff's average, 10 points = 1 SD) and only populates for "
+                f"pitches with a Rapsodo reading linked to this outing. 'Reliable' needs at least "
+                f"{MIN_BASELINE_PITCHES} pitches of that type in this game -- shown either way, just flagged below "
+                f"that floor.",
+                class_="text-muted small",
+            ))
             vs_rhh = [p for p in pitches if p.opponent_hand == "R"]
             vs_lhh = [p for p in pitches if p.opponent_hand == "L"]
+            rap_by_gp = profile_queries.rapsodo_by_game_pitch_id(db, [p.game_pitch_id for p in pitches])
+            stuff_baselines = profile_queries.team_stuff_plus_baselines(db)
             sections.append(ui.navset_tab(
-                ui.nav_panel("All Batters", ui_helpers.render_dict_table(compute_pitch_type_breakdown(pitches))),
-                ui.nav_panel("vs RHH", ui_helpers.render_dict_table(compute_pitch_type_breakdown(vs_rhh)) if vs_rhh else ui.p("No pitches recorded against a right-handed batter yet.", class_="text-muted small")),
-                ui.nav_panel("vs LHH", ui_helpers.render_dict_table(compute_pitch_type_breakdown(vs_lhh)) if vs_lhh else ui.p("No pitches recorded against a left-handed batter yet.", class_="text-muted small")),
+                ui.nav_panel("All Batters", ui_helpers.render_dict_table(_pitch_type_breakdown_with_stuff(pitches, rap_by_gp, stuff_baselines))),
+                ui.nav_panel("vs RHH", ui_helpers.render_dict_table(_pitch_type_breakdown_with_stuff(vs_rhh, rap_by_gp, stuff_baselines)) if vs_rhh else ui.p("No pitches recorded against a right-handed batter yet.", class_="text-muted small")),
+                ui.nav_panel("vs LHH", ui_helpers.render_dict_table(_pitch_type_breakdown_with_stuff(vs_lhh, rap_by_gp, stuff_baselines)) if vs_lhh else ui.p("No pitches recorded against a left-handed batter yet.", class_="text-muted small")),
             ))
 
             sections.append(ui.hr())

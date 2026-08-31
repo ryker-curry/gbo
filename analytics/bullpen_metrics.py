@@ -91,9 +91,22 @@ def _pitch_level_haa(pitch):
     """Same as _pitch_level_vaa, horizontal plane. See
     calculate_estimated_haa's docstring for its lower-confidence caveat
     (Horizontal Angle's exact definition isn't independently confirmed
-    the way the vertical plate-height conversion is)."""
-    release_side = float(pitch.release_side) if pitch.release_side is not None else None
-    horizontal_angle = float(pitch.horizontal_angle) if pitch.horizontal_angle is not None else None
+    the way the vertical plate-height conversion is).
+
+    pitch.release_side/.horizontal_angle are stored in Rapsodo's raw
+    convention (positive = pitcher's right/arm-side-for-a-RHP -- see
+    rapsodo_conventions.strike_zone_inches_to_plate_feet's docstring),
+    while pitch.plate_x_ft has already been converted to GBO's fixed
+    plate_x convention (positive = first-base side). Negated here so
+    all three inputs share one frame before the parabola fit -- without
+    this, release/angle and plate-crossing position would disagree on
+    which side is positive and the fitted approach angle would come out
+    wrong. Only local to this calculation; the raw stored columns and
+    every other reader of release_side/horizontal_angle (Release Point
+    chart, arm-angle calc) are untouched and stay in Rapsodo's native
+    convention, which is what they want."""
+    release_side = -float(pitch.release_side) if pitch.release_side is not None else None
+    horizontal_angle = -float(pitch.horizontal_angle) if pitch.horizontal_angle is not None else None
     release_extension = float(pitch.release_extension) if pitch.release_extension is not None else None
     plate_side = float(pitch.plate_x_ft) if pitch.plate_x_ft is not None else None
     return calculate_estimated_haa(release_side, horizontal_angle, release_extension, plate_side)

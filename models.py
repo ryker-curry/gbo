@@ -823,6 +823,7 @@ class RapsodoImport(Base):
     import_id = Column(Integer, primary_key=True)
     player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)
     bullpen_id = Column(Integer, ForeignKey("bullpen_sessions.bullpen_id"), nullable=True)
+    game_id = Column(Integer, ForeignKey("games.game_id"), nullable=True)  # set instead of bullpen_id when this file was imported against an intrasquad game outing rather than a bullpen session -- mutually exclusive with bullpen_id, never both set
     original_filename = Column(String(255), nullable=False)
     file_hash = Column(String(64), nullable=False)  # sha256 hex digest of the raw uploaded bytes
     uploaded_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
@@ -835,6 +836,7 @@ class RapsodoImport(Base):
 
     player = relationship("Player")
     bullpen = relationship("BullpenSession", back_populates="rapsodo_imports")
+    game = relationship("Game")
     uploaded_by = relationship("User")
     pitches = relationship("RapsodoPitch", back_populates="import_record")
 
@@ -858,10 +860,11 @@ class RapsodoPitch(Base):
     __table_args__ = (UniqueConstraint("player_id", "rapsodo_unique_id", name="uq_rapsodo_pitch_player_unique_id"),)
 
     rapsodo_pitch_id = Column(Integer, primary_key=True)
-    bullpen_id = Column(Integer, ForeignKey("bullpen_sessions.bullpen_id"), nullable=False)
+    bullpen_id = Column(Integer, ForeignKey("bullpen_sessions.bullpen_id"), nullable=True)  # nullable Aug 2026: an intrasquad-game import (see RapsodoImport.game_id) has no bullpen session at all -- one or the other is set, matching the import it came from
     player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)
     import_id = Column(Integer, ForeignKey("rapsodo_imports.import_id"), nullable=False)
     pitch_number = Column(Integer, nullable=False)  # chronological within the session -- see docstring above
+    game_pitch_id = Column(Integer, ForeignKey("game_pitches.game_pitch_id"), nullable=True)  # set once this reading has been matched to the specific live-charted pitch it came from (intrasquad-game imports only) -- see services/rapsodo_import.py's matching logic
 
     # --- Raw layer: exactly as imported, never overwritten by recalculation ---
     rapsodo_pitch_id_raw = Column(String(50), nullable=True)  # CSV "Pitch ID"
@@ -911,6 +914,7 @@ class RapsodoPitch(Base):
     import_record = relationship("RapsodoImport", back_populates="pitches")
     pitch_type = relationship("PitchType")
     pitch_videos = relationship("BullpenPitchVideo", back_populates="pitch", cascade="all, delete-orphan")
+    game_pitch = relationship("GamePitch")
 
 
 class BullpenPitchVideo(Base):
