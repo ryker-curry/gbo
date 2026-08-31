@@ -65,6 +65,7 @@ from modules import (  # noqa: E402
     team_schedule, player_assignments, at_appointments, rapsodo_import,
     player_development, player_game_stats, player_hitting, player_video, player_bullpens,
     analytics, pitcher_game_report, hitter_game_report, bullpen_dashboard,
+    pitcher_profile, hitter_profile,
     user_management, staff_assignments, hitter_tracking,
     opponent_teams, bullpen_scripts, training_routines, idp, bullpen_tracking,
     game_tracking, command_tracker, roster, player_profile,
@@ -93,6 +94,8 @@ MODULE_UI = {
     "analytics": lambda: analytics.analytics_ui("analytics"),
     "pitcher_game_report": lambda: pitcher_game_report.pitcher_game_report_ui("pitcher_game_report"),
     "hitter_game_report": lambda: hitter_game_report.hitter_game_report_ui("hitter_game_report"),
+    "pitcher_profile": lambda: pitcher_profile.pitcher_profile_ui("pitcher_profile"),
+    "hitter_profile": lambda: hitter_profile.hitter_profile_ui("hitter_profile"),
     "bullpen_dashboard": lambda: bullpen_dashboard.bullpen_dashboard_ui("bullpen_dashboard"),
     "user_management": lambda: user_management.user_management_ui("user_management"),
     "staff_assignments": lambda: staff_assignments.staff_assignments_ui("staff_assignments"),
@@ -233,6 +236,8 @@ def server(input, output, session):
     analytics.analytics_server("analytics", app_state)
     pitcher_game_report.pitcher_game_report_server("pitcher_game_report", app_state)
     hitter_game_report.hitter_game_report_server("hitter_game_report", app_state)
+    pitcher_profile.pitcher_profile_server("pitcher_profile", app_state)
+    hitter_profile.hitter_profile_server("hitter_profile", app_state)
     bullpen_dashboard.bullpen_dashboard_server("bullpen_dashboard", app_state)
     user_management.user_management_server("user_management", app_state)
     staff_assignments.staff_assignments_server("staff_assignments", app_state)
@@ -484,13 +489,16 @@ def _account_not_set_up_ui():
 _NAV_GROUPS = [
     ("Overview", ["dashboard"]),
     ("Roster", ["roster", "player_profile", "players"]),
-    ("Development", ["assessments", "idp", "training_routines", "player_assignments", "team_schedule", "at_appointments"]),
-    ("Pitching", ["bullpen_dashboard", "bullpen_tracking", "bullpen_scripts", "rapsodo_import"]),
+    ("Development", ["assessments", "idp", "training_routines", "player_assignments", "team_schedule"]),
+    # at_appointments/bullpen_scripts intentionally omitted from every group
+    # below (Aug 31 2026 -- Ryker's call, kept in the codebase/MODULE_UI,
+    # just out of the visible sidebar) -- see nav.py's matching comments.
+    ("Pitching", ["bullpen_dashboard", "bullpen_tracking", "rapsodo_import"]),
     ("Hitting", ["hitter_tracking"]),
-    ("Games", ["game_tracking", "pitcher_game_report", "hitter_game_report", "analytics"]),
+    ("Games", ["game_tracking", "pitcher_game_report", "hitter_game_report", "analytics", "pitcher_profile", "hitter_profile"]),
     ("Scouting", ["opponent_teams"]),
     ("Admin", ["user_management", "staff_assignments", "video_import"]),
-    ("Me", ["player_profile", "player_schedule", "player_development", "player_stats", "player_game_stats", "player_hitting", "player_video", "player_bullpens"]),
+    ("Me", ["player_profile", "player_schedule", "player_development", "player_stats", "player_game_stats", "player_hitting", "player_video", "player_bullpens", "pitcher_profile", "hitter_profile"]),
 ]
 _NAV_LABELS = {
     "players": "Player setup", "roster": "Players", "idp": "Development plans", "rapsodo_import": "Import Rapsodo",
@@ -517,6 +525,8 @@ _ICONS = {
     "pitcher_game_report": '<path d="M5 4h14v16H5zM8 9h8M8 13h8M8 17h5"/>',
     "hitter_game_report": '<path d="M5 4h14v16H5zM8 9h8M8 13h8M8 17h5"/>',
     "analytics": '<path d="M3 17l6-6 4 4 8-8M14 7h7v7"/>',
+    "pitcher_profile": '<path d="M3 17l6-6 4 4 8-8M14 7h7v7"/><circle cx="12" cy="12" r="9"/>',
+    "hitter_profile": '<path d="M3 17l6-6 4 4 8-8M14 7h7v7"/><circle cx="12" cy="12" r="9"/>',
     "opponent_teams": '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
     "user_management": '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/>',
     "staff_assignments": '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>',

@@ -55,11 +55,9 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             NavPage("training_routines", "Training Routines", "activity"),
         ]
 
-        # AT Appointments isn't sports-science-relevant -- everyone else
-        # with Player Development access still sees it (same rule as
-        # the original: privacy-scoped inside the page itself, not here).
-        if role_name != "Sports Scientist":
-            pd_pages.append(NavPage("at_appointments", "Athletic Trainer Appointments", "hospital"))
+        # AT Appointments: kept in the codebase (Ryker doesn't expect it
+        # to see real use yet), deliberately left out of the sidebar
+        # -- Aug 31 2026 call, same treatment as Bullpen Scripts below.
 
         # Import Rapsodo Data / Bullpen Tracking / Bullpen Scripts /
         # Bullpen Dashboard are pitching-side tools -- hidden from
@@ -77,7 +75,9 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
         if show_bullpen_pages or role_name in ("Sports Scientist", "Data Analyst"):
             pd_pages.extend([
                 NavPage("bullpen_tracking", "Bullpen Tracking", "trophy"),
-                NavPage("bullpen_scripts", "Bullpen Scripts", "calendar-event"),
+                # Bullpen Scripts: kept in the codebase, deliberately left
+                # out of the sidebar (Aug 31 2026 call -- Ryker doesn't
+                # expect it to see real use yet).
                 NavPage("bullpen_dashboard", "Bullpen Dashboard", "bar-chart"),
                 NavPage("command_tracker", "Command Tracker", "crosshair"),
             ])
@@ -105,6 +105,15 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             NavPage("analytics", "Player Stats", "graph-up"),
             NavPage("pitcher_game_report", "Pitcher Game Report", "file-text"),
             NavPage("hitter_game_report", "Hitter Game Report", "trophy"),
+            # Filterable per-player deep dive (Aug 2026, Stat Lab plan) --
+            # Stuff+/Location+/Pitching+ grading, physical charts, Command
+            # Target Zones, all filterable by date range/pitch type/
+            # opponent scope, vs. Pitcher Game Report's single-outing
+            # snapshot above. Same key reused for the Player-facing 'My
+            # Pitcher/Hitter Profile' entries below -- one module,
+            # self-scoped by role, same pattern as player_profile.py.
+            NavPage("pitcher_profile", "Pitcher Profile", "graph-up-arrow"),
+            NavPage("hitter_profile", "Hitter Profile", "graph-up-arrow"),
         ]))
 
     # Video Coordinator -- deliberately its own small section rather than
@@ -145,8 +154,10 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
         # player's own is_pitcher flag (same as the original).
         if is_pitcher_player:
             my_dev_pages.append(NavPage("player_bullpens", "My Bullpens", "trophy"))
+            my_dev_pages.append(NavPage("pitcher_profile", "My Pitcher Profile", "graph-up-arrow"))
         else:
             my_dev_pages.append(NavPage("player_hitting", "My Hitting", "trophy"))
+            my_dev_pages.append(NavPage("hitter_profile", "My Hitter Profile", "graph-up-arrow"))
         sections.append(NavSection("My Development", my_dev_pages))
 
     return sections
