@@ -30,7 +30,7 @@ from database import get_session
 from models import Player, User, PitchType, StaffPlayerAssignment
 from game_stats import compute_batting_line, compute_batted_ball_profile
 from plate_discipline import compute_hitter_discipline, compute_zone_tier_discipline
-from analytics import profile_queries
+from analytics import performance_score, profile_queries
 from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_figure, CONTACT_QUALITY_SCORE
 
 import ui_helpers
@@ -173,6 +173,7 @@ def hitter_profile_server(input, output, session, app_state):
                 return ui_helpers.card(ui_helpers.empty_state(
                     "No pitches seen in this date range yet. Widen the filters, or check back once games are tracked."
                 ))
+            f = _current_filters()
 
             line = compute_batting_line(pitches)
             sections = [ui.h5(f"{player.first_name} {player.last_name}", class_="gbo-section-title")]
@@ -235,6 +236,42 @@ def hitter_profile_server(input, output, session, app_state):
                     f"({discipline['Located Pitches']} with a recorded location)",
                     class_="text-muted small",
                 ))
+
+                # --- Performance: results-based composite (Aug 31 2026
+                # design call with Ryker -- see analytics/
+                # performance_score.py's module docstring). Hitters
+                # don't get a Stuff+/Location+/Command+/Arsenal
+                # equivalent (pitcher-only, pitch-quality concepts) --
+                # this IS the whole Hitter Performance score, not a
+                # blend of several pieces the way pitcher Performance
+                # is. Gated on the same discipline["Pitches Seen"] > 0
+                # check as the section above, since Chase %/Whiff %/
+                # Zone Swing % come from `discipline`.
+                hitter_results_line = dict(line, **{
+                    "Chase %": discipline["Chase %"],
+                    "Whiff %": discipline["Whiff %"],
+                    "Zone Swing %": discipline["Zone Swing %"],
+                })
+                team_hitting_lines = profile_queries.team_hitting_lines(db, date_from=f["date_from"], date_to=f["date_to"])
+                performance_value = None
+                if len(team_hitting_lines) >= performance_score.MIN_BASELINE_PLAYERS:
+                    results_baseline = performance_score.team_hitter_results_baseline(team_hitting_lines)
+                    performance_value = performance_score.hitter_results_score(hitter_results_line, results_baseline)
+
+                sections.append(ui.hr())
+                sections.append(ui.p(ui.strong("Performance")))
+                sections.append(ui.p(
+                    "Results-based composite -- wOBA, AVG, Chase % (lower better), Whiff % (lower better), Zone "
+                    "Swing % (higher better), all team-relative -- game production, separate from the Bucket "
+                    "System's physical/athletic score. Hitters don't have a pitch-quality grade to blend in the way "
+                    "pitcher Performance does, so this is the Results score in full.",
+                    class_="text-muted small",
+                ))
+                performance_bars = ui_helpers.render_percentile_bars([("Performance", performance_value)])
+                if performance_bars is not None:
+                    sections.append(performance_bars)
+                else:
+                    sections.append(ui.p("Not enough team baseline yet for a Performance score.", class_="text-muted small"))
 
             sections.append(ui.p(ui.strong("Zone-Tier Discipline")))
             sections.append(ui.p("Heart = down the middle, Shadow = straddles the zone edge, Chase = tempting but outside, Waste = nowhere near.", class_="text-muted small"))

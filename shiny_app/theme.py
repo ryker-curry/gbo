@@ -427,6 +427,30 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-ring--green .gbo-ring-inner, .gbo-ring--yellow .gbo-ring-inner, .gbo-ring--orange .gbo-ring-inner, .gbo-ring--red .gbo-ring-inner { width: 100%; height: 100%; background: transparent; }
 .gbo-ring--green .gbo-ring-value, .gbo-ring--yellow .gbo-ring-value, .gbo-ring--orange .gbo-ring-value, .gbo-ring--red .gbo-ring-value, .gbo-ring--green .gbo-ring-sublabel, .gbo-ring--yellow .gbo-ring-sublabel, .gbo-ring--orange .gbo-ring-sublabel, .gbo-ring--red .gbo-ring-sublabel { color: #fff; }
 
+/* Percentile bars (Aug 2026) -- Savant/mlbpitchprofiler.com-style row
+   (colored bar + a circular percentile badge riding the fill edge +
+   the raw "+" stat alongside) for the mean-100/10-per-SD grade family
+   -- Ryker's own reference site for Pitcher/Hitter Profile's grade
+   display, replacing the .gbo-ring treatment for that family (Bucket
+   System / Command+ elsewhere keep their existing rings untouched).
+   Colored via the same good/flag status tiers as .gbo-ring
+   (ui_helpers.mean100_ring_status), not that site's own continuous
+   red-to-blue scale -- stays in GBO's existing traffic-light language
+   instead of a one-off palette. See ui_helpers.render_percentile_bars. */
+.gbo-pctbar-group { display: flex; flex-direction: column; }
+.gbo-pctbar-row { display: flex; align-items: center; gap: 4px; padding: 14px 2px; border-bottom: 1px solid var(--gbo-border); }
+.gbo-pctbar-row:last-child { border-bottom: 0; }
+.gbo-pctbar-label { flex: 0 0 112px; font-weight: 600; font-size: .82rem; color: var(--gbo-text); }
+.gbo-pctbar-track { position: relative; flex: 1 1 auto; height: 8px; border-radius: 4px; background: var(--gbo-bg-raised); margin: 0 18px; }
+.gbo-pctbar-fill { position: absolute; top: 0; left: 0; height: 100%; border-radius: 4px; background: var(--gbo-border-strong); transition: width .6s ease; }
+.gbo-pctbar-fill.good { background: var(--gbo-status-good); }
+.gbo-pctbar-fill.flag { background: var(--gbo-status-flag); }
+.gbo-pctbar-badge { position: absolute; top: 50%; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transform: translate(-50%, -50%); background: var(--gbo-border-strong); color: #fff; font-family: var(--gbo-display); font-weight: 700; font-size: .74rem; font-variant-numeric: tabular-nums; box-shadow: 0 0 0 3px var(--gbo-bg-card); transition: left .6s ease; }
+.gbo-pctbar-badge.good { background: var(--gbo-status-good); }
+.gbo-pctbar-badge.flag { background: var(--gbo-status-flag); }
+.gbo-pctbar-raw { flex: 0 0 44px; text-align: right; font-family: var(--gbo-mono); font-size: .84rem; font-weight: 600; color: var(--gbo-text); font-variant-numeric: tabular-nums; }
+.gbo-pctbar-empty { flex: 1 1 auto; color: var(--gbo-text-muted); font-size: .78rem; }
+
 /* Bucket summary card (collapsible) */
 .gbo-bucket { display: grid; grid-template-columns: 56px 1fr auto; gap: 16px; align-items: center; padding: 14px 20px; background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); border-radius: 10px; cursor: pointer; margin-bottom: 10px; }
 .gbo-bucket:hover { border-color: var(--gbo-border-strong); }
@@ -529,6 +553,144 @@ a.gbo-pri:hover { background: var(--gbo-bg-raised); }
 .gbo-show { transition: transform .25s cubic-bezier(.2,.8,.2,1), box-shadow .25s; }
 .gbo-show:hover { transform: translateY(-2px); box-shadow: var(--gbo-shadow); }
 @media (prefers-reduced-motion: reduce) { .gbo-anim-in { opacity: 1; transform: none; } }
+
+/* =========================================================
+   8. ENTRY PAGES — data-entry forms styled as cards (round 2, Aug 30 2026)
+   (pure CSS: no module needs to change for a page to pick
+   this up; sections that render form controls become cards,
+   and fields flow in a responsive two-column grid)
+   ========================================================= */
+/* controls */
+.form-control, .form-select { padding: .5rem .75rem; border-radius: 8px; min-height: 40px; }
+.form-select { appearance: none; -webkit-appearance: none; padding-right: 2.1rem; background-position: right .8rem center; background-repeat: no-repeat; }
+.form-control:hover:not(:focus), .form-select:hover:not(:focus) { border-color: color-mix(in srgb, var(--gbo-border-strong) 55%, var(--gbo-text-muted)); }
+textarea.form-control { min-height: 84px; }
+input[type="date"].form-control::-webkit-calendar-picker-indicator { filter: invert(.65); }
+.input-group .btn { border-color: var(--gbo-border-strong); }
+.progress { background-color: var(--gbo-bg-raised); }
+.progress-bar { background-color: var(--gbo-crimson); }
+
+/* selectize matches the native controls */
+.selectize-control { min-height: 40px; }
+.selectize-control .selectize-input { background: var(--gbo-bg-raised); border: 1px solid var(--gbo-border-strong); border-radius: 8px; color: var(--gbo-text); min-height: 40px; padding: .5rem .75rem; box-shadow: none; }
+.selectize-control.single .selectize-input { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%237A8594' stroke-width='1.5'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .8rem center; background-size: 10px; padding-right: 2.1rem; }
+.selectize-control.single .selectize-input:after { display: none; }
+.selectize-input.focus { border-color: var(--gbo-focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--gbo-focus) 30%, transparent); }
+.selectize-input > input, .selectize-input .item { color: var(--gbo-text); }
+.selectize-dropdown { background: var(--gbo-bg-card); border: 1px solid var(--gbo-border-strong); border-radius: 8px; color: var(--gbo-text-2); box-shadow: var(--gbo-shadow); }
+.selectize-dropdown .option { padding: .45rem .75rem; }
+.selectize-dropdown .option.active { background: var(--gbo-bg-raised); color: var(--gbo-text); }
+.selectize-dropdown .option.selected { color: var(--gbo-gold-text); }
+
+/* datepicker dropdown */
+.datepicker-dropdown { background: var(--gbo-bg-card); border: 1px solid var(--gbo-border-strong); border-radius: 8px; color: var(--gbo-text-2); box-shadow: var(--gbo-shadow); }
+.datepicker table tr td, .datepicker table tr th { color: var(--gbo-text-2); }
+.datepicker table tr td.day:hover, .datepicker table tr td.focused { background: var(--gbo-bg-raised); }
+.datepicker table tr td.active.active, .datepicker table tr td.active:hover { background: var(--gbo-crimson); border-color: var(--gbo-crimson); }
+.datepicker table tr td.old, .datepicker table tr td.new { color: var(--gbo-text-muted); }
+.datepicker .datepicker-switch:hover, .datepicker .prev:hover, .datepicker .next:hover { background: var(--gbo-bg-raised); }
+
+/* labels: quiet uppercase eyebrows */
+.gbo-content .shiny-input-container > label, .gbo-content .form-label { font-size: .6875rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--gbo-text-muted); margin-bottom: .35rem; }
+.gbo-content .form-check label, .gbo-content .shiny-input-container .checkbox label { text-transform: none; letter-spacing: 0; font-size: .85rem; font-weight: 500; color: var(--gbo-text-2); }
+
+/* separators inside entry pages */
+.gbo-content .tab-pane hr { border: 0; height: 1px; background: linear-gradient(90deg, var(--gbo-border), transparent); opacity: 1; margin: 1.1rem 0; }
+/* a section's own leading separator is redundant once it's a card */
+.gbo-content .shiny-html-output:has(.shiny-input-container) > div > hr:first-child,
+.gbo-content .shiny-html-output:has(.shiny-input-container) > hr:first-child { display: none; }
+
+/* any output section that renders form controls becomes a card */
+.gbo-content .shiny-html-output:has(.shiny-input-container):not(:has(.shiny-html-output .shiny-input-container)),
+.gbo-content .shiny-html-output:has(> .accordion) {
+  display: block; background: var(--gbo-bg-card); border: 1px solid var(--gbo-border);
+  border-radius: 10px; padding: 18px 20px 20px; margin-bottom: 14px; max-width: 900px;
+}
+.gbo-content .shiny-html-output:has(.shiny-input-container) .accordion { margin: .25rem 0 .5rem; }
+.gbo-content .shiny-html-output:has(.shiny-input-container) .accordion-item { border-radius: 8px; }
+
+/* headings inside entry cards read as section eyebrows */
+.gbo-content .shiny-html-output:has(.shiny-input-container) h4,
+.gbo-content .shiny-html-output:has(.shiny-input-container) h5 {
+  font-size: .8rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--gbo-text); border-left: 3px solid var(--gbo-crimson);
+  padding-left: 10px; margin: .35rem 0 .9rem;
+}
+
+/* fields flow two-up wherever a block holds several inputs */
+.gbo-content div:not(.bslib-grid):not(.gbo-filter):has(> .shiny-input-container ~ .shiny-input-container) {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 4px 22px; align-items: end;
+}
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > h4,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > h5,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > hr,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > p,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .btn,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .accordion,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > table,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .table-responsive,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > svg,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > img,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-plot-output,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .bslib-grid,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-input-container:has(textarea) {
+  grid-column: 1 / -1;
+}
+.gbo-content .shiny-html-output:has(.shiny-input-container) .btn-primary { margin-top: .55rem; }
+.gbo-content .shiny-input-container { margin-bottom: .85rem; max-width: none; width: auto; }
+
+/* buttons size to their label instead of stretching across the card */
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .btn { justify-self: start; width: auto; min-width: 240px; }
+
+/* the card you're typing in wakes up */
+.gbo-content .shiny-html-output:has(.shiny-input-container):focus-within { border-color: var(--gbo-border-strong); }
+
+/* hint / helper text under fields and section intros */
+.gbo-content .form-text, .gbo-content .help-block { color: var(--gbo-text-muted); font-size: .8rem; }
+.gbo-content .shiny-html-output:has(.shiny-input-container) p { color: var(--gbo-text-2); font-size: .85rem; }
+
+/* multi-select values read as chips */
+.selectize-control.multi .selectize-input { padding: .35rem .5rem; }
+.selectize-control.multi .selectize-input .item {
+  background: color-mix(in srgb, var(--gbo-crimson) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gbo-crimson) 45%, transparent);
+  color: var(--gbo-text); border-radius: 6px; padding: 2px 8px;
+  margin: 2px 6px 2px 0; font-size: .8rem;
+}
+.selectize-control.multi .selectize-input .item.active { background: var(--gbo-crimson); border-color: var(--gbo-crimson); color: #fff; }
+
+/* save / error toasts match the theme instead of stock Shiny white */
+#shiny-notification-panel { bottom: 18px; right: 18px; }
+.shiny-notification {
+  background: var(--gbo-bg-raised); color: var(--gbo-text);
+  border: 1px solid var(--gbo-border-strong); border-left: 3px solid var(--gbo-border-strong);
+  border-radius: 10px; box-shadow: var(--gbo-shadow);
+  padding: 12px 34px 12px 14px; font-size: .875rem;
+}
+.shiny-notification-message { border-left-color: var(--gbo-status-good); }
+.shiny-notification-warning { border-left-color: var(--gbo-status-watch); }
+.shiny-notification-error { border-left-color: var(--gbo-status-flag); }
+.shiny-notification-close { color: var(--gbo-text-muted); }
+.shiny-notification-close:hover { color: var(--gbo-text); }
+
+/* history / list tables: eyebrow headers, quiet row hover */
+.gbo-content .table thead th { font-size: .6875rem; text-transform: uppercase; letter-spacing: .08em; color: var(--gbo-text-muted); font-weight: 600; border-bottom: 1px solid var(--gbo-border-strong); }
+.gbo-content .table tbody tr:hover > td { background: var(--gbo-bg-raised); }
+
+/* dark scrollbars + crimson selection/accents everywhere */
+html { scrollbar-color: var(--gbo-border-strong) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--gbo-border-strong); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--gbo-text-muted); }
+::selection { background: color-mix(in srgb, var(--gbo-crimson) 45%, transparent); color: #fff; }
+input, textarea, select { accent-color: var(--gbo-crimson); }
+
+/* disabled states stay legible but clearly off */
+.btn:disabled { opacity: .45; }
+.form-control:disabled, .form-select:disabled { opacity: .55; background-color: var(--gbo-bg-card); }
 """.replace("{FONT_STACK}", FONT_STACK).replace("{DISPLAY_STACK}", DISPLAY_STACK).replace("{MONO_STACK}", MONO_STACK)
 
 

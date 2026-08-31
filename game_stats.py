@@ -281,9 +281,34 @@ def compute_batted_ball_profile(pitches, bats=None):
 # separate intentional-walk value (see compute_pitch_type_breakdown's
 # docstring), so every BB is treated as unintentional here too.
 WOBA_WEIGHTS = {"uBB": 0.69, "HBP": 0.72, "1B": 0.89, "2B": 1.27, "3B": 1.62, "HR": 2.10}
-# Commonly-cited recent-MLB-average constant -- swap for a real
-# league-specific value once Ryker has one he trusts more.
-FIP_CONSTANT = 3.10
+# MIAA-specific constant (Ryker's call, Aug 31 2026, replacing the old
+# generic MLB placeholder) -- derived the real way: FIP_constant =
+# league_era - ((13*HR + 3*(BB+HBP) - 2*K) / IP), computed from every
+# MIAA baseball team's full-season 2026 pitching line (13 teams that
+# sponsor baseball: themiaa.com/stats.aspx?path=baseball&year=2026,
+# fetched Aug 31 2026) -- IP converted from the X.Y display convention
+# to true outs/3 decimal innings before summing (same distinction
+# _innings_pitched() below makes). League totals: 5522.667 IP, 766 HR,
+# 3266 BB, 1033 HBP, 4501 K, 4985 R, 4280 ER across all 13 teams'
+# full schedules (not MIAA-only games -- a team's season line includes
+# its non-conference opponents too, which is fine here: the goal is
+# "what does a MIAA pitching staff's season actually look like", not
+# "what happens only in MIAA-vs-MIAA games").
+#
+# Calibrated against the MIAA's real, earned-runs-only ERA (4280 ER *
+# 9 / 5522.667 IP = 6.97), Ryker's explicit call (Aug 31 2026) over
+# calibrating to the league's runs-allowed average (8.12, all runs
+# incl. unearned -- would give 5.62 instead). GBO now tracks earned vs.
+# unearned runs itself too (game_pitches.unearned_runs_on_play, added
+# the same day) -- compute_pitching_line's new "ERA" key is the real
+# earned-run figure this constant was actually calibrated against, so
+# the two are on a consistent basis for any game where the coach tagged
+# unearned runs. The older "ERA (runs-allowed avg -- ER not tracked)"
+# key is still exactly what its name says and will keep averaging a
+# touch higher than FIP for a league-average pitcher whenever a team
+# has any unearned runs -- that's expected, not a bug, since the two
+# keys are deliberately measuring different things now.
+FIP_CONSTANT = 4.47
 
 
 def _innings_pitched(pa_pitches):
@@ -324,12 +349,20 @@ def compute_pitching_line(pitches):
     which predates this and is a coarser proxy. E+A% here is the real
     stat Ryker described: (Early PAs + Ahead PAs) / Batters Faced.
 
-    ER is NOT distinguished from total runs allowed -- GBO has no
-    earned/unearned run model (no formal error-attribution), so "ERA"
-    here is really runs-allowed average. FIP and wOBA use generic,
-    documented linear-weight constants, not a season/league-specific
-    set. See this module's WOBA_WEIGHTS/FIP_CONSTANT for exactly what's
-    used and why."""
+    ER IS now distinguished from total runs allowed (Aug 31 2026) --
+    game_pitches.unearned_runs_on_play is manually tagged per play by
+    whoever's scoring live (defaults to 0/all-earned; see
+    models.GamePitch for why this is manual, not a formal
+    error-attribution rules engine). "ER Allowed"/"ERA" below are the
+    real earned-run figures; the older "ERA (runs-allowed avg -- ER not
+    tracked)" key is kept alongside for existing callers and is exactly
+    what its name says -- runs allowed per 9, earned or not. Both keys
+    read identically for any data recorded before this field existed,
+    or for any play the scorer didn't mark unearned. FIP and wOBA use
+    generic, documented linear-weight constants except FIP_CONSTANT,
+    which IS now MIAA-specific and calibrated against the real
+    earned-run figure -- see this module's WOBA_WEIGHTS/FIP_CONSTANT for
+    exactly what's used and why."""
     pa_pitches = [p for p in pitches if p.ends_plate_appearance]
     batters_faced = len(pa_pitches)
     k = sum(1 for p in pa_pitches if p.ab_outcome == "K")
@@ -339,6 +372,15 @@ def compute_pitching_line(pitches):
     hr_allowed = sum(1 for p in pa_pitches if p.ab_outcome == "HR")
     xbh_allowed = sum(1 for p in pa_pitches if p.ab_outcome in ("2B", "3B", "HR"))
     runs_allowed = sum(p.runs_scored_on_play or 0 for p in pitches)
+    # Real earned runs, now that game_pitches.unearned_runs_on_play
+    # exists (Aug 31 2026, manual per-play tagging -- see
+    # models.GamePitch for why this is manual, not derived). Every row
+    # recorded before this field existed, and every row where the coach
+    # didn't mark anything unearned, has unearned_runs_on_play=0, so
+    # earned_runs_allowed == runs_allowed for all of that data -- this
+    # is a strict refinement, not a break, of the old runs-allowed-only
+    # picture.
+    earned_runs_allowed = sum(p.earned_runs_on_play for p in pitches)
     sac = sum(1 for p in pa_pitches if p.ab_outcome in ("Sac Bunt", "Sac Fly"))
     sf = sum(1 for p in pa_pitches if p.ab_outcome == "Sac Fly")
     ab = batters_faced - bb - hbp - sac
@@ -411,6 +453,14 @@ def compute_pitching_line(pitches):
         "K/BB": round(k / bb, 2) if bb else None,
         "K %": _rate(k, batters_faced), "K/9": round(k * 9 / ip_decimal, 2) if ip_decimal else None,
         "ERA (runs-allowed avg -- ER not tracked)": round(runs_allowed * 9 / ip_decimal, 2) if ip_decimal else None,
+        # Real earned-run ERA, now that earned/unearned is tracked per
+        # play (see earned_runs_allowed above). Kept alongside, not
+        # instead of, the runs-allowed-average field above -- several
+        # display modules already key off that field name, and this is
+        # additive. New code (and FIP_CONSTANT's own docstring caveat)
+        # should prefer this one.
+        "ER Allowed": earned_runs_allowed,
+        "ERA": round(earned_runs_allowed * 9 / ip_decimal, 2) if ip_decimal else None,
         "FIP": round((13 * hr_allowed + 3 * (bb + hbp) - 2 * k) / ip_decimal + FIP_CONSTANT, 2) if ip_decimal else None,
         "OBA (opponent AVG)": round(hits_allowed / ab, 3) if ab else None,
         "wOBA": round(woba_num / woba_den, 3) if woba_den else None,

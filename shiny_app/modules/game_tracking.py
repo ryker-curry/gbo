@@ -2906,10 +2906,19 @@ def game_tracking_server(input, output, session, app_state):
             req("ab_outcome_select" in input)
             ab_outcome = input.ab_outcome_select()
             suggested_outs, suggested_bases, suggested_runs = suggest_after_state(ab_outcome, state["bases"], state["outs"])
-            return ui.layout_columns(
-                ui.input_numeric("final_outs_input", "Outs after", value=min(suggested_outs, 3), min=0, max=3, step=1),
-                ui.input_text("final_bases_input", "Bases after (1st,2nd,3rd = 1/0)", value=suggested_bases),
-                ui.input_numeric("final_runs_input", "Runs scored on play", value=suggested_runs, min=0, max=4, step=1),
+            return ui.div(
+                ui.layout_columns(
+                    ui.input_numeric("final_outs_input", "Outs after", value=min(suggested_outs, 3), min=0, max=3, step=1),
+                    ui.input_text("final_bases_input", "Bases after (1st,2nd,3rd = 1/0)", value=suggested_bases),
+                    ui.input_numeric("final_runs_input", "Runs scored on play", value=suggested_runs, min=0, max=4, step=1),
+                ),
+                # Manual earned/unearned tagging (Ryker, Aug 31 2026) --
+                # defaults to 0 (all earned, the common case); bump this
+                # up only when an error caused a run that wouldn't have
+                # scored on clean defense. See
+                # models.GamePitch.unearned_runs_on_play for the full
+                # reasoning on why this is manual, not auto-derived.
+                ui.input_numeric("unearned_runs_input", "Of those, unearned (error-caused)", value=0, min=0, max=4, step=1),
             )
         finally:
             db.close()
@@ -3109,6 +3118,13 @@ def game_tracking_server(input, output, session, app_state):
                     )
                     return
                 final_runs = int(input.final_runs_input())
+                unearned_runs = int(input.unearned_runs_input()) if "unearned_runs_input" in input else 0
+                if unearned_runs > final_runs:
+                    ui.notification_show(
+                        "Unearned runs can't exceed runs scored on the play -- pitch not recorded.",
+                        type="error", duration=8,
+                    )
+                    return
 
             notes = ((input.pitch_notes_input() or "").strip() if "pitch_notes_input" in input else "")
 
@@ -3154,6 +3170,7 @@ def game_tracking_server(input, output, session, app_state):
                 outs_after=final_outs if ends_pa else None,
                 bases_after=final_bases if ends_pa else None,
                 runs_scored_on_play=final_runs if ends_pa else 0,
+                unearned_runs_on_play=unearned_runs if ends_pa else 0,
                 re_before=re_before,
                 re_after=re_after,
                 run_value=run_value,
@@ -3745,8 +3762,9 @@ def game_tracking_server(input, output, session, app_state):
                     re_before_str = f"{float(p.re_before):.2f}" if p.re_before is not None else "—"
                     re_after_str = f"{float(p.re_after):.2f}" if p.re_after is not None else "—"
                     rv_str = f"{float(p.run_value):+.3f}" if p.run_value is not None else "—"
+                    runs_str = f"{p.runs_scored_on_play}" + (f" ({p.unearned_runs_on_play} unearned)" if p.unearned_runs_on_play else "")
                     summary_children.append(ui.p(
-                        f"AB: {p.ab_outcome or '—'} — Runs {p.runs_scored_on_play} — RE {re_before_str}→{re_after_str} (RV {rv_str})",
+                        f"AB: {p.ab_outcome or '—'} — Runs {runs_str} — RE {re_before_str}→{re_after_str} (RV {rv_str})",
                         class_="text-muted small mb-0",
                     ))
                 if p.notes:

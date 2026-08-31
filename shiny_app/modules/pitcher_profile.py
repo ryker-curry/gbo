@@ -37,7 +37,7 @@ from database import get_session
 from models import Player, User, PitchType, PlayerPitchArsenal, StaffPlayerAssignment
 from game_stats import compute_pitching_line, compute_pitch_type_breakdown
 from strike_zone import classify_attack_zone
-from analytics import command_metrics, profile_queries
+from analytics import command_metrics, performance_score, profile_queries
 from analytics.pitch_grading import (
     stuff_plus, location_plus, pitching_plus, arsenal_summary, MIN_BASELINE_PITCHES,
 )
@@ -78,58 +78,13 @@ def _my_player(db, app_state):
     return db.query(Player).filter(Player.player_id == me.player_id).first()
 
 
-def _grade_ring_status(label, value):
-    """V1 color cut points for the mean-100/10-per-SD grade scale
-    (Stuff+/Location+/Pitching+) -- NOT bucket_display.py's 0-100
-    percentile cut points. >=110 (roughly 1+ SD above the team) reads
-    good, <90 (1+ SD below) flags, in between stays the neutral default
-    look. Unvalidated V1 guess, same as every other new cut point in
-    this build -- revisit once real scores exist to check against
-    Ryker's own read of the staff."""
-    if value is None:
-        return None
-    if value >= 110:
-        return "good"
-    if value < 90:
-        return "flag"
-    return None
-
-
-def _grade_rings(specs):
-    """Stuff+/Location+/Pitching+ as the same full-circle CSS ring
-    bucket_display.build_percentage_rings uses app-wide (identical
-    .gbo-ring* classes from theme.py -- same visual language as the
-    Bucket System/Command+ rings, per the design brief's explicit call
-    to reuse that style rather than invent a new one). NOT that
-    function directly, though -- these scores sit on a mean-100/
-    +-10-per-SD scale (pitch_grading.py), not a true 0-100 percentile,
-    so the ring's FILL needs its own mapping while the NUMBER shown
-    stays the real, untransformed grade. specs: list of (label, value)
-    tuples, value may be None ('not enough baseline yet').
-
-    Fill mapping (V1, unvalidated): 100 (dead average) -> 50% filled;
-    +/-30 points (3 SD) -> fully empty/full."""
-    if not any(v is not None for _, v in specs):
-        return None
-    cols = []
-    for label, value in specs:
-        if value is None:
-            cols.append(ui.div(ui.p(ui.strong(label)), ui.p("Not enough data yet", class_="text-muted small"), class_="gbo-ring-col"))
-            continue
-        pct = max(0.0, min(100.0, 50 + (float(value) - 100) * (50 / 30)))
-        status = _grade_ring_status(label, value)
-        ring = ui.div(
-            ui.div(
-                ui.span(f"{value:.0f}", class_="gbo-ring-value"),
-                ui.span(label, class_="gbo-ring-sublabel"),
-                class_="gbo-ring-inner",
-            ),
-            class_=f"gbo-ring {status}" if status else "gbo-ring",
-            style=f"--gbo-ring-pct: {pct};",
-        )
-        cols.append(ui.div(ring, class_="gbo-ring-col"))
-    col_width = max(1, 12 // len(specs))
-    return ui.layout_columns(*cols, col_widths=[col_width] * len(cols))
+# NOTE (Aug 31 2026): _grade_ring_status/_grade_rings used to live here
+# -- moved to shiny_app/ui_helpers.py as mean100_ring_status/
+# render_percentile_bars (Savant/mlbpitchprofiler.com-style percentile
+# bars, per Ryker's own reference site, replacing the ring treatment
+# for this grade family) so hitter_profile.py's new Performance section
+# can reuse the same component. See pp_body()'s Grades section below
+# and ui_helpers.render_percentile_bars' docstring.
 
 
 def _stacked_bar(segments):
@@ -419,15 +374,71 @@ def pitcher_profile_server(input, output, session, app_state):
             overview_stuff = [v for row in arsenal_rows for v in [row["Stuff+"]] if v is not None]
             overview_loc = [v for row in arsenal_rows for v in [row["Location+"]] if v is not None]
             overview_pitching = [v for row in arsenal_rows for v in [row["Pitching+"]] if v is not None]
-            grade_rings = _grade_rings([
-                ("Stuff+", round(sum(overview_stuff) / len(overview_stuff), 1) if overview_stuff else None),
-                ("Location+", round(sum(overview_loc) / len(overview_loc), 1) if overview_loc else None),
-                ("Pitching+", round(sum(overview_pitching) / len(overview_pitching), 1) if overview_pitching else None),
+            stuff_plus_value = round(sum(overview_stuff) / len(overview_stuff), 1) if overview_stuff else None
+            location_plus_value = round(sum(overview_loc) / len(overview_loc), 1) if overview_loc else None
+            pitching_plus_value = round(sum(overview_pitching) / len(overview_pitching), 1) if overview_pitching else None
+            grade_bars = ui_helpers.render_percentile_bars([
+                ("Stuff+", stuff_plus_value),
+                ("Location+", location_plus_value),
+                ("Pitching+", pitching_plus_value),
             ])
-            if grade_rings is not None:
-                sections.append(grade_rings)
+            if grade_bars is not None:
+                sections.append(grade_bars)
             else:
                 sections.append(ui.p("No graded pitches yet in this range -- needs Rapsodo-linked pitches (Stuff+) or located game pitches (Location+).", class_="text-muted small"))
+
+            # --- Performance: game-production composite (Stuff+/
+            # Location+/Command+/Arsenal/Results), kept deliberately
+            # separate from the Bucket System's physical/athletic score
+            # (Aug 31 2026 design call with Ryker -- see analytics/
+            # performance_score.py's module docstring for the full
+            # reasoning and Ryker's exact weighting call). Results (and
+            # therefore Performance) only means anything against real
+            # game outcomes -- same game_pitches gate as the Line
+            # section above, not rapsodo-only bullpen reps.
+            if game_pitches:
+                baseline_mean, baseline_stdev, baseline_n = _team_command_plus_baseline(db)
+                cmd_view_pitches = command_metrics.game_pitches_command_view(game_pitches, player.throws)
+                cmd_scorecard = command_metrics.session_command_scorecard(cmd_view_pitches)
+                command_plus_value = None
+                if baseline_n >= command_metrics.MIN_BASELINE_PITCHES:
+                    command_plus_value = command_metrics.command_plus(cmd_scorecard["avg_danger_adjusted_miss"], baseline_mean, baseline_stdev)
+
+                arsenal_pitching_value = performance_score.usage_weighted_average(arsenal_rows, "Pitching+")
+
+                pitcher_results_line = dict(line, **{"CSW %": performance_score.csw_pct(game_pitches)})
+                team_pitching_lines = profile_queries.team_pitching_lines(db, date_from=f["date_from"], date_to=f["date_to"])
+                results_score = None
+                if len(team_pitching_lines) >= performance_score.MIN_BASELINE_PLAYERS:
+                    results_baseline = performance_score.team_pitcher_results_baseline(team_pitching_lines)
+                    results_score = performance_score.pitcher_results_score(pitcher_results_line, results_baseline)
+
+                performance_value = performance_score.combine_pitcher_performance(
+                    stuff_plus_value, location_plus_value, command_plus_value, arsenal_pitching_value, results_score,
+                )
+
+                sections.append(ui.hr())
+                sections.append(ui.p(ui.strong("Performance")))
+                sections.append(ui.p(
+                    "Equal-weighted blend of Stuff+, Location+, Command+, Arsenal (usage-weighted Pitching+ across "
+                    "the mix), and Results (FIP/WHIP/K-BB/CSW%/Execution%, team-relative) -- game production, kept "
+                    "separate from the Bucket System's physical/athletic score. Not adjusted for the overlap this "
+                    "creates between Arsenal and Stuff+/Location+ (Arsenal is itself built from them) -- a V1 "
+                    "formula, same treatment as every other composite in this build.",
+                    class_="text-muted small",
+                ))
+                performance_bars = ui_helpers.render_percentile_bars([
+                    ("Stuff+", stuff_plus_value),
+                    ("Location+", location_plus_value),
+                    ("Command+", command_plus_value),
+                    ("Arsenal", arsenal_pitching_value),
+                    ("Results", results_score),
+                    ("Performance", performance_value),
+                ])
+                if performance_bars is not None:
+                    sections.append(performance_bars)
+                else:
+                    sections.append(ui.p("Not enough graded pitches or team baseline yet for a Performance score.", class_="text-muted small"))
 
             # --- Pitch Usage / Attack Zone bars ---
             total_pitches = sum(usage_counts.values())

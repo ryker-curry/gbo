@@ -92,7 +92,7 @@ from analytics.pitch_trajectory import calculate_estimated_arm_angle
 from pitch_type_config import FASTBALL_TYPES
 from visualizations.bullpen_charts import movement_chart, release_point_chart, location_chart, color_for_pitch_label
 from visualizations.spin_axis_chart import individual_spin_axis_chart, average_spin_axis_chart
-from visualizations.release_silhouette import render_release_silhouette_svg
+from visualizations.pitcher_graphic import pitcher_release_svg
 from video_helpers import render_video_clip
 
 import ui_helpers
@@ -629,33 +629,44 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
                     type_order.append(label)
                 type_groups[label].append(p)
 
-            release_points = []
+            releases = []
             for label in type_order:
                 group = type_groups[label]
                 heights = [float(p.release_height) for p in group if p.release_height is not None]
                 sides = [float(p.release_side) for p in group if p.release_side is not None]
-                avg_h = sum(heights) / len(heights) if heights else None
-                avg_s = sum(sides) / len(sides) if sides else None
-                release_points.append((avg_h, avg_s, color_for_pitch_label(label), label, len(group)))
+                if not heights or not sides:
+                    continue
+                avg_h = sum(heights) / len(heights)
+                avg_s = sum(sides) / len(sides)
+                releases.append({
+                    "label": label,
+                    "color": color_for_pitch_label(label),
+                    # pitcher_release_svg wants catcher-view side_ft (+ =
+                    # catcher's right); GBO's release_side is raw Rapsodo
+                    # (pitcher-view, + = pitcher's own right/throwing
+                    # side -- see rapsodo_conventions.py), so negate here,
+                    # same sign flip already established for plate_x
+                    # elsewhere (Aug 31 2026 convention fix).
+                    "side_ft": -avg_s,
+                    "height_ft": avg_h,
+                    "count": len(group),
+                })
 
-            n_types_plotted = sum(1 for h, s, *_ in release_points if h is not None and s is not None)
             player_height_in = float(player.height_in) if player is not None and player.height_in is not None else None
             throws = player.throws if player is not None else None
 
-            svg, caption = render_release_silhouette_svg(release_points, player_height_in, throws)
-            silhouette_children = [ui.HTML(svg)]
-            if caption:
-                silhouette_children.append(ui.p(caption, class_="text-muted small", style="text-align:center;"))
-            if n_types_plotted:
-                legend_items = [
-                    ui.div(
-                        ui.div(style=f"width:10px; height:10px; border-radius:5px; background:{color}; display:inline-block; margin-right:5px;"),
-                        f"{label} (n={n})",
-                        style="display:inline-flex; align-items:center; color:#B8B8B8; font-size:0.78rem; margin:2px 8px;",
-                    )
-                    for h, s, color, label, n in release_points if h is not None and s is not None
-                ]
-                silhouette_children.append(ui.div(*legend_items, style="display:flex; flex-wrap:wrap; justify-content:center; margin-top:6px;"))
+            # New Aug 31 2026 (round 2) release-point graphic from
+            # Ryker's web designer -- replaces the earlier hand-built
+            # release_silhouette.py stick/solid-shaded illustration.
+            # Its own legend (colored dot + label + usage %) is built
+            # into the SVG, so no separate legend_items block is needed
+            # here anymore.
+            silhouette_children = [ui.HTML(pitcher_release_svg(releases, throws=throws or "R", height_in=player_height_in or 73))]
+            if player is not None and player.height_in is None:
+                silhouette_children.append(ui.p(
+                    "Using an average height -- add this pitcher's real height on the Players page for a more accurate figure.",
+                    class_="text-muted small", style="text-align:center;",
+                ))
             silhouette_panel = ui.div(
                 ui.p("Release Point", style=f"color:{TEXT_CREAM}; font-weight:700; text-align:center; margin-bottom:4px;"),
                 *silhouette_children,
