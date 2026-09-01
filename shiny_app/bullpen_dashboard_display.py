@@ -710,14 +710,24 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
         spin_axis_mode = input[spin_axis_mode_key]() if spin_axis_mode_key in input else "Average by Pitch Type"
 
         def _build():
+            # width/height bumped from 500x420 to match Location's
+            # 700x480 (Sept 1 2026, Ryker: "pitch movement chart and
+            # spin axis charts need to be bigger, take up same amount
+            # of space that the pitch location chart takes up") -- the
+            # CSS grid-squeeze bug these three charts shared is fixed
+            # separately (theme.py), but Location was also just
+            # rendered at a bigger native resolution to begin with, so
+            # matching that resolution here keeps Spin Axis genuinely
+            # as large/sharp as Location at the same display width,
+            # not merely stretched.
             children = []
             if spin_axis_mode == "Average by Pitch Type":
-                children.append(chart_helpers.fig_to_img(average_spin_axis_chart(filtered_pitches), width=500, height=420))
+                children.append(chart_helpers.fig_to_img(average_spin_axis_chart(filtered_pitches), width=700, height=480))
             else:
                 individual_type_filter = None if selected_type == "All Pitches" else selected_type
                 if selected_type == "All Pitches":
                     children.append(ui.p("Showing every pitch type at once gets busy -- filter to one type above for a cleaner view.", class_="text-muted small"))
-                children.append(chart_helpers.fig_to_img(individual_spin_axis_chart(filtered_pitches, pitch_type_filter=individual_type_filter), width=500, height=420))
+                children.append(chart_helpers.fig_to_img(individual_spin_axis_chart(filtered_pitches, pitch_type_filter=individual_type_filter), width=700, height=480))
             return ui.div(*children)
 
         key = (spin_chart_id, _target_key(target), selected_type, spin_axis_mode)
