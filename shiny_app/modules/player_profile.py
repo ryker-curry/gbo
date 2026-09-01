@@ -12,12 +12,23 @@ the profile serves as the central hub"). Layout, top to bottom:
      worst metrics in plain words, so the "Objective -> Analytics ->
      Insight" chain is visible before any table.
   3. Tabs: Overview (bucket summary cards + composite rings) ·
-     Assessments (the existing full breakdown from bucket_display) ·
-     Mobility (ROM report + movement flag) · Pitching (latest Rapsodo
-     session summary) · Development (IDP goals) · Video.
+     Assessments (the scored breakdown from bucket_display, PLUS --
+     Sept 2026 -- a "Full History" accordion, one panel per assessment
+     category with data, raw dated entries via assessment_history.py)
+     · Mobility (ROM report + movement flag) · Pitching (latest
+     Rapsodo session summary) · Development (IDP goals) · Video.
 
 Everything analytic is REUSED from bucket_system / bucket_display /
 bullpen_metrics -- this page adds no new calculations.
+
+Sept 2026 (Ryker's call): the Assessments page (shiny_app/modules/
+assessments.py) was pared down to pure data entry -- viewing moved
+here. Full History is this page's one genuinely new piece: two of the
+11 assessment categories (Anthropometrics, Pitcher-Specific) never
+feed bucket_system at all, so before this they had NO display anywhere
+except the Assessments page's own history view. Full History covers
+every category uniformly (not just those two) so nothing needs special-
+casing here.
 
 Who lands here: coaches via the Roster (app_state.deep_link_player_id
 + update_navs) or the in-page picker; a Player-role user always sees
@@ -35,6 +46,7 @@ from models import (Player, StaffPlayerAssignment, Assessment, AssessmentCategor
                     RapsodoPitch, IDPGoal, Video)
 from bucket_system import compute_bucket_system, list_seasons, current_season_label
 from analytics.bullpen_metrics import session_summary, pitch_type_summary
+from assessment_history import assessment_history_query, assessment_history_rows
 from pitch_type_config import FASTBALL_TYPES
 import bucket_display
 import ui_helpers
@@ -222,11 +234,23 @@ def player_profile_server(input, output, session, app_state):
             goals = db.query(IDPGoal).options(joinedload(IDPGoal.category), joinedload(IDPGoal.status)).filter(IDPGoal.player_id == pid).order_by(IDPGoal.created_at.desc()).all()
             videos = db.query(Video).filter(Video.player_id == pid).order_by(Video.recorded_date.desc().nullslast()).limit(10).all()
             mode = app_state.dark_mode() or "dark"
-            return _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state)
+            # Full History (Sept 2026): every assessment category with
+            # data for this player, not just the 6 that feed the bucket
+            # score -- see the module docstring. One query per category
+            # (11 total, cheap -- same as bucket_system's own per-
+            # category queries elsewhere) rather than a lazily-loaded
+            # picker, since this whole page is already one render pass.
+            history_categories = db.query(AssessmentCategory).order_by(AssessmentCategory.display_order).all()
+            history_panels = []
+            for cat in history_categories:
+                rows = assessment_history_rows(assessment_history_query(db, pid, cat.category_id).all())
+                if rows:
+                    history_panels.append(ui.accordion_panel(f"{cat.category_name} ({len(rows)})", ui_helpers.render_dict_table(rows)))
+            return _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels)
         finally:
             db.close()
 
-    def _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state):
+    def _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels):
         pos = p.player_position.position_name if p.player_position else None
         cls = p.player_class.class_name if p.player_class else None
         meta = " · ".join(x for x in [f"#{p.jersey_number}" if p.jersey_number else None, pos, cls, f"{p.bats or '-'}/{p.throws or '-'}",
@@ -273,7 +297,20 @@ def player_profile_server(input, output, session, app_state):
 
         # --- tabs ---
         overview = _overview_tab(bd, summ, pitches, bullpen, goals, mode)
-        assessments_tab = ui.div(bucket_display.build_full_breakdown(bd, key_prefix="profile", mode=mode)) if bd.get("total_score") is not None else ui_helpers.card(ui_helpers.empty_state("No scored assessments yet. Log Body Composition, Power, or Strength tests to populate the breakdown."))
+        breakdown_block = bucket_display.build_full_breakdown(bd, key_prefix="profile", mode=mode) if bd.get("total_score") is not None else ui_helpers.card(ui_helpers.empty_state("No scored assessments yet. Log Body Composition, Power, or Strength tests to populate the breakdown."))
+        # Full History -- collapsed by default, same treatment the raw
+        # history table always got on the (now data-entry-only)
+        # Assessments page. Only categories with real data get a panel,
+        # so an unused category (e.g. Baseball Performance, still an
+        # empty placeholder) doesn't show up as a dead accordion row.
+        history_block = (
+            ui.div(
+                ui.h5("Full History", class_="gbo-section-title", style="margin-top:20px;"),
+                ui.accordion(*history_panels, open=False, id=None),
+            )
+            if history_panels else None
+        )
+        assessments_tab = ui.div(breakdown_block, history_block)
         rom = bd.get("mobility_rom_report") or []
         mobility_tab = ui.div(
             ui.div(bucket_display.build_movement_flag_ring(mf, rom, key_prefix="profile", mode=mode) if mf else None, style="margin-bottom:16px;"),
