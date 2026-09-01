@@ -295,6 +295,34 @@ def _composite_score_status(value):
     return "flag"
 
 
+def _individual_metric_status(pct):
+    """Color rule for build_metric_bars' individual metric bars (Body
+    Comp/Power/Strength/Speed rows in the Physical Testing Breakdown)
+    -- a separate, stricter cut than _composite_score_status' 80/85
+    (which is itself already stricter than the app-wide status_from_
+    percentile 35/60 default -- see that function's docstring for why
+    35/60 doesn't work on this roster). Ryker's call (Sept 1 2026),
+    reported after noticing every one of these bars rendered green
+    regardless of percentile -- turned out to be two separate things:
+    build_metric_bars never applied ANY status class before this (pure
+    bug, independent of where the cutoff sits -- the CSS's base
+    .gbo-metric-bar-fill rule defaults to green), and on top of that
+    the percentile itself (value vs. team leader, not a true rank)
+    clusters high the same way composite scores do. 90+ good, 80-89
+    watch, <80 flag; no percentile data yet stays neutral (muted gray,
+    same class score_ring/metric_bar already use for "not scored" --
+    missing data isn't the same claim as "performed poorly", so it
+    shouldn't render as a flag). Revisit alongside _composite_score_
+    status if the roster's spread changes."""
+    if pct is None:
+        return "neutral"
+    if pct >= 90:
+        return "good"
+    if pct >= 80:
+        return "watch"
+    return "flag"
+
+
 def _tier_for_total(value):
     """Total ring color = the same Diamond/Gold/Silver/Bronze/Common
     tiers as the player card's Overall rating (show_card in ui_helpers.
@@ -410,10 +438,11 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark", is_pitcher=None):
                 f"{tier['badge_source']} tier: {tier['tier_label']}",
                 class_=f"gbo-tier-badge {tier['status']}",
             ))
+        status = _individual_metric_status(raw_percentile)
         rows.append(ui.div(
             ui.div(*header_children, class_="gbo-metric-bar-header"),
             ui.div(
-                ui.div(class_="gbo-metric-bar-fill", style=f"width: {pct}%;"),
+                ui.div(class_=f"gbo-metric-bar-fill {status}", style=f"width: {pct}%;"),
                 class_="gbo-metric-bar-track",
             ),
             ui.p(percentile_label, class_="gbo-metric-bar-percentile"),
