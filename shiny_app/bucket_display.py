@@ -273,7 +273,7 @@ def build_percentage_rings(metrics, key_prefix, show_ordinal=False, mode="dark",
     return ui.layout_columns(*cols, col_widths=[col_width] * len(cols))
 
 
-def _composite_score_status(value):
+def composite_score_status(value):
     """Color rule for build_score_rings' Body Comp/Power/Strength rings
     -- NOT the app-wide status_from_percentile 35/60 split used for
     individual metric percentiles elsewhere (ui_helpers.status_from_
@@ -285,7 +285,15 @@ def _composite_score_status(value):
     actually separate anyone -- these cut points are tuned to that
     real spread instead: below 80 flag (red), 80-84 watch (yellow),
     85+ good (green). Revisit if the roster's score distribution
-    shifts."""
+    shifts.
+
+    Public (Sept 1 2026) -- player_profile.py's Overview tab shows the
+    identical Body Comp/Power/Strength subgroup scores a second time
+    (accordion header badges, separate from build_score_rings' rings),
+    and used to color them with the app-wide 35/60 default instead of
+    this one -- same score, two different colors depending on which
+    part of the page you looked at. Reuse this here instead of a
+    second copy of the same cut points."""
     if value is None:
         return None
     if value >= 85:
@@ -295,10 +303,10 @@ def _composite_score_status(value):
     return "flag"
 
 
-def _individual_metric_status(pct):
+def individual_metric_status(pct):
     """Color rule for build_metric_bars' individual metric bars (Body
     Comp/Power/Strength/Speed rows in the Physical Testing Breakdown)
-    -- a separate, stricter cut than _composite_score_status' 80/85
+    -- a separate, stricter cut than composite_score_status' 80/85
     (which is itself already stricter than the app-wide status_from_
     percentile 35/60 default -- see that function's docstring for why
     35/60 doesn't work on this roster). Ryker's call (Sept 1 2026),
@@ -346,9 +354,9 @@ def _tier_for_total(value):
 def _score_ring_status(label, value):
     """build_score_rings' status_fn -- Total gets the player-card tier
     scale (_tier_for_total), Body Comp/Power/Strength keep the red/
-    yellow/green scale (_composite_score_status). See each function's
+    yellow/green scale (composite_score_status). See each function's
     docstring."""
-    return _tier_for_total(value) if label == "Total" else _composite_score_status(value)
+    return _tier_for_total(value) if label == "Total" else composite_score_status(value)
 
 
 def build_score_rings(bucket_data, key_prefix, mode="dark"):
@@ -356,7 +364,7 @@ def build_score_rings(bucket_data, key_prefix, mode="dark"):
     Returns None (renders nothing) if there's no data yet for any of
     them. Colored via _score_ring_status: Total uses the player card's
     Diamond/Gold/Silver/Bronze/Common tiers, the other three use red/
-    yellow/green (see _tier_for_total / _composite_score_status)."""
+    yellow/green (see _tier_for_total / composite_score_status)."""
     specs = [
         ("Total", bucket_data["total_score"]),
         ("Body Comp", bucket_data["body_comp_score"]),
@@ -438,7 +446,7 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark", is_pitcher=None):
                 f"{tier['badge_source']} tier: {tier['tier_label']}",
                 class_=f"gbo-tier-badge {tier['status']}",
             ))
-        status = _individual_metric_status(raw_percentile)
+        status = individual_metric_status(raw_percentile)
         rows.append(ui.div(
             ui.div(*header_children, class_="gbo-metric-bar-header"),
             ui.div(
