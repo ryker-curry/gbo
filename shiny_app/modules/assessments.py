@@ -1,25 +1,27 @@
 """
 GBO -- Assessments module.
 
-Direct port of pages/assessments.py -- data-driven by design: works for
-any assessment category as soon as its test types are seeded, so the
-remaining categories beyond Anthropometrics/Body Composition need no
-code changes here, just seed data. Entry is manual, and every category
-supports full history (multiple dated entries per player), not just a
-current snapshot.
+Sept 2026: pared down to a pure DATA-ENTRY page (Ryker's call -- "the
+assessment page is purely just for inputting data" -- viewing moved to
+Player Profile, which already showed most of this same data via
+bucket_display and now also shows Full History via assessment_history.
+py). This module no longer computes or renders score rings, the full
+breakdown, or goals-in-progress -- see shiny_app/modules/player_
+profile.py for all of that.
 
-Layout, top to bottom, same order as the original:
+Still data-driven by design: works for any assessment category as soon
+as its test types are seeded, so a new category beyond Anthropometrics/
+Body Composition needs no code changes here, just seed data.
+
+Layout, top to bottom:
   1. Player picker (not active-only -- Ryker wants to keep entering
      data for prior-roster players)
-  2. Physical testing score rings/breakdown for that player (reuses
-     bucket_display.py, same as Dashboard/My Assessments)
-  3. Goals in progress (baseline vs. current for any metric tied to an
-     open IDP goal)
-  4. Category picker, optional pitch-type filter (Pitcher-Specific only)
-  5. Full history (collapsed, excludes Rapsodo-import-linked entries --
-     those live on Bullpen Tracking instead)
-  6. Edit or delete a past entry (can_edit_assessments only)
-  7. New assessment entry, one ui.input_numeric per test type, grouped
+  2. Category picker, optional pitch-type filter (Pitcher-Specific only)
+  3. Edit or delete a past entry (can_edit_assessments only) -- reuses
+     assessment_history.assessment_history_query for its "which entry?"
+     picker; this is data correction, not a view, so it stayed here
+     rather than moving to Player Profile with the rest of the display.
+  4. New assessment entry, one ui.input_numeric per test type, grouped
      by "Group: Field" test-name prefixes (can_edit_assessments only)
 
 Same ordering-hazard pattern as player_stats.py's category -> pitch-type
@@ -38,7 +40,7 @@ access for dynamically-named inputs, same as input.name() for a static
 one) instead of a fixed list of input.<name>() calls.
 """
 
-from datetime import date, datetime, time, timedelta
+from datetime import date
 
 from shiny import module, ui, render, reactive, req
 from sqlalchemy.orm import joinedload
@@ -46,36 +48,21 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from models import (
     Player, StaffPlayerAssignment, AssessmentCategory, AssessmentTestType,
-    Assessment, AssessmentResult, PitchType, IDPGoal, IDPStatus, BullpenPitch, RapsodoPitch,
+    Assessment, AssessmentResult, PitchType,
 )
-from bucket_system import BUCKET_RELEVANT_CATEGORIES, get_bucket_test_names_for_category, compute_bucket_system
-from analytics.rapsodo_goal_metrics import rapsodo_field_for_test_name, average_rapsodo_metric
+from bucket_system import BUCKET_RELEVANT_CATEGORIES, get_bucket_test_names_for_category
+from assessment_history import assessment_history_query
 
 import ui_helpers
-import bucket_display
-
-
-def _recent_rapsodo_average(db, player_id, rapsodo_field, pitch_type_id, days):
-    """Same lookback-average helper idp.py's _rapsodo_avg uses for a
-    goal's live "Current" value -- kept in sync with that one on
-    purpose (see the fix note in top_section() below for why this
-    exists here too)."""
-    cutoff = datetime.combine(date.today() - timedelta(days=days), time.min)
-    q = db.query(RapsodoPitch).filter(RapsodoPitch.player_id == player_id, RapsodoPitch.pitch_date >= cutoff)
-    if pitch_type_id:
-        q = q.filter(RapsodoPitch.pitch_type_id == pitch_type_id)
-    return average_rapsodo_metric(q.all(), rapsodo_field)
 
 
 @module.ui
 def assessments_ui():
     return ui.div(
-        ui_helpers.page_header("Assessments"),
+        ui_helpers.page_header("Assessments", "Log new testing data here. To see a player's scores, breakdown, and history, use Player Profile."),
         ui.output_ui("player_picker"),
-        ui.output_ui("top_section"),
         ui.output_ui("category_picker"),
         ui.output_ui("pitch_type_filter_section"),
-        ui.output_ui("history_section"),
         ui.output_ui("edit_section"),
         ui.output_ui("new_entry_section"),
         ui_helpers.page_footer(),
@@ -142,125 +129,6 @@ def assessments_server(input, output, session, app_state):
             db.close()
 
     # -------------------------------------------------------------------
-    # 2 & 3. Score rings/breakdown + goals in progress, for the selected player
-    # -------------------------------------------------------------------
-
-    @render.ui
-    def top_section():
-        _refresh_tick()
-        if not app_state.is_authenticated():
-            return None
-        req("player_select" in input)
-        selected_player_id = int(input.player_select())
-        mode = app_state.dark_mode() or "dark"
-
-        db = get_session()
-        try:
-            selected_player = db.query(Player).filter(Player.player_id == selected_player_id).first()
-            if selected_player is None:
-                return None
-
-            sections = []
-            bucket_data = compute_bucket_system(db, selected_player_id)
-            rings = bucket_display.build_score_rings(bucket_data, "assess", mode=mode)
-            # rings is None when Total/Body Comp/Power/Strength are all
-            # None -- but a player can have real data in a reference-
-            # only section (Mobility & ROM, Speed, etc.) that isn't part
-            # of any of those 4 scores. Without this check, a player who
-            # (for example) only has ROM data on file so far would show
-            # NO breakdown at all here, even though real data exists --
-            # found via a screenshot of a player whose ROM testing had
-            # just started (Aug 2026) showing "no data" despite having
-            # ROM values on record.
-            # A movement_flag can exist even with an empty mobility_rom_report
-            # (e.g. a current_injury flag set on the player profile before any
-            # ROM data is ever entered -- compute_movement_flag's injury
-            # override doesn't require ROM rows) -- same "don't gate one
-            # section's visibility on another section's data" fix as above.
-            has_mobility_data = bool(bucket_data.get("mobility_rom_report")) or bool(bucket_data.get("movement_flag"))
-            if rings is not None or has_mobility_data:
-                if rings is not None:
-                    sections.append(rings)
-                    profile = bucket_display.build_development_profile(bucket_data, "assess", mode=mode)
-                    if profile is not None:
-                        sections.append(profile)
-                sections.append(ui.h5("Physical Testing Breakdown", class_="gbo-section-title"))
-                sections.append(bucket_display.build_full_breakdown(bucket_data, "assess_detail", mode=mode))
-                sections.append(ui.hr())
-
-            open_goals = (
-                db.query(IDPGoal)
-                .join(IDPStatus)
-                .options(joinedload(IDPGoal.category), joinedload(IDPGoal.target_test_type))
-                .filter(IDPGoal.player_id == selected_player_id, IDPGoal.target_test_type_id.isnot(None), IDPStatus.status_name != "Completed")
-                .all()
-            )
-            if open_goals:
-                sections.append(ui.h5(f"Goals in progress — {selected_player.first_name} {selected_player.last_name}", class_="gbo-section-title"))
-                goal_rows = []
-                for g in open_goals:
-                    unit = f" {g.target_test_type.unit}" if g.target_test_type.unit else ""
-                    if g.category.category_name == "Pitcher-Specific":
-                        # Fix: Pitcher-Specific goals used to read this
-                        # "Current" value from AssessmentResult, but per
-                        # analytics/rapsodo_goal_metrics.py (and idp.py,
-                        # which already does this correctly) nothing
-                        # writes new AssessmentResult rows under
-                        # Pitcher-Specific any more -- real pitch data
-                        # lands in RapsodoPitch now. Reading the old
-                        # table silently showed "Current: -" for every
-                        # Pitcher-Specific goal here even when the
-                        # player had plenty of real bullpen data, which
-                        # the IDP page (same goal, same metric) showed
-                        # correctly the whole time. Mirrors idp.py's
-                        # _rapsodo_avg / goal-current-value branch.
-                        rapsodo_field = rapsodo_field_for_test_name(g.target_test_type.test_name)
-                        if rapsodo_field:
-                            current_value = _recent_rapsodo_average(db, g.player_id, rapsodo_field, g.target_pitch_type_id, 30)
-                        else:
-                            # Unmapped test (e.g. Spin Axis -- see that
-                            # module's docstring) still uses the legacy
-                            # AssessmentResult path, same as before.
-                            cutoff = date.today() - timedelta(days=30)
-                            recent_results = (
-                                db.query(AssessmentResult)
-                                .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
-                                .filter(
-                                    Assessment.player_id == g.player_id,
-                                    Assessment.category_id == g.category_id,
-                                    Assessment.assessment_date >= cutoff,
-                                    AssessmentResult.test_type_id == g.target_test_type_id,
-                                )
-                                .all()
-                            )
-                            current_value = sum(float(r.value) for r in recent_results) / len(recent_results) if recent_results else None
-                    else:
-                        latest_pair = (
-                            db.query(AssessmentResult, Assessment.assessment_date)
-                            .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
-                            .filter(Assessment.player_id == g.player_id, AssessmentResult.test_type_id == g.target_test_type_id)
-                            .order_by(Assessment.assessment_date.desc())
-                            .first()
-                        )
-                        current_value = float(latest_pair[0].value) if latest_pair else None
-
-                    goal_rows.append({
-                        "Category": g.category.category_name,
-                        "Metric": g.target_test_type.test_name,
-                        "Baseline": f"{float(g.baseline_value):.2f}{unit}" if g.baseline_value is not None else "—",
-                        "Current": f"{current_value:.2f}{unit}" if current_value is not None else "—",
-                        "Target": f"{float(g.target_value):.2f}{unit}" if g.target_value is not None else "—",
-                        "Target date": g.target_date.strftime("%Y-%m-%d (%a)") if g.target_date else "—",
-                    })
-                sections.append(ui_helpers.render_dict_table(goal_rows))
-                sections.append(ui.p("Full goal details (action steps, progress notes) are on the IDP page.", class_="text-muted small"))
-                sections.append(ui.hr())
-
-            return ui.div(*sections)
-        finally:
-            db.close()
-
-    # -------------------------------------------------------------------
     # 4. Category picker + pitch-type filter
     # -------------------------------------------------------------------
 
@@ -322,69 +190,7 @@ def assessments_server(input, output, session, app_state):
         return None
 
     # -------------------------------------------------------------------
-    # 5. Full history
-    # -------------------------------------------------------------------
-
-    def _history_query(db, player_id, category_id):
-        q = (
-            db.query(Assessment)
-            .options(
-                joinedload(Assessment.results).joinedload(AssessmentResult.test_type),
-                joinedload(Assessment.pitch_type),
-            )
-            .filter(Assessment.player_id == player_id, Assessment.category_id == category_id)
-            # Same Rapsodo-import exclusion as My Assessments -- that
-            # data already has a home on Bullpen Tracking.
-            .filter(~Assessment.assessment_id.in_(
-                db.query(BullpenPitch.linked_assessment_id).filter(BullpenPitch.linked_assessment_id.isnot(None))
-            ))
-        )
-        pt_filter_id = _pitch_type_filter_id()
-        if pt_filter_id is not None:
-            q = q.filter(Assessment.pitch_type_id == pt_filter_id)
-        return q.order_by(Assessment.assessment_date.desc()).limit(500)
-
-    @render.ui
-    def history_section():
-        _refresh_tick()
-        if not app_state.is_authenticated():
-            return None
-        req("player_select" in input)
-        req("category_select" in input)
-        selected_player_id = int(input.player_select())
-        selected_category_id = int(input.category_select())
-
-        db = get_session()
-        try:
-            past_assessments = _history_query(db, selected_player_id, selected_category_id).all()
-            if not past_assessments:
-                body = ui_helpers.empty_state("No entries to show.")
-            else:
-                rows = []
-                for a in past_assessments:
-                    row = {"Date": a.assessment_date.strftime("%Y-%m-%d (%a)")}
-                    if a.pitch_type:
-                        row["Pitch Type"] = a.pitch_type.type_name
-                    row["Notes"] = a.notes or ""
-                    for r in a.results:
-                        unit_label = f" ({r.test_type.unit})" if r.test_type.unit else ""
-                        row[f"{r.test_type.test_name}{unit_label}"] = round(float(r.value), 2)
-                    rows.append(row)
-                content = []
-                if len(past_assessments) == 500:
-                    content.append(ui.p("Showing the most recent 500 entries.", class_="text-muted small"))
-                content.append(ui_helpers.render_dict_table(rows))
-                body = ui.div(*content)
-
-            return ui.accordion(
-                ui.accordion_panel("Show full history (every individual entry)", body),
-                open=False, id=None,
-            )
-        finally:
-            db.close()
-
-    # -------------------------------------------------------------------
-    # 6. Edit or delete a past entry
+    # 5. Edit or delete a past entry
     # -------------------------------------------------------------------
 
     @render.ui
@@ -400,7 +206,7 @@ def assessments_server(input, output, session, app_state):
         db = get_session()
         try:
             category = db.query(AssessmentCategory).filter(AssessmentCategory.category_id == selected_category_id).first()
-            editable_assessments = _history_query(db, selected_player_id, selected_category_id).all()
+            editable_assessments = assessment_history_query(db, selected_player_id, selected_category_id, pitch_type_id=_pitch_type_filter_id()).all()
 
             if not editable_assessments:
                 body = ui.p("No entries to edit yet.", class_="text-muted small")
@@ -530,7 +336,7 @@ def assessments_server(input, output, session, app_state):
             db.close()
 
     # -------------------------------------------------------------------
-    # 7. New assessment entry
+    # 6. New assessment entry
     # -------------------------------------------------------------------
 
     @render.ui
