@@ -104,6 +104,27 @@ def assessments_server(input, output, session, app_state):
             groups.setdefault(group_name, []).append((t, field_label))
         return groups
 
+    def _category_entry_test_types(db, category):
+        """Every AssessmentTestType enterable for this category via the
+        assessment forms -- same filtering new_entry_section() uses, so
+        the edit form's "missing fields" section (added Sept 2026 so a
+        field added to a category after an old entry already existed,
+        like BMR/Recommended Caloric Intake, can still be filled in on
+        that old entry) offers exactly the same fields a brand-new entry
+        would."""
+        if category is None:
+            return []
+        test_types = (
+            db.query(AssessmentTestType)
+            .filter(AssessmentTestType.category_id == category.category_id)
+            .order_by(AssessmentTestType.display_order, AssessmentTestType.test_type_id)
+            .all()
+        )
+        if category.category_name in BUCKET_RELEVANT_CATEGORIES:
+            allowed_names = get_bucket_test_names_for_category(category.category_name)
+            test_types = [t for t in test_types if t.test_name in allowed_names]
+        return test_types
+
     # -------------------------------------------------------------------
     # 1. Player picker
     # -------------------------------------------------------------------
@@ -276,10 +297,42 @@ def assessments_server(input, output, session, app_state):
                     inputs.append(ui.input_numeric(f"edit_result_{r.result_id}", label, value=float(r.value), step=0.1))
                 field_blocks.append(ui.layout_columns(*inputs))
 
+            # Fields that exist for this category now but weren't on this
+            # entry when it was originally saved (e.g. BMR/Recommended
+            # Caloric Intake added to Body Composition after older entries
+            # already existed). Distinct "edit_missing_{test_type_id}" input
+            # IDs -- doesn't collide with edit_result_{result_id} above
+            # (results don't exist for these yet) or new_entry_section's
+            # test_{test_type_id} (different render.ui, but keeping the
+            # prefix distinct avoids any ambiguity). Left at 0.0 -- the
+            # save handler only creates a row when a field was actually
+            # filled in, so untouched fields don't create bogus entries.
+            missing_test_types = [
+                t for t in _category_entry_test_types(db, category)
+                if t.test_type_id not in result_by_test_type_id
+            ]
+            missing_block = []
+            if missing_test_types:
+                missing_groups = _group_test_fields(missing_test_types, category.category_name if category else "")
+                missing_block.append(ui.markdown("**Add missing fields (optional)**"))
+                missing_block.append(ui.p(
+                    "Fields added to this category after this entry was originally saved. Leave blank/0 to skip.",
+                    class_="text-muted small",
+                ))
+                for group_name, fields in missing_groups.items():
+                    if len(missing_groups) > 1:
+                        missing_block.append(ui.markdown(f"*{group_name}*"))
+                    inputs = []
+                    for t, field_label in fields:
+                        label = field_label + (f" ({t.unit})" if t.unit else "")
+                        inputs.append(ui.input_numeric(f"edit_missing_{t.test_type_id}", label, value=0.0, step=0.1))
+                    missing_block.append(ui.layout_columns(*inputs))
+
             return ui.div(
                 ui.input_date("edit_date", "Assessment date", value=editing_assessment.assessment_date),
                 *pitch_type_block,
                 *field_blocks,
+                *missing_block,
                 ui.input_text_area("edit_notes", "Notes (optional)", value=editing_assessment.notes or ""),
                 ui.input_action_button("save_edit_btn", "Save changes", class_="btn-primary mt-2"),
                 ui.hr(),
@@ -319,6 +372,20 @@ def assessments_server(input, output, session, app_state):
                 key = f"edit_result_{r.result_id}"
                 if key in input:
                     r.value = input[key]()
+
+            # New fields filled in via edit_entry_form's "missing fields"
+            # section -- create the AssessmentResult row now, skipping
+            # anything left at the untouched 0.0 default.
+            category = db.query(AssessmentCategory).filter(AssessmentCategory.category_id == editing_assessment.category_id).first()
+            existing_test_type_ids = {r.test_type_id for r in editing_assessment.results}
+            for t in _category_entry_test_types(db, category):
+                if t.test_type_id in existing_test_type_ids:
+                    continue
+                key = f"edit_missing_{t.test_type_id}"
+                if key in input:
+                    value = input[key]()
+                    if value:
+                        db.add(AssessmentResult(assessment_id=editing_assessment.assessment_id, test_type_id=t.test_type_id, value=value))
 
             db.commit()
             ui.notification_show("Saved changes.", type="message", duration=6)
