@@ -87,6 +87,7 @@ from models import BullpenSession, RapsodoPitch
 from analytics.bullpen_metrics import (
     session_summary, pitch_type_summary, individual_pitch_rows, filter_pitches, pitch_type_label,
     release_trajectory_summary, fastball_trajectory_diagnostic, average_estimated_arm_angle,
+    vaa_trajectory_triples, team_havaa_baseline,
 )
 from analytics.pitch_trajectory import calculate_estimated_arm_angle
 from pitch_type_config import FASTBALL_TYPES
@@ -170,6 +171,34 @@ def _load_pitches(db, target):
     )
 
 
+def _team_havaa_baseline_query(db):
+    """Team-wide HAVAA baseline query (Sept 2026 addition). Deliberately
+    NOT scoped to one pitcher/session/target -- HAVAA compares a pitch's
+    VAA against every OTHER pitch (bullpen or game, any pitcher) that
+    crossed the plate at roughly the same height, so the baseline needs
+    the whole team's pitches, unlike everything else in this file.
+
+    Only pulls the 4 columns calculate_estimated_vaa needs (release_
+    height/angle/extension, plate_z_ft) -- filtered not-null here so the
+    query itself does the same "missing any one -> skip" work
+    vaa_trajectory_triples()/calculate_estimated_vaa would otherwise do
+    per-row after a full fetch. Follows this file's established
+    get_session()-inline pattern (see _target_and_pitches above) --
+    analytics/bullpen_metrics.py stays DB-free, this file owns the
+    query."""
+    return (
+        db.query(RapsodoPitch)
+        .options(joinedload(RapsodoPitch.pitch_type))
+        .filter(
+            RapsodoPitch.release_height.isnot(None),
+            RapsodoPitch.release_angle.isnot(None),
+            RapsodoPitch.release_extension.isnot(None),
+            RapsodoPitch.plate_z_ft.isnot(None),
+        )
+        .all()
+    )
+
+
 def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
     controls_id = f"{key_prefix}_controls"
     results_id = f"{key_prefix}_results"
@@ -247,6 +276,21 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
         t, _ = _target_and_pitches()
         if t is not None:
             _charts_shown_for.set(_target_key(t))
+
+    @reactive.calc
+    def _havaa_baseline():
+        """Team-wide HAVAA baseline (Sept 2026 addition) -- unlike
+        _target_and_pitches below, this has no reactive dependency on
+        input/get_target, so Shiny computes it once per module instance
+        (bullpen dashboard, or its reuse on Pitcher Profile) and caches
+        it for the rest of the session rather than re-querying on every
+        pitcher/session switch."""
+        db = get_session()
+        try:
+            rows = _team_havaa_baseline_query(db)
+            return team_havaa_baseline(vaa_trajectory_triples(rows))
+        finally:
+            db.close()
 
     @reactive.calc
     def _target_and_pitches():
@@ -490,7 +534,7 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
             ))
             present_fastball_types = [t for t in FASTBALL_TYPES if any(pitch_type_label(p) == t for p in filtered_pitches)]
             for canonical_type in present_fastball_types:
-                diag = fastball_trajectory_diagnostic(filtered_pitches, player, canonical_pitch_type=canonical_type)
+                diag = fastball_trajectory_diagnostic(filtered_pitches, player, canonical_pitch_type=canonical_type, havaa_baseline=_havaa_baseline())
                 if diag is None:
                     continue
                 trajectory_cards.append(_card(
@@ -506,6 +550,7 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
                         ui.div(f"Velocity: {diag['Velocity']:.1f} mph" if diag["Velocity"] is not None else "Velocity: —"),
                         ui.div(f"VB: {diag['VB']:.1f}\"" if diag["VB"] is not None else "VB: —"),
                         ui.div(f"VAA: {diag['VAA']}"),
+                        ui.div(f"HAVAA: {diag['HAVAA']}"),
                         ui.div(f"Release Height: {diag['Release Height']:.2f} ft" if diag["Release Height"] is not None else "Release Height: —"),
                         ui.div(f"Extension: {diag['Extension']:.2f} ft" if diag["Extension"] is not None else "Extension: —"),
                         ui.div(f"Arm Angle: {diag['Arm Angle']}"),
