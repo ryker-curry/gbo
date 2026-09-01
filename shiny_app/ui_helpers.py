@@ -390,10 +390,13 @@ def show_card(player, bucket_data, pitch_summary=None, flag="neutral", fastball_
       in any form now). They're still visible elsewhere (Overview tab,
       Development priorities) just never percentile-scored there --
       see BODY_COMP_BAR_NAMES in bucket_display.py.
-      Pitchers also get VELO (average FASTBALL-only velocity, from
-      fastball_summary) and SPIN (average spin rate across the whole
-      latest session) -- shown as the raw mph/rpm, bar scaled
-      70-100 mph / 1500-2800 rpm.
+      Pitchers also get VELO and SPIN -- both average FASTBALL-only
+      (from fastball_summary, Sept 2026: SPIN used to average every
+      pitch type together, which is misleading since curveballs/
+      sliders spin faster than fastballs by design -- same fix VELO
+      already had), shown as the raw mph/rpm with max fastball
+      velo/spin alongside the average, bar scaled 70-100 mph /
+      1500-2800 rpm.
     Tier by overall: 90+ diamond, 85-89 gold, 80-84 silver, 75-79
     bronze, else common (Aug 2026, Ryker: renamed from gold/crimson/
     silver/slate to the more trading-card-standard Diamond/Gold/
@@ -443,10 +446,33 @@ def show_card(player, bucket_data, pitch_summary=None, flag="neutral", fastball_
         bar("ARM", bd.get("capacity_score")), flag_bar("ROM", rom_color, rom_deficits),
     ]
     if getattr(player, "is_pitcher", False):
-        ps = pitch_summary or {}
+        # VELO and SPIN are both fastball-only averages (Aug/Sept 2026,
+        # Ryker) -- SPIN used to average across every pitch type in the
+        # session, which mixed in curveballs/sliders that spin faster
+        # than a fastball by design, the same "mixed pitch types"
+        # problem VELO was fixed for first. Both bars show max
+        # alongside the average now too: the bar position/status still
+        # reflects the average (more representative of what a guy sits
+        # at than one outlier pitch), max is just extra context in the
+        # value text.
         fb = fastball_summary or {}
-        v, sp = fb.get("avg_velocity"), ps.get("avg_spin_rate")
-        attrs += [bar("VELO", v, f"{v:.1f}" if v else None, 70, 100), bar("SPIN", sp, f"{sp:,.0f}" if sp else None, 1500, 2800)]
+        v, mv = fb.get("avg_velocity"), fb.get("max_velocity")
+        sp, msp = fb.get("avg_spin_rate"), fb.get("max_spin_rate")
+
+        def _avg_max_display(avg, mx, fmt):
+            """Formats "88.4 / 96.2 max", collapsing to just the average
+            when there's nothing more to say -- a single-fastball session
+            has avg == max, and showing "93.5 / 93.5 max" is just noise."""
+            if avg is None:
+                return None
+            avg_s = fmt(avg)
+            if mx is None or fmt(mx) == avg_s:
+                return avg_s
+            return f"{avg_s} / {fmt(mx)} max"
+
+        velo_display = _avg_max_display(v, mv, lambda x: f"{x:.1f}")
+        spin_display = _avg_max_display(sp, msp, lambda x: f"{x:,.0f}")
+        attrs += [bar("VELO", v, velo_display, 70, 100), bar("SPIN", sp, spin_display, 1500, 2800)]
 
     pos = player.player_position.position_name if getattr(player, "player_position", None) else None
     cls = player.player_class.class_name if getattr(player, "player_class", None) else None
