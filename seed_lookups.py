@@ -187,11 +187,18 @@ LOWER_BODY_STRENGTH_TESTS = [
     ("Isometric Mid-Thigh Pull Peak Vertical Force (Plant Leg)", "N"),
 ]
 
-# (test_name, unit) -- matches Ryker's bucket-system spreadsheet exactly
+# (test_name, unit) -- matches Ryker's bucket-system spreadsheet exactly,
+# except Broad Jump/Lateral Jump Distance were switched ft -> in Sept 1
+# 2026 (Ryker's call, for consistency with every other jump metric here
+# already being in inches). Only affects fresh seeds -- the live DB's
+# existing test types + the 68 already-recorded values were converted
+# directly (unit relabeled, values x12) rather than through this file,
+# since seed_tests() only adds missing test types and never touches
+# ones that already exist.
 EXPLOSIVE_POWER_TESTS = [
     ("Vertical Jump (Jump Mat)", "in"),
-    ("Broad Jump Distance", "ft"),
-    ("Lateral Jump Distance (Drive Leg)", "ft"), ("Lateral Jump Distance (Plant Leg)", "ft"),
+    ("Broad Jump Distance", "in"),
+    ("Lateral Jump Distance (Drive Leg)", "in"), ("Lateral Jump Distance (Plant Leg)", "in"),
     ("Countermovement Jump Height", "in"),
     ("Countermovement Jump RSI-Modified", "ratio"),
     ("Countermovement Jump Concentric Duration", "ms"),
