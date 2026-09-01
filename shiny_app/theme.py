@@ -648,11 +648,39 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator { filter: inv
 .gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > .shiny-plot-output,
 .gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > .bslib-grid,
 .gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > table,
-.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > .table-responsive {
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > .table-responsive,
+/* Sept 1 2026: several charts (bullpen_dashboard_display.py's Movement
+   and Spin Axis panels) build their output as ui.div(*children) --
+   the chart image PLUS a caption/legend div underneath -- so the real
+   child of .shiny-html-output is a plain <div>, not the img/bslib-grid
+   itself. None of the specific-tag selectors above match a bare div,
+   so this was still landing in a single ~240px auto-fit cell (visible
+   live as a tiny chart floating in a mostly-empty row -- Ryker: "pitch
+   movement chart and spin axis charts need to be bigger, take up same
+   amount of space that the pitch location chart takes up" -- Location
+   didn't have this bug because it returns its <img> directly, with no
+   wrapping div). */
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > div {
   grid-column: 1 / -1;
 }
 .gbo-content .shiny-html-output:has(.shiny-input-container) .btn-primary { margin-top: .55rem; }
 .gbo-content .shiny-input-container { margin-bottom: .85rem; max-width: none; width: auto; }
+
+/* Sept 1 2026: the generic "entry form" card treatment above
+   (.shiny-html-output:has(.shiny-input-container) -> max-width:900px)
+   is meant for actual data-entry forms, but a chart panel that also
+   has a filter slider/radio group (Bullpen Dashboard's Charts section,
+   reused on Pitcher/Hitter Profile) matches that same selector and was
+   getting capped to the same narrow 900px width as a login form --
+   directly working against "big and easy to read" charts. Any card
+   that also contains real chart/graphic content escapes the width cap
+   (form-only cards, with no image/svg/chart grid anywhere inside,
+   still get the narrow max-width as originally intended). */
+.gbo-content .shiny-html-output:has(.shiny-input-container):has(img),
+.gbo-content .shiny-html-output:has(.shiny-input-container):has(svg),
+.gbo-content .shiny-html-output:has(.shiny-input-container):has(.bslib-grid) {
+  max-width: none;
+}
 
 /* buttons size to their label instead of stretching across the card */
 .gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .btn { justify-self: start; width: auto; min-width: 240px; }
