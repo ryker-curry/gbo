@@ -124,7 +124,16 @@ def assessments_server(input, output, session, app_state):
                 str(p.player_id): f"{p.first_name} {p.last_name}" + ("" if p.active else " (Inactive / prior roster)")
                 for p in players
             }
-            return ui.input_select("player_select", "Player", choices=choices)
+            # Keep whatever player was already selected across a save --
+            # this re-renders on every _bump_refresh() (after save/edit/
+            # delete), and ui.input_select defaults to the FIRST choice
+            # when `selected` isn't given, which is what was silently
+            # bouncing the picker back to the top of the roster after
+            # every save. Falls back to the default (first player) on
+            # first load, when nothing's selected yet.
+            current = input.player_select() if "player_select" in input else None
+            selected = current if current in choices else None
+            return ui.input_select("player_select", "Player", choices=choices, selected=selected)
         finally:
             db.close()
 
