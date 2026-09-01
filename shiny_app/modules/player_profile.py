@@ -353,14 +353,25 @@ def player_profile_server(input, output, session, app_state):
         for title, score, metrics in buckets:
             if score is None and not metrics:
                 continue
-            st = ui_helpers.status_from_percentile(score)
-            flagged = sum(1 for d in metrics.values() if d.get("percentile") is not None and d["percentile"] < 35)
-            watch = sum(1 for d in metrics.values() if d.get("percentile") is not None and 35 <= d["percentile"] < 60)
+            # Sept 1 2026 fix: this accordion used to grade both the
+            # panel's own composite score AND each individual metric bar
+            # with the app-wide 35/60 default (ui_helpers.status_from_
+            # percentile) -- on this roster that read as "everyone
+            # green," the same complaint that already drove build_score_
+            # rings/build_metric_bars to stricter cut points elsewhere.
+            # Now reuses those same two scales instead of a third copy:
+            # composite_score_status for the panel/score badge (matches
+            # the Composite scores ring for the identical value), individual_
+            # metric_status for each metric row and the flagged/watch
+            # counts that drive this panel's chip.
+            st = bucket_display.composite_score_status(score) or ui_helpers.STATUS_NEUTRAL
+            flagged = sum(1 for d in metrics.values() if bucket_display.individual_metric_status(d.get("percentile")) == "flag")
+            watch = sum(1 for d in metrics.values() if bucket_display.individual_metric_status(d.get("percentile")) == "watch")
             if flagged: st = ui_helpers.STATUS_FLAG
             elif watch and st == ui_helpers.STATUS_GOOD: st = ui_helpers.STATUS_WATCH
-            rows = [ui_helpers.metric_bar(n, f"{d.get('raw')}", d.get("percentile"), unit=d.get("unit"), percentile_text=f"{bucket_display.ordinal(d['percentile'])} percentile" if d.get("percentile") is not None else "No team comparison yet") for n, d in metrics.items()]
+            rows = [ui_helpers.metric_bar(n, f"{d.get('raw')}", d.get("percentile"), status=bucket_display.individual_metric_status(d.get("percentile")), unit=d.get("unit"), percentile_text=f"{bucket_display.ordinal(d['percentile'])} percentile" if d.get("percentile") is not None else "No team comparison yet") for n, d in metrics.items()]
             bucket_cards.append(ui.accordion_panel(
-                ui.div(ui.span(f"{score:.0f}" if score is not None else "—", class_=f"gbo-bucket-score {('gold' if (score or 0) >= 90 else ui_helpers.status_from_percentile(score))}"),
+                ui.div(ui.span(f"{score:.0f}" if score is not None else "—", class_=f"gbo-bucket-score {('gold' if (score or 0) >= 90 else (bucket_display.composite_score_status(score) or 'neutral'))}"),
                        ui.div(title, class_="gbo-bucket-title"),
                        ui_helpers.status_chip(st, f"{flagged} priority · {watch} attention" if (flagged or watch) else None), class_="gbo-bucket-head"),
                 ui.div(*rows, class_="gbo-metric-bar-group") if rows else ui_helpers.empty_state("No metrics recorded."),
