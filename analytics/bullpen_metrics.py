@@ -259,6 +259,7 @@ def session_summary(pitches):
             "avg_velocity": None,
             "max_velocity": None,
             "avg_spin_rate": None,
+            "max_spin_rate": None,
         }
 
     type_names = []
@@ -273,6 +274,7 @@ def session_summary(pitches):
         "avg_velocity": _avg([p.velocity for p in pitches]),
         "max_velocity": _max([p.velocity for p in pitches]),
         "avg_spin_rate": _avg([p.total_spin for p in pitches]),
+        "max_spin_rate": _max([p.total_spin for p in pitches]),
     }
 
 
