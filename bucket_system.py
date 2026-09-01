@@ -210,25 +210,47 @@ BODY_COMP_METRICS = [
     ("Skeletal Muscle Mass", "higher"),
 ]
 
-# All 4 Body Comp raw fields that are actually in the bucket
-# spreadsheet -- used to scope the assessment ENTRY FORM (Ryker wants
-# all 4 enterable, even though only 2 feed the calculation above).
-BODY_COMP_ENTRY_FIELDS = {"Body Weight", "Body Fat Mass", "Skeletal Muscle Mass", "Percent Body Fat"}
+# Body Comp raw fields enterable via the assessment ENTRY FORM (Ryker
+# wants all of these enterable, even though only 2 -- BODY_COMP_METRICS
+# above -- feed the composite calculation). Sept 1 2026: added Basal
+# Metabolic Rate (BMR) and Recommended Caloric Intake, the InBody770's
+# two metabolic-guidance fields ("our machine gives bmr and recommended
+# caloric intake") -- same reference-only treatment as Body Fat Mass/
+# Percent Body Fat, not part of the composite (a bigger player naturally
+# has a higher BMR/calorie target; that's body size, not fitness, so
+# ranking players against each other on it would be misleading).
+BODY_COMP_ENTRY_FIELDS = {
+    "Body Weight", "Body Fat Mass", "Skeletal Muscle Mass", "Percent Body Fat",
+    "Basal Metabolic Rate (BMR)", "Recommended Caloric Intake",
+}
 
-# Same 4 fields as BODY_COMP_ENTRY_FIELDS, but as (test_name, direction)
-# pairs for DISPLAY (percentile bars in the Body Comp breakdown, per
-# Ryker's call) -- players see percentile bars for all 4, even though
+# The original 4 BODY_COMP_ENTRY_FIELDS, as (test_name, direction) pairs
+# for DISPLAY (percentile bars in the Body Comp breakdown, per Ryker's
+# call) -- players see percentile bars for all 4, even though
 # body_comp_score above still only averages the first 2. Body Fat Mass/
 # Percent Body Fat use "lower" (less body fat scores toward 100), per
 # Ryker's call -- the professor's original scoring never assigned them
 # a direction at all since they were never part of the composite math,
 # so this is a new, display-only decision, not a re-derivation of his
 # spreadsheet. Order here is the order the bars render in.
+#
+# Sept 1 2026: BMR/Recommended Caloric Intake also live here (needed so
+# compute_metric_percentiles picks them up at all) but are deliberately
+# NOT additional bars -- see the inline comment on those two entries.
 BODY_COMP_DISPLAY_METRICS = [
     ("Body Weight", "higher"),
     ("Skeletal Muscle Mass", "higher"),
     ("Body Fat Mass", "lower"),
     ("Percent Body Fat", "lower"),
+    # BMR/Recommended Caloric Intake (Sept 1 2026): direction is unused
+    # for these two -- neither is in BODY_COMP_METRICS/BODY_COMP_BAR_
+    # NAMES, so bucket_display.build_full_breakdown routes them straight
+    # to build_raw_metrics' plain "Reference only, not scored" line
+    # (same as Body Fat Mass/Percent Body Fat), never a percentile bar.
+    # "higher" is a placeholder to satisfy compute_metric_percentiles'
+    # signature, not a real scoring call.
+    ("Basal Metabolic Rate (BMR)", "higher"),
+    ("Recommended Caloric Intake", "higher"),
 ]
 
 # sub_group_name -> [(test_name, direction), ...]

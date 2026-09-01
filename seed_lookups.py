@@ -85,6 +85,12 @@ BODY_COMPOSITION_TESTS = [
     ("Right Leg Lean Mass", "lb"), ("Left Leg Lean Mass", "lb"),
     ("Throwing Arm Fat Mass", "lb"), ("Non-Throwing Arm Fat Mass", "lb"),
     ("Trunk Fat Mass", "lb"), ("Right Leg Fat Mass", "lb"), ("Left Leg Fat Mass", "lb"),
+    # Sept 1 2026 addition (Ryker: "our machine gives bmr and recommended
+    # caloric intake") -- the InBody770 printout's two metabolic-guidance
+    # fields. Same "enterable, reference-only, not scored" treatment as
+    # Body Fat Mass/Percent Body Fat below -- see BODY_COMP_ENTRY_FIELDS/
+    # BODY_COMP_DISPLAY_METRICS in bucket_system.py.
+    ("Basal Metabolic Rate (BMR)", "kcal"), ("Recommended Caloric Intake", "kcal"),
 ]
 
 # (test_name, unit) -- pruned down to exactly what's actually measured
