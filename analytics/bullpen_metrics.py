@@ -30,12 +30,105 @@ two functions keeps working unchanged -- the new columns simply don't
 appear without a player.
 """
 
-from statistics import mean
+from statistics import mean, stdev
 
 from analytics.pitch_trajectory import (
     calculate_estimated_arm_angle, calculate_estimated_vaa, calculate_estimated_haa,
     classify_fastball_trajectory,
 )
+
+
+HAVAA_HEIGHT_BUCKET_FT = 0.5
+# Team-wide baseline bucket width for Height-Adjusted VAA (Sept 2026):
+# plate-crossing height is rounded to the nearest half-foot before
+# grouping, so e.g. 2.3ft and 2.6ft crossings pool into the same
+# baseline bucket rather than each needing its own exact-height sample.
+
+MIN_HAVAA_BASELINE_PITCHES = 20
+# Mean/stdev gate for one (pitch_type, height bucket) baseline cell --
+# same floor as Location+/Arsenal's "Reliable" flag (a mean/stdev
+# baseline, not a fitted regression like Stuff+'s MIN_STUFF_TRAINING_
+# PITCHES=40 in analytics/pitch_grading.py). Per Ryker's Sept 1 2026
+# call: bucket by pitch type + rounded plate height, NOT also split by
+# throwing hand.
+
+
+def _havaa_height_bucket(plate_height_ft, bucket_size=HAVAA_HEIGHT_BUCKET_FT):
+    """Round a plate-crossing height to the nearest bucket_size -- the
+    grouping key both team_havaa_baseline() and havaa() use, so a pitch
+    is always looked up against the same bucket it was trained into."""
+    if plate_height_ft is None:
+        return None
+    return round(plate_height_ft / bucket_size) * bucket_size
+
+
+def vaa_trajectory_triples(pitches):
+    """Public helper for building a team-wide HAVAA baseline from OUTSIDE
+    this module (e.g. a Shiny page's own DB-querying function) without
+    reaching into this module's private _pitch_level_vaa -- keeps this
+    module the only place that knows how estimated VAA is computed.
+    Returns a list of (pitch_type_label, plate_height_ft, vaa_degrees)
+    triples, one per pitch with both a usable estimated VAA and a
+    measured plate-crossing height; pitches missing either are dropped,
+    same as every other average-second calculation in this module."""
+    triples = []
+    for p in pitches:
+        vaa = _pitch_level_vaa(p)["value_degrees"]
+        plate_height = float(p.plate_z_ft) if p.plate_z_ft is not None else None
+        if vaa is None or plate_height is None:
+            continue
+        triples.append((pitch_type_label(p), plate_height, vaa))
+    return triples
+
+
+def team_havaa_baseline(triples):
+    """Build the Height-Adjusted VAA baseline from (pitch_type_label,
+    plate_height_ft, vaa_degrees) triples -- see vaa_trajectory_triples().
+    Buckets by pitch type + plate-crossing height rounded to the nearest
+    HAVAA_HEIGHT_BUCKET_FT (no handedness split, per Ryker's Sept 1 2026
+    call). Returns {(pitch_type_label, height_bucket): (mean_vaa,
+    stdev_vaa, n)}, omitting any bucket with fewer than
+    MIN_HAVAA_BASELINE_PITCHES pitches -- not enough data yet to trust
+    that bucket's average/spread."""
+    buckets = {}
+    for pitch_type, plate_height, vaa in triples:
+        bucket = _havaa_height_bucket(plate_height)
+        if bucket is None:
+            continue
+        buckets.setdefault((pitch_type, bucket), []).append(vaa)
+
+    baseline = {}
+    for key, vaas in buckets.items():
+        if len(vaas) < MIN_HAVAA_BASELINE_PITCHES:
+            continue
+        avg = round(mean(vaas), 2)
+        spread = round(stdev(vaas), 2) if len(vaas) > 1 else 0.0
+        baseline[key] = (avg, spread, len(vaas))
+    return baseline
+
+
+def havaa(pitch_type_label_value, plate_height_ft, vaa_degrees, baseline):
+    """Height-Adjusted VAA for one pitch (or one already-averaged VAA
+    value): how many standard deviations flatter (+) or steeper (-) than
+    a typical pitch of the SAME pitch type crossing the plate at the
+    SAME rounded height -- this is what isolates true "ride"/carry
+    quality from the geometric fact that raw VAA is naturally flatter
+    high in the zone and steeper low, independent of pitch type.
+
+    Returns None if vaa_degrees/plate_height_ft is missing or `baseline`
+    (from team_havaa_baseline()) has no entry for this (pitch_type,
+    height bucket) yet -- i.e. not enough team-wide data at that height
+    for that pitch type."""
+    if vaa_degrees is None or plate_height_ft is None:
+        return None
+    bucket = _havaa_height_bucket(plate_height_ft)
+    entry = baseline.get((pitch_type_label_value, bucket)) if baseline else None
+    if entry is None:
+        return None
+    avg, spread, _n = entry
+    if spread == 0:
+        return 0.0
+    return round((vaa_degrees - avg) / spread, 2)
 
 
 def _avg(values):
@@ -328,13 +421,20 @@ def release_trajectory_summary(pitches, player):
     }
 
 
-def fastball_trajectory_diagnostic(pitches, player, canonical_pitch_type="4-Seam Fastball"):
+def fastball_trajectory_diagnostic(pitches, player, canonical_pitch_type="4-Seam Fastball", havaa_baseline=None):
     """Compact "FASTBALL TRAJECTORY" diagnostic card data (spec Section
     18): Velocity/VB/VAA/Release Height/Extension/Arm Angle plus a
     Flat/Average/Steep classification, scoped to ONE canonical pitch
     type at a time (never mixing 4-seam and 2-seam/sinker thresholds --
     call this once per fastball-family type actually present, per
     classify_fastball_trajectory's own per-type config).
+
+    havaa_baseline (Sept 2026 addition): an optional team-wide baseline
+    from team_havaa_baseline() -- when given, adds an "HAVAA" key
+    (Height-Adjusted VAA, alongside VAA rather than replacing it, per
+    Ryker's Sept 1 2026 call). When omitted (the default), "HAVAA"
+    still appears as "Not enough data yet" so every caller of this
+    function keeps working unchanged.
 
     Returns None if no pitch in `pitches` matches canonical_pitch_type
     (nothing to show a card for) -- caller should skip rendering the
@@ -348,12 +448,26 @@ def fastball_trajectory_diagnostic(pitches, player, canonical_pitch_type="4-Seam
     arm_angles = [_pitch_level_arm_angle(p, player)["value_degrees"] for p in group]
     arm_avg, arm_n = _avg_pitch_level(arm_angles)
 
+    havaa_avg, havaa_n = None, 0
+    if havaa_baseline:
+        pitch_havaas = [
+            havaa(
+                canonical_pitch_type,
+                float(p.plate_z_ft) if p.plate_z_ft is not None else None,
+                vaa,
+                havaa_baseline,
+            )
+            for p, vaa in zip(group, vaas)
+        ]
+        havaa_avg, havaa_n = _avg_pitch_level(pitch_havaas)
+
     return {
         "pitch_type": canonical_pitch_type,
         "n": len(group),
         "Velocity": _avg([p.velocity for p in group]),
         "VB": _avg([p.vb_spin for p in group]),
         "VAA": f"{vaa_avg:g}° (n={vaa_n})" if vaa_avg is not None else "N/A",
+        "HAVAA": f"{havaa_avg:+.2f} (n={havaa_n})" if havaa_avg is not None else "Not enough data yet",
         "Release Height": _avg([p.release_height for p in group]),
         "Extension": _avg_extension([p.release_extension for p in group]),
         "Arm Angle": f"{arm_avg:g}°" if arm_avg is not None else "N/A",
