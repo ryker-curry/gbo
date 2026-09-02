@@ -38,6 +38,7 @@ from shiny import ui
 
 from bucket_system import BODY_COMP_METRICS
 import force_plate_standards
+import ui_helpers
 
 BODY_COMP_BAR_NAMES = {name for name, _ in BODY_COMP_METRICS}
 
@@ -460,13 +461,28 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark", is_pitcher=None):
 
 
 def build_raw_metrics(metrics_dict):
-    """Plain raw-value line, no percentile bar and no team comparison --
-    for Body Comp fields that are reference-only. Returns None if
-    empty."""
+    """Body Comp fields that are reference-only, not part of the
+    composite/percentile-bar path (BMR, Recommended Caloric Intake,
+    Body Fat Mass, Percent Body Fat). Sept 2026 (Ryker's call -- a
+    single small muted caption line meant "a player would never even
+    notice them"): now its own KPI-tile row, the same .gbo-kpi-card
+    component Team Overview's headline numbers use (ui_helpers.
+    kpi_tile), instead of plain inline text. Every tile is left
+    status=None on purpose -- these aren't ranked against the team the
+    way the bars above are, so a good/watch/flag color would
+    misrepresent them as scored. Returns None if empty (unchanged
+    contract)."""
     if not metrics_dict:
         return None
-    parts = [f"{name}: {d['raw']:.1f}{d['unit'] or ''}" for name, d in metrics_dict.items()]
-    return ui.p("Reference only, not scored — " + "  •  ".join(parts), class_="text-muted small")
+    tiles = []
+    for name, d in metrics_dict.items():
+        unit = d["unit"] or ""
+        value = f"{d['raw']:,.0f}" if unit == "kcal" else f"{d['raw']:.1f}"
+        tiles.append(ui_helpers.kpi_tile(name, value, unit=unit))
+    return ui.div(
+        ui.p("Reference only, not scored", class_="text-muted small mb-2"),
+        ui.div(*tiles, class_="gbo-kpi-row"),
+    )
 
 
 def build_full_breakdown(bucket_data, key_prefix, mode="dark"):
