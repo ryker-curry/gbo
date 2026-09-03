@@ -37,16 +37,30 @@ a target is open, since Shiny's reactive.Value persists for the whole
 session the way a Streamlit query param never did -- without it, a
 coach who opened one pitcher's dashboard would be stuck on it for the
 rest of their session with no in-app way back to the picker.
+
+Sept 2026 addition: the session picker (_sessions_with_tracked_data)
+now also lists sessions with command-tracking data (CommandPitch rows,
+logged on the separate Command Tracker page), not just Rapsodo data --
+previously a command-focused bullpen never showed up on this page at
+all. Opening such a session shows a read-only Command Tracking
+scorecard + chart (command_dashboard_display.py) below/instead of the
+Rapsodo section, via the same register_*_dashboard(get_target)
+convention; a session with both kinds of data shows both. "Overall
+Pitch Tracking" stays Rapsodo-only for now -- a combined view across a
+pitcher's command sessions is a deliberate not-yet, revisit once
+there's more fall-ball command data to look at (intrasquads start the
+week of Sep 7 2026).
 """
 
 from shiny import module, ui, render, reactive, req
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import Player, StaffPlayerAssignment, User, BullpenSession, RapsodoPitch
+from models import Player, StaffPlayerAssignment, User, BullpenSession, RapsodoPitch, CommandPitch
 
 import ui_helpers
 import bullpen_dashboard_display
+import command_dashboard_display
 
 ALLOWED_STAFF_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst")
 
@@ -74,16 +88,45 @@ def _allowed_player_ids(db, app_state):
     return [p.player_id for p in q.all()]
 
 
-def _sessions_with_rapsodo_data(db, allowed_player_ids):
-    return (
+def _sessions_with_tracked_data(db, allowed_player_ids):
+    """Every bullpen session with Rapsodo data, command-tracking data, or
+    both -- the Bullpen Dashboard's session picker shows all of them
+    (Sept 2026: previously Rapsodo-only via an inner join to
+    RapsodoPitch, so a command-focused bullpen logged on the separate
+    Command Tracker page -- CommandPitch rows, no RapsodoPitch -- never
+    showed up here at all).
+
+    Two separate queries rather than one OR-joined query, kept simple
+    and matching this file's existing query style; merged below into
+    one dict so a session with both kinds of data (the schema allows
+    it -- BullpenType's "Command" value is a default, not a constraint)
+    appears exactly once. Returns (sessions_by_id, rapsodo_bullpen_ids,
+    command_bullpen_ids) -- callers use the two id sets to decide which
+    of the Rapsodo/Command display fragments actually apply to the
+    selected session."""
+    rapsodo_sessions = (
         db.query(BullpenSession)
         .options(joinedload(BullpenSession.bullpen_type), joinedload(BullpenSession.player))
         .join(RapsodoPitch, RapsodoPitch.bullpen_id == BullpenSession.bullpen_id)
         .filter(BullpenSession.player_id.in_(allowed_player_ids))
         .distinct()
-        .order_by(BullpenSession.session_date.desc())
         .all()
     )
+    command_sessions = (
+        db.query(BullpenSession)
+        .options(joinedload(BullpenSession.bullpen_type), joinedload(BullpenSession.player))
+        .join(CommandPitch, CommandPitch.bullpen_id == BullpenSession.bullpen_id)
+        .filter(BullpenSession.player_id.in_(allowed_player_ids))
+        .distinct()
+        .all()
+    )
+    rapsodo_ids = {b.bullpen_id for b in rapsodo_sessions}
+    command_ids = {b.bullpen_id for b in command_sessions}
+    merged = {b.bullpen_id: b for b in rapsodo_sessions}
+    for b in command_sessions:
+        merged.setdefault(b.bullpen_id, b)
+    sessions_by_id = dict(sorted(merged.items(), key=lambda kv: kv[1].session_date, reverse=True))
+    return sessions_by_id, rapsodo_ids, command_ids
 
 
 @module.ui
@@ -96,6 +139,7 @@ def bullpen_dashboard_ui():
         ui.output_ui("dashboard_header"),
         ui.output_ui("dash_overall_controls_slot"),
         ui.output_ui("dash_session_controls_slot"),
+        ui.output_ui("dash_command_controls_slot"),
         ui_helpers.page_footer(),
     )
 
@@ -149,13 +193,17 @@ def bullpen_dashboard_server(input, output, session, app_state):
             result = {
                 "allowed_player_ids": allowed_player_ids,
                 "sessions_by_id": {},
+                "rapsodo_bullpen_ids": set(),
+                "command_bullpen_ids": set(),
                 "target_bullpen_id": None,
                 "invalid_target": False,
             }
             if not allowed_player_ids:
                 return result
-            sessions = _sessions_with_rapsodo_data(db, allowed_player_ids)
-            result["sessions_by_id"] = {b.bullpen_id: b for b in sessions}
+            sessions_by_id, rapsodo_ids, command_ids = _sessions_with_tracked_data(db, allowed_player_ids)
+            result["sessions_by_id"] = sessions_by_id
+            result["rapsodo_bullpen_ids"] = rapsodo_ids
+            result["command_bullpen_ids"] = command_ids
 
             raw_target = _target_bullpen_id()
             if raw_target is not None:
@@ -181,7 +229,7 @@ def bullpen_dashboard_server(input, output, session, app_state):
         if not resolved["allowed_player_ids"]:
             return ui_helpers.empty_state("No pitchers to show yet." if app_state.can_view_all_players() else "No pitchers are currently assigned to you.")
         if not resolved["sessions_by_id"]:
-            return ui_helpers.empty_state("No bullpen sessions with imported Rapsodo data yet. Upload one from the \"Import Rapsodo Data\" page first.")
+            return ui_helpers.empty_state("No bullpen sessions with tracked data yet. Import Rapsodo data, or log a session on the Command Tracker page, first.")
         return None
 
     @render.ui
@@ -199,7 +247,7 @@ def bullpen_dashboard_server(input, output, session, app_state):
 
         warning = None
         if resolved["invalid_target"]:
-            warning = ui.p("That session either doesn't exist, has no Rapsodo data yet, or you don't have access to it.", class_="text-warning")
+            warning = ui.p("That session either doesn't exist, has no tracked data yet, or you don't have access to it.", class_="text-warning")
 
         pitchers_by_id = {}
         for b in resolved["sessions_by_id"].values():
@@ -274,19 +322,42 @@ def bullpen_dashboard_server(input, output, session, app_state):
         if target_player is None:
             return None
         player_session_ids = [
-            bid for bid, b in resolved["sessions_by_id"].items() if b.player_id == target_player_id
+            bid for bid, b in resolved["sessions_by_id"].items()
+            if b.player_id == target_player_id and bid in resolved["rapsodo_bullpen_ids"]
         ]
         if not player_session_ids:
             return None
         return {"kind": "combined", "player": target_player, "bullpen_ids": player_session_ids}
 
     def _get_session_target(input):
+        """Rapsodo dashboard target -- None (nothing to show) for a
+        command-only session, so the Rapsodo display never has to
+        handle a zero-RapsodoPitch session; see _get_command_session_
+        target below for that session's actual data."""
         if not app_state.is_authenticated():
             return None
         if app_state.role_name() != "Player" and app_state.role_name() not in ALLOWED_STAFF_ROLES:
             return None
         resolved = _resolved()
-        if resolved["target_bullpen_id"] is not None:
+        if resolved["target_bullpen_id"] is not None and resolved["target_bullpen_id"] in resolved["rapsodo_bullpen_ids"]:
+            return {"kind": "session", "bullpen_id": resolved["target_bullpen_id"]}
+        return None
+
+    def _get_command_session_target(input):
+        """Command Tracking target (Sept 2026 addition) -- mirrors
+        _get_session_target exactly, just gated on command_bullpen_ids
+        instead of rapsodo_bullpen_ids, so a command-focused bullpen
+        (logged on the separate Command Tracker page) shows its
+        scorecard/chart here even though it has no Rapsodo data at
+        all. A session with both kinds of data resolves both targets
+        at once -- dash_session_controls_slot/dash_command_controls_
+        slot below render whichever fragment(s) actually apply."""
+        if not app_state.is_authenticated():
+            return None
+        if app_state.role_name() != "Player" and app_state.role_name() not in ALLOWED_STAFF_ROLES:
+            return None
+        resolved = _resolved()
+        if resolved["target_bullpen_id"] is not None and resolved["target_bullpen_id"] in resolved["command_bullpen_ids"]:
             return {"kind": "session", "bullpen_id": resolved["target_bullpen_id"]}
         return None
 
@@ -295,6 +366,9 @@ def bullpen_dashboard_server(input, output, session, app_state):
     )
     _session_fragment = bullpen_dashboard_display.register_bullpen_dashboard(
         input, output, session, "dash_session", _get_session_target,
+    )
+    _command_fragment = command_dashboard_display.register_command_dashboard(
+        input, output, session, "dash_command", _get_command_session_target,
     )
 
     @render.ui
@@ -318,7 +392,10 @@ def bullpen_dashboard_server(input, output, session, app_state):
             # needs it), and still shown once there are 2+ sessions to
             # actually aggregate.
             target_player_id = resolved["sessions_by_id"][resolved["target_bullpen_id"]].player_id
-            session_count = sum(1 for b in resolved["sessions_by_id"].values() if b.player_id == target_player_id)
+            session_count = sum(
+                1 for bid, b in resolved["sessions_by_id"].items()
+                if b.player_id == target_player_id and bid in resolved["rapsodo_bullpen_ids"]
+            )
             if session_count <= 1:
                 return None
         return _overall_fragment
@@ -331,3 +408,12 @@ def bullpen_dashboard_server(input, output, session, app_state):
         if resolved["target_bullpen_id"] is None:
             return None
         return _session_fragment
+
+    @render.ui
+    def dash_command_controls_slot():
+        if not app_state.is_authenticated():
+            return None
+        resolved = _resolved()
+        if resolved["target_bullpen_id"] is None:
+            return None
+        return _command_fragment
