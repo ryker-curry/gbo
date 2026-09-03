@@ -1,5 +1,6 @@
 """
-GBO -- Command Tracker: the command chart (Section 18).
+GBO -- Command Tracker charts: command_chart (Section 18) plus
+pitch_locations_chart (Sept 2026 addition).
 
 One function, command_chart(pitches) -- plots every LOCATED pitch
 (actual location recorded) as a point at its own (horizontal_miss,
@@ -25,6 +26,12 @@ Pure figure builder, same shape as strike_zone.py/visualizations/
 bullpen_charts.py: takes an already-loaded, already-filtered list of
 CommandPitch ORM objects (joinedload(.pitch_type) is the caller's job)
 and returns a plain Plotly Figure -- no Shiny/database calls here.
+
+pitch_locations_chart (below command_chart in this file) is the
+complementary view Ryker asked for: instead of every pitch normalized
+to its own miss-from-target offset, it plots every pitch's INTENDED
+and ACTUAL point on the real strike zone, each numbered, connected by
+a line -- see its own docstring for the full reasoning.
 """
 
 import plotly.graph_objects as go
@@ -32,7 +39,8 @@ import plotly.graph_objects as go
 import command_config
 from analytics.command_metrics import pitch_type_label
 from pitch_type_config import get_pitch_color
-from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, GOLD, MUTED_GRAY
+from strike_zone import ZONE_HALF_WIDTH, ZONE_BOTTOM, ZONE_TOP
+from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, GOLD, MUTED_GRAY, TEXT_CREAM
 
 # Fixed axis extent (inches), same rationale as movement_chart's fixed
 # MOVEMENT_EXTENT -- every command chart shows the same boundaries
@@ -108,5 +116,108 @@ def command_chart(pitches):
         yaxis=dict(range=[-CHART_EXTENT_IN, CHART_EXTENT_IN], gridcolor=GRID_GRAY, zeroline=False, dtick=3,
                     scaleanchor="x", scaleratio=1, constrain="domain"),
         legend=dict(orientation="h", y=-0.15),
+    )
+    return fig
+
+
+def pitch_locations_chart(pitches):
+    """Sept 2026 addition (Ryker): one chart showing every pitch's
+    INTENDED location and ACTUAL location together, plotted on the real
+    strike zone -- NOT command_chart's miss-from-target coordinate
+    system above, since the point here is showing where on the actual
+    zone each pitch was aimed and landed, not just how far off. Each
+    pitch is numbered on BOTH its intended and actual point (pitch 1's
+    intended dot and pitch 1's actual dot both show "1"), connected by
+    a thin dotted line so the miss direction is visible at a glance
+    instead of requiring the viewer to match numbers by eye across a
+    busy chart.
+
+    Color is by pitch type (Ryker: "if different pitch types are
+    thrown change color of dot to be able to tell the difference"),
+    same pitch_type_config.get_pitch_color convention as command_chart
+    above -- intended and actual use the SAME color for a given pitch
+    type (a same-colored pair threads together visually via color,
+    number, AND the connecting line), distinguished from each other by
+    marker shape instead: a hollow ring for intended, a filled dot for
+    actual.
+
+    Same real plate-coordinate system as visualizations/bullpen_charts.
+    location_chart (feet, zone rectangle from strike_zone.py) -- one
+    shared zone definition across the app, not a second independently
+    drawn approximation.
+
+    pitches: CommandPitch ORM objects (joinedload'd .pitch_type). A
+    pitch with no actual location yet still gets its numbered intended
+    point -- there's nothing to draw a line to or an actual dot for, an
+    intent-only pitch has no "actual" side yet."""
+    fig = go.Figure()
+
+    order, groups = _group_by_type(pitches)
+
+    # Connecting lines first (layer="below") so the numbered markers
+    # always draw on top and stay legible even where a line crosses
+    # through them.
+    for p in pitches:
+        if p.actual_x is None or p.actual_z is None:
+            continue
+        fig.add_shape(
+            type="line", xref="x", yref="y",
+            x0=float(p.intended_x), y0=float(p.intended_z),
+            x1=float(p.actual_x), y1=float(p.actual_z),
+            line=dict(color=MUTED_GRAY, width=1, dash="dot"), layer="below",
+        )
+
+    label_font = dict(color="#FFFFFF", size=10, family="Arial Black, Arial, sans-serif")
+
+    for label in order:
+        group = groups[label]
+        color = get_pitch_color(label) if label != "Unspecified" else MUTED_GRAY
+
+        fig.add_trace(go.Scatter(
+            x=[float(p.intended_x) for p in group],
+            y=[float(p.intended_z) for p in group],
+            mode="markers+text",
+            text=[str(p.pitch_number) for p in group],
+            textposition="middle center",
+            textfont=label_font,
+            marker=dict(symbol="circle-open", color=color, size=24, line=dict(color=color, width=3)),
+            name=label, legendgroup=label, showlegend=True,
+            hovertemplate=f"{label} — Intended<br>Pitch #%{{text}}<br>(%{{x:.2f}}, %{{y:.2f}}) ft<extra></extra>",
+        ))
+
+        located = [p for p in group if p.actual_x is not None and p.actual_z is not None]
+        if located:
+            customdata = [
+                [p.pitch_number, float(p.miss_distance) if p.miss_distance is not None else None, p.miss_direction or "—"]
+                for p in located
+            ]
+            fig.add_trace(go.Scatter(
+                x=[float(p.actual_x) for p in located],
+                y=[float(p.actual_z) for p in located],
+                mode="markers+text",
+                text=[str(p.pitch_number) for p in located],
+                textposition="middle center",
+                textfont=label_font,
+                marker=dict(symbol="circle", color=color, size=24, opacity=0.9, line=dict(color="#1E1E1E", width=1)),
+                name=label, legendgroup=label, showlegend=False,
+                customdata=customdata,
+                hovertemplate=(
+                    f"{label} — Actual<br>Pitch #%{{customdata[0]}}<br>(%{{x:.2f}}, %{{y:.2f}}) ft<br>"
+                    "Miss: %{customdata[1]:.1f} in (%{customdata[2]})<extra></extra>"
+                ),
+            ))
+
+    # Strike zone rectangle -- shared convention with strike_zone.py /
+    # bullpen_charts.location_chart (one zone definition across the app).
+    fig.add_shape(
+        type="rect", x0=-ZONE_HALF_WIDTH, x1=ZONE_HALF_WIDTH, y0=ZONE_BOTTOM, y1=ZONE_TOP,
+        line=dict(color=TEXT_CREAM, width=2), fillcolor="rgba(0,0,0,0)",
+    )
+
+    apply_gbo_theme(
+        fig, title="Pitch Locations — Intended vs. Actual", x_title="Plate Side (ft)", y_title="Plate Height (ft)", height=500,
+        xaxis=dict(range=[-2.5, 2.5], gridcolor=GRID_GRAY, zeroline=False, scaleanchor="y", scaleratio=1),
+        yaxis=dict(range=[0, 5], gridcolor=GRID_GRAY, zeroline=False),
+        legend=dict(orientation="h", y=-0.12),
     )
     return fig

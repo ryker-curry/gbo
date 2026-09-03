@@ -21,6 +21,15 @@ migration for decorative Plotly output.
 Per-session accordions and per-session video pickers use dynamic,
 session-scoped input/output IDs, same lazy-registration idiom as
 player_hitting.py/training_routines.py elsewhere in this migration.
+
+Sept 2026 addition: the inline "Bullpen Dashboard" section's View
+picker now also lists a pitcher's command-tracking-only sessions (no
+Rapsodo data at all -- logged on the separate Command Tracker page
+instead), reusing the new command_dashboard_display.py the same way
+this section already reuses bullpen_dashboard_display.py. Previously a
+pitcher with zero Rapsodo sessions never saw this section at all, even
+with command-tracked bullpens on record -- see bp_dashboard_body's own
+docstring for the gating details.
 """
 
 from shiny import module, ui, render, reactive, req
@@ -28,12 +37,13 @@ import plotly.graph_objects as go
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import Player, User, BullpenSession, RapsodoPitch, BullpenPitch, Assessment, AssessmentResult, Video
+from models import Player, User, BullpenSession, RapsodoPitch, CommandPitch, BullpenPitch, Assessment, AssessmentResult, Video
 from video_helpers import render_video_clip
 
 import ui_helpers
 import chart_helpers
 import bullpen_dashboard_display
+import command_dashboard_display
 
 # Same fixed generic strike-zone boundaries used on Bullpen Tracking.
 ZONE_SIDE_BOUNDS = (-0.283, 0.283)
@@ -210,7 +220,15 @@ def player_bullpens_server(input, output, session, app_state):
         below) into a bullpen_dashboard_display target dict -- req()s on
         the view choice itself so both of bullpen_dashboard_display's
         registered outputs simply render nothing until a view is picked
-        (same "not applicable yet" contract as its docstring)."""
+        (same "not applicable yet" contract as its docstring).
+
+        Sept 2026: the View list now also includes command-tracking-only
+        sessions (see _bp_dashboard_body below), so a specific-session
+        choice only resolves to a Rapsodo target when that session
+        actually has Rapsodo data -- otherwise this returns None and
+        _get_command_dashboard_target below is what actually resolves,
+        so the Rapsodo display never has to handle a session with zero
+        RapsodoPitch rows."""
         req("bp_view_choice" in input)
         db = get_session()
         try:
@@ -224,12 +242,41 @@ def player_bullpens_server(input, output, session, app_state):
                     db.query(RapsodoPitch.bullpen_id).filter(RapsodoPitch.player_id == my_player.player_id).distinct().all()
                 ]
                 return {"kind": "combined", "player": my_player, "bullpen_ids": rapsodo_bullpen_ids}
-            return {"kind": "session", "bullpen_id": int(choice)}
+            bullpen_id = int(choice)
+            has_rapsodo = db.query(RapsodoPitch.bullpen_id).filter(RapsodoPitch.bullpen_id == bullpen_id).first() is not None
+            if not has_rapsodo:
+                return None
+            return {"kind": "session", "bullpen_id": bullpen_id}
         finally:
             db.close()
 
+    def _get_command_dashboard_target(input):
+        """Command Tracking counterpart to _get_bullpen_dashboard_target
+        above (Sept 2026 addition) -- no "__all__"/combined option yet,
+        same not-yet call as the coach-facing Bullpen Dashboard page
+        (shiny_app/modules/bullpen_dashboard.py's own
+        _get_command_session_target): Overall/combined stays
+        Rapsodo-only for now, revisit once there's more fall-ball
+        command data to look at."""
+        req("bp_view_choice" in input)
+        choice = input.bp_view_choice()
+        if choice == "__all__":
+            return None
+        bullpen_id = int(choice)
+        db = get_session()
+        try:
+            has_command = db.query(CommandPitch.bullpen_id).filter(CommandPitch.bullpen_id == bullpen_id).first() is not None
+        finally:
+            db.close()
+        if not has_command:
+            return None
+        return {"kind": "session", "bullpen_id": bullpen_id}
+
     _bp_dashboard_fragment = bullpen_dashboard_display.register_bullpen_dashboard(
         input, output, session, "bp", _get_bullpen_dashboard_target,
+    )
+    _bp_command_fragment = command_dashboard_display.register_command_dashboard(
+        input, output, session, "bp_command", _get_command_dashboard_target,
     )
 
     @render.ui
@@ -237,7 +284,18 @@ def player_bullpens_server(input, output, session, app_state):
         """View picker for the inline Bullpen Dashboard section -- a
         separate render.ui block from _get_bullpen_dashboard_target's
         consumers (bullpen_dashboard_display's own registered outputs),
-        same ordering-hazard-safe split as everywhere else."""
+        same ordering-hazard-safe split as everywhere else.
+
+        Sept 2026: widened from Rapsodo-only to also list
+        command-tracking-only sessions (a bullpen never thrown on
+        Rapsodo, logged instead on the separate Command Tracker page)
+        -- previously this whole section, and the pitcher, simply never
+        appeared here if they had no Rapsodo data at all, even with
+        command-tracked bullpens on record. "All Sessions (Combined)"
+        stays Rapsodo-only (only offered when there's at least one
+        Rapsodo session) -- see _get_command_dashboard_target's
+        docstring for why a combined command view is a deliberate
+        not-yet."""
         _refresh_tick()
         if not app_state.is_authenticated() or app_state.role_name() != "Player":
             return None
@@ -257,24 +315,38 @@ def player_bullpens_server(input, output, session, app_state):
                 row[0] for row in
                 db.query(RapsodoPitch.bullpen_id).filter(RapsodoPitch.player_id == my_player.player_id).distinct().all()
             }
-            if not rapsodo_bullpen_ids:
+            # CommandPitch has no player_id of its own (ownership comes
+            # through BullpenSession.player_id, same reason
+            # command_tracker.py queries this way) -- scope by this
+            # player's own session ids instead of a direct player filter.
+            my_session_ids = [b.bullpen_id for b in sessions]
+            command_bullpen_ids = {
+                row[0] for row in
+                db.query(CommandPitch.bullpen_id).filter(CommandPitch.bullpen_id.in_(my_session_ids)).distinct().all()
+            } if my_session_ids else set()
+            tracked_bullpen_ids = rapsodo_bullpen_ids | command_bullpen_ids
+            if not tracked_bullpen_ids:
                 return None
-            rapsodo_sessions = [b for b in sessions if b.bullpen_id in rapsodo_bullpen_ids]
+            tracked_sessions = [b for b in sessions if b.bullpen_id in tracked_bullpen_ids]
 
-            choices = {"__all__": "All Sessions (Combined)"}
-            for b in rapsodo_sessions:
+            choices = {}
+            if rapsodo_bullpen_ids:
+                choices["__all__"] = "All Sessions (Combined)"
+            for b in tracked_sessions:
                 type_label = b.bullpen_type.type_name if b.bullpen_type else "—"
                 choices[str(b.bullpen_id)] = f"{b.session_date.strftime('%Y-%m-%d (%a)')} — {type_label}"
 
             return ui.div(
                 ui.h5("Bullpen Dashboard", class_="gbo-section-title"),
                 ui.p(
-                    "Pick a specific session for its full pitch-type summary, filters, and charts -- "
-                    "or view every session combined.",
+                    "Pick a specific session for its full pitch-type summary, filters, and charts, "
+                    "or its command-tracking scorecard for a Command Tracker session -- "
+                    "or view every Rapsodo session combined.",
                     class_="text-muted small",
                 ),
                 ui.input_select("bp_view_choice", "View", choices=choices),
                 _bp_dashboard_fragment,
+                _bp_command_fragment,
                 ui.hr(),
             )
         finally:
