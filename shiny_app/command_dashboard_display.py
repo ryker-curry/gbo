@@ -1,7 +1,7 @@
 """
 GBO -- Shared, read-only Command Tracker display: renders a single
-session's already-saved command-tracking data (scorecard + command
-chart) given nothing but a bullpen_id. Reused by
+session's already-saved command-tracking data (scorecard + two charts)
+given nothing but a bullpen_id. Reused by
 shiny_app/modules/bullpen_dashboard.py so a coach OR the player who
 threw the bullpen can view a command-focused session's results from
 the same Bullpen Dashboard picker used for Rapsodo sessions, without
@@ -10,16 +10,15 @@ touching the entry workflow.
 Command Tracker itself (shiny_app/modules/command_tracker.py) stays
 the only place pitches get click-to-place ENTERED, EDITED, or DELETED
 -- this module is read-only, reusing its exact aggregate math
-(analytics/command_metrics.py) and its exact chart
-(visualizations/command_charts.command_chart) so the two views can
-never disagree about the same session's numbers. Lifted from that
-module's cmd_scorecard_section/cmd_chart_section -- the underlying
-computation was already pure (query by bullpen_id, then plain
-functions); only the reactive coupling (_refresh_tick/
-_active_bullpen_id/_access_ok) changes, swapped for
-bullpen_dashboard_display.register_bullpen_dashboard's
-get_target(input) convention so both can be registered side by side on
-the same page.
+(analytics/command_metrics.py) and its exact charts
+(visualizations/command_charts.py) so the two views can never disagree
+about the same session's numbers. Lifted from that module's
+cmd_scorecard_section/cmd_chart_section -- the underlying computation
+was already pure (query by bullpen_id, then plain functions); only the
+reactive coupling (_refresh_tick/_active_bullpen_id/_access_ok)
+changes, swapped for bullpen_dashboard_display.
+register_bullpen_dashboard's get_target(input) convention so both can
+be registered side by side on the same page.
 
 Written for BOTH a coach and the player who threw the bullpen (Command
 Tracker's own entry workflow is coach/staff-only; this view isn't) --
@@ -30,6 +29,17 @@ target bands) gets one plain-language line near it, and the band
 thresholds are pulled live from command_config.py rather than restated
 as a bare "3/6/9" so this can never drift out of sync with the actual
 classification.
+
+Sept 2026 addition: a Pitch Type filter plus a "Pitches to Show"
+multi-select, same two-output controls/results split as
+bullpen_dashboard_display.py's own filters -- added because the
+pitch-locations chart (visualizations/command_charts.
+pitch_locations_chart) gets crowded once a session has more than a
+handful of pitches. Ryker specifically wanted to pick exactly which
+pitches show (not just a contiguous range), so pitch selection is a
+multi-select of individual pitch numbers -- every pitch is selected by
+default, and unchecking/removing one drops it from the scorecard,
+table, AND both charts at once.
 
 Calling convention -- same shape as bullpen_dashboard_display.
 register_bullpen_dashboard, so both can sit on the same page:
@@ -45,7 +55,7 @@ revisit once there's more fall-ball command data to look at). Returns
 a ui.output_ui fragment for the caller's own render.ui tree.
 """
 
-from shiny import ui, render, reactive
+from shiny import ui, render, reactive, req
 from shinywidgets import output_widget, render_plotly
 from sqlalchemy.orm import joinedload
 
@@ -84,16 +94,21 @@ def _band_legend():
 
 
 def register_command_dashboard(input, output, session, key_prefix, get_target):
+    controls_id = f"{key_prefix}_controls"
     results_id = f"{key_prefix}_results"
     locations_widget_id = f"{key_prefix}_pitch_locations_chart"
     chart_widget_id = f"{key_prefix}_command_chart"
 
+    type_filter_key = f"{key_prefix}_pitch_type_filter"
+    select_key = f"{key_prefix}_pitch_select"
+
     @reactive.calc
     def _target_and_pitches():
-        """Shared by _results and the chart widget below, so picking a
-        session only queries CommandPitch once per actual change --
-        same reasoning as bullpen_dashboard_display.py's own
-        _target_and_pitches @reactive.calc."""
+        """Every pitch for the target session, unfiltered -- shared by
+        _controls (to build the filter choices/range) and _filtered
+        below, so picking a session only queries CommandPitch once per
+        actual change, same reasoning as bullpen_dashboard_display.py's
+        own _target_and_pitches @reactive.calc."""
         target = get_target(input)
         if target is None:
             return None, None
@@ -110,9 +125,35 @@ def register_command_dashboard(input, output, session, key_prefix, get_target):
         finally:
             db.close()
 
-    @output(id=results_id)
+    @reactive.calc
+    def _filtered():
+        """(target, filtered_pitches) -- shared by _results and both
+        chart widgets below, so the pitch-type/selection filtering only
+        happens once per actual change instead of once per output.
+        Local filtering rather than a shared helper -- CommandPitch
+        has nothing in common with RapsodoPitch's
+        analytics.bullpen_metrics.filter_pitches (no velocity/spin
+        filters, different model entirely). Pitch selection is exact
+        membership (a multi-select of individual pitch numbers), not a
+        lo/hi range -- Ryker wanted to be able to pick specific pitches
+        (e.g. 1, 4, 9), not just a contiguous stretch."""
+        req(type_filter_key in input)
+        req(select_key in input)
+        target, all_pitches = _target_and_pitches()
+        if target is None:
+            return None, None
+        selected_type = input[type_filter_key]()
+        selected_numbers = {int(v) for v in input[select_key]()}
+        filtered_pitches = [
+            p for p in all_pitches
+            if (selected_type == "All Pitches" or command_metrics.pitch_type_label(p) == selected_type)
+            and p.pitch_number in selected_numbers
+        ]
+        return target, filtered_pitches
+
+    @output(id=controls_id)
     @render.ui
-    def _results():
+    def _controls():
         target, pitches = _target_and_pitches()
         if target is None:
             return None
@@ -136,11 +177,17 @@ def register_command_dashboard(input, output, session, key_prefix, get_target):
             return None
 
         player = active_bullpen.player
-        throws = player.throws if player else None
         player_name = f"{player.first_name} {player.last_name}" if player else "—"
         type_label = active_bullpen.bullpen_type.type_name if active_bullpen.bullpen_type else "—"
 
-        children = [
+        type_options = ["All Pitches"]
+        for p in pitches:
+            label = command_metrics.pitch_type_label(p)
+            if label not in type_options:
+                type_options.append(label)
+        pitch_number_choices = {str(p.pitch_number): f"#{p.pitch_number}" for p in pitches}
+
+        return ui.div(
             ui.hr(),
             ui.h5(
                 f"Command Tracking — {player_name} — {active_bullpen.session_date.strftime('%Y-%m-%d (%a)')} — {type_label}",
@@ -151,7 +198,44 @@ def register_command_dashboard(input, output, session, key_prefix, get_target):
                 class_="text-muted small",
             ),
             ui.p(_band_legend(), class_="text-muted small"),
-        ]
+            ui.layout_columns(
+                ui.input_select(type_filter_key, "Pitch Type", choices=type_options),
+                ui.input_selectize(
+                    select_key, "Pitches to Show",
+                    choices=pitch_number_choices, selected=list(pitch_number_choices.keys()), multiple=True,
+                    options={"plugins": ["remove_button"], "placeholder": "Select pitches..."},
+                ),
+                col_widths=[4, 8],
+            ),
+            ui.p(
+                "Remove a pitch's chip (or clear the box and pick specific ones) to show only the pitches you choose.",
+                class_="text-muted small",
+            ),
+            ui.output_ui(results_id),
+        )
+
+    @output(id=results_id)
+    @render.ui
+    def _results():
+        target, pitches = _filtered()
+        if target is None:
+            return None
+        if not pitches:
+            return ui_helpers.empty_state("No pitches match the selected filters.")
+
+        db = get_session()
+        try:
+            active_bullpen = (
+                db.query(BullpenSession)
+                .options(joinedload(BullpenSession.player))
+                .filter(BullpenSession.bullpen_id == target["bullpen_id"])
+                .first()
+            )
+        finally:
+            db.close()
+        throws = active_bullpen.player.throws if active_bullpen and active_bullpen.player else None
+
+        children = []
 
         scorecard = command_metrics.session_command_scorecard(pitches)
         if scorecard["located_pitches"] == 0:
@@ -163,6 +247,7 @@ def register_command_dashboard(input, output, session, key_prefix, get_target):
             {"label": "Avg Miss", "value": _fmt(scorecard["avg_miss_distance"], " in")},
             {"label": "Median Miss", "value": _fmt(scorecard["median_miss_distance"], " in")},
             {"label": "Danger-Adj. Miss", "value": _fmt(scorecard["avg_danger_adjusted_miss"], " in")},
+            {"label": "Execution %", "value": _fmt(scorecard["execution_pct"], "%")},
             {"label": "Precision %", "value": _fmt(scorecard["precision_pct"], "%")},
             {"label": "Command Target %", "value": _fmt(scorecard["command_target_pct"], "%")},
             {"label": "Competitive %", "value": _fmt(scorecard["competitive_pct"], "%")},
@@ -186,6 +271,7 @@ def register_command_dashboard(input, output, session, key_prefix, get_target):
                 "Pitches": row["Pitches"],
                 "Avg Miss (in)": row["Avg Miss"] if row["Avg Miss"] is not None else "—",
                 "Danger-Adj. Miss (in)": row["Danger-Adj. Miss"] if row["Danger-Adj. Miss"] is not None else "—",
+                "Execution %": row["Execution %"] if row["Execution %"] is not None else "—",
                 "Precision %": row["Precision %"] if row["Precision %"] is not None else "—",
                 "Command %": row["Command Target %"] if row["Command Target %"] is not None else "—",
                 "Major Miss %": row["Major Miss %"] if row["Major Miss %"] is not None else "—",
@@ -196,8 +282,10 @@ def register_command_dashboard(input, output, session, key_prefix, get_target):
 
         children.append(ui.h6("Pitch locations", class_="mt-3"))
         children.append(ui.p(
-            "Every pitch, numbered, plotted on the real strike zone. The hollow ring is where it was aimed, "
-            "the filled dot is where it landed, and the dotted line connects the two — color shows pitch type.",
+            "Every pitch, numbered, plotted on the real strike zone (the batters and home plate are just for "
+            "visual reference). The hollow ring is where it was aimed, the filled dot is where it landed, and "
+            "the dotted line connects the two — color shows pitch type. Use the filters above to narrow this "
+            "down if it's crowded.",
             class_="text-muted small",
         ))
         children.append(output_widget(locations_widget_id))
@@ -214,7 +302,7 @@ def register_command_dashboard(input, output, session, key_prefix, get_target):
     @output(id=locations_widget_id)
     @render_plotly
     def _pitch_locations_chart():
-        target, pitches = _target_and_pitches()
+        target, pitches = _filtered()
         if target is None or not pitches:
             return None
         return command_charts.pitch_locations_chart(pitches)
@@ -222,9 +310,9 @@ def register_command_dashboard(input, output, session, key_prefix, get_target):
     @output(id=chart_widget_id)
     @render_plotly
     def _command_chart():
-        target, pitches = _target_and_pitches()
+        target, pitches = _filtered()
         if target is None or not pitches:
             return None
         return command_charts.command_chart(pitches)
 
-    return ui.output_ui(results_id)
+    return ui.output_ui(controls_id)

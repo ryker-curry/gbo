@@ -29,6 +29,8 @@ Streamlit-only wrapper around it so existing Streamlit pages keep
 working unchanged until they're migrated.
 """
 
+import math
+
 import numpy as np
 import plotly.graph_objects as go
 
@@ -134,6 +136,116 @@ def classify_attack_zone(plate_x, plate_z):
     if -CHASE_HALF_WIDTH <= plate_x <= CHASE_HALF_WIDTH and CHASE_BOTTOM <= plate_z <= CHASE_TOP:
         return "Chase"
     return "Waste"
+
+
+# ---------------------------------------------------------------------
+# Coach's call grid (Level-Pitch-Zone) -- Sept 2026, Ryker: the staff
+# calls pitches as a spoken 3-number sequence (level, pitch type, zone),
+# so a pitch's real "target" for grading execution is the whole called
+# CELL, not one exact coordinate -- landing anywhere in the called cell
+# should grade as perfectly executed, not just a pixel-perfect hit on
+# wherever a coordinate happened to get clicked. A 4 (vertical) x 5
+# (horizontal) grid, described to Ryker for a right-handed batter but,
+# per his own note, applied identically regardless of batter or pitcher
+# handedness -- every band below is built purely from plain x/z
+# distance to the existing zone box (ZONE_HALF_WIDTH/BOTTOM/TOP above),
+# the same fixed reference every other zone calculation in this module
+# already uses, so it never needs to know which physical side is which
+# to compute anything correctly, and levels/zones 2-4 line up exactly
+# with the 3x3 in-zone grid already drawn on pitch_locations_chart.
+#
+# Levels (vertical, bottom to top):
+#   1 = dirt / below the zone           (unbounded below)
+#   2 = bottom third of the zone
+#   3 = middle third of the zone
+#   4 = top third of the zone, and up   (unbounded above)
+# Zones (horizontal, one side to the other):
+#   1 = off the plate at the chalk      (unbounded outward)
+#   2 = the near third of the zone
+#   3 = the middle third
+#   4 = the far third
+#   5 = off the plate at the chalk, the other side (unbounded outward,
+#       mirrors 1)
+# ---------------------------------------------------------------------
+
+_LEVEL_THIRD_H = (ZONE_TOP - ZONE_BOTTOM) / 3
+_ZONE_THIRD_W = (2 * ZONE_HALF_WIDTH) / 3
+
+# level/zone -> (lo, hi) bounds in feet -- +/-inf marks the open outer
+# edge of the dirt/high/chalk cells (1 and 4, 1 and 5), which is exactly
+# right for distance_from_cell_in's max(lo - x, 0, x - hi) formula
+# below: an infinite bound can never be the largest term, so it simply
+# never constrains distance on that side, with no special-casing needed.
+_LEVEL_Z_BOUNDS = {
+    1: (float("-inf"), ZONE_BOTTOM),
+    2: (ZONE_BOTTOM, ZONE_BOTTOM + _LEVEL_THIRD_H),
+    3: (ZONE_BOTTOM + _LEVEL_THIRD_H, ZONE_TOP - _LEVEL_THIRD_H),
+    4: (ZONE_TOP - _LEVEL_THIRD_H, float("inf")),
+}
+_ZONE_X_BOUNDS = {
+    1: (float("-inf"), -ZONE_HALF_WIDTH),
+    2: (-ZONE_HALF_WIDTH, -ZONE_HALF_WIDTH + _ZONE_THIRD_W),
+    3: (-ZONE_HALF_WIDTH + _ZONE_THIRD_W, ZONE_HALF_WIDTH - _ZONE_THIRD_W),
+    4: (ZONE_HALF_WIDTH - _ZONE_THIRD_W, ZONE_HALF_WIDTH),
+    5: (ZONE_HALF_WIDTH, float("inf")),
+}
+
+
+def call_level(plate_z):
+    """plate_z (feet) -> the 1-4 level band it falls in (see the block
+    comment above). None if plate_z is None -- every real number falls
+    in exactly one band since 1 and 4 are open-ended."""
+    if plate_z is None:
+        return None
+    for level, (lo, hi) in _LEVEL_Z_BOUNDS.items():
+        if lo <= plate_z <= hi:
+            return level
+    return None
+
+
+def call_zone(plate_x):
+    """plate_x (feet) -> the 1-5 zone band it falls in, same convention
+    as call_level."""
+    if plate_x is None:
+        return None
+    for zone, (lo, hi) in _ZONE_X_BOUNDS.items():
+        if lo <= plate_x <= hi:
+            return zone
+    return None
+
+
+def call_cell(plate_x, plate_z):
+    """(plate_x, plate_z) -> (level, zone), the called cell containing
+    that point -- e.g. the cell a pitch was aimed into, derived from its
+    own intended coordinates (wherever it was entered, that's where the
+    call was aimed -- no separate level/zone field needed). None if
+    either coordinate is missing."""
+    if plate_x is None or plate_z is None:
+        return None
+    return call_level(plate_z), call_zone(plate_x)
+
+
+def distance_from_cell_in(level, zone, plate_x, plate_z):
+    """Distance, in INCHES, from (plate_x, plate_z) to the given
+    (level, zone) cell's rectangle -- 0 if the point is inside the cell
+    (including its open/unbounded edges), otherwise the straight-line
+    distance to the nearest edge. Used to grade how far an ACTUAL pitch
+    landed from the cell it was CALLED into (see
+    analytics/command_metrics.pitch_execution_score) -- a more
+    forgiving, coach's-eye read than a raw point-to-point miss:
+    anywhere inside the called cell is a 0, same as a bullseye. None if
+    any input is missing or level/zone is out of range."""
+    if level is None or zone is None or plate_x is None or plate_z is None:
+        return None
+    z_bounds = _LEVEL_Z_BOUNDS.get(level)
+    x_bounds = _ZONE_X_BOUNDS.get(zone)
+    if z_bounds is None or x_bounds is None:
+        return None
+    x_lo, x_hi = x_bounds
+    z_lo, z_hi = z_bounds
+    dx = max(x_lo - plate_x, 0.0, plate_x - x_hi)
+    dz = max(z_lo - plate_z, 0.0, plate_z - z_hi)
+    return math.hypot(dx, dz) * 12.0
 
 
 def build_zone_selector_figure(marker_x=None, marker_z=None):

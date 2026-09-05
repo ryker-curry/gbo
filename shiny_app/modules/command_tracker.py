@@ -731,6 +731,9 @@ def command_tracker_server(input, output, session, app_state):
                 if p.actual_x is not None and p.actual_z is not None:
                     miss_label = f"{float(p.miss_distance):.1f} in ({p.miss_direction})" if p.miss_distance is not None else "—"
                     summary += f" — Actual {float(p.actual_x):+.2f}/{float(p.actual_z):.2f} — Miss {miss_label}"
+                    score = command_metrics.pitch_execution_score(p)
+                    if score is not None:
+                        summary += f" — Execution {score} ({command_config.execution_score_label(score)})"
                 else:
                     summary += " — Actual not recorded"
                 if p.velocity is not None:
@@ -928,6 +931,7 @@ def command_tracker_server(input, output, session, app_state):
                 {"label": "Avg Miss", "value": _fmt(scorecard["avg_miss_distance"], " in")},
                 {"label": "Danger-Adj. Miss", "value": _fmt(scorecard["avg_danger_adjusted_miss"], " in")},
                 {"label": "Median Miss", "value": _fmt(scorecard["median_miss_distance"], " in")},
+                {"label": "Execution %", "value": _fmt(scorecard["execution_pct"], "%")},
                 {"label": "Precision %", "value": _fmt(scorecard["precision_pct"], "%")},
                 {"label": "Command Target %", "value": _fmt(scorecard["command_target_pct"], "%")},
                 {"label": "Competitive %", "value": _fmt(scorecard["competitive_pct"], "%")},
@@ -944,6 +948,7 @@ def command_tracker_server(input, output, session, app_state):
                     "Pitches": row["Pitches"],
                     "Avg Miss (in)": row["Avg Miss"] if row["Avg Miss"] is not None else "—",
                     "Danger-Adj. Miss (in)": row["Danger-Adj. Miss"] if row["Danger-Adj. Miss"] is not None else "—",
+                    "Execution %": row["Execution %"] if row["Execution %"] is not None else "—",
                     "Precision %": row["Precision %"] if row["Precision %"] is not None else "—",
                     "Command %": row["Command Target %"] if row["Command Target %"] is not None else "—",
                     "Major Miss %": row["Major Miss %"] if row["Major Miss %"] is not None else "—",
