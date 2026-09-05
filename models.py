@@ -679,7 +679,7 @@ class BullpenType(Base):
     from the original 5 values (High Intent Velo, Pitch Design, Execution
     Focused, Touch and Feel, Short Box) with the Rapsodo Bullpen Analytics
     spec's 8-value list: Standard Bullpen, Pitch Design, Command, Velocity,
-    Recovery, Live BP, Assessment, Other. Existing BullpenSession rows are
+    Recovery, Live AB, Assessment, Other. Existing BullpenSession rows are
     remapped onto the closest new name by the same migration -- see that
     file for the exact old->new mapping and rationale."""
     __tablename__ = "bullpen_types"
