@@ -530,8 +530,17 @@ def pitch_execution_score(pitch):
         return None
     if pitch.intended_x is None or pitch.intended_z is None:
         return None
-    level, zone = strike_zone.call_cell(pitch.intended_x, pitch.intended_z)
-    distance_in = strike_zone.distance_from_cell_in(level, zone, pitch.actual_x, pitch.actual_z)
+    # CommandPitch.intended_x/z and actual_x/z are Numeric DB columns --
+    # SQLAlchemy hands those back as decimal.Decimal, which can't mix
+    # with the plain floats in strike_zone's cell-bounds arithmetic
+    # (TypeError: unsupported operand type(s) for -: 'float' and
+    # 'decimal.Decimal'). Cast to float up front, same as every other
+    # per-pitch calculation in this module already does (see
+    # compute_miss above).
+    intended_x, intended_z = float(pitch.intended_x), float(pitch.intended_z)
+    actual_x, actual_z = float(pitch.actual_x), float(pitch.actual_z)
+    level, zone = strike_zone.call_cell(intended_x, intended_z)
+    distance_in = strike_zone.distance_from_cell_in(level, zone, actual_x, actual_z)
     return command_config.execution_score(distance_in)
 
 
