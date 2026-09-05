@@ -423,7 +423,7 @@ def seed_bullpen_types(session):
         BullpenType(type_name="Command", display_order=3),
         BullpenType(type_name="Velocity", display_order=4),
         BullpenType(type_name="Recovery", display_order=5),
-        BullpenType(type_name="Live BP", display_order=6),
+        BullpenType(type_name="Live AB", display_order=6),
         BullpenType(type_name="Assessment", display_order=7),
         BullpenType(type_name="Other", display_order=8),
     ]

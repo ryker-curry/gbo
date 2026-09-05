@@ -47,11 +47,26 @@ Usage:
 import math
 
 # --- palette ---------------------------------------------------------------
-SIL_TOP = "#9AA1AE"       # silhouette, lit top
-SIL_BOT = "#454A55"       # silhouette, shaded bottom
-DIRT = "#54402F"
-DIRT_LIGHT = "#6E523C"
-DIRT_DARK = "#33261B"
+# Recolored Sept 5 2026 per Ryker's reference image (a soft, semi-
+# transparent teal figure on a flat rust-brown mound) -- geometry/pose/
+# IK-fitting logic below is UNCHANGED, this is a palette-only restyle.
+# Hex values sampled directly from Ryker's reference image, not guessed.
+SIL_TOP = "#C9E0DB"       # silhouette, lit top (was cool gray #9AA1AE)
+SIL_BOT = "#8FB5B2"       # silhouette, shaded bottom (was #454A55)
+DIRT = "#7A3A19"          # was "#54402F"
+DIRT_LIGHT = "#96502A"    # was "#6E523C"
+DIRT_DARK = "#4A210D"     # was "#33261B"
+# Self-toned darker-teal rim for the silhouette's own outline (see
+# fig_sw/outline_sw below), sampled directly from Ryker's reference
+# image's own outline (~#8FB4B5 there) rather than a near-black outline
+# (invisible against this dashboard's near-black card, #17100B on
+# #161010) or a gold accent (first attempt, but Ryker wants it to match
+# the reference's own darker-tone-of-the-same-color edge look, not an
+# unrelated accent color). Darkened further than the sampled value so
+# it still reads against BOTH the light top of the fill gradient and
+# this dashboard's dark card (the reference only ever needed to
+# contrast against a white background).
+SIL_EDGE = "#5F9494"
 GRASS = "#1A2B1A"
 GRASS_LIGHT = "#243D24"
 RUBBER = "#D8D4C6"
@@ -216,9 +231,27 @@ POSES = {
 # Used for overhead + three-quarter slots; sidearm still uses the
 # constructed pose until a sidearm frame is traced.
 # ---------------------------------------------------------------------------
-TRACE_HAND = (0.1688, 1.2693)
-TRACE_BACK_TOE = (0.2145, 0.2642)
-TRACE_PTS = [(0.1688, 1.2693), (0.1495, 1.2669), (0.1397, 1.2563), (0.1424, 1.1929), (0.1251, 1.1598), (0.1247, 1.1323), (0.1125, 1.0634), (0.0771, 0.9697), (0.0503, 0.9504), (0.0282, 0.9264), (0.0062, 0.9138), (-0.0214, 0.9055), (-0.0572, 0.8823), (-0.0847, 0.8799), (-0.0926, 0.8898), (-0.0946, 0.9177), (-0.1265, 0.9287), (-0.1332, 0.9642), (-0.1462, 0.9854), (-0.1647, 0.9972), (-0.1895, 1.0), (-0.2328, 0.9878), (-0.2454, 0.9697), (-0.2497, 0.9425), (-0.2706, 0.9201), (-0.2662, 0.913), (-0.2501, 0.9106), (-0.2403, 0.9035), (-0.2344, 0.8732), (-0.2005, 0.8098), (-0.206, 0.7906), (-0.2466, 0.7299), (-0.2686, 0.661), (-0.2686, 0.6472), (-0.2509, 0.5894), (-0.2497, 0.5453), (-0.2442, 0.5382), (-0.2194, 0.5276), (-0.195, 0.537), (-0.1536, 0.5276), (-0.119, 0.4894), (-0.0997, 0.4543), (-0.0977, 0.4213), (-0.0792, 0.3634), (-0.0875, 0.3), (-0.0761, 0.2118), (-0.0627, 0.187), (-0.0662, 0.1402), (-0.0615, 0.1181), (-0.0481, 0.0988), (-0.0387, 0.0575), (-0.0422, 0.0189), (-0.0324, 0.0067), (-0.0186, 0.0), (0.0172, 0.0004), (0.0338, 0.011), (0.0338, 0.0602), (0.0412, 0.0961), (0.0314, 0.1236), (0.0349, 0.139), (0.0558, 0.1528), (0.0739, 0.1563), (0.0889, 0.174), (0.1318, 0.1783), (0.1452, 0.1996), (0.1684, 0.2059), (0.1975, 0.2339), (0.2145, 0.2642), (0.2145, 0.289), (0.1991, 0.3606), (0.196, 0.413), (0.1767, 0.526), (0.1586, 0.5811), (0.1515, 0.6417), (0.1338, 0.6665), (0.1113, 0.7327), (0.0834, 0.7961), (0.0834, 0.8402), (0.0905, 0.8898), (0.105, 0.9189), (0.1251, 0.9394), (0.1334, 0.9724), (0.1527, 1.0), (0.1605, 1.0386), (0.1656, 1.113), (0.1849, 1.1461), (0.1881, 1.1709), (0.1771, 1.2094), (0.1877, 1.248), (0.1818, 1.2614)]
+# Re-traced Sept 5 2026 per Ryker's second reference image (a flat,
+# semi-transparent teal illustration of a pitcher/thrower at release,
+# back view) -- Ryker wants the ACTUAL pose/proportions of that image,
+# not just its colors, while keeping every bit of the dynamic behavior
+# below (slot-angle pose pick, arm rotation, IK-style hand-to-release-
+# point fit, L/R mirroring) working exactly as it did on the original
+# traced photo. Pipeline: OpenCV color-threshold mask isolating the
+# teal figure -> cv2.findContours -> cv2.approxPolyDP simplified to 90
+# points -> normalized to this module's existing TRACE_PTS convention
+# (origin at the front-foot ground contact, +x toward the arm/throwing
+# side, y up, 1.0 = the pitcher's standing height measured to the top
+# of the HEAD, NOT the raised hand -- same convention as the original
+# trace, which is why TRACE_HAND's y can exceed 1.0). This reference
+# illustration only ever shows ONE leg (a stylized single-leg-balance
+# pose, unlike the original real release photo's two-leg stride), so
+# there's no real "trailing back toe" to trace -- TRACE_BACK_TOE is set
+# to the same point as the origin (the one visible planted foot)
+# instead of inventing a second leg's position.
+TRACE_HAND = (0.4165, 1.1867)
+TRACE_BACK_TOE = (0.0, 0.0)
+TRACE_PTS = [(0.4165, 1.1867), (0.396, 1.1883), (0.377, 1.1804), (0.3643, 1.1661), (0.358, 1.1487), (0.1982, 1.0316), (0.1428, 0.981), (0.127, 0.9763), (0.0811, 0.9462), (0.0305, 0.932), (-0.0138, 0.8924), (-0.0581, 0.8829), (-0.0803, 0.8892), (-0.0993, 0.9209), (-0.1167, 0.9731), (-0.1357, 0.9905), (-0.161, 1.0), (-0.1974, 0.9984), (-0.2259, 0.9858), (-0.2496, 0.9668), (-0.2654, 0.9415), (-0.2686, 0.9161), (-0.2528, 0.8782), (-0.2053, 0.818), (-0.1895, 0.807), (-0.18, 0.807), (-0.1689, 0.7943), (-0.1689, 0.7848), (-0.2195, 0.7215), (-0.2338, 0.6772), (-0.2306, 0.6028), (-0.21, 0.5301), (-0.1942, 0.5016), (-0.1721, 0.4778), (-0.1483, 0.4731), (-0.1373, 0.4778), (-0.1262, 0.4921), (-0.1119, 0.5411), (-0.0993, 0.5665), (-0.0898, 0.568), (-0.0724, 0.5617), (-0.0676, 0.5475), (-0.0581, 0.538), (-0.0376, 0.5285), (-0.036, 0.4968), (-0.0218, 0.4478), (0.0257, 0.3544), (0.0305, 0.3354), (0.021, 0.25), (0.04, 0.1472), (0.0131, 0.1203), (-0.0202, 0.0522), (-0.0376, 0.0316), (-0.0407, 0.0174), (-0.0328, 0.0032), (0.0099, 0.0), (0.0368, 0.0063), (0.0368, 0.0142), (0.0479, 0.0253), (0.0922, 0.0237), (0.1159, 0.0301), (0.1238, 0.0396), (0.1238, 0.0554), (0.1048, 0.0759), (0.1032, 0.0965), (0.1286, 0.1171), (0.1396, 0.1408), (0.1681, 0.163), (0.176, 0.1835), (0.2061, 0.2184), (0.2362, 0.2706), (0.252, 0.4288), (0.2504, 0.481), (0.2425, 0.5301), (0.2235, 0.587), (0.1998, 0.6266), (0.1871, 0.6693), (0.1475, 0.7342), (0.1206, 0.8354), (0.176, 0.8829), (0.176, 0.8908), (0.2124, 0.9256), (0.2488, 0.9478), (0.2805, 0.9778), (0.3849, 1.1028), (0.4102, 1.1028), (0.4371, 1.1218), (0.445, 1.1424), (0.4434, 1.1598), (0.4355, 1.1741)]
 
 
 def pitcher_release_svg(releases, throws="R", height_in=73,
@@ -367,9 +400,18 @@ def pitcher_release_svg(releases, throws="R", height_in=73,
     # disc seals the joint. The whole figure is then fitted (bounded
     # scale + rotation + shift) so the hand lands on the release point.
     if True:
-        ARM_RUN = list(range(78, 90)) + list(range(0, 10))
-        PIVOT = (0.055, 0.90)
-        NATIVE_SLOT = 17.2
+        # Indices below are for the NEW 90-point trace (see TRACE_PTS'
+        # comment above) -- computed the same way as before: the two
+        # runs of contour points that outline the throwing arm (topside
+        # from the shoulder/neck junction around to the hand, and the
+        # underside from the armpit back around to the hand), plus a
+        # shoulder PIVOT placed between those two junction points, and
+        # NATIVE_SLOT measured directly off this image's own arm angle
+        # (pivot-to-hand, degrees off vertical) instead of reused from
+        # the old photo.
+        ARM_RUN = list(range(79, 90)) + list(range(0, 10))
+        PIVOT = (0.0756, 0.8837)
+        NATIVE_SLOT = 48.4
         delta = _clamp(slot_deg - NATIVE_SLOT, 0.0, 125.0)
         if delta < 10.0:
             delta = 0.0
@@ -438,8 +480,12 @@ def pitcher_release_svg(releases, throws="R", height_in=73,
     d.append(
         '<defs>'
         f'<filter id="{uid}ds" x="-30%" y="-30%" width="160%" height="160%">'
-        f'<feDropShadow dx="{sign*3}" dy="4" stdDeviation="3" '
-        f'flood-color="#000" flood-opacity=".4"/></filter>'
+        f'<feDropShadow dx="{sign*3}" dy="4" stdDeviation="2" '
+        # Lighter drop shadow (.4 -> .12) -- reference image reads as a
+        # flat, mostly shadowless illustration; a fully-removed shadow
+        # made the figure look like it was floating off the mound, so
+        # this keeps just enough to ground it.
+        f'flood-color="#000" flood-opacity=".12"/></filter>'
         f'<linearGradient id="{uid}Sil" gradientUnits="userSpaceOnUse" '
         f'x1="0" y1="{grad_top:.0f}" x2="0" y2="{GROUND_Y:.0f}">'
         f'<stop offset="0" stop-color="{SIL_TOP}"/>'
@@ -486,8 +532,27 @@ def pitcher_release_svg(releases, throws="R", height_in=73,
              f'fill="url(#{uid}Sh)"/>')
 
     # --- the silhouette (separate parts, one shared gradient) ---------------
-    fig_sw = 3.0 if (pose_name != "sidearm") else 0.8
+    # Sept 5 2026: Ryker's feedback on the recolor -- with the fill and
+    # stroke both drawn from the same gradient, the whole figure reads
+    # as one soft blob and it's hard to tell which way the pitcher is
+    # actually throwing. Two-pass outline: first pass strokes every
+    # part (including internal joint discs like the rotation pivot)
+    # slightly WIDER in flat OUTLINE ink and with no fill, then a
+    # second pass redraws every part at the normal width in the
+    # silhouette's own fill/gradient on top -- the second pass covers
+    # the outline pass everywhere the parts overlap each other, so only
+    # the figure's true outer boundary (most usefully: the throwing
+    # arm's edge) ends up outlined, instead of stroking each part
+    # independently, which exposed internal seams (e.g. the rotation
+    # pivot disc showing through as a stray floating circle). Pure
+    # outline-color addition; the traced geometry/IK-fit is unchanged.
+    fig_sw = 2.4
+    outline_sw = fig_sw + 3.0
     d.append(f'<g id="figure" filter="url(#{uid}ds)">')
+    for part in sil:
+        d.append(f'<path d="{part}" fill="none" stroke="{SIL_EDGE}" '
+                 f'stroke-width="{outline_sw}" stroke-linejoin="round" '
+                 f'stroke-opacity=".8"/>')
     for part in sil:
         d.append(f'<path d="{part}" fill="url(#{uid}Sil)" '
                  f'stroke="url(#{uid}Sil)" stroke-width="{fig_sw}" '
