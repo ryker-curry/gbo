@@ -38,6 +38,7 @@ import math
 from statistics import mean, median, stdev
 
 import command_config
+import strike_zone
 
 FEET_TO_INCHES = 12.0
 
@@ -191,6 +192,21 @@ def _pct_true(flags):
 def _pct_false(flags):
     vals = [f for f in flags if f is not None]
     return round(sum(1 for f in vals if not f) / len(vals) * 100, 1) if vals else None
+
+
+def _execution_pct(located_pitches):
+    """Session/pitch-type "Execution %" -- the average 0/1/2 execution
+    score (see pitch_execution_score) across already-located pitches,
+    scaled to 0-100 against the max possible score (2) so it
+    reads on the same 0-100 scale as Precision %/Command Target %/
+    Major Miss % next to it. 100% would mean every pitch scored a
+    perfect 2; 0% would mean every pitch scored a 0. None if there are
+    no located pitches."""
+    scores = [pitch_execution_score(p) for p in located_pitches]
+    scores = [s for s in scores if s is not None]
+    if not scores:
+        return None
+    return round(sum(scores) / (len(scores) * command_config.MAX_EXECUTION_SCORE) * 100, 1)
 
 
 def _located(pitches):
@@ -402,6 +418,8 @@ def session_command_scorecard(pitches):
         "command_target_pct": _pct_true([p.within_command_target for p in located]) if n else None,
         "competitive_pct": _pct_true([p.within_competitive_target for p in located]) if n else None,
         "major_miss_pct": _pct_false([p.within_competitive_target for p in located]) if n else None,
+        "avg_execution_score": _avg([pitch_execution_score(p) for p in located]) if n else None,
+        "execution_pct": _execution_pct(located),
         "horizontal_command_mean_abs": _avg([abs(p.horizontal_miss) for p in located]) if n else None,
         "horizontal_command_stdev": _sd([p.horizontal_miss for p in located]) if n else None,
         "vertical_command_mean_abs": _avg([abs(p.vertical_miss) for p in located]) if n else None,
@@ -483,11 +501,38 @@ def command_by_pitch_type(pitches, throws):
             "Command Target %": _pct_true([p.within_command_target for p in located]) if n else None,
             "Competitive %": _pct_true([p.within_competitive_target for p in located]) if n else None,
             "Major Miss %": _pct_false([p.within_competitive_target for p in located]) if n else None,
+            "Execution %": _execution_pct(located),
             "Horizontal Miss": _avg([abs(p.horizontal_miss) for p in located]) if n else None,
             "Vertical Miss": _avg([abs(p.vertical_miss) for p in located]) if n else None,
             "Miss Bias": miss_bias(group, throws),
         })
     return rows
+
+
+def pitch_execution_score(pitch):
+    """A pitch's 0/1/2 execution score (see command_config.execution_score
+    for what each value means), graded against the coach's CALLED CELL
+    rather than a single point -- Sept 2026, Ryker: pitches are called
+    as a spoken level/zone sequence (see strike_zone.call_cell), so
+    landing anywhere in that same cell is a perfect 2, not just an exact
+    coordinate match. The called cell is derived from the pitch's own
+    intended_x/z (wherever it was entered IS where the call was aimed --
+    no separate level/zone field needed), then the ACTUAL location is
+    measured against that cell's boundaries rather than against
+    intended_x/z as an exact point (strike_zone.distance_from_cell_in).
+    Same PRECISION/COMPETITIVE inch thresholds as
+    command_config.execution_score -- just a more forgiving distance
+    feeding into them. Works identically for a real CommandPitch row or
+    a _GamePitchCommandView, same as danger_adjusted_miss above. None if
+    the pitch has no actual location yet (or, degenerately, no intended
+    location)."""
+    if pitch.actual_x is None or pitch.actual_z is None:
+        return None
+    if pitch.intended_x is None or pitch.intended_z is None:
+        return None
+    level, zone = strike_zone.call_cell(pitch.intended_x, pitch.intended_z)
+    distance_in = strike_zone.distance_from_cell_in(level, zone, pitch.actual_x, pitch.actual_z)
+    return command_config.execution_score(distance_in)
 
 
 def individual_pitch_rows(pitches):
@@ -498,6 +543,7 @@ def individual_pitch_rows(pitches):
     strike zone graphic) when it builds the real table."""
     rows = []
     for p in pitches:
+        score = pitch_execution_score(p)
         rows.append({
             "#": p.pitch_number,
             "Pitch Type": pitch_type_label(p),
@@ -506,5 +552,7 @@ def individual_pitch_rows(pitches):
             "Miss (in)": float(p.miss_distance) if p.miss_distance is not None else None,
             "Danger-Adj. Miss (in)": danger_adjusted_miss(p),
             "Direction": p.miss_direction or "—",
+            "Execution": score,
+            "Execution Label": command_config.execution_score_label(score) or "—",
         })
     return rows

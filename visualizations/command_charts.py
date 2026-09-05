@@ -32,15 +32,23 @@ complementary view Ryker asked for: instead of every pitch normalized
 to its own miss-from-target offset, it plots every pitch's INTENDED
 and ACTUAL point on the real strike zone, each numbered, connected by
 a line -- see its own docstring for the full reasoning.
+
+Sept 2026 addition: pitch_locations_chart also places a generic
+batter silhouette image on each side of the zone plus a drawn home
+plate at the bottom (visualizations/hitter_graphic.py) -- pure
+decorative context (Ryker's own reference image, cropped/recolored),
+placed as Plotly layout images / shapes on layer="below" so they never
+compete with the actual data markers.
 """
 
 import plotly.graph_objects as go
 
 import command_config
-from analytics.command_metrics import pitch_type_label
+from analytics.command_metrics import pitch_type_label, pitch_execution_score
 from pitch_type_config import get_pitch_color
 from strike_zone import ZONE_HALF_WIDTH, ZONE_BOTTOM, ZONE_TOP
 from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, GOLD, MUTED_GRAY, TEXT_CREAM
+from visualizations.hitter_graphic import hitter_images, home_plate_shape
 
 # Fixed axis extent (inches), same rationale as movement_chart's fixed
 # MOVEMENT_EXTENT -- every command chart shows the same boundaries
@@ -50,6 +58,37 @@ from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, GOLD, MUTED_G
 # room to see Major Miss pitches without them sitting on the frame edge
 # in a typical bullpen.
 CHART_EXTENT_IN = 2.0 * command_config.COMPETITIVE_TARGET_RADIUS_IN
+
+# pitch_locations_chart's own axis/placement tuning (feet) -- separate
+# from CHART_EXTENT_IN above (that one's command_chart's inches-based
+# miss-from-target extent).
+#
+# HITTER_HEIGHT_FT is sized so the fixed strike_zone.ZONE_BOTTOM/TOP
+# box (1.5-3.5ft) sits where it would on a real average-height player,
+# using MLB's ABS (Automated Ball-Strike) system's own height-based
+# zone convention as the reference: ABS sets the zone top at 53.5% of
+# a batter's height and the bottom at 27%. GBO doesn't track individual
+# batter heights, so ZONE_BOTTOM/TOP stay one fixed generic box for the
+# whole app (real ball/strike & attack-zone classification depends on
+# them -- this chart doesn't change that, only how tall the purely
+# decorative silhouette is drawn next to it). Solving each ABS
+# percentage against the fixed box separately gives two different
+# implied heights (1.5ft / 27% = 5.56ft; 3.5ft / 53.5% = 6.54ft) since
+# the fixed 2ft-tall box isn't exactly proportioned like an ABS zone at
+# any one height -- their average, ~6.1ft (~6'1"), is also right in
+# line with MLB players' actual average height, so that's the number
+# used here. At that height the fixed zone lands at roughly the
+# 25th-57th percent mark on the silhouette (ABS: 27th-53.5th) --
+# knees-to-letters, close enough to read as correct.
+#
+# Since the bat swings OUTWARD (see hitter_graphic.py), the body can
+# sit close to the zone edge -- only the bat needs the extra chart
+# width, not the whole silhouette. HITTER_CENTER_X/CHART_X_EXTENT_FT
+# scale with HITTER_HEIGHT_FT (silhouette width is a fixed aspect
+# ratio of its height) to keep the same clearances as before.
+HITTER_HEIGHT_FT = 6.1
+HITTER_CENTER_X = 2.0
+CHART_X_EXTENT_FT = 3.1
 
 
 def _group_by_type(pitches):
@@ -99,14 +138,19 @@ def command_chart(pitches):
         color = get_pitch_color(label) if label != "Unspecified" else MUTED_GRAY
         xs = [float(p.horizontal_miss) for p in group]
         ys = [float(p.vertical_miss) for p in group]
-        customdata = [[p.pitch_number, float(p.miss_distance), p.miss_direction or "—"] for p in group]
+        customdata = [
+            [p.pitch_number, float(p.miss_distance), p.miss_direction or "—",
+             command_config.execution_score_label(pitch_execution_score(p))]
+            for p in group
+        ]
         fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="markers", name=label,
             marker=dict(color=color, size=11, opacity=0.9, line=dict(color="#1E1E1E", width=1)),
             customdata=customdata,
             hovertemplate=(
                 f"{label}<br>Pitch #%{{customdata[0]}}<br>"
-                "Miss: %{customdata[1]:.1f} in (%{customdata[2]})<extra></extra>"
+                "Miss: %{customdata[1]:.1f} in (%{customdata[2]})<br>"
+                "Execution: %{customdata[3]}<extra></extra>"
             ),
         ))
 
@@ -149,7 +193,12 @@ def pitch_locations_chart(pitches):
     pitches: CommandPitch ORM objects (joinedload'd .pitch_type). A
     pitch with no actual location yet still gets its numbered intended
     point -- there's nothing to draw a line to or an actual dot for, an
-    intent-only pitch has no "actual" side yet."""
+    intent-only pitch has no "actual" side yet.
+
+    A generic batter silhouette image is placed on each side of the
+    zone (mirrored, purely for visual context -- not tied to the
+    actual pitcher's/hitter's handedness) plus a drawn home plate at
+    the bottom, via visualizations/hitter_graphic.py."""
     fig = go.Figure()
 
     order, groups = _group_by_type(pitches)
@@ -188,7 +237,8 @@ def pitch_locations_chart(pitches):
         located = [p for p in group if p.actual_x is not None and p.actual_z is not None]
         if located:
             customdata = [
-                [p.pitch_number, float(p.miss_distance) if p.miss_distance is not None else None, p.miss_direction or "—"]
+                [p.pitch_number, float(p.miss_distance) if p.miss_distance is not None else None, p.miss_direction or "—",
+                 command_config.execution_score_label(pitch_execution_score(p)) or "—"]
                 for p in located
             ]
             fig.add_trace(go.Scatter(
@@ -203,7 +253,8 @@ def pitch_locations_chart(pitches):
                 customdata=customdata,
                 hovertemplate=(
                     f"{label} — Actual<br>Pitch #%{{customdata[0]}}<br>(%{{x:.2f}}, %{{y:.2f}}) ft<br>"
-                    "Miss: %{customdata[1]:.1f} in (%{customdata[2]})<extra></extra>"
+                    "Miss: %{customdata[1]:.1f} in (%{customdata[2]})<br>"
+                    "Execution: %{customdata[3]}<extra></extra>"
                 ),
             ))
 
@@ -214,10 +265,48 @@ def pitch_locations_chart(pitches):
         line=dict(color=TEXT_CREAM, width=2), fillcolor="rgba(0,0,0,0)",
     )
 
+    # 3x3 zone grid (Sept 2026, Ryker) -- the standard nine-cell strike
+    # zone breakdown coaches/broadcasts use (up-in/middle-in/down-in,
+    # etc.), two evenly-spaced vertical and two horizontal divider
+    # lines inside the same zone rectangle above. Thinner and dimmer
+    # than the zone border so the outer boundary still reads as the
+    # primary shape.
+    zone_width = 2 * ZONE_HALF_WIDTH
+    zone_height = ZONE_TOP - ZONE_BOTTOM
+    for i in (1, 2):
+        grid_x = -ZONE_HALF_WIDTH + zone_width * i / 3
+        fig.add_shape(
+            type="line", xref="x", yref="y",
+            x0=grid_x, x1=grid_x, y0=ZONE_BOTTOM, y1=ZONE_TOP,
+            line=dict(color=TEXT_CREAM, width=1, dash="dot"),
+        )
+        grid_y = ZONE_BOTTOM + zone_height * i / 3
+        fig.add_shape(
+            type="line", xref="x", yref="y",
+            x0=-ZONE_HALF_WIDTH, x1=ZONE_HALF_WIDTH, y0=grid_y, y1=grid_y,
+            line=dict(color=TEXT_CREAM, width=1, dash="dot"),
+        )
+
+    # Batter silhouettes flanking the zone + home plate on the ground --
+    # pure visual context, never the data itself, so both draw
+    # layer="below" the markers above and are faded (see
+    # hitter_graphic.IMAGE_OPACITY). Back to Ryker's own reference
+    # image (assets/hitter_silhouette*.png) as a placed layout image --
+    # a hand-drawn back-view attempt didn't render well and there's no
+    # back-view source photo available, so this is the front/side pose
+    # again (see hitter_graphic.py's docstring for the full history).
+    # HITTER_HEIGHT_FT / HITTER_CENTER_X are tuned to sit just outside
+    # the zone without the bat overlapping the data area.
+    for img in hitter_images(center_x=HITTER_CENTER_X, facing="right", height_ft=HITTER_HEIGHT_FT):
+        fig.add_layout_image(**img)
+    for img in hitter_images(center_x=-HITTER_CENTER_X, facing="left", height_ft=HITTER_HEIGHT_FT):
+        fig.add_layout_image(**img)
+    fig.add_shape(**home_plate_shape(half_width_ft=ZONE_HALF_WIDTH))
+
     apply_gbo_theme(
         fig, title="Pitch Locations — Intended vs. Actual", x_title="Plate Side (ft)", y_title="Plate Height (ft)", height=500,
-        xaxis=dict(range=[-2.5, 2.5], gridcolor=GRID_GRAY, zeroline=False, scaleanchor="y", scaleratio=1),
-        yaxis=dict(range=[0, 5], gridcolor=GRID_GRAY, zeroline=False),
+        xaxis=dict(range=[-CHART_X_EXTENT_FT, CHART_X_EXTENT_FT], gridcolor=GRID_GRAY, zeroline=False, scaleanchor="y", scaleratio=1),
+        yaxis=dict(range=[-0.6, HITTER_HEIGHT_FT + 0.4], gridcolor=GRID_GRAY, zeroline=False),
         legend=dict(orientation="h", y=-0.12),
     )
     return fig

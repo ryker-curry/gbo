@@ -76,6 +76,52 @@ def classify_miss(miss_distance_in):
     return MAJOR_MISS_LABEL
 
 
+# Sept 2026, Ryker: a simpler 0/1/2 "execution score" per pitch, meant
+# to be readable at a glance without knowing what "Competitive" or
+# "Major Miss" mean -- 2 = perfectly executed, 1 = a close/good miss, 0
+# = not even close. Deliberately NOT a second, independently-tuned
+# scale: it collapses classify_miss's four tiers by reusing the exact
+# same PRECISION_TARGET_RADIUS_IN / COMPETITIVE_TARGET_RADIUS_IN
+# thresholds above (Precise -> 2, Good or Competitive -> 1, Major Miss
+# -> 0), so it can never disagree with classify_miss, the within_*_target
+# flags, or the Precision/Competitive/Major Miss percentages already
+# shown everywhere -- just a friendlier read of the same math. Averaged
+# across a session's pitches and scaled to 0-100, this is also the
+# "Execution %" shown on the command scorecard (see
+# analytics/command_metrics.py's session_command_scorecard).
+EXECUTION_SCORE_PERFECT = 2
+EXECUTION_SCORE_CLOSE = 1
+EXECUTION_SCORE_MISS = 0
+MAX_EXECUTION_SCORE = EXECUTION_SCORE_PERFECT
+
+EXECUTION_SCORE_LABELS = {
+    EXECUTION_SCORE_PERFECT: "Perfect Execution",
+    EXECUTION_SCORE_CLOSE: "Close Miss",
+    EXECUTION_SCORE_MISS: "Missed Execution",
+}
+
+
+def execution_score(miss_distance_in):
+    """miss_distance_in (inches) -> 0, 1, or 2 -- see the block comment
+    above for what each score means and why the thresholds match
+    classify_miss exactly. Returns None if miss_distance_in is None (no
+    actual location recorded yet)."""
+    if miss_distance_in is None:
+        return None
+    miss_distance_in = float(miss_distance_in)
+    if miss_distance_in <= PRECISION_TARGET_RADIUS_IN:
+        return EXECUTION_SCORE_PERFECT
+    if miss_distance_in <= COMPETITIVE_TARGET_RADIUS_IN:
+        return EXECUTION_SCORE_CLOSE
+    return EXECUTION_SCORE_MISS
+
+
+def execution_score_label(score):
+    """0/1/2 -> its display label above. None (or an unrecognized score)
+    passes through as None."""
+    return EXECUTION_SCORE_LABELS.get(score)
+
+
 def target_flags(miss_distance_in):
     """miss_distance_in -> (within_precision_target, within_command_target,
     within_competitive_target) booleans, matching the three CommandPitch
