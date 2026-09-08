@@ -1573,7 +1573,14 @@ def game_tracking_server(input, output, session, app_state):
                 # player's profile only and were never meant to be a
                 # selectable defensive assignment for an actual game.
                 positions = db.query(Position).filter(Position.position_name.notin_(["INF", "OF"])).order_by(Position.display_order).all()
-                batter_candidates = players if include_pitchers else [p for p in players if not p.is_pitcher]
+                # "Include pitchers" only surfaces pitchers who actually have
+                # a secondary position on file (Player.secondary_position_id)
+                # -- a real two-way player, not every pitcher on the roster.
+                # Ryker's ask (Sep 2026): a pitcher with no secondary
+                # position isn't someone who'd ever hit/field for us, so
+                # they shouldn't clutter this dropdown even with the box
+                # checked.
+                batter_candidates = [p for p in players if not p.is_pitcher or (include_pitchers and p.secondary_position_id)]
                 pitcher_candidates = [p for p in players if p.is_pitcher]
 
                 player_choices = {"": "-- Select --"}
@@ -2001,7 +2008,9 @@ def game_tracking_server(input, output, session, app_state):
             db = get_session()
             try:
                 players = db.query(Player).filter(Player.active.is_(True)).order_by(Player.last_name, Player.first_name).all()
-                candidates = players if include_pitchers else [p for p in players if not p.is_pitcher]
+                # Same "two-way = has a secondary position" rule as the
+                # initial batter_candidates filter above -- see that comment.
+                candidates = [p for p in players if not p.is_pitcher or (include_pitchers and p.secondary_position_id)]
                 names_by_id = {p.player_id: f"{p.first_name} {p.last_name}" for p in candidates}
                 # Lineup slots need the real, specific fielding position (so
                 # e.g. a 2B and a SS can both be in the lineup at once without
