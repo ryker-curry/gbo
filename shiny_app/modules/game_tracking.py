@@ -1479,10 +1479,12 @@ def game_tracking_server(input, output, session, app_state):
             ui.output_ui("squad_a_lineup_setup_picker"),
             ui.output_ui("squad_a_lineup_slots_body"),
             ui.output_ui("squad_a_lineup_display"),
+            ui.output_ui("squad_a_lineup_edit_body"),
             ui.hr(),
             ui.output_ui("squad_b_lineup_setup_picker"),
             ui.output_ui("squad_b_lineup_slots_body"),
             ui.output_ui("squad_b_lineup_display"),
+            ui.output_ui("squad_b_lineup_edit_body"),
             ui.hr(),
             # Squad C's lineup setup/slots/display -- rendered like Squad
             # A/B above, but each of these three outputs returns None on
@@ -1492,6 +1494,7 @@ def game_tracking_server(input, output, session, app_state):
             ui.output_ui("squad_c_lineup_setup_picker"),
             ui.output_ui("squad_c_lineup_slots_body"),
             ui.output_ui("squad_c_lineup_display"),
+            ui.output_ui("squad_c_lineup_edit_body"),
             ui.hr(),
             ui.output_ui("opponent_lineup_setup_picker"),
             ui.output_ui("opponent_lineup_display"),
@@ -1506,6 +1509,7 @@ def game_tracking_server(input, output, session, app_state):
         # squad "C", the same way they already re-check game.is_intrasquad
         # for squad "B", so this stays safe even if that ever changes.
         squad_label = {"A": "Team 1 Lineup", "B": "Team 2 Lineup", "C": "Team 3 Lineup"}[squad]
+        _edit_open = reactive.Value(False)  # toggles the "Edit lineup" form below _display -- Ryker's ask (Sep 2026): edit a saved lineup directly in Lineup & Setup
 
         @output(id=f"{prefix}_setup_picker")
         @render.ui
@@ -1679,7 +1683,214 @@ def game_tracking_server(input, output, session, app_state):
                     p = db.query(Player).filter(Player.player_id == starting_pitcher_id).first()
                     if p:
                         children.append(ui.p(f"{pitcher_prefix}: {p.first_name} {p.last_name}", class_="text-muted small"))
+                if _can_edit() and not _edit_open():
+                    children.append(ui.input_action_button(f"{prefix}_edit_toggle_btn", "Edit lineup", class_="btn-outline-secondary btn-sm mt-2"))
                 return ui.div(*children)
+            finally:
+                db.close()
+
+        @output(id=f"{prefix}_edit_body")
+        @render.ui
+        def _edit_body():
+            _refresh_tick()
+            if not _access_ok() or not _can_edit() or not _edit_open():
+                return None
+            game_id = _active_game_id()
+            if game_id is None:
+                return None
+            db = get_session()
+            try:
+                game = db.query(Game).filter(Game.game_id == game_id).first()
+                if game is None or (squad == "B" and not game.is_intrasquad) or (squad == "C" and not game.uses_three_squad_intrasquad):
+                    return None
+                slots = (
+                    db.query(GameLineupSlot)
+                    .options(joinedload(GameLineupSlot.player), joinedload(GameLineupSlot.substitutions))
+                    .filter(GameLineupSlot.game_id == game_id, GameLineupSlot.squad == squad)
+                    .order_by(GameLineupSlot.batting_order).all()
+                )
+                if not slots:
+                    _edit_open.set(False)
+                    return None
+                # A slot counts as "used" (its original player pick is locked)
+                # once any pitch has been recorded against it, or it already
+                # has substitution history -- changing player_id on either
+                # would corrupt already-recorded stat attribution (see
+                # GameLineupSlot's docstring: player_id is "this slot's
+                # ORIGINAL occupant -- kept immutable once saved"). Position
+                # and batting order are always safe to change regardless --
+                # GBO doesn't track fielding stats at all, and every FK that
+                # cares about a slot points at lineup_slot_id, never at
+                # batting_order (see the same docstring).
+                slot_ids = [s.lineup_slot_id for s in slots]
+                used_slot_ids = {
+                    row[0] for row in db.query(GamePitch.batting_slot_id)
+                    .filter(GamePitch.game_id == game_id, GamePitch.batting_slot_id.in_(slot_ids))
+                    .distinct().all()
+                }
+                players = db.query(Player).filter(Player.active.is_(True)).order_by(Player.last_name, Player.first_name).all()
+                positions = db.query(Position).filter(Position.position_name.notin_(["INF", "OF"])).order_by(Position.display_order).all()
+                # Unlike the original setup form, this doesn't filter players
+                # by is_pitcher at all -- a two-way player needs to stay
+                # pickable here regardless of which squad's slot this is,
+                # same as the setup form's own "Include pitchers" checkbox
+                # already allows when checked.
+                player_choices = {"": "-- Select --"}
+                player_choices.update({str(p.player_id): f"{p.first_name} {p.last_name}" for p in players})
+                position_choices = {"": "-- Position --"}
+                position_choices.update({str(pos.position_id): pos.position_name for pos in positions})
+
+                rows = [ui.layout_columns(
+                    ui.p("Order", class_="mb-0 small text-muted"),
+                    ui.p("Player", class_="mb-0 small text-muted"),
+                    ui.p("Position", class_="mb-0 small text-muted"),
+                    col_widths=[2, 6, 4],
+                )]
+                for s in slots:
+                    locked = s.lineup_slot_id in used_slot_ids or bool(s.substitutions)
+                    order_input = ui.input_numeric(f"{prefix}_edit_order_{s.lineup_slot_id}", None, value=s.batting_order, min=1, max=99, step=1)
+                    position_input = ui.input_select(f"{prefix}_edit_position_{s.lineup_slot_id}", None, choices=position_choices, selected=str(s.starting_position_id) if s.starting_position_id else "")
+                    if locked:
+                        player_cell = ui.p(
+                            (f"{s.player.first_name} {s.player.last_name}" if s.player else "—") + " 🔒",
+                            class_="mb-0",
+                            title="Already used in this game -- the player can't be changed without corrupting recorded stats. Position/order can still be changed.",
+                        )
+                    else:
+                        player_cell = ui.input_select(f"{prefix}_edit_player_{s.lineup_slot_id}", None, choices=player_choices, selected=str(s.player_id))
+                    rows.append(ui.layout_columns(order_input, player_cell, position_input, col_widths=[2, 6, 4]))
+
+                pitcher_children = []
+                if not game.uses_three_squad_intrasquad:
+                    current_pitcher_id = {"A": game.starting_pitcher_id, "B": game.squad_b_starting_pitcher_id, "C": game.squad_c_starting_pitcher_id}[squad]
+                    pitcher_candidates = [p for p in players if p.is_pitcher]
+                    pitcher_choices = {"": "-- Select --"}
+                    pitcher_choices.update({str(p.player_id): f"{p.first_name} {p.last_name}" for p in pitcher_candidates})
+                    pitcher_label = {"A": "Starting pitcher", "B": "Starting pitcher (Team 2)", "C": "Starting pitcher (Team 3)"}[squad]
+                    pitcher_children.append(ui.input_select(f"{prefix}_edit_starting_pitcher", pitcher_label, choices=pitcher_choices, selected=str(current_pitcher_id) if current_pitcher_id else ""))
+
+                edit_label = squad_label if squad in ("B", "C") else ("Team 1 Lineup" if game.is_intrasquad else "Lineup")
+                return ui.div(
+                    ui.h5(f"Edit {edit_label}", class_="gbo-section-title"),
+                    ui.p(
+                        "Players already used in this game (🔒) are locked in so past pitches stay attributed correctly -- "
+                        "batting order and position can still be changed for every slot. To swap in a different player for "
+                        "an unused slot, just pick someone new below.",
+                        class_="text-muted small",
+                    ),
+                    ui.div(*rows),
+                    *pitcher_children,
+                    ui.input_action_button(f"{prefix}_edit_save_btn", "Save changes", class_="btn-primary mt-2"),
+                    ui.input_action_button(f"{prefix}_edit_cancel_btn", "Cancel", class_="btn-outline-secondary mt-2 ms-2"),
+                )
+            finally:
+                db.close()
+
+        @reactive.effect
+        @reactive.event(input[f"{prefix}_edit_toggle_btn"])
+        def _open_edit():
+            _edit_open.set(True)
+
+        @reactive.effect
+        @reactive.event(input[f"{prefix}_edit_cancel_btn"])
+        def _cancel_edit():
+            _edit_open.set(False)
+
+        @reactive.effect
+        @reactive.event(input[f"{prefix}_edit_save_btn"])
+        def _save_edit():
+            game_id = _active_game_id()
+            if game_id is None:
+                return
+            db = get_session()
+            try:
+                game = db.query(Game).filter(Game.game_id == game_id).first()
+                if game is None:
+                    return
+                if (squad == "B" and not game.is_intrasquad) or (squad == "C" and not game.uses_three_squad_intrasquad):
+                    return
+                slots = (
+                    db.query(GameLineupSlot)
+                    .options(joinedload(GameLineupSlot.substitutions))
+                    .filter(GameLineupSlot.game_id == game_id, GameLineupSlot.squad == squad)
+                    .all()
+                )
+                if not slots:
+                    return
+                slot_ids = [s.lineup_slot_id for s in slots]
+                used_slot_ids = {
+                    row[0] for row in db.query(GamePitch.batting_slot_id)
+                    .filter(GamePitch.game_id == game_id, GamePitch.batting_slot_id.in_(slot_ids))
+                    .distinct().all()
+                }
+
+                new_player_ids = {}
+                new_position_ids = {}
+                new_orders = {}
+                for s in slots:
+                    order_key = f"{prefix}_edit_order_{s.lineup_slot_id}"
+                    position_key = f"{prefix}_edit_position_{s.lineup_slot_id}"
+                    player_key = f"{prefix}_edit_player_{s.lineup_slot_id}"
+                    if order_key not in input:
+                        continue  # stale slot list (lineup changed since the form rendered) -- skip rather than guess
+                    order_raw = input[order_key]()
+                    new_orders[s.lineup_slot_id] = int(order_raw) if order_raw else s.batting_order
+                    position_raw = input[position_key]() if position_key in input else None
+                    new_position_ids[s.lineup_slot_id] = int(position_raw) if position_raw else None
+                    locked = s.lineup_slot_id in used_slot_ids or bool(s.substitutions)
+                    if not locked and player_key in input:
+                        player_raw = input[player_key]()
+                        new_player_ids[s.lineup_slot_id] = int(player_raw) if player_raw else None
+
+                # Duplicate checks -- same protection _save (the original
+                # setup form) already has, applied across the post-edit
+                # state of every slot together.
+                final_player_ids = [new_player_ids.get(s.lineup_slot_id, s.player_id) for s in slots]
+                final_player_ids = [pid for pid in final_player_ids if pid]
+                if len(final_player_ids) != len(set(final_player_ids)):
+                    ui.notification_show("The same player would end up in more than one slot -- fix the duplicate(s) before saving.", type="error", duration=10)
+                    return
+                final_position_ids = [new_position_ids.get(s.lineup_slot_id, s.starting_position_id) for s in slots]
+                final_position_ids = [pid for pid in final_position_ids if pid]
+                if len(final_position_ids) != len(set(final_position_ids)):
+                    ui.notification_show("The same position would be assigned to more than one slot -- fix the duplicate(s) before saving.", type="error", duration=10)
+                    return
+                final_orders = [new_orders.get(s.lineup_slot_id, s.batting_order) for s in slots]
+                if len(final_orders) != len(set(final_orders)):
+                    ui.notification_show("Two slots would end up with the same batting order number -- fix the duplicate(s) before saving.", type="error", duration=10)
+                    return
+
+                skipped_locked_players = 0
+                for s in slots:
+                    if s.lineup_slot_id in new_player_ids:
+                        if s.lineup_slot_id in used_slot_ids or bool(s.substitutions):
+                            skipped_locked_players += 1  # defensive -- shouldn't happen, the form doesn't offer a player select for locked slots
+                        else:
+                            new_pid = new_player_ids[s.lineup_slot_id]
+                            if new_pid:
+                                s.player_id = new_pid
+                    if s.lineup_slot_id in new_position_ids:
+                        s.starting_position_id = new_position_ids[s.lineup_slot_id]
+                    if s.lineup_slot_id in new_orders:
+                        s.batting_order = new_orders[s.lineup_slot_id]
+
+                if not game.uses_three_squad_intrasquad and f"{prefix}_edit_starting_pitcher" in input:
+                    pitcher_raw = input[f"{prefix}_edit_starting_pitcher"]()
+                    new_pitcher_id = int(pitcher_raw) if pitcher_raw else None
+                    if squad == "A":
+                        game.starting_pitcher_id = new_pitcher_id
+                    elif squad == "B":
+                        game.squad_b_starting_pitcher_id = new_pitcher_id
+                    else:
+                        game.squad_c_starting_pitcher_id = new_pitcher_id
+
+                db.commit()
+                msg = "Lineup updated."
+                if skipped_locked_players:
+                    msg += " (A locked player pick was skipped -- that slot's already been used in this game.)"
+                ui.notification_show(msg, type="message", duration=8)
+                _edit_open.set(False)
+                _bump_refresh()
             finally:
                 db.close()
 
