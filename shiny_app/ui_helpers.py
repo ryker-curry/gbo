@@ -415,11 +415,33 @@ def show_card(player, bucket_data, pitch_summary=None, flag="neutral", fastball_
     rom_color = mf.get("color")
     rom_deficits = mf.get("deficit_count")
 
+    # Local import (not at module top) to dodge a circular import --
+    # bucket_display.py already does `import ui_helpers` at ITS top
+    # level, so ui_helpers importing bucket_display back at ITS top
+    # level would deadlock the two modules' load order; deferring it to
+    # here (only runs once show_card() is actually called, long after
+    # both modules have finished loading) sidesteps that entirely.
+    from bucket_display import composite_score_status
+
     def bar(label, value, display=None, lo=0, hi=100, status=None):
         if value is None:
             return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_="neutral", style="width:0"), class_="b"), ui.span("—", class_="v"), class_="gbo-at")
         pct = max(0, min(100, (float(value) - lo) / (hi - lo) * 100))
-        st = status or ("gold" if pct >= 90 else status_from_percentile(pct))
+        # Ryker's ask (Sept 2026): BODY/PWR/STR/SPD/ARM are the same
+        # 0-100 bucket composite scores build_score_rings' Body Comp/
+        # Power/Strength rings already color via composite_score_status
+        # (80/85 cut points, tuned to this roster's real spread -- see
+        # that function's docstring) instead of the app-wide 35/60
+        # status_from_percentile default, which reads as "everyone
+        # green" here since composite scores cluster well above 60.
+        # Same fix as the Sept 1 2026 Overview-tab one referenced above
+        # composite_score_status's definition, just for the hero card's
+        # bars too, so the card never disagrees with the rings about
+        # the same score. VELO/SPIN (lo/hi outside the default 0-100 --
+        # raw mph/rpm, not a bucket score) keep the old scale, unless a
+        # caller explicitly passes status=.
+        is_bucket_score = lo == 0 and hi == 100
+        st = status or (composite_score_status(value) if is_bucket_score else ("gold" if pct >= 90 else status_from_percentile(pct)))
         return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_=st, style=f"width:{pct:.0f}%"), class_="b"), ui.span(display if display is not None else f"{float(value):.0f}", class_="v"), class_="gbo-at")
 
     def flag_bar(label, color, count):
