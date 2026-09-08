@@ -1578,17 +1578,30 @@ def game_tracking_server(input, output, session, app_state):
                         col_widths=[1, 6, 5],
                     ))
                 children = [ui.div(*rows)]
-                pitcher_choices = {"": "-- Select --"}
-                pitcher_choices.update({str(p.player_id): f"{p.first_name} {p.last_name}" for p in pitcher_candidates})
-                pitcher_label = {"A": "Starting pitcher", "B": "Starting pitcher (Squad B)", "C": "Starting pitcher (Squad C)"}[squad]
-                children.append(ui.input_select(f"{prefix}_starting_pitcher", pitcher_label, choices=pitcher_choices))
-                if squad in ("B", "C"):
-                    children.append(ui.p(
-                        "Saved as a default for the live \"who's pitching\" picker during other squads' at-bats -- "
-                        f"Squad {squad} doesn't get formal pitching-change history the way Squad A does, so this is a "
-                        "starting point you can still override any at-bat, not a lock-in.",
-                        class_="text-muted small",
-                    ))
+                # Three-squad intrasquad games skip the "starting pitcher"
+                # pick entirely, for every squad (A included) -- per
+                # Ryker's explicit ask (Sep 2026): in this mode there's no
+                # upfront designation at all, just a live free-pick pitcher
+                # each plate appearance (see
+                # who_is_up_three_squad_batter_and_pitcher /
+                # get_current_three_squad_pitcher_id), so a "starting
+                # pitcher" field here would just be unused clutter. Two-
+                # squad games (including ordinary intrasquad) are
+                # unaffected -- Squad A still gets its formal starting
+                # pitcher + pitching-change history, Squad B still gets
+                # its own saved default.
+                if not game.uses_three_squad_intrasquad:
+                    pitcher_choices = {"": "-- Select --"}
+                    pitcher_choices.update({str(p.player_id): f"{p.first_name} {p.last_name}" for p in pitcher_candidates})
+                    pitcher_label = {"A": "Starting pitcher", "B": "Starting pitcher (Squad B)", "C": "Starting pitcher (Squad C)"}[squad]
+                    children.append(ui.input_select(f"{prefix}_starting_pitcher", pitcher_label, choices=pitcher_choices))
+                    if squad in ("B", "C"):
+                        children.append(ui.p(
+                            "Saved as a default for the live \"who's pitching\" picker during other squads' at-bats -- "
+                            f"Squad {squad} doesn't get formal pitching-change history the way Squad A does, so this is a "
+                            "starting point you can still override any at-bat, not a lock-in.",
+                            class_="text-muted small",
+                        ))
                 children.append(ui.input_action_button(f"{prefix}_save_btn", "Save lineup", class_="btn-primary mt-2"))
                 return ui.div(*children)
             finally:
@@ -1649,7 +1662,10 @@ def game_tracking_server(input, output, session, app_state):
                         "Position": position.position_name if position else "—",
                     })
                 children = [ui.h5(label, class_="gbo-section-title"), ui_helpers.render_dict_table(rows)]
-                starting_pitcher_id = {"A": game.starting_pitcher_id, "B": game.squad_b_starting_pitcher_id, "C": game.squad_c_starting_pitcher_id}[squad]
+                # No starting-pitcher concept at all in three-squad mode
+                # (see the setup form's own comment) -- always None here,
+                # skip the line entirely rather than show a stale/blank one.
+                starting_pitcher_id = None if game.uses_three_squad_intrasquad else {"A": game.starting_pitcher_id, "B": game.squad_b_starting_pitcher_id, "C": game.squad_c_starting_pitcher_id}[squad]
                 pitcher_prefix = "Starting pitcher" if squad == "A" else "Starting pitcher (default -- overridable live)"
                 if starting_pitcher_id:
                     p = db.query(Player).filter(Player.player_id == starting_pitcher_id).first()
