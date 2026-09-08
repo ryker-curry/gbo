@@ -393,6 +393,14 @@ CONTACT_QUALITY_OPTIONS = ["Barrel", "Solid", "Weak", "Miss"]
 RUNNER_EVENT_TYPES = ["Stolen Base", "Caught Stealing", "Picked Off", "Wild Pitch", "Passed Ball", "Balk", "Defensive Indifference"]
 RUNNER_EVENT_OUT_TYPES = ("Caught Stealing", "Picked Off")
 
+# Display-only label for each squad letter (Sep 2026, Ryker: show "Team
+# 1/2/3" instead of "Squad A/B/C"). Purely cosmetic -- the underlying
+# squad column values ('A'/'B'/'C', on GameLineupSlot/GamePitch.
+# batting_squad/GameRunnerEvent.batting_squad) and every variable/
+# function name built around them are UNCHANGED, so this is the only
+# place that ever needs to change if the wording changes again.
+TEAM_LABEL = {"A": "Team 1", "B": "Team 2", "C": "Team 3"}
+
 GAME_VIDEO_SUBFOLDER = "pitch-videos/"  # same folder Bullpen/Hitter Tracking's clips upload into, inside the one shared R2 bucket
 
 
@@ -1302,8 +1310,8 @@ def game_tracking_server(input, output, session, app_state):
             return ui.div(
                 ui.h5("Start a new game", class_="gbo-section-title"),
                 ui.input_select("new_game_season_choice", "Season", choices=choices),
-                ui.input_checkbox("new_game_intrasquad", "Intrasquad scrimmage (Squad A vs Squad B, our own roster on both sides)"),
-                ui.input_checkbox("new_game_three_squad", "Three-team intrasquad (Squad A/B/C rotating through, one team bats while the other two field -- only used when Intrasquad scrimmage above is also checked)"),
+                ui.input_checkbox("new_game_intrasquad", "Intrasquad scrimmage (Team 1 vs Team 2, our own roster on both sides)"),
+                ui.input_checkbox("new_game_three_squad", "Three-team intrasquad (Team 1/2/3 rotating through, one team bats while the other two field -- only used when Intrasquad scrimmage above is also checked)"),
             )
         finally:
             db.close()
@@ -1423,9 +1431,9 @@ def game_tracking_server(input, output, session, app_state):
             title = f"{loc} {_opponent_display_name(g)} — {g.game_date.strftime('%Y-%m-%d (%a)')}"
             score_cards = (
                 [
-                    {"label": "Squad A", "value": str(g.our_score)},
-                    {"label": "Squad B", "value": str(g.opponent_score)},
-                    {"label": "Squad C", "value": str(g.squad_c_score)},
+                    {"label": "Team 1", "value": str(g.our_score)},
+                    {"label": "Team 2", "value": str(g.opponent_score)},
+                    {"label": "Team 3", "value": str(g.squad_c_score)},
                 ]
                 if g.uses_three_squad_intrasquad else
                 [
@@ -1497,7 +1505,7 @@ def game_tracking_server(input, output, session, app_state):
         # game.uses_three_squad_intrasquad before showing anything for
         # squad "C", the same way they already re-check game.is_intrasquad
         # for squad "B", so this stays safe even if that ever changes.
-        squad_label = {"A": "Squad A Lineup", "B": "Squad B Lineup", "C": "Squad C Lineup"}[squad]
+        squad_label = {"A": "Team 1 Lineup", "B": "Team 2 Lineup", "C": "Team 3 Lineup"}[squad]
 
         @output(id=f"{prefix}_setup_picker")
         @render.ui
@@ -1516,7 +1524,7 @@ def game_tracking_server(input, output, session, app_state):
                 existing = db.query(GameLineupSlot).filter(GameLineupSlot.game_id == game_id, GameLineupSlot.squad == squad).count()
                 if existing:
                     return None
-                label = squad_label if squad in ("B", "C") else ("Squad A Lineup" if game.is_intrasquad else "Lineup")
+                label = squad_label if squad in ("B", "C") else ("Team 1 Lineup" if game.is_intrasquad else "Lineup")
                 return ui.div(
                     ui.h5(f"Set {label}", class_="gbo-section-title"),
                     ui.input_checkbox(f"{prefix}_include_pitchers", "Include pitchers in the batting order (two-way players)"),
@@ -1593,12 +1601,12 @@ def game_tracking_server(input, output, session, app_state):
                 if not game.uses_three_squad_intrasquad:
                     pitcher_choices = {"": "-- Select --"}
                     pitcher_choices.update({str(p.player_id): f"{p.first_name} {p.last_name}" for p in pitcher_candidates})
-                    pitcher_label = {"A": "Starting pitcher", "B": "Starting pitcher (Squad B)", "C": "Starting pitcher (Squad C)"}[squad]
+                    pitcher_label = {"A": "Starting pitcher", "B": "Starting pitcher (Team 2)", "C": "Starting pitcher (Team 3)"}[squad]
                     children.append(ui.input_select(f"{prefix}_starting_pitcher", pitcher_label, choices=pitcher_choices))
                     if squad in ("B", "C"):
                         children.append(ui.p(
-                            "Saved as a default for the live \"who's pitching\" picker during other squads' at-bats -- "
-                            f"Squad {squad} doesn't get formal pitching-change history the way Squad A does, so this is a "
+                            "Saved as a default for the live \"who's pitching\" picker during other teams' at-bats -- "
+                            f"{TEAM_LABEL[squad]} doesn't get formal pitching-change history the way Team 1 does, so this is a "
                             "starting point you can still override any at-bat, not a lock-in.",
                             class_="text-muted small",
                         ))
@@ -1633,7 +1641,7 @@ def game_tracking_server(input, output, session, app_state):
                 )
                 if not slots:
                     return None
-                label = squad_label if squad in ("B", "C") else ("Squad A Lineup" if game.is_intrasquad else "Lineup")
+                label = squad_label if squad in ("B", "C") else ("Team 1 Lineup" if game.is_intrasquad else "Lineup")
                 # Milestone 4 -- shows each slot's CURRENT occupant/position
                 # (post-substitution), not the original starter; see
                 # get_current_slot_occupant_id/get_current_slot_position_id.
@@ -1885,7 +1893,7 @@ def game_tracking_server(input, output, session, app_state):
                 else:
                     game.squad_c_starting_pitcher_id = int(pitcher_raw) if pitcher_raw else None
                 db.commit()
-                label = "lineup" if squad == "A" else f"Squad {squad} lineup"
+                label = "lineup" if squad == "A" else f"{TEAM_LABEL[squad]} lineup"
                 ui.notification_show(f"Saved {label} ({len(picks)} batters).", type="message", duration=8)
                 _bump_refresh()
             finally:
@@ -2119,7 +2127,7 @@ def game_tracking_server(input, output, session, app_state):
                 return None
 
             if game.uses_three_squad_intrasquad:
-                half_label = f"Squad {suggest_current_batting_squad(pitches, state)} batting"
+                half_label = f"{TEAM_LABEL[suggest_current_batting_squad(pitches, state)]} batting"
                 score_value = f"{game.our_score}-{game.opponent_score}-{game.squad_c_score} (A-B-C)"
             else:
                 half_label = "Batting" if state["is_our_batting"] else "Pitching"
@@ -2186,7 +2194,7 @@ def game_tracking_server(input, output, session, app_state):
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
             if game.status != "In Progress":
                 return None
-            half_label = f"Squad {suggest_current_batting_squad(pitches, state)} batting" if game.uses_three_squad_intrasquad else ("We're batting" if state["is_our_batting"] else "We're pitching")
+            half_label = f"{TEAM_LABEL[suggest_current_batting_squad(pitches, state)]} batting" if game.uses_three_squad_intrasquad else ("We're batting" if state["is_our_batting"] else "We're pitching")
             children = [
                 ui.h5(f"Inning {state['inning']} — {half_label}", class_="gbo-section-title"),
                 ui_helpers.render_kpi_cards([
@@ -2480,7 +2488,7 @@ def game_tracking_server(input, output, session, app_state):
                     p = db.query(Player).filter(Player.player_id == cur_id).first() if cur_id else None
                     if p:
                         squad = suggest_current_batting_squad(pitches, state)
-                        return ui.p(f"At bat: {p.first_name} {p.last_name} (Squad {squad})", class_="text-muted small")
+                        return ui.p(f"At bat: {p.first_name} {p.last_name} ({TEAM_LABEL[squad]})", class_="text-muted small")
                     return None
                 if state["is_our_batting"]:
                     cur_id = state.get("current_our_player")
@@ -2501,7 +2509,7 @@ def game_tracking_server(input, output, session, app_state):
             # rule (see module docstring).
             if game.uses_three_squad_intrasquad:
                 suggested_squad = suggest_current_batting_squad(pitches, state)
-                squad_choices = {"A": "Squad A", "B": "Squad B", "C": "Squad C"}
+                squad_choices = dict(TEAM_LABEL)
                 return ui.div(
                     ui.p("New plate appearance -- which team is up? (auto-suggested from the rotation, override if needed)", class_="text-muted small"),
                     ui.input_select("batting_squad_select", "Team up to bat", choices=squad_choices, selected=suggested_squad),
@@ -2528,7 +2536,7 @@ def game_tracking_server(input, output, session, app_state):
                         pitcher_choices = {str(p.player_id): f"{p.first_name} {p.last_name}" for p in pitcher_candidates}
                         suggested_pitcher = get_current_squad_b_pitcher_id(game)
                         pitcher_selected = str(suggested_pitcher) if suggested_pitcher is not None and str(suggested_pitcher) in pitcher_choices else None
-                        children.append(ui.input_select("opp_pitcher_select", "Opposing pitcher (Squad B)", choices=pitcher_choices, selected=pitcher_selected))
+                        children.append(ui.input_select("opp_pitcher_select", "Opposing pitcher (Team 2)", choices=pitcher_choices, selected=pitcher_selected))
             else:
                 if game.is_intrasquad:
                     if squad_b_slots:
@@ -2539,7 +2547,7 @@ def game_tracking_server(input, output, session, app_state):
                     choices = {str(pid): f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}" for pid in squad_b_ids if pid in players_by_id}
                     suggested = suggest_next_squad_b_batter(game, squad_b_slots) if squad_b_slots else None
                     selected = str(suggested) if suggested is not None and str(suggested) in choices else None
-                    children.append(ui.input_select("opp_our_batter_select", "Opposing batter (Squad B)", choices=choices, selected=selected))
+                    children.append(ui.input_select("opp_our_batter_select", "Opposing batter (Team 2)", choices=choices, selected=selected))
                 else:
                     opp_roster = game.opponent_team.roster if game.opponent_team else []
                     if opp_roster:
@@ -2592,7 +2600,7 @@ def game_tracking_server(input, output, session, app_state):
             choices = {str(pid): f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}" for pid in lineup_ids if pid in players_by_id}
             suggested = suggest_next_squad_batter(game, squad, slots) if slots else None
             selected = str(suggested) if suggested is not None and str(suggested) in choices else None
-            children = [ui.input_select("three_squad_batter_select", f"Squad {squad} batter", choices=choices, selected=selected)]
+            children = [ui.input_select("three_squad_batter_select", f"{TEAM_LABEL[squad]} batter", choices=choices, selected=selected)]
 
             pitcher_candidates = db.query(Player).filter(Player.active.is_(True), Player.is_pitcher.is_(True)).order_by(Player.last_name, Player.first_name).all()
             if not pitcher_candidates:
@@ -2897,7 +2905,7 @@ def game_tracking_server(input, output, session, app_state):
                 max_order = max((s.batting_order for s in slots), default=0)
                 order_choices = {str(i): str(i) for i in range(1, max_order + 2)}
 
-                title_suffix = " (Squad B)" if squad == "B" else ""
+                title_suffix = " (Team 2)" if squad == "B" else ""
 
                 return ui.accordion(
                     ui.accordion_panel(
