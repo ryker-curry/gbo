@@ -497,6 +497,28 @@ def _currently_occupied_player_ids(game, squad):
     return {get_current_slot_occupant_id(s) for s in slots}
 
 
+def _players_taken_by_other_squads(game, squad):
+    """Which players are already committed to a DIFFERENT squad in this
+    intrasquad game -- either in another squad's saved batting lineup
+    (any slot, subbed-in occupant included) or as another squad's
+    starting pitcher. Ryker's ask (Sep 2026): once a guy is picked for
+    one team, he shouldn't show up as a pickable option for the other
+    team(s) too -- a player can only be on one squad. Used to trim the
+    batter/pitcher choices when SETTING UP a squad's lineup, and as the
+    final save-time guard against a cross-squad duplicate slipping
+    through (see _save below)."""
+    other_squads = [s for s in ("A", "B", "C") if s != squad]
+    taken = {get_current_slot_occupant_id(s) for s in game.lineup_slots if s.squad in other_squads}
+    starting_pitcher_by_squad = {
+        "A": game.starting_pitcher_id,
+        "B": game.squad_b_starting_pitcher_id,
+        "C": game.squad_c_starting_pitcher_id,
+    }
+    taken |= {starting_pitcher_by_squad[s] for s in other_squads}
+    taken.discard(None)
+    return taken
+
+
 def _resolve_current_batting_slot(slots, batter_player_id):
     """Milestone 4 -- which GameLineupSlot the given batter currently
     occupies, used to stamp GamePitch.batting_slot_id at record time.
@@ -1580,8 +1602,13 @@ def game_tracking_server(input, output, session, app_state):
                 # position isn't someone who'd ever hit/field for us, so
                 # they shouldn't clutter this dropdown even with the box
                 # checked.
-                batter_candidates = [p for p in players if not p.is_pitcher or (include_pitchers and p.secondary_position_id)]
-                pitcher_candidates = [p for p in players if p.is_pitcher]
+                # Once a player's picked for a DIFFERENT squad in this game
+                # (saved lineup slot or saved starting pitcher), he drops
+                # out of every OTHER squad's choices entirely -- a guy can
+                # only be on one team. See _players_taken_by_other_squads.
+                taken_elsewhere = _players_taken_by_other_squads(game, squad)
+                batter_candidates = [p for p in players if p.player_id not in taken_elsewhere and (not p.is_pitcher or (include_pitchers and p.secondary_position_id))]
+                pitcher_candidates = [p for p in players if p.is_pitcher and p.player_id not in taken_elsewhere]
 
                 player_choices = {"": "-- Select --"}
                 player_choices.update({str(p.player_id): f"{p.first_name} {p.last_name}" for p in batter_candidates})
@@ -2007,10 +2034,17 @@ def game_tracking_server(input, output, session, app_state):
 
             db = get_session()
             try:
+                game = db.query(Game).filter(Game.game_id == game_id).first()
+                if game is None:
+                    return
                 players = db.query(Player).filter(Player.active.is_(True)).order_by(Player.last_name, Player.first_name).all()
                 # Same "two-way = has a secondary position" rule as the
                 # initial batter_candidates filter above -- see that comment.
-                candidates = [p for p in players if not p.is_pitcher or (include_pitchers and p.secondary_position_id)]
+                # Also drops anyone already saved to a DIFFERENT squad's
+                # lineup, same as the initial form -- see
+                # _players_taken_by_other_squads.
+                taken_elsewhere = _players_taken_by_other_squads(game, squad)
+                candidates = [p for p in players if p.player_id not in taken_elsewhere and (not p.is_pitcher or (include_pitchers and p.secondary_position_id))]
                 names_by_id = {p.player_id: f"{p.first_name} {p.last_name}" for p in candidates}
                 # Lineup slots need the real, specific fielding position (so
                 # e.g. a 2B and a SS can both be in the lineup at once without
@@ -2103,15 +2137,31 @@ def game_tracking_server(input, output, session, app_state):
                 if len(chosen_position_ids) != len(set(chosen_position_ids)):
                     ui.notification_show("The same position is assigned to more than one slot -- fix the duplicate(s) before saving.", type="error", duration=10)
                     return
+                pitcher_raw = input[f"{prefix}_starting_pitcher"]() if f"{prefix}_starting_pitcher" in input else ""
+                pitcher_id = int(pitcher_raw) if pitcher_raw else None
+                # Final guard against a cross-squad duplicate -- the live
+                # dropdowns already filter these out, but this is the
+                # authoritative check at the moment of saving (e.g. another
+                # squad's lineup could've been saved in a different tab
+                # since this form was opened). See
+                # _players_taken_by_other_squads.
+                taken_elsewhere = _players_taken_by_other_squads(game, squad)
+                collision_ids = (set(chosen_ids) | ({pitcher_id} if pitcher_id else set())) & taken_elsewhere
+                if collision_ids:
+                    collision_names = [f"{p.first_name} {p.last_name}" for p in db.query(Player).filter(Player.player_id.in_(collision_ids)).all()]
+                    ui.notification_show(
+                        f"{', '.join(collision_names) or 'A picked player'} is already on another team in this game -- fix before saving.",
+                        type="error", duration=10,
+                    )
+                    return
                 for i, player_id, position_id in picks:
                     db.add(GameLineupSlot(game_id=game_id, squad=squad, batting_order=i, player_id=player_id, starting_position_id=position_id))
-                pitcher_raw = input[f"{prefix}_starting_pitcher"]() if f"{prefix}_starting_pitcher" in input else ""
                 if squad == "A":
-                    game.starting_pitcher_id = int(pitcher_raw) if pitcher_raw else None
+                    game.starting_pitcher_id = pitcher_id
                 elif squad == "B":
-                    game.squad_b_starting_pitcher_id = int(pitcher_raw) if pitcher_raw else None
+                    game.squad_b_starting_pitcher_id = pitcher_id
                 else:
-                    game.squad_c_starting_pitcher_id = int(pitcher_raw) if pitcher_raw else None
+                    game.squad_c_starting_pitcher_id = pitcher_id
                 db.commit()
                 label = "lineup" if squad == "A" else f"{TEAM_LABEL[squad]} lineup"
                 ui.notification_show(f"Saved {label} ({len(picks)} batters).", type="message", duration=8)
