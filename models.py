@@ -1119,6 +1119,35 @@ class Game(Base):
     # auto-suggested default on this page.
     squad_b_starting_pitcher_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)
     opponent_starting_pitcher_id = Column(Integer, ForeignKey("opponent_players.opponent_player_id"), nullable=True)
+    # Three-team intrasquad mode (Sep 2026, Ryker: squads of 7-8 with a
+    # lot of position players, three lineups rotating -- one team bats
+    # while the other two share the field, then rotates). Deliberately
+    # ADDITIVE, not a replacement for the existing Squad A vs Squad B
+    # two-sided flow: every existing intrasquad game keeps using
+    # is_our_team_batting's plain True/False alternation untouched
+    # (see compute_current_state() in game_tracking.py), because at
+    # any single pitch there is still only ever exactly one batting
+    # team and one pitching team on record -- the third, waiting team
+    # has zero footprint on a pitch row, especially since this app
+    # doesn't track fielding stats at all. uses_three_squad_intrasquad
+    # just unlocks a THIRD roster (Squad C, via GameLineupSlot's
+    # already-arbitrary squad column) and a live "which team is up"
+    # picker in place of the automatic two-way flip; GamePitch/
+    # GameRunnerEvent.batting_squad ('A'/'B'/'C') records which of the
+    # three that was, so the right one of three score totals gets
+    # credited. False (the default) for every other game, including
+    # ordinary two-squad intrasquad games, which are entirely
+    # unaffected by this column's existence.
+    uses_three_squad_intrasquad = Column(Boolean, default=False, nullable=False)
+    # Squad C's running total, mirroring our_score/opponent_score --
+    # only meaningful when uses_three_squad_intrasquad is True. Squad
+    # A's total stays in our_score, Squad B's in opponent_score (same
+    # columns two-squad games already use), so this is purely additive.
+    squad_c_score = Column(Integer, default=0, nullable=False)
+    # Squad C's starting pitcher pick, mirroring squad_b_starting_pitcher_id
+    # -- same "smarter default, always overridable" role, no formal
+    # PitchingChange-style history for Squad C either.
+    squad_c_starting_pitcher_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)
     notes = Column(Text, nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -1129,6 +1158,7 @@ class Game(Base):
     lineup_slots = relationship("GameLineupSlot", back_populates="game", cascade="all, delete-orphan", order_by="GameLineupSlot.batting_order")
     starting_pitcher = relationship("Player", foreign_keys=[starting_pitcher_id])
     squad_b_starting_pitcher = relationship("Player", foreign_keys=[squad_b_starting_pitcher_id])
+    squad_c_starting_pitcher = relationship("Player", foreign_keys=[squad_c_starting_pitcher_id])
     opponent_lineup_slots = relationship("OpponentLineupSlot", back_populates="game", cascade="all, delete-orphan", order_by="OpponentLineupSlot.batting_order")
     opponent_starting_pitcher = relationship("OpponentPlayer", foreign_keys=[opponent_starting_pitcher_id])
     pitches = relationship("GamePitch", back_populates="game", cascade="all, delete-orphan", order_by="GamePitch.pitch_sequence")
@@ -1354,6 +1384,16 @@ class GamePitch(Base):
     # substituted out and later re-enters the same slot. See
     # LineupSubstitution and _resolve_current_batting_slot().
     batting_slot_id = Column(Integer, ForeignKey("game_lineup_slots.lineup_slot_id"), nullable=True)
+    # Three-team intrasquad mode only (Game.uses_three_squad_intrasquad)
+    # -- 'A'/'B'/'C', which of the three squads was actually batting on
+    # this pitch. is_our_team_batting still gets set too (True when the
+    # named batting_squad's players are the ones in our_player_id,
+    # False otherwise) so every existing query/report that reads that
+    # boolean keeps working unchanged; batting_squad is purely additive,
+    # letting _do_record_pitch credit the right one of THREE score
+    # totals instead of just our_score/opponent_score. NULL for every
+    # ordinary (non-three-squad) game.
+    batting_squad = Column(String(1), nullable=True)
 
     pa_pitch_number = Column(Integer, nullable=True)  # pitch # within this specific plate appearance
     balls_before = Column(Integer, nullable=True)
@@ -1502,6 +1542,7 @@ class GameRunnerEvent(Base):
     game_id = Column(Integer, ForeignKey("games.game_id"), nullable=False)
     pitch_sequence_after = Column(Integer, nullable=False)  # the pitch_sequence of the last actual pitch recorded before this event; 0 if none yet this game
     is_our_team_batting = Column(Boolean, nullable=False)  # which side had the runner -- same convention as GamePitch.is_our_team_batting, stored (not just used transiently) so an undo can reverse a scored run against the right side's total without re-deriving it
+    batting_squad = Column(String(1), nullable=True)  # three-team intrasquad mode only -- 'A'/'B'/'C', mirroring GamePitch.batting_squad, so a run scored via to_base==4 credits the right one of three score totals (and undo reverses the right one). NULL for every ordinary game.
     event_type = Column(String(30), nullable=False)  # "Stolen Base" / "Caught Stealing" / "Picked Off" / "Wild Pitch" / "Passed Ball" / "Balk" / "Defensive Indifference"
     from_base = Column(Integer, nullable=False)  # 1, 2, or 3
     to_base = Column(Integer, nullable=True)  # 2, 3, or 4 (home) -- NULL when is_out
