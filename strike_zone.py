@@ -30,6 +30,7 @@ working unchanged until they're migrated.
 """
 
 import math
+import re
 
 import numpy as np
 import plotly.graph_objects as go
@@ -93,6 +94,78 @@ def is_in_zone(plate_x, plate_z):
     if plate_x is None or plate_z is None:
         return None
     return (-ZONE_HALF_WIDTH <= plate_x <= ZONE_HALF_WIDTH) and (ZONE_BOTTOM <= plate_z <= ZONE_TOP)
+
+
+# ---------------------------------------------------------------------
+# Pitch code shorthand (Sep 2026) -- Ryker's own live-charting notation
+# for INTENDED location: a 3-digit "Level-Pitch-Zone" code (e.g. "214"),
+# typed once instead of clicking the zone graphic. The pitch digit
+# (middle) is resolved by the caller against the actual pitcher's real
+# arsenal (see game_tracking.py's _resolve_actual_pitcher_id/
+# _apply_pitch_code) -- decode_pitch_code below only handles the outer
+# two digits, level and zone, converting them to the same plate_x/
+# plate_z coordinates everything else in this file already uses.
+#
+# Level (vertical, 1-4), per Ryker: 1 = below the zone/dirt, 2 = bottom
+# of the zone/knees, 3 = middle zone, 4 = top of zone and above. Levels
+# 2/3/4 land at the center of the SAME three vertical rows
+# derive_old_zone already divides the zone into, so a decoded code
+# round-trips through derive_old_zone into the matching old-system
+# row; level 1 lands far enough below ZONE_BOTTOM to register as Bury
+# (0), same as any other pitch in the dirt.
+#
+# Zone (horizontal, 1-5), per Ryker: 1 = chalk/off the plate (in to a
+# righty, off to a lefty), 2 = inner part of the zone, 3 = middle zone,
+# 4 = away zone to a righty/in zone to a lefty, 5 = off the plate/
+# chalk (off to a righty, in to a lefty). Zones 2/3/4 are the same
+# three in-zone columns derive_old_zone already uses; 1 and 5 are one
+# column-width further out on each side, off the actual 17in plate --
+# solidly outside is_in_zone, clamped to the nearest column by
+# derive_old_zone like any other off-the-plate point. Physical side is
+# fixed regardless of batter handedness (this file's plate_x
+# convention never flips for handedness) -- 1 is the glove/3B side
+# (negative x), 5 is the arm/1B side (positive x); which one reads as
+# "in" vs "away" depends on whether the batter at the plate is a
+# righty or a lefty, exactly as Ryker described it.
+_CODE_ROW_HEIGHT = (ZONE_TOP - ZONE_BOTTOM) / 3.0
+_CODE_COL_WIDTH = (2 * ZONE_HALF_WIDTH) / 3.0
+
+LEVEL_TO_PLATE_Z = {
+    1: ZONE_BOTTOM - _CODE_ROW_HEIGHT / 2.0,  # dirt/below
+    2: ZONE_BOTTOM + _CODE_ROW_HEIGHT / 2.0,  # bottom third / knees
+    3: ZONE_BOTTOM + _CODE_ROW_HEIGHT * 1.5,  # middle third
+    4: ZONE_BOTTOM + _CODE_ROW_HEIGHT * 2.5,  # top third (and above)
+}
+ZONE_TO_PLATE_X = {
+    1: -ZONE_HALF_WIDTH - _CODE_COL_WIDTH / 2.0,  # chalk/off plate, glove side (3B)
+    2: -ZONE_HALF_WIDTH + _CODE_COL_WIDTH / 2.0,  # inner-zone column, glove side
+    3: 0.0,                                        # middle
+    4: ZONE_HALF_WIDTH - _CODE_COL_WIDTH / 2.0,   # inner-zone column, arm side
+    5: ZONE_HALF_WIDTH + _CODE_COL_WIDTH / 2.0,   # chalk/off plate, arm side (1B)
+}
+
+
+def parse_pitch_code(code):
+    """Splits a 3-digit "Level-Pitch-Zone" code (e.g. "214") into its
+    three integer digits (2, 1, 4). Raises ValueError with a message
+    suitable for direct display (e.g. via ui.notification_show) if the
+    code isn't exactly 3 digits."""
+    code = (code or "").strip()
+    if not re.fullmatch(r"\d{3}", code):
+        raise ValueError(f'Pitch code must be exactly 3 digits (Level-Pitch-Zone, e.g. "214") -- got "{code}".')
+    return int(code[0]), int(code[1]), int(code[2])
+
+
+def decode_pitch_code(level, zone):
+    """Level (1-4) + Zone (1-5) -> (plate_x, plate_z) -- see the
+    module-level note above this section for what each value means.
+    Raises ValueError with a message suitable for direct display if
+    either is out of range."""
+    if level not in LEVEL_TO_PLATE_Z:
+        raise ValueError(f"Level must be 1-4 (1=dirt/below, 2=knees, 3=middle, 4=top & above) -- got {level}.")
+    if zone not in ZONE_TO_PLATE_X:
+        raise ValueError(f"Zone must be 1-5 -- got {zone}.")
+    return ZONE_TO_PLATE_X[zone], LEVEL_TO_PLATE_Z[level]
 
 
 # Attack zone tiers (Heart/Shadow/Chase/Waste) -- a GBO approximation of
