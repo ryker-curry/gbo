@@ -27,9 +27,26 @@ sessions).
 
 Run once, after pulling this update.
 
-Run:
-    python migrations/migrate_contact_quality_labels.py
+Run (from anywhere -- see the sys.path note below):
+    python3 migrations/migrate_contact_quality_labels.py
+
+Import path note: run as a bare script, Python puts THIS file's own
+directory (migrations/) on sys.path, not the repo root one level up
+where database.py actually lives -- fails with "ModuleNotFoundError:
+No module named 'database'" (same root cause shiny_app/app.py's own
+sys.path note already documents for the app itself). Fixed below the
+same way: explicitly add the repo root to sys.path before importing
+database, so this runs correctly no matter which directory it's
+launched from.
 """
+
+import os
+import sys
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(_THIS_DIR)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 from sqlalchemy import text
 from database import engine
