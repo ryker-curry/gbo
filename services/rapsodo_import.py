@@ -53,7 +53,17 @@ class RapsodoImportError(Exception):
 
 
 class DuplicateImportError(RapsodoImportError):
-    """This exact file has already been imported for this player."""
+    """This exact file has already been imported for this player.
+
+    Carries the existing RapsodoImport's id (and, when it was a game-linked
+    import, its game_id) so a caller can offer to re-check the match
+    instead of just dead-ending -- see rapsodo_import.py's _do_game_import,
+    which is the only place that currently uses these."""
+
+    def __init__(self, message, import_id=None, game_id=None):
+        super().__init__(message)
+        self.import_id = import_id
+        self.game_id = game_id
 
 
 class RapsodoValidationError(RapsodoImportError):
@@ -309,7 +319,9 @@ def import_rapsodo_file(
             f"{existing_import.uploaded_at.strftime('%Y-%m-%d %H:%M')} "
             f"({existing_import.imported_row_count} pitch(es) imported at the time). "
             f"Re-uploading it again would create duplicate pitches -- if this is intentionally a "
-            f"different/corrected file, re-save it or note the difference before uploading."
+            f"different/corrected file, re-save it or note the difference before uploading.",
+            import_id=existing_import.import_id,
+            game_id=existing_import.game_id,
         )
 
     df = read_csv_bytes(file_bytes)
