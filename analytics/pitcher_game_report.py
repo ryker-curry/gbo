@@ -51,7 +51,12 @@ STRIKE_OUTCOMES = {"Called Strike", "Swing and Miss", "Foul", "In Play"}
 SWING_OUTCOMES = {"Swing and Miss", "Foul", "In Play"}
 CSW_OUTCOMES = {"Called Strike", "Swing and Miss"}  # the industry-standard CSW% definition -- no fouls
 DOMINANT_OUTCOMES = {"Called Strike", "Swing and Miss", "Foul"}  # Ryker's own Dominant Pitch definition -- includes fouls, see module docstring
-OUT_AB_OUTCOMES = {"K", "Groundout", "Flyout", "Lineout", "Double Play", "Sac Bunt", "Sac Fly"}
+# Both count as a strikeout everywhere below -- "K (Looking)" is a
+# separate AB_OUTCOMES value (game_tracking.py) purely so a strikeout
+# looking shows as its own result on the sheet; it's still a K/out for
+# every stat here.
+K_OUTCOMES = {"K", "K (Looking)"}
+OUT_AB_OUTCOMES = {"Groundout", "Flyout", "Lineout", "Double Play", "Sac Bunt", "Sac Fly"} | K_OUTCOMES
 HIT_AB_OUTCOMES = {"1B", "2B", "3B", "HR"}
 XBH_AB_OUTCOMES = {"2B", "3B", "HR"}
 NON_AB_OUTCOMES = {"BB", "HBP", "Sac Bunt", "Sac Fly"}  # excluded from the standard AB count, per the official scoring rule
@@ -163,7 +168,7 @@ def _compute_header_stats(all_pitches, completed_pas):
     xbh = sum(1 for pa in completed_pas if pa[-1].ab_outcome in XBH_AB_OUTCOMES)
     bb = sum(1 for pa in completed_pas if pa[-1].ab_outcome == "BB")
     hbp = sum(1 for pa in completed_pas if pa[-1].ab_outcome == "HBP")
-    ks = sum(1 for pa in completed_pas if pa[-1].ab_outcome == "K")
+    ks = sum(1 for pa in completed_pas if pa[-1].ab_outcome in K_OUTCOMES)
     runs = sum((pa[-1].runs_scored_on_play or 0) for pa in completed_pas)
 
     leadoff_pas = [pa for pa in completed_pas if _is_leadoff_pitch(pa[0])]
@@ -176,8 +181,8 @@ def _compute_header_stats(all_pitches, completed_pas):
     # an 0-2 or 1-2 count -- the count on the PA's OWN final pitch (the
     # one that ended it), not any earlier pitch in the PA.
     zero_two_hits = sum(1 for pa in completed_pas if pa[-1].ab_outcome in HIT_AB_OUTCOMES and pa[-1].balls_before == 0 and pa[-1].strikes_before == 2)
-    zero_two_barrel = sum(1 for pa in completed_pas if pa[-1].contact_quality == "Barrel" and pa[-1].balls_before == 0 and pa[-1].strikes_before == 2)
-    one_two_barrel = sum(1 for pa in completed_pas if pa[-1].contact_quality == "Barrel" and pa[-1].balls_before == 1 and pa[-1].strikes_before == 2)
+    zero_two_barrel = sum(1 for pa in completed_pas if pa[-1].contact_quality == "Barreled/Squared Up" and pa[-1].balls_before == 0 and pa[-1].strikes_before == 2)
+    one_two_barrel = sum(1 for pa in completed_pas if pa[-1].contact_quality == "Barreled/Squared Up" and pa[-1].balls_before == 1 and pa[-1].strikes_before == 2)
 
     early_count, ahead_count, a3p_yes = _compute_early_ahead_a3p(completed_pas)
 
@@ -331,7 +336,7 @@ def _pitch_type_row(type_pitches, completed_pas, type_id, total_pitches_all_type
         chases = sum(1 for p in out_of_zone_reviewed if p.pitch_outcome in SWING_OUTCOMES)
 
     putaway_opportunities = sum(1 for p in type_pitches if p.strikes_before == 2)
-    putaway_pitches = sum(1 for p in type_pitches if p.strikes_before == 2 and p.ends_plate_appearance and p.ab_outcome == "K")
+    putaway_pitches = sum(1 for p in type_pitches if p.strikes_before == 2 and p.ends_plate_appearance and p.ab_outcome in K_OUTCOMES)
 
     in_play = [p for p in type_pitches if p.pitch_outcome == "In Play"]
     gb = sum(1 for p in in_play if p.batted_ball_type == "Ground Ball")

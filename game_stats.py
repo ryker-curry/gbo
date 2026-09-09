@@ -104,6 +104,11 @@ def get_pitches_thrown_to_opponent_batter(session, opponent_player_id, season_id
 
 HIT_OUTCOMES = {"1B", "2B", "3B", "HR"}
 NON_AB_OUTCOMES = {"BB", "HBP", "Sac Bunt", "Sac Fly"}
+# Both count as a strikeout for every stat below -- "K (Looking)" is a
+# separate AB_OUTCOMES value (game_tracking.py) purely so a strikeout
+# looking shows as its own result on the sheet; it's still a K for
+# every aggregate (K count, AB count, leadoff-out, putaway pitch, etc.).
+K_OUTCOMES = ("K", "K (Looking)")
 
 
 def _has_risp(first_pitch_of_pa):
@@ -137,7 +142,7 @@ def _batting_slice(completed_pas):
     triples = sum(1 for p in endings if p.ab_outcome == "3B")
     hr = sum(1 for p in endings if p.ab_outcome == "HR")
     hits = singles + doubles + triples + hr
-    k = sum(1 for p in endings if p.ab_outcome == "K")
+    k = sum(1 for p in endings if p.ab_outcome in K_OUTCOMES)
     total_bases = singles + 2 * doubles + 3 * triples + 4 * hr
     avg = round(hits / ab, 3) if ab else None
     obp = round((hits + bb + hbp) / (ab + bb + hbp + sf), 3) if (ab + bb + hbp + sf) else None
@@ -189,7 +194,7 @@ def compute_batting_line(pitches):
 
     risp_pas = [p for p in completed_pas if _has_risp(p[0])]
     two_strike_pas = [p for p in completed_pas if _reached_two_strikes(p)]
-    two_strike_k = sum(1 for p in two_strike_pas if p[-1].ab_outcome == "K")
+    two_strike_k = sum(1 for p in two_strike_pas if p[-1].ab_outcome in K_OUTCOMES)
     leadoff_pas = [p for p in completed_pas if _is_leadoff_pa(p[0])]
 
     rv_values = [float(p.run_value) for p in pitches if p.run_value is not None]
@@ -247,7 +252,7 @@ def compute_batted_ball_profile(pitches, bats=None):
             spray_counts[label] = spray_counts.get(label, 0) + 1
     use_side_neutral = bats not in ("R", "L")
 
-    barrels = sum(1 for p in balls_in_play if p.contact_quality == "Barrel")
+    barrels = sum(1 for p in balls_in_play if p.contact_quality == "Barreled/Squared Up")
     solid = sum(1 for p in balls_in_play if p.contact_quality == "Solid")
     hard_contact = barrels + solid
 
@@ -365,7 +370,7 @@ def compute_pitching_line(pitches):
     exactly what's used and why."""
     pa_pitches = [p for p in pitches if p.ends_plate_appearance]
     batters_faced = len(pa_pitches)
-    k = sum(1 for p in pa_pitches if p.ab_outcome == "K")
+    k = sum(1 for p in pa_pitches if p.ab_outcome in K_OUTCOMES)
     bb = sum(1 for p in pa_pitches if p.ab_outcome == "BB")
     hbp = sum(1 for p in pa_pitches if p.ab_outcome == "HBP")
     hits_allowed = sum(1 for p in pa_pitches if p.ab_outcome in HIT_OUTCOMES)
@@ -420,12 +425,12 @@ def compute_pitching_line(pitches):
             ahead_pas += 1
 
     leadoff_pas = [pa for pa in completed_pas if _is_leadoff_pa(pa[0])]
-    leadoff_outs = sum(1 for pa in leadoff_pas if pa[-1].ab_outcome in ("K", "Groundout", "Flyout", "Lineout", "Double Play", "Sac Bunt", "Sac Fly"))
+    leadoff_outs = sum(1 for pa in leadoff_pas if pa[-1].ab_outcome in K_OUTCOMES + ("Groundout", "Flyout", "Lineout", "Double Play", "Sac Bunt", "Sac Fly"))
     leadoff_bb = sum(1 for pa in leadoff_pas if pa[-1].ab_outcome == "BB")
     two_out_bb = sum(1 for pa in completed_pas if pa[-1].ab_outcome == "BB" and pa[-1].outs_before == 2)
     zero_two_hits = sum(1 for pa in completed_pas if pa[-1].ab_outcome in HIT_OUTCOMES and pa[-1].balls_before == 0 and pa[-1].strikes_before == 2)
-    zero_two_barrel = sum(1 for pa in completed_pas if pa[-1].contact_quality == "Barrel" and pa[-1].balls_before == 0 and pa[-1].strikes_before == 2)
-    one_two_barrel = sum(1 for pa in completed_pas if pa[-1].contact_quality == "Barrel" and pa[-1].balls_before == 1 and pa[-1].strikes_before == 2)
+    zero_two_barrel = sum(1 for pa in completed_pas if pa[-1].contact_quality == "Barreled/Squared Up" and pa[-1].balls_before == 0 and pa[-1].strikes_before == 2)
+    one_two_barrel = sum(1 for pa in completed_pas if pa[-1].contact_quality == "Barreled/Squared Up" and pa[-1].balls_before == 1 and pa[-1].strikes_before == 2)
 
     singles = sum(1 for pa in completed_pas if pa[-1].ab_outcome == "1B")
     doubles = sum(1 for pa in completed_pas if pa[-1].ab_outcome == "2B")
@@ -650,7 +655,7 @@ def _compute_a3p_attribution(pitches):
         fourth = next((p for p in pa if p.pa_pitch_number == 4), None)
         if fourth is not None and fourth.strikes_before is not None and fourth.balls_before is not None:
             is_ahead = fourth.strikes_before > fourth.balls_before
-        elif third.ends_plate_appearance and third.ab_outcome == "K":
+        elif third.ends_plate_appearance and third.ab_outcome in K_OUTCOMES:
             is_ahead = True
         else:
             continue
@@ -688,7 +693,7 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
     first_pitch_strikes = [p for p in first_pitches if p.pitch_outcome in STRIKE_OUTCOMES]
 
     two_strike_pitches = [p for p in pitches if p.strikes_before == 2]
-    putaway_pitches = [p for p in two_strike_pitches if p.ends_plate_appearance and p.ab_outcome == "K"]
+    putaway_pitches = [p for p in two_strike_pitches if p.ends_plate_appearance and p.ab_outcome in K_OUTCOMES]
 
     balls_in_play = [p for p in pitches if p.pitch_outcome == "In Play"]
     batted_ball_counts = {
@@ -704,7 +709,7 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
     hbp = sum(1 for p in pa_ending if p.ab_outcome == "HBP")
     sf = sum(1 for p in pa_ending if p.ab_outcome == "Sac Fly")
     sac = sum(1 for p in pa_ending if p.ab_outcome in ("Sac Bunt", "Sac Fly"))
-    k = sum(1 for p in pa_ending if p.ab_outcome == "K")
+    k = sum(1 for p in pa_ending if p.ab_outcome in K_OUTCOMES)
     singles = sum(1 for p in pa_ending if p.ab_outcome == "1B")
     doubles = sum(1 for p in pa_ending if p.ab_outcome == "2B")
     triples = sum(1 for p in pa_ending if p.ab_outcome == "3B")
