@@ -21,6 +21,7 @@ the default), "intrasquad", or "external".
 """
 
 from sqlalchemy.orm import joinedload
+from sqlalchemy import or_
 
 from models import GamePitch, Game, RapsodoPitch, BullpenSession, PitchType
 
@@ -88,17 +89,25 @@ def get_hitter_profile_pitches(db, player_id, date_from=None, date_to=None, pitc
     return query.order_by(Game.game_date, GamePitch.pitch_sequence).all()
 
 
-def get_pitcher_rapsodo_pitches(db, player_id, date_from=None, date_to=None, pitch_type=None):
+def get_pitcher_rapsodo_pitches(db, player_id, date_from=None, date_to=None, pitch_type=None, game_scope="all"):
     """Every RapsodoPitch for this player -- bullpen-sourced AND
     game-linked alike (Stuff+ is physical-characteristics-only, see
     pitch_grading.py's module docstring -- it doesn't care whether the
     reading came from a bullpen rep or a real outing). Date range reads
     off RapsodoPitch.pitch_date directly (works for both sources) so a
     bullpen-only pitcher still gets a populated Individual Pitches
-    physical read even before any game linking exists. game_scope/
-    opponent_hand aren't supported here -- outcome/opponent context
-    lives on GamePitch, not RapsodoPitch; see rapsodo_by_game_pitch_id
-    below for how the two get joined per-pitch."""
+    physical read even before any game linking exists.
+
+    game_scope (Sept 2026 addition, same convention as _apply_filters
+    above): unlike the GamePitch-only queries, "intrasquad"/"external"
+    here only narrows which GAME-linked pitches count -- a bullpen
+    reading isn't a game at all, so it's never excluded by this filter
+    regardless of scope (an outer join + OR, not a plain filter, since
+    RapsodoPitch.game_pitch_id/bullpen_id are mutually exclusive per
+    row -- see that column's own comment on models.RapsodoPitch).
+    opponent_hand still isn't supported here -- that context lives on
+    GamePitch, not RapsodoPitch; see rapsodo_by_game_pitch_id below for
+    how the two get joined per-pitch."""
     query = (
         db.query(RapsodoPitch)
         .options(joinedload(RapsodoPitch.pitch_type))
@@ -110,6 +119,13 @@ def get_pitcher_rapsodo_pitches(db, player_id, date_from=None, date_to=None, pit
         query = query.filter(RapsodoPitch.pitch_date <= date_to)
     if pitch_type:
         query = query.join(PitchType, RapsodoPitch.pitch_type_id == PitchType.pitch_type_id).filter(PitchType.type_name == pitch_type)
+    if game_scope in ("intrasquad", "external"):
+        query = (
+            query.outerjoin(GamePitch, RapsodoPitch.game_pitch_id == GamePitch.game_pitch_id)
+            .outerjoin(Game, GamePitch.game_id == Game.game_id)
+        )
+        wants_intrasquad = game_scope == "intrasquad"
+        query = query.filter(or_(RapsodoPitch.bullpen_id.isnot(None), Game.is_intrasquad.is_(wants_intrasquad)))
     return query.order_by(RapsodoPitch.pitch_date).all()
 
 

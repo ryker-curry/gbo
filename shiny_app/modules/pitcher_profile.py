@@ -22,11 +22,15 @@ command_charts.py (Command Target Zones, same code pitcher_game_report.py
 already uses, just scoped by this page's own filters instead of one
 game_id), bullpen_dashboard_display.register_bullpen_dashboard
 (Physical Profile -- the exact same Bullpen Dashboard charts, pointed at
-this pitcher's bullpen sessions in the selected date range instead of a
-single session/all-time), and analytics/pitch_grading.py (Stuff+/
-Location+/Pitching+/Arsenal). analytics/profile_queries.py is the one
-new piece: the date-range/pitch-type/game-scope filtered queries this
-page needs that game_stats.py's season/single-game queries don't cover.
+this pitcher's WHOLE Rapsodo history in the selected date range --
+bullpen sessions and intrasquad games alike as of Sept 2026, via the
+"player_pitches" target kind added to bullpen_dashboard_display.py
+specifically for this page, rather than the bullpen-only "combined"
+kind My Bullpens/the standalone Bullpen Dashboard use), and
+analytics/pitch_grading.py (Stuff+/Location+/Pitching+/Arsenal).
+analytics/profile_queries.py is the one new piece: the date-range/
+pitch-type/game-scope filtered queries this page needs that
+game_stats.py's season/single-game queries don't cover.
 """
 
 from datetime import date, timedelta
@@ -215,6 +219,21 @@ def pitcher_profile_server(input, output, session, app_state):
     # -------------------------------------------------------------------
 
     def _get_physical_target(input):
+        """Sept 2026: was bullpen-only (bullpen_ids_for_player, ignoring
+        the Pitch Type/Games filters entirely) -- now pulls this
+        player's RapsodoPitch history bullpen AND game alike
+        (profile_queries.get_pitcher_rapsodo_pitches, the same unified
+        query already backing this page's "no pitches in this range"
+        gate above), respecting all three filters (date range, pitch
+        type, game scope) the way every other section on this page
+        already does. Ryker's call: the Physical Profile dashboard
+        (Movement/Release/Location/Spin, arm angle) is the coach-and-
+        player "dig deeper" place for a pitcher's whole Rapsodo history,
+        not just bullpen reps -- an intrasquad outing's ball flight data
+        matters just as much here. Feeds bullpen_dashboard_display's new
+        "player_pitches" target kind (a plain id list, not bullpen_ids)
+        added specifically for this -- "session"/"combined" (My
+        Bullpens, this page's own earlier version) are untouched."""
         req("pp_date_from" in input)
         db = get_session()
         try:
@@ -225,10 +244,13 @@ def pitcher_profile_server(input, output, session, app_state):
             if player is None:
                 return None
             f = _current_filters()
-            bullpen_ids = profile_queries.bullpen_ids_for_player(db, pid, f["date_from"], f["date_to"])
-            if not bullpen_ids:
+            rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+            )
+            if not rapsodo_pitches:
                 return None
-            return {"kind": "combined", "player": player, "bullpen_ids": bullpen_ids}
+            return {"kind": "player_pitches", "player": player, "rapsodo_pitch_ids": [p.rapsodo_pitch_id for p in rapsodo_pitches]}
         finally:
             db.close()
 
@@ -513,7 +535,12 @@ def pitcher_profile_server(input, output, session, app_state):
             # --- Physical Profile (reused Bullpen Dashboard) ---
             sections.append(ui.hr())
             sections.append(ui.p(ui.strong("Physical Profile")))
-            sections.append(ui.p("Same Bullpen Dashboard charts used elsewhere in GBO, scoped to this pitcher's bullpen sessions in the selected date range.", class_="text-muted small"))
+            sections.append(ui.p(
+                "Same Movement/Release Point/Location/Spin Axis charts as the Bullpen Dashboard, built from every "
+                "Rapsodo-linked pitch this pitcher has -- bullpen sessions AND intrasquad games alike -- matching "
+                "the Pitch Type/Games filters above.",
+                class_="text-muted small",
+            ))
             sections.append(_physical_fragment)
 
             return ui.div(*sections)

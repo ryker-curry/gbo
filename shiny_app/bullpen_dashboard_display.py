@@ -68,11 +68,22 @@ possible one at once, so there's no need to suffix by bullpen_id itself).
 pass to resolve what to show; it must return one of:
     {"kind": "session", "bullpen_id": int}
     {"kind": "combined", "player": Player, "bullpen_ids": [int, ...]}
+    {"kind": "player_pitches", "player": Player, "rapsodo_pitch_ids": [int, ...]}
     None  -- nothing selected yet / not applicable; both outputs render
              nothing (via req(), so this doesn't turn into a friendly
              "no data" state, which is what a caller wants for "this
              section isn't showing at all right now" versus a real
              empty-data case).
+
+"player_pitches" (Sept 2026 addition, Pitcher Profile's Physical
+Profile section): a plain, caller-supplied list of RapsodoPitch ids --
+bullpen-sourced AND game-linked alike, already filtered by whatever
+date range/pitch type/game scope the caller's own page applies (see
+analytics/profile_queries.get_pitcher_rapsodo_pitches). Unlike
+"session"/"combined", this kind doesn't assume every pitch shares one
+bullpen_id -- that's the whole point, it's for a caller that already
+did its own cross-source query rather than one scoped to bullpen
+sessions.
 It should do its own req()-gating on whatever upstream selection input
 it depends on (e.g. a "View" picker) -- same convention as every other
 downstream render.ui in this codebase that reads an upstream select.
@@ -160,6 +171,14 @@ def _load_pitches(db, target):
             .options(joinedload(RapsodoPitch.pitch_type), joinedload(RapsodoPitch.player))
             .filter(RapsodoPitch.bullpen_id == target["bullpen_id"])
             .order_by(RapsodoPitch.pitch_number)
+            .all()
+        )
+    if target["kind"] == "player_pitches":
+        return (
+            db.query(RapsodoPitch)
+            .options(joinedload(RapsodoPitch.pitch_type), joinedload(RapsodoPitch.player))
+            .filter(RapsodoPitch.rapsodo_pitch_id.in_(target["rapsodo_pitch_ids"]))
+            .order_by(RapsodoPitch.pitch_date)
             .all()
         )
     return (
@@ -268,6 +287,8 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
     def _target_key(target):
         if target["kind"] == "session":
             return ("session", target["bullpen_id"])
+        if target["kind"] == "player_pitches":
+            return ("player_pitches", tuple(sorted(target["rapsodo_pitch_ids"])))
         return ("combined", tuple(sorted(target["bullpen_ids"])))
 
     @reactive.effect
@@ -421,7 +442,9 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
                 {"label": "Total Pitches", "value": str(summary["total_pitches"])},
                 {"label": "Pitch Types", "value": str(len(summary["pitch_type_names"]))},
                 {"label": "Avg Velocity", "value": f"{summary['avg_velocity']:.1f} mph" if summary["avg_velocity"] is not None else "—"},
-                {"label": "Max Velocity", "value": f"{summary['max_velocity']:.1f} mph" if summary["max_velocity"] is not None else "—"} if target["kind"] == "session" else {"label": "Sessions", "value": str(len(target["bullpen_ids"]))},
+                {"label": "Max Velocity", "value": f"{summary['max_velocity']:.1f} mph" if summary["max_velocity"] is not None else "—"}
+                if target["kind"] in ("session", "player_pitches")
+                else {"label": "Sessions", "value": str(len(target["bullpen_ids"]))},
                 {"label": "Avg Spin Rate", "value": f"{summary['avg_spin_rate']:.0f} rpm" if summary["avg_spin_rate"] is not None else "—"},
             ]
             # Aug 2026 addition: Estimated Arm Angle KPI tile, geometric
