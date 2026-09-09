@@ -360,6 +360,8 @@ import plotly.graph_objects as go
 
 from database import get_session
 from r2_client import upload_video_to_r2
+from video_helpers import ShinyFileAdapter as _ShinyFileAdapter
+from format_helpers import opponent_display_name as _opponent_display_name
 import strike_zone
 import field_location
 from models import (
@@ -1042,31 +1044,10 @@ def _ends_plate_appearance(state, outcome):
     return ends_pa, new_balls, new_strikes
 
 
-def _opponent_display_name(g):
-    if g.opponent_team:
-        return g.opponent_team.team_name
-    return g.opponent_name or "Unknown opponent"
-
-
 def _game_label(g):
     loc = "vs" if g.is_home else ("@" if g.is_home is False else "vs (neutral)")
     season_label = f"[{g.season.season_name}] " if g.season else ""
     return f"{season_label}{g.game_date.strftime('%Y-%m-%d (%a)')} — {loc} {_opponent_display_name(g)} ({g.status}) — {g.our_score}-{g.opponent_score}"
-
-
-class _ShinyFileAdapter:
-    """Adapts one ui.input_file() entry to the .name/.getvalue()/.type
-    shape upload_video_to_r2() expects -- same adapter duplicated in
-    every video-handling module in this migration (hitter_tracking.py,
-    training_routines.py, bullpen_tracking.py), per that convention."""
-    def __init__(self, file_info: dict):
-        self.name = file_info["name"]
-        self.type = file_info.get("type")
-        self._datapath = file_info["datapath"]
-
-    def getvalue(self) -> bytes:
-        with open(self._datapath, "rb") as f:
-            return f.read()
 
 
 def _upload_game_video_clip(file_info: dict, identifier: str):
@@ -2511,8 +2492,15 @@ def game_tracking_server(input, output, session, app_state):
                 return None
 
             anchor = pitches[-1].pitch_sequence if pitches else 0
+            # joinedload our_player/opponent_player -- these used to be
+            # looked up with one extra db.query(Player)/db.query(
+            # OpponentPlayer) PER pending event (re-run on every reactive
+            # tick this panel re-renders, i.e. every pitch); a runner's
+            # name is a fixed 1:1 relationship already declared on the
+            # model, so it's cheaper to fetch in the same query.
             pending = (
                 db.query(GameRunnerEvent)
+                .options(joinedload(GameRunnerEvent.our_player), joinedload(GameRunnerEvent.opponent_player))
                 .filter(GameRunnerEvent.game_id == game_id, GameRunnerEvent.pitch_sequence_after == anchor)
                 .order_by(GameRunnerEvent.created_at)
                 .all()
@@ -2524,10 +2512,10 @@ def game_tracking_server(input, output, session, app_state):
                 for ev in pending:
                     who = None
                     if ev.our_player_id:
-                        p = db.query(Player).filter(Player.player_id == ev.our_player_id).first()
+                        p = ev.our_player
                         who = f"{p.first_name} {p.last_name} — " if p else None
                     elif ev.opponent_player_id:
-                        op = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == ev.opponent_player_id).first()
+                        op = ev.opponent_player
                         who = f"{op.player_name} — " if op else None
                     outcome = "out" if ev.is_out else {2: "2nd", 3: "3rd", 4: "home"}.get(ev.to_base, "?")
                     children.append(ui.p(f"{ev.event_type}: {who or ''}{base_label.get(ev.from_base, '?')} → {outcome}", class_="text-muted small"))

@@ -38,6 +38,7 @@ from shiny import module, ui, render, reactive, req
 from database import get_session
 from models import SessionType, TrainingRoutine, RoutineExercise
 from r2_client import upload_video_to_r2
+from video_helpers import ShinyFileAdapter as _ShinyFileAdapter
 
 import ui_helpers
 
@@ -50,23 +51,6 @@ BLANK_EXERCISE_ROW_COUNT = 3
 # and vice versa. Anything not listed here is shared (visible to both).
 PITCHING_SESSION_TYPES = {"Arm Care", "Throwing", "Plyos", "Mechanical Work", "Bullpen"}
 HITTING_SESSION_TYPES = {"Hitting Drills"}
-
-
-class _ShinyFileAdapter:
-    """Adapts one ui.input_file() entry to the .name/.getvalue()/.type
-    shape upload_video_to_r2() expects -- same adapter as
-    hitter_tracking.py's, duplicated here per that convention.
-    (video_import.py used to carry a copy of this too, but that page
-    was redesigned to store pasted Google Drive links instead of
-    uploading files, so it no longer needs R2 or this adapter at all.)"""
-    def __init__(self, file_info: dict):
-        self.name = file_info["name"]
-        self.type = file_info.get("type")
-        self._datapath = file_info["datapath"]
-
-    def getvalue(self) -> bytes:
-        with open(self._datapath, "rb") as f:
-            return f.read()
 
 
 def _upload_routine_video(file_info: dict, identifier: str):

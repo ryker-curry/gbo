@@ -44,90 +44,17 @@ import ui_helpers
 import chart_helpers
 import bullpen_dashboard_display
 import command_dashboard_display
+import bullpen_chart_helpers
+from bullpen_chart_helpers import (
+    PITCH_TYPE_COLORS, ZONE_SIDE_BOUNDS, ZONE_HEIGHT_BOUNDS, BURY_HEIGHT_THRESHOLD,
+    FULL_ZONE_SIDE, FULL_ZONE_HEIGHT,
+    render_strike_zone_plot as _render_strike_zone_plot,
+    render_scatter_with_averages as _render_scatter_with_averages,
+)
 
-# Same fixed generic strike-zone boundaries used on Bullpen Tracking.
-ZONE_SIDE_BOUNDS = (-0.283, 0.283)
-ZONE_HEIGHT_BOUNDS = (2.167, 2.833)
-BURY_HEIGHT_THRESHOLD = 1.5  # ft -- below this counts as "buried", regardless of target
-
-_SIDE_THIRD = ZONE_SIDE_BOUNDS[1] - ZONE_SIDE_BOUNDS[0]
-FULL_ZONE_SIDE = (ZONE_SIDE_BOUNDS[0] - _SIDE_THIRD, ZONE_SIDE_BOUNDS[1] + _SIDE_THIRD)
-_HEIGHT_THIRD = ZONE_HEIGHT_BOUNDS[1] - ZONE_HEIGHT_BOUNDS[0]
-FULL_ZONE_HEIGHT = (ZONE_HEIGHT_BOUNDS[0] - _HEIGHT_THIRD, ZONE_HEIGHT_BOUNDS[1] + _HEIGHT_THIRD)
-
-PITCH_TYPE_COLORS = [
-    "#3A8FE0", "#B08618", "#2A9E7A", "#B85FC4", "#E0713F", "#7F7EDB", "#D94F3D", "#7A8594",
-]
-
-
-def _render_strike_zone_plot(title, data_by_type):
-    fig = go.Figure()
-    fig.add_shape(type="rect", x0=FULL_ZONE_SIDE[0], x1=FULL_ZONE_SIDE[1], y0=FULL_ZONE_HEIGHT[0], y1=FULL_ZONE_HEIGHT[1],
-                  line=dict(color="#AEB6C2", width=2), fillcolor="rgba(0,0,0,0)")
-    for x in ZONE_SIDE_BOUNDS:
-        fig.add_shape(type="line", x0=x, x1=x, y0=FULL_ZONE_HEIGHT[0], y1=FULL_ZONE_HEIGHT[1], line=dict(color="#5A5A5A", width=1, dash="dot"))
-    for y in ZONE_HEIGHT_BOUNDS:
-        fig.add_shape(type="line", x0=FULL_ZONE_SIDE[0], x1=FULL_ZONE_SIDE[1], y0=y, y1=y, line=dict(color="#5A5A5A", width=1, dash="dot"))
-
-    for i, (pitch_type, entries) in enumerate(data_by_type.items()):
-        color = PITCH_TYPE_COLORS[i % len(PITCH_TYPE_COLORS)]
-        xs = [e["Plate Side"] for e in entries if "Plate Side" in e and "Plate Height" in e]
-        ys = [e["Plate Height"] for e in entries if "Plate Side" in e and "Plate Height" in e]
-        if not xs:
-            continue
-        fig.add_trace(go.Scatter(
-            x=xs, y=ys, mode="markers", name=pitch_type,
-            marker=dict(color=color, size=10, opacity=0.75, line=dict(color="#171B21", width=1)),
-            hovertemplate=f"{pitch_type}<br>Side: %{{x:.2f}} ft<br>Height: %{{y:.2f}} ft<extra></extra>",
-        ))
-
-    fig.update_layout(
-        title=title,
-        xaxis_title="Plate Side (ft)", yaxis_title="Plate Height (ft)",
-        showlegend=True, height=480,
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#AEB6C2"),
-        xaxis=dict(gridcolor="#2A3039", zerolinecolor="#2A3039", range=[FULL_ZONE_SIDE[0] - 1, FULL_ZONE_SIDE[1] + 1], scaleanchor="y", scaleratio=1),
-        yaxis=dict(gridcolor="#2A3039", zerolinecolor="#2A3039", range=[0, FULL_ZONE_HEIGHT[1] + 1.5]),
-        margin=dict(t=40, b=40, l=40, r=40),
-        legend=dict(bgcolor="rgba(0,0,0,0)"),
-    )
-    return chart_helpers.fig_to_img(fig, width=700, height=480)
-
-
-def _render_scatter_with_averages(title, x_label, y_label, data_by_type, x_key, y_key):
-    fig = go.Figure()
-    for i, (pitch_type, entries) in enumerate(data_by_type.items()):
-        color = PITCH_TYPE_COLORS[i % len(PITCH_TYPE_COLORS)]
-        xs = [e[x_key] for e in entries if x_key in e and y_key in e]
-        ys = [e[y_key] for e in entries if x_key in e and y_key in e]
-        if not xs:
-            continue
-        fig.add_trace(go.Scatter(
-            x=xs, y=ys, mode="markers", name=pitch_type,
-            marker=dict(color=color, size=8, opacity=0.35),
-            showlegend=False,
-            hovertemplate=f"{pitch_type}<br>{x_label}: %{{x}}<br>{y_label}: %{{y}}<extra></extra>",
-        ))
-        avg_x, avg_y = sum(xs) / len(xs), sum(ys) / len(ys)
-        fig.add_trace(go.Scatter(
-            x=[avg_x], y=[avg_y], mode="markers+text", name=pitch_type,
-            marker=dict(color=color, size=18, line=dict(color="#AEB6C2", width=2)),
-            text=[pitch_type], textposition="top center",
-            textfont=dict(color="#AEB6C2", size=12),
-            hovertemplate=f"{pitch_type} average<br>{x_label}: %{{x:.1f}}<br>{y_label}: %{{y:.1f}}<extra></extra>",
-        ))
-    fig.update_layout(
-        title=title,
-        xaxis_title=x_label, yaxis_title=y_label,
-        showlegend=False, height=420,
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#AEB6C2"),
-        xaxis=dict(gridcolor="#2A3039", zerolinecolor="#2A3039"),
-        yaxis=dict(gridcolor="#2A3039", zerolinecolor="#2A3039"),
-        margin=dict(t=40, b=40, l=40, r=40),
-    )
-    return chart_helpers.fig_to_img(fig, width=700, height=420)
+# PITCH_TYPE_COLORS / zone-boundary constants and the strike-zone/
+# scatter chart builders: shared with bullpen_tracking.py, see
+# bullpen_chart_helpers.py.
 
 
 def _compute_actual_zone(plate_side_ft, plate_height_ft):

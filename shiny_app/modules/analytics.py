@@ -43,18 +43,15 @@ from bucket_display import build_percentage_rings
 
 import ui_helpers
 import chart_helpers
+import format_helpers
+from format_helpers import (
+    format_pct as _fmt_pct1,
+    format_num as _fmt_num,
+)
 
 
 def _fmt_pct(value):
-    return f"{value:.0f}%" if value is not None else "—"
-
-
-def _fmt_pct1(value):
-    return f"{value:.1f}%" if value is not None else "—"
-
-
-def _fmt_num(value, decimals=2):
-    return f"{value:.{decimals}f}" if value is not None else "—"
+    return format_helpers.format_pct(value, decimals=0)
 
 
 @module.ui

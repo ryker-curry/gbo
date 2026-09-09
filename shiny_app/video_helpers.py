@@ -48,6 +48,17 @@ Drive for the embed to load for someone without access to the file
 otherwise -- that part hasn't changed and still has to be right on the
 uploader's end; this fix only addresses the app-side rendering bug,
 not a link that's actually still permission-restricted.
+
+ShinyFileAdapter (below) is a second, separate extraction added to
+this same "shared video plumbing" module: bullpen_tracking.py,
+hitter_tracking.py, training_routines.py, and game_tracking.py each
+carried an identical private `_ShinyFileAdapter` class -- the small
+`.name`/`.getvalue()`/`.type` wrapper r2_client.upload_video_to_r2()
+needs (see that function's own docstring, which already anticipated
+needing exactly this adapter once Shiny pages were migrated), one
+copy per module, all byte-for-byte the same. Each of those modules'
+own `_upload_*_video()` helper still calls it the same way, now via
+`from video_helpers import ShinyFileAdapter`.
 """
 
 import re
@@ -97,3 +108,18 @@ def render_video_clip(url: str, height: str = "480"):
             class_="text-muted small mt-1",
         ),
     )
+
+
+class ShinyFileAdapter:
+    """Adapts one ui.input_file() entry to the .name/.getvalue()/.type
+    shape upload_video_to_r2() expects. Single shared copy of what used
+    to be an identical private class in every video-uploading page
+    module (see this module's docstring)."""
+    def __init__(self, file_info: dict):
+        self.name = file_info["name"]
+        self.type = file_info.get("type")
+        self._datapath = file_info["datapath"]
+
+    def getvalue(self) -> bytes:
+        with open(self._datapath, "rb") as f:
+            return f.read()
