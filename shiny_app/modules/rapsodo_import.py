@@ -182,6 +182,21 @@ def rapsodo_import_server(input, output, session, app_state):
                 )
             pitcher_choices = {str(p.player_id): f"{p.first_name} {p.last_name}" for p in pitchers}
 
+            # This whole block re-renders on every _bump_refresh() call --
+            # including right after every import attempt, success or not
+            # (Ryker hit this directly: re-trying a stuck import kept
+            # kicking the form back to the first pitcher alphabetically
+            # and "Bullpen Session", because neither input below carried
+            # a selected= reflecting what was already picked). Preserve
+            # the current pick across the re-render the same way
+            # game_tracking.py's game_picker already does for game_select
+            # -- read it back from input if it's still a valid choice,
+            # otherwise fall back to the original default.
+            current_pitcher = input.selected_pitcher_id() if "selected_pitcher_id" in input else None
+            selected_pitcher = current_pitcher if current_pitcher in pitcher_choices else None
+            current_target_type = input.target_type() if "target_type" in input else None
+            selected_target_type = current_target_type if current_target_type in ("bullpen", "game") else "bullpen"
+
             sections = []
             if not can_edit_sessions:
                 sections.append(ui.p(
@@ -191,12 +206,12 @@ def rapsodo_import_server(input, output, session, app_state):
                 ))
 
             sections.extend([
-                ui.input_select("selected_pitcher_id", "Pitcher", choices=pitcher_choices),
+                ui.input_select("selected_pitcher_id", "Pitcher", choices=pitcher_choices, selected=selected_pitcher),
                 ui.hr(),
                 ui.input_radio_buttons(
                     "target_type", "Import into",
                     choices={"bullpen": "Bullpen Session", "game": "Intrasquad Game"},
-                    selected="bullpen", inline=True,
+                    selected=selected_target_type, inline=True,
                 ),
                 ui.output_ui("target_picker"),
                 ui.hr(),
@@ -246,7 +261,12 @@ def rapsodo_import_server(input, output, session, app_state):
                 str(g.game_id): f"{g.game_date.strftime('%Y-%m-%d (%a)')} — {g.opponent_name or 'Intrasquad'}"
                 for g in games
             }
-            return ui.input_select("target_game_id", "Game", choices=game_choices)
+            # Same selected= preservation as body()'s pitcher/target_type
+            # inputs above, and for the same reason -- this also
+            # re-renders on every _bump_refresh().
+            current_game = input.target_game_id() if "target_game_id" in input else None
+            selected_game = current_game if current_game in game_choices else None
+            return ui.input_select("target_game_id", "Game", choices=game_choices, selected=selected_game)
         finally:
             db.close()
 
