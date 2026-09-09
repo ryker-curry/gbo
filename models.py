@@ -989,7 +989,7 @@ class HitterSwing(Base):
     pitch_zone = Column(Integer, nullable=True)  # 0 = Bury, 1-9 = in-zone grid -- where it ACTUALLY ended up, same convention as BullpenPitch
     pitcher_hand = Column(String(1), nullable=True)  # 'R' or 'L' -- always capturable even if the pitcher isn't a roster player (BP arm, machine, opponent)
     pitcher_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)  # optional: only set if it's one of our own roster pitchers
-    contact_quality = Column(String(20), nullable=True)  # "Barrel" / "Solid" / "Weak" / "Miss"
+    contact_quality = Column(String(20), nullable=True)  # "Barreled/Squared Up" / "Solid" / "Jammed" / "Off the End" / "Clipped" / "Miss"
     hit_location = Column(String(20), nullable=True)  # field spray direction -- not applicable for Miss
     notes = Column(Text, nullable=True)
     video_url = Column(String(500), nullable=True)  # optional clip for this specific swing -- one per swing, no multi-angle, same as BullpenPitch
@@ -1418,7 +1418,7 @@ class GamePitch(Base):
     intended_plate_x = Column(Numeric(5, 3), nullable=True)
     intended_plate_z = Column(Numeric(5, 3), nullable=True)
     pitch_outcome = Column(String(20), nullable=True)  # "Ball" / "Called Strike" / "Swing and Miss" / "Foul" / "In Play" / "HBP"
-    contact_quality = Column(String(20), nullable=True)  # "Barrel" / "Solid" / "Weak" / "Miss" -- same categories as Hitter Tracking
+    contact_quality = Column(String(20), nullable=True)  # "Barreled/Squared Up" / "Solid" / "Jammed" / "Off the End" / "Clipped" / "Miss" -- same categories as Hitter Tracking
     # Only meaningful when pitch_outcome == "In Play". Swing/take itself
     # isn't a separate field -- it's already fully derivable from
     # pitch_outcome (Swing and Miss/Foul/In Play = swung; Ball/Called
@@ -1442,7 +1442,7 @@ class GamePitch(Base):
     is_sword = Column(Boolean, default=False, nullable=False)
 
     ends_plate_appearance = Column(Boolean, default=False, nullable=False)
-    ab_outcome = Column(String(30), nullable=True)  # only set when ends_plate_appearance -- "K", "BB", "1B", "2B", "3B", "HR", "HBP", "E", "FC", "Sac Bunt", "Sac Fly", "Groundout", "Flyout", "Lineout", etc.
+    ab_outcome = Column(String(30), nullable=True)  # only set when ends_plate_appearance -- "K", "K (Looking)", "BB", "1B", "2B", "3B", "HR", "HBP", "E", "FC", "Sac Bunt", "Sac Fly", "Groundout", "Flyout", "Lineout", etc.
 
     outs_after = Column(Integer, nullable=True)
     bases_after = Column(String(3), nullable=True)

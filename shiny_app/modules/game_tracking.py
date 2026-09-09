@@ -380,10 +380,20 @@ ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Da
 
 PITCH_OUTCOMES = ["Ball", "Called Strike", "Swing and Miss", "Foul", "In Play", "HBP"]
 AB_OUTCOMES = [
-    "K", "BB", "HBP", "1B", "2B", "3B", "HR", "E", "FC",
+    "K", "K (Looking)", "BB", "HBP", "1B", "2B", "3B", "HR", "E", "FC",
     "Sac Bunt", "Sac Fly", "Groundout", "Flyout", "Lineout", "Double Play",
 ]
-CONTACT_QUALITY_OPTIONS = ["Barrel", "Solid", "Weak", "Miss"]
+# Both count as a strikeout/out everywhere stats are computed from
+# ab_outcome (game_stats.py, analytics/pitcher_game_report.py) -- "K
+# (Looking)" exists only so a strikeout looking shows as its own
+# result here, per Ryker's request (Sept 2026).
+K_OUTCOMES = ("K", "K (Looking)")
+# Sept 2026, Ryker: renamed/expanded from Barrel/Solid/Weak/Miss so
+# "weak contact" splits into how it was actually mishit. "Miss" stays
+# a separate 6th value (swung and made literally no contact -- not a
+# contact-quality tier at all) -- same categories shared with Hitter
+# Tracking (see hitter_tracking.py's own copy of this list).
+CONTACT_QUALITY_OPTIONS = ["Barreled/Squared Up", "Solid", "Jammed", "Off the End", "Clipped", "Miss"]
 
 # Mid-plate-appearance base-running events -- see GameRunnerEvent's
 # docstring in models.py for the full "why" (bases_before/outs_before
@@ -806,7 +816,7 @@ def suggest_after_state(ab_outcome, bases_before, outs_before):
             b[1] = "1"
         b[0] = "1"
 
-    if ab_outcome in ("K", "Groundout", "Flyout", "Lineout"):
+    if ab_outcome in K_OUTCOMES + ("Groundout", "Flyout", "Lineout"):
         outs += 1
     elif ab_outcome == "Double Play":
         outs += 2
@@ -858,6 +868,17 @@ def suggest_after_state(ab_outcome, bases_before, outs_before):
         force_advance()
     elif ab_outcome == "E":
         force_advance()
+
+    # 3rd out ends the half-inning -- any runners still shown on base
+    # don't carry over (Ryker, Sept 2026: base state should auto-clear
+    # once 3 outs are recorded, not require a manual fix on the "Bases
+    # after" field). compute_current_state already treats outs>=3 as
+    # 000 for computing the NEXT pitch's starting state either way --
+    # this makes the stored bases_after for THIS pitch, and what the
+    # picker defaults to, agree with that instead of showing whoever
+    # was left on base when the out was made.
+    if outs >= 3:
+        b = ["0", "0", "0"]
 
     return outs, "".join(b), runs
 
@@ -1033,14 +1054,21 @@ def _resolve_current_hitter_id_for_stats(game, state, squad_a_slots, squad_b_slo
     return None
 
 
-def _ends_plate_appearance(state, outcome):
+def _ends_plate_appearance(state, outcome, force=False):
+    """force=True (from the "This pitch ends the at-bat" override
+    checkbox, see pitch_outcome_dependent_fields) makes the AB Result
+    picker show up regardless of the ball/strike math below -- a
+    manual escape hatch for anything the automatic count doesn't
+    already cover (Ryker, Sept 2026: needed a guaranteed way to record
+    a hit-by-pitch, or confirm a walk, no matter what count it
+    happened on)."""
     new_balls = state["balls"] + (1 if outcome == "Ball" else 0)
     new_strikes = state["strikes"]
     if outcome in ("Called Strike", "Swing and Miss"):
         new_strikes += 1
     elif outcome == "Foul" and new_strikes < 2:
         new_strikes += 1
-    ends_pa = outcome == "In Play" or outcome == "HBP" or new_balls >= 4 or (new_strikes >= 3 and outcome != "Foul")
+    ends_pa = force or outcome == "In Play" or outcome == "HBP" or new_balls >= 4 or (new_strikes >= 3 and outcome != "Foul")
     return ends_pa, new_balls, new_strikes
 
 
@@ -3457,6 +3485,14 @@ def game_tracking_server(input, output, session, app_state):
         req("pitch_outcome_select" in input)
         outcome = input.pitch_outcome_select()
         children = []
+        # Manual escape hatch: force the Result/AB-outcome section to
+        # show up below even when this outcome alone wouldn't naturally
+        # end the at-bat by the ball/strike count -- e.g. confirming a
+        # walk, or flagging a "Ball" that was actually a hit-by-pitch.
+        # Hidden for In Play/HBP since those already always end the PA
+        # on their own; showing it there would do nothing.
+        if outcome not in ("In Play", "HBP"):
+            children.append(ui.input_checkbox("force_end_pa_checkbox", "This pitch ends the at-bat (e.g. walk, hit-by-pitch)"))
         if outcome in ("In Play", "Foul", "Swing and Miss"):
             children.append(ui.input_select("contact_quality_select", "Contact quality (optional)", choices=["-- N/A --"] + CONTACT_QUALITY_OPTIONS))
             children.append(ui.input_checkbox("is_sword_checkbox", "Sword (ugly, off-balance swing)"))
@@ -3525,10 +3561,30 @@ def game_tracking_server(input, output, session, app_state):
             if game.status != "In Progress":
                 return None
             outcome = input.pitch_outcome_select()
-            ends_pa, new_balls, new_strikes = _ends_plate_appearance(state, outcome)
+            force_end_pa = input.force_end_pa_checkbox() if "force_end_pa_checkbox" in input else False
+            ends_pa, new_balls, new_strikes = _ends_plate_appearance(state, outcome, force=force_end_pa)
             if not ends_pa:
                 return None
-            default_ab = "BB" if new_balls >= 4 else ("K" if new_strikes >= 3 else ("HBP" if outcome == "HBP" else "1B"))
+            # Called Strike is a strikeout LOOKING, Swing and Miss is
+            # swinging -- default to the right one instead of always
+            # "K", same "suggested, not forced" pattern as everything
+            # else in this picker (coach can still override).
+            strikeout_default = "K (Looking)" if outcome == "Called Strike" else "K"
+            if new_balls >= 4:
+                default_ab = "BB"
+            elif new_strikes >= 3:
+                default_ab = strikeout_default
+            elif outcome == "HBP":
+                default_ab = "HBP"
+            elif outcome == "In Play":
+                default_ab = "1B"
+            else:
+                # Only reachable via the force-end-the-at-bat override --
+                # the count alone doesn't suggest anything, so leave it
+                # unselected rather than default to a guess (e.g. a
+                # forced "Ball" is often actually a hit-by-pitch the
+                # coach is flagging manually -- don't assume "1B").
+                default_ab = None
             choices = {name: name for name in AB_OUTCOMES}
             return ui.div(
                 ui.h5("Result", class_="gbo-section-title"),
@@ -3555,7 +3611,8 @@ def game_tracking_server(input, output, session, app_state):
             if game.status != "In Progress":
                 return None
             outcome = input.pitch_outcome_select()
-            ends_pa, new_balls, new_strikes = _ends_plate_appearance(state, outcome)
+            force_end_pa = input.force_end_pa_checkbox() if "force_end_pa_checkbox" in input else False
+            ends_pa, new_balls, new_strikes = _ends_plate_appearance(state, outcome, force=force_end_pa)
             if not ends_pa:
                 return None
             req("ab_outcome_select" in input)
@@ -3784,7 +3841,8 @@ def game_tracking_server(input, output, session, app_state):
 
             req("pitch_outcome_select" in input)
             outcome = input.pitch_outcome_select()
-            ends_pa, new_balls, new_strikes = _ends_plate_appearance(state, outcome)
+            force_end_pa = input.force_end_pa_checkbox() if "force_end_pa_checkbox" in input else False
+            ends_pa, new_balls, new_strikes = _ends_plate_appearance(state, outcome, force=force_end_pa)
 
             cq = None
             is_sword = False
