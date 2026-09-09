@@ -18,9 +18,10 @@ importing them from game_tracking.py here would be a circular import
 """
 
 from shiny import ui, render, reactive, req
+from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import GamePitch, PitchType
+from models import Game, GamePitch, PitchType
 import strike_zone
 import ui_helpers
 

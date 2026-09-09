@@ -12,7 +12,11 @@ and GAME_VIDEO_SUBFOLDER moved along with their one and only call site
 (game_video_upload_section's bulk-upload handler).
 """
 
+import uuid
+
 from shiny import ui, render, reactive, req
+from shinywidgets import output_widget, render_plotly
+from sqlalchemy.orm import joinedload
 
 from database import get_session
 from models import GamePitch, GameVideoClip
@@ -20,6 +24,7 @@ from video_helpers import ShinyFileAdapter as _ShinyFileAdapter
 from r2_client import upload_video_to_r2
 import strike_zone
 import click_widgets
+from click_widgets import build_clickable_widget as _build_clickable_widget
 import ui_helpers
 
 GAME_VIDEO_SUBFOLDER = "pitch-videos/"  # same folder Bullpen/Hitter Tracking's clips upload into, inside the one shared R2 bucket
