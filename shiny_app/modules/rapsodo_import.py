@@ -477,7 +477,33 @@ def rapsodo_import_server(input, output, session, app_state):
                 )
             except DuplicateImportError as e:
                 db.rollback()
-                ui.notification_show(str(e), type="error", duration=12)
+                # This exact file was already imported. If that earlier
+                # import was ALSO game-linked to this same game (not a
+                # bullpen import, and not linked to a different game --
+                # both would make re-matching against THIS game wrong),
+                # re-check its match here instead of just dead-ending: the
+                # match banner/reconciliation table is session-only (see
+                # _last_game_import's docstring), so once it's gone -- a
+                # page reload, a new day, a new login -- re-uploading the
+                # same file was previously the only thing a coach could
+                # try, and it used to just repeat this same error forever
+                # with no way back to the reconciliation step. Ryker hit
+                # this exact dead end (Sept 2026) on Bradley Neill's
+                # 9/8 intrasquad outing.
+                if e.import_id is not None and e.game_id == target_game_id:
+                    try:
+                        match_result = auto_match_rapsodo_to_game_pitches(db, e.import_id, target_game_id)
+                    except RapsodoImportError as match_err:
+                        ui.notification_show(f"{e} Also couldn't re-check the match: {match_err}", type="error", duration=12)
+                        return
+                    _last_game_import.set((e.import_id, target_game_id, match_result))
+                    ui.notification_show(
+                        f"{e} Re-checked the match against this game's charted pitches -- see below.",
+                        type="message", duration=10,
+                    )
+                    _bump_refresh()
+                else:
+                    ui.notification_show(str(e), type="error", duration=12)
                 return
             except RapsodoValidationError as e:
                 db.rollback()
