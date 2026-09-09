@@ -123,10 +123,17 @@ def is_in_zone(plate_x, plate_z):
 # solidly outside is_in_zone, clamped to the nearest column by
 # derive_old_zone like any other off-the-plate point. Physical side is
 # fixed regardless of batter handedness (this file's plate_x
-# convention never flips for handedness) -- 1 is the glove/3B side
-# (negative x), 5 is the arm/1B side (positive x); which one reads as
-# "in" vs "away" depends on whether the batter at the plate is a
-# righty or a lefty, exactly as Ryker described it.
+# convention never flips for handedness) -- for a RIGHT-handed pitcher,
+# 1 is the arm/3B side (negative x), 5 is the glove/1B side (positive
+# x) -- flipped for a lefty, same as everywhere else in GBO (see
+# analytics/command_metrics.py's classify_miss_direction/
+# normalize_horizontal_to_arm_side, and rapsodo_conventions.py's
+# strike_zone_inches_to_plate_feet, both of which agree: negative
+# plate_x = arm side for a RHP). Corrected 2026-09 -- this comment
+# previously had arm/glove backwards; which physical side reads as
+# "in" vs "away" depends on whether the BATTER at the plate is a
+# righty or a lefty, exactly as Ryker described it, and is unaffected
+# by this fix.
 _CODE_ROW_HEIGHT = (ZONE_TOP - ZONE_BOTTOM) / 3.0
 _CODE_COL_WIDTH = (2 * ZONE_HALF_WIDTH) / 3.0
 
@@ -137,11 +144,11 @@ LEVEL_TO_PLATE_Z = {
     4: ZONE_BOTTOM + _CODE_ROW_HEIGHT * 2.5,  # top third (and above)
 }
 ZONE_TO_PLATE_X = {
-    1: -ZONE_HALF_WIDTH - _CODE_COL_WIDTH / 2.0,  # chalk/off plate, glove side (3B)
-    2: -ZONE_HALF_WIDTH + _CODE_COL_WIDTH / 2.0,  # inner-zone column, glove side
+    1: -ZONE_HALF_WIDTH - _CODE_COL_WIDTH / 2.0,  # chalk/off plate, arm side (3B) for a RHP
+    2: -ZONE_HALF_WIDTH + _CODE_COL_WIDTH / 2.0,  # inner-zone column, arm side for a RHP
     3: 0.0,                                        # middle
-    4: ZONE_HALF_WIDTH - _CODE_COL_WIDTH / 2.0,   # inner-zone column, arm side
-    5: ZONE_HALF_WIDTH + _CODE_COL_WIDTH / 2.0,   # chalk/off plate, arm side (1B)
+    4: ZONE_HALF_WIDTH - _CODE_COL_WIDTH / 2.0,   # inner-zone column, glove side for a RHP
+    5: ZONE_HALF_WIDTH + _CODE_COL_WIDTH / 2.0,   # chalk/off plate, glove side (1B) for a RHP
 }
 
 
