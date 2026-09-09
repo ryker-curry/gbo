@@ -296,7 +296,9 @@ def render_dict_table(rows: list, empty_message: str = None):
     table has no equivalent auto-fill).
 
     Returns empty_state(empty_message) if rows is empty and a message
-    was given, otherwise a styled <table>. Every cell value is passed
+    was given, otherwise a styled <table> wrapped in a .table-responsive
+    scroll container (so wide tables scroll horizontally within
+    themselves rather than the whole page). Every cell value is passed
     through ui.tags.td() as plain text, so it's auto-escaped the same
     way every other value in this app is -- callers should pre-format
     (dates, rounding, "—" for None) before building the row dicts, same
@@ -315,7 +317,11 @@ def render_dict_table(rows: list, empty_message: str = None):
 
     header = ui.tags.tr(*[ui.tags.th(c) for c in columns])
     body_rows = [ui.tags.tr(*[ui.tags.td(row.get(c, "—")) for c in columns]) for row in rows]
-    return ui.tags.table(ui.tags.thead(header), ui.tags.tbody(*body_rows), class_="table table-sm")
+    table = ui.tags.table(ui.tags.thead(header), ui.tags.tbody(*body_rows), class_="table table-sm")
+    # Wrap in a scroll container so wide tables (many columns) scroll
+    # horizontally within themselves instead of forcing the whole page
+    # (sidebar and header included) to scroll sideways.
+    return ui.div(table, class_="table-responsive")
 
 
 def render_kpi_cards(cards: list):
