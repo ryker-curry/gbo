@@ -618,7 +618,13 @@ def auto_match_rapsodo_to_game_pitches(db_session, import_id: int, game_id: int)
             ):
                 gp.actual_plate_x = rp.plate_x_ft
                 gp.actual_plate_z = rp.plate_z_ft
-                gp.pitch_zone = derive_old_zone(rp.plate_x_ft, rp.plate_z_ft)
+                # float(...) -- rp.plate_x_ft/plate_z_ft are Numeric
+                # columns (Decimal at runtime), and Decimal vs. the plain
+                # float literals inside derive_old_zone's comparisons
+                # raises TypeError. Same cast plate_discipline.py already
+                # applies for the identical reason when reading
+                # GamePitch.actual_plate_x/z back out.
+                gp.pitch_zone = derive_old_zone(float(rp.plate_x_ft), float(rp.plate_z_ft))
             matched_count += 1
         db_session.commit()
     except Exception:
@@ -685,7 +691,9 @@ def apply_manual_rapsodo_game_pitch_matches(db_session, import_id: int, matches:
             ):
                 gp.actual_plate_x = rp.plate_x_ft
                 gp.actual_plate_z = rp.plate_z_ft
-                gp.pitch_zone = derive_old_zone(rp.plate_x_ft, rp.plate_z_ft)
+                # See auto_match_rapsodo_to_game_pitches's identical cast
+                # above for why float(...) is needed here.
+                gp.pitch_zone = derive_old_zone(float(rp.plate_x_ft), float(rp.plate_z_ft))
             matched_count += 1
         db_session.commit()
     except RapsodoImportError:
