@@ -97,14 +97,18 @@ def is_in_zone(plate_x, plate_z):
 
 
 # ---------------------------------------------------------------------
-# Pitch code shorthand (Sep 2026) -- Ryker's own live-charting notation
-# for INTENDED location: a 3-digit "Level-Pitch-Zone" code (e.g. "214"),
-# typed once instead of clicking the zone graphic. The pitch digit
-# (middle) is resolved by the caller against the actual pitcher's real
-# arsenal (see game_tracking.py's _resolve_actual_pitcher_id/
-# _apply_pitch_code) -- decode_pitch_code below only handles the outer
-# two digits, level and zone, converting them to the same plate_x/
-# plate_z coordinates everything else in this file already uses.
+# Pitch code shorthand (Sep 2026, revised Sep 2026) -- Ryker's own
+# live-charting notation for INTENDED location: a 2-digit "Level-Zone"
+# code (e.g. "14"), typed once instead of clicking the zone graphic.
+# Location only -- pitch type is always picked from the pitch-type
+# dropdown by the coach, never guessed from the code. (An earlier
+# version tried a 3-digit "Level-Pitch-Zone" code that resolved its
+# middle digit against the pitcher's arsenal-list position -- dropped
+# because arsenal order isn't a stable, memorizable numbering across
+# pitchers, so e.g. "2" didn't reliably mean the same pitch type for
+# everyone; Ryker's own report, Sep 2026: typed "224" expecting
+# Curveball, got 2-Seam Fastball because that happened to be 2nd in
+# that pitcher's own arsenal list.)
 #
 # Level (vertical, 1-4), per Ryker: 1 = below the zone/dirt, 2 = bottom
 # of the zone/knees, 3 = middle zone, 4 = top of zone and above. Levels
@@ -153,14 +157,14 @@ ZONE_TO_PLATE_X = {
 
 
 def parse_pitch_code(code):
-    """Splits a 3-digit "Level-Pitch-Zone" code (e.g. "214") into its
-    three integer digits (2, 1, 4). Raises ValueError with a message
-    suitable for direct display (e.g. via ui.notification_show) if the
-    code isn't exactly 3 digits."""
+    """Splits a 2-digit "Level-Zone" code (e.g. "14") into its two
+    integer digits (1, 4). Raises ValueError with a message suitable
+    for direct display (e.g. via ui.notification_show) if the code
+    isn't exactly 2 digits."""
     code = (code or "").strip()
-    if not re.fullmatch(r"\d{3}", code):
-        raise ValueError(f'Pitch code must be exactly 3 digits (Level-Pitch-Zone, e.g. "214") -- got "{code}".')
-    return int(code[0]), int(code[1]), int(code[2])
+    if not re.fullmatch(r"\d{2}", code):
+        raise ValueError(f'Pitch code must be exactly 2 digits (Level-Zone, e.g. "14") -- got "{code}".')
+    return int(code[0]), int(code[1])
 
 
 def decode_pitch_code(level, zone):

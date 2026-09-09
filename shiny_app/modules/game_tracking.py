@@ -3270,8 +3270,9 @@ def game_tracking_server(input, output, session, app_state):
         every mode this page supports -- Squad A's own formal pitching
         staff (get_current_pitcher_id), Squad B's free pick, or a
         three-squad game's free pick. Used to scope the pitch-type
-        dropdown -- and the pitch-code decoder's pitch digit, see
-        _apply_pitch_code below -- to that real pitcher's real arsenal.
+        dropdown to that real pitcher's real arsenal (the pitch-code
+        decoder, _apply_pitch_code below, no longer needs this -- it
+        only ever resolves location now, never pitch type).
         Previously only Squad A's own pitcher got this treatment here;
         an intrasquad opposing pitcher (Squad B, or three-squad free
         pick) saw every pitch type unfiltered -- this folds that in too."""
@@ -3330,21 +3331,26 @@ def game_tracking_server(input, output, session, app_state):
             # Review, their actual location (see that section below) are.
             show_intended = (not state["is_our_batting"]) or game.is_intrasquad
             if show_intended:
-                # Ryker's shorthand pitch code (Sep 2026) -- type
-                # Level-Pitch-Zone (e.g. "214") and hit Apply instead of
+                # Ryker's shorthand pitch code (Sep 2026, revised Sep 2026) --
+                # type Level-Zone (e.g. "14") and hit Apply instead of
                 # clicking the zone graphic. _apply_pitch_code below
                 # decodes it into the same intended_x_input/
-                # intended_z_input/pitch_type_select the click widget and
-                # manual entry already write into, so nothing downstream
-                # (record_pitch, execution scoring, etc.) needs to know
-                # this path even exists -- the click graphic still works
-                # too, and updates to show where the code landed.
+                # intended_z_input the click widget and manual entry
+                # already write into, so nothing downstream (record_pitch,
+                # execution scoring, etc.) needs to know this path even
+                # exists -- the click graphic still works too, and updates
+                # to show where the code landed. Location only -- pitch
+                # type is never touched by the code, always picked from
+                # the dropdown above (see the module-level note in
+                # strike_zone.py's Pitch code shorthand section for why
+                # an earlier version that also guessed pitch type from
+                # the code was dropped).
                 children.append(ui.p(
-                    'Pitch code (Level-Pitch-Zone, e.g. "214") -- or click the zone / type coordinates below.',
+                    'Pitch code (Level-Zone, e.g. "14") -- or click the zone / type coordinates below.',
                     class_="text-muted small",
                 ))
                 children.append(ui.layout_columns(
-                    ui.input_text("pitch_code_input", None, placeholder="e.g. 214"),
+                    ui.input_text("pitch_code_input", None, placeholder="e.g. 14"),
                     ui.input_action_button("apply_pitch_code_btn", "Apply code", class_="btn-outline-light btn-sm"),
                     col_widths=[8, 4],
                 ))
@@ -3352,7 +3358,7 @@ def game_tracking_server(input, output, session, app_state):
                     "Level: 1=dirt/below zone, 2=knees/bottom, 3=middle, 4=top & above. "
                     "Zone: 1=chalk/off the plate (in to a righty, off to a lefty), 2=inner, 3=middle, "
                     "4=inner (away to a righty, in to a lefty), 5=chalk/off the plate (away to a righty, in to a lefty). "
-                    "Pitch digit = that pitch's position in the arsenal list above.",
+                    "Sets location only -- pick the pitch type above yourself.",
                     class_="text-muted small",
                 ))
                 children.append(ui.p(
@@ -3373,49 +3379,31 @@ def game_tracking_server(input, output, session, app_state):
     @reactive.effect
     @reactive.event(input.apply_pitch_code_btn)
     def _apply_pitch_code():
-        """Decodes pitch_code_input (Ryker's Level-Pitch-Zone shorthand,
-        see strike_zone.py's own module-level note) and pushes the
-        result into intended_x_input/intended_z_input/pitch_type_select
-        via ui.update_*, the same three widgets the click graphic and
-        manual entry already drive -- so this is purely an alternate,
-        faster way to fill in the exact same fields, not a separate
-        data path. A code with a valid level/zone but a pitch digit
-        outside this pitcher's actual arsenal still sets the location
-        (a partial success is more useful than none) and asks the coach
-        to pick the pitch type manually instead of guessing wrong."""
+        """Decodes pitch_code_input (Ryker's Level-Zone shorthand, see
+        strike_zone.py's own module-level note) and pushes the result
+        into intended_x_input/intended_z_input via ui.update_*, the same
+        two widgets the click graphic and manual entry already drive --
+        so this is purely an alternate, faster way to fill in the exact
+        same fields, not a separate data path. Location only -- never
+        touches pitch_type_select, which the coach always picks
+        themselves (see the module-level note in strike_zone.py for why
+        an earlier version that also guessed pitch type from a third
+        digit was dropped: that digit resolved against the pitcher's
+        arsenal-list position rather than a fixed pitch type, so e.g.
+        "2" didn't reliably mean the same pitch for every pitcher)."""
         game_id = _active_game_id()
         if game_id is None:
             return
         raw = (input.pitch_code_input() or "").strip() if "pitch_code_input" in input else ""
         try:
-            level, pitch_digit, zone = strike_zone.parse_pitch_code(raw)
+            level, zone = strike_zone.parse_pitch_code(raw)
             x, z = strike_zone.decode_pitch_code(level, zone)
         except ValueError as e:
             ui.notification_show(str(e), type="error", duration=8)
             return
-        db = get_session()
-        try:
-            ctx = _load_tracking_context(db, game_id)
-            if ctx is None:
-                return
-            game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
-            pitcher_id = _resolve_actual_pitcher_id(game, state)
-            pitch_types = db.query(PitchType).order_by(PitchType.pitch_type_id).all()
-            arsenal_names = get_arsenal_pitch_type_names(db, pitcher_id, pitch_types) if pitcher_id else [pt.type_name for pt in pitch_types]
-        finally:
-            db.close()
         ui.update_numeric("intended_x_input", value=round(x, 3))
         ui.update_numeric("intended_z_input", value=round(z, 3))
-        if 1 <= pitch_digit <= len(arsenal_names):
-            pitch_name = arsenal_names[pitch_digit - 1]
-            ui.update_select("pitch_type_select", selected=pitch_name)
-            ui.notification_show(f'Applied "{raw}": {pitch_name}, location set.', type="message", duration=5)
-        else:
-            ui.notification_show(
-                f'Location set from "{raw}", but pitch digit {pitch_digit} is outside this pitcher\'s arsenal '
-                f"({len(arsenal_names)} pitch{'es' if len(arsenal_names) != 1 else ''}) -- pick the pitch type manually.",
-                type="warning", duration=10,
-            )
+        ui.notification_show(f'Applied "{raw}": location set. Pick the pitch type above.', type="message", duration=5)
 
     @render_plotly
     def intended_location_widget():
