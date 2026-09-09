@@ -26,18 +26,15 @@ from plate_discipline import compute_hitter_discipline, compute_pitcher_command,
 from pitch_location_stats import compute_command_precision, compute_attack_zones
 
 import ui_helpers
+import format_helpers
+from format_helpers import (
+    format_pct as _fmt_pct1,
+    format_num as _fmt_num,
+)
 
 
 def _fmt_pct(value):
-    return f"{value:.0f}%" if value is not None else "—"
-
-
-def _fmt_pct1(value):
-    return f"{value:.1f}%" if value is not None else "—"
-
-
-def _fmt_num(value, decimals=2):
-    return f"{value:.{decimals}f}" if value is not None else "—"
+    return format_helpers.format_pct(value, decimals=0)
 
 
 @module.ui

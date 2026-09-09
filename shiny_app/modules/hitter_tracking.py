@@ -60,6 +60,7 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from models import Player, StaffPlayerAssignment, PitchType, HitterTrackingSession, HitterSwing, HitterSessionType
 from r2_client import upload_video_to_r2
+from video_helpers import ShinyFileAdapter as _ShinyFileAdapter
 
 import ui_helpers
 import chart_helpers
@@ -77,24 +78,6 @@ CONTACT_QUALITY_OPTIONS = ["Barrel", "Solid", "Weak", "Miss"]
 CONTACT_QUALITY_SCORE = {"Barrel": 3, "Solid": 2, "Weak": 1, "Miss": 0}
 HIT_LOCATION_OPTIONS = ["Left Field", "Left-Center", "Center Field", "Right-Center", "Right Field", "Infield"]
 ZONE_GRID_LAYOUT = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
-
-
-class _ShinyFileAdapter:
-    """Adapts one ui.input_file() entry to the .name/.getvalue()/.type
-    shape upload_video_to_r2() expects -- same adapter as
-    training_routines.py's, duplicated here per that file's own
-    convention (each video-handling module carries its own small
-    copy). video_import.py used to carry one too, but that page was
-    redesigned to store pasted Google Drive links instead of uploading
-    files, so it no longer needs R2 or this adapter."""
-    def __init__(self, file_info: dict):
-        self.name = file_info["name"]
-        self.type = file_info.get("type")
-        self._datapath = file_info["datapath"]
-
-    def getvalue(self) -> bytes:
-        with open(self._datapath, "rb") as f:
-            return f.read()
 
 
 def _upload_swing_video(file_info: dict, identifier: str):

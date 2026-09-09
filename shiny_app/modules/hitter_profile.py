@@ -34,16 +34,14 @@ from analytics import performance_score, profile_queries
 from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_figure, CONTACT_QUALITY_SCORE
 
 import ui_helpers
+import format_helpers
+from format_helpers import format_pct as _fmt_pct
 
 STAFF_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
 
 
-def _fmt_pct(value):
-    return f"{value:.1f}%" if value is not None else "—"
-
-
 def _fmt(value, decimals=3):
-    return f"{value:.{decimals}f}" if value is not None else "—"
+    return format_helpers.format_num(value, decimals)
 
 
 def _my_player(db, app_state):

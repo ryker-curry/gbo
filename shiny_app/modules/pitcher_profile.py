@@ -35,7 +35,7 @@ game_stats.py's season/single-game queries don't cover.
 
 from datetime import date, timedelta
 
-from shiny import module, ui, render, req
+from shiny import module, ui, render, req, reactive
 from shinywidgets import output_widget, render_plotly
 from database import get_session
 from models import Player, User, PitchType, PlayerPitchArsenal, StaffPlayerAssignment
@@ -50,6 +50,11 @@ from pitch_type_config import get_pitch_color
 
 import ui_helpers
 import bullpen_dashboard_display
+import format_helpers
+from format_helpers import (
+    format_pct as _fmt_pct,
+    format_num as _fmt,
+)
 
 STAFF_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
 
@@ -61,14 +66,6 @@ STAFF_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data
 # unrelated scheme. Flag for Ryker/the designer to revise if a
 # different treatment is wanted.
 ATTACK_ZONE_COLORS = {"Heart": "#BF1E2D", "Shadow": "#F2B529", "Chase": "#7A8594", "Waste": "#3A3F47"}
-
-
-def _fmt(value, decimals=2):
-    return f"{value:.{decimals}f}" if value is not None else "—"
-
-
-def _fmt_pct(value):
-    return f"{value:.1f}%" if value is not None else "—"
 
 
 def _fmt_grade(value):
@@ -591,24 +588,43 @@ def pitcher_profile_server(input, output, session, app_state):
     # output needs its own registered function.
     # -------------------------------------------------------------------
 
-    def _view_pitches(db):
+    @reactive.calc
+    def _view_pitches():
+        """Command Target Zones' filtered view-pitch list, shared by
+        pp_command_section/pp_command_table/pp_command_chart below.
+        Was a plain function taking a caller-supplied `db`, called
+        fresh (a full query) from each of those three render
+        functions independently on every reactive tick -- now computed
+        once and reused, same @reactive.calc memoization pattern
+        bullpen_dashboard.py's _resolved() already uses for the
+        identical reason. Opens and fully closes its own db session
+        (rather than reusing a caller's) so the cached result is safe
+        to read after this function returns, no matter which caller
+        reads it or when -- game_pitches_command_view()'s objects only
+        carry plain scalars plus the already-joinedload'd .pitch_type
+        (see profile_queries._base_pitching_query), so nothing on them
+        needs a live session once this returns."""
         role = app_state.role_name()
         if role != "Player" and role not in STAFF_ROLES:
             return None, None
-        pid = _current_player_id(db)
-        if pid is None:
-            return None, None
-        player = db.query(Player).filter(Player.player_id == pid).first()
-        if player is None:
-            return None, None
-        f = _current_filters()
-        game_pitches = profile_queries.get_pitcher_profile_pitches(
-            db, pid, date_from=f["date_from"], date_to=f["date_to"],
-            pitch_type=f["pitch_type"], game_scope=f["game_scope"],
-        )
-        if not game_pitches:
-            return None, None
-        return command_metrics.game_pitches_command_view(game_pitches, player.throws), player.throws
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None, None
+            player = db.query(Player).filter(Player.player_id == pid).first()
+            if player is None:
+                return None, None
+            f = _current_filters()
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+            )
+            if not game_pitches:
+                return None, None
+            return command_metrics.game_pitches_command_view(game_pitches, player.throws), player.throws
+        finally:
+            db.close()
 
     def _team_command_plus_baseline(db):
         """Same all-time, all-games team population Pitcher Game Report's
@@ -632,36 +648,32 @@ def pitcher_profile_server(input, output, session, app_state):
         if not app_state.is_authenticated():
             return None
         _current_filters()
-        db = get_session()
-        try:
-            view_pitches, _throws = _view_pitches(db)
-            if not view_pitches:
-                return None
-            return ui.div(
-                ui.hr(),
-                ui.p(ui.strong("Command Target Zones")),
-                ui.p(
-                    "Same Precision/Command/Competitive target-radius bands and concentric-ring chart Command "
-                    "Tracker uses -- built from this window's intended-vs-actual pitch locations. Only pitches with "
-                    "a logged intended location count (a real opponent's pitcher never has one on file).",
-                    class_="text-muted small",
-                ),
-                ui.output_ui("pp_command_table"),
-                output_widget("pp_command_chart"),
-            )
-        finally:
-            db.close()
+        view_pitches, _throws = _view_pitches()
+        if not view_pitches:
+            return None
+        return ui.div(
+            ui.hr(),
+            ui.p(ui.strong("Command Target Zones")),
+            ui.p(
+                "Same Precision/Command/Competitive target-radius bands and concentric-ring chart Command "
+                "Tracker uses -- built from this window's intended-vs-actual pitch locations. Only pitches with "
+                "a logged intended location count (a real opponent's pitcher never has one on file).",
+                class_="text-muted small",
+            ),
+            ui.output_ui("pp_command_table"),
+            output_widget("pp_command_chart"),
+        )
 
     @render.ui
     def pp_command_table():
         if not app_state.is_authenticated():
             return None
+        view_pitches, throws = _view_pitches()
+        if not view_pitches:
+            return None
+        scorecard = command_metrics.session_command_scorecard(view_pitches)
         db = get_session()
         try:
-            view_pitches, throws = _view_pitches(db)
-            if not view_pitches:
-                return None
-            scorecard = command_metrics.session_command_scorecard(view_pitches)
             if scorecard["located_pitches"] == 0:
                 return ui.p("No pitches have an actual location recorded yet -- needs Video Review or a Rapsodo link.", class_="text-muted small")
 
@@ -688,14 +700,10 @@ def pitcher_profile_server(input, output, session, app_state):
     def pp_command_chart():
         if not app_state.is_authenticated():
             return None
-        db = get_session()
-        try:
-            view_pitches, _throws = _view_pitches(db)
-            if not view_pitches:
-                return None
-            located = [p for p in view_pitches if p.horizontal_miss is not None]
-            if not located:
-                return None
-            return command_charts.command_chart(view_pitches)
-        finally:
-            db.close()
+        view_pitches, _throws = _view_pitches()
+        if not view_pitches:
+            return None
+        located = [p for p in view_pitches if p.horizontal_miss is not None]
+        if not located:
+            return None
+        return command_charts.command_chart(view_pitches)

@@ -40,25 +40,16 @@ from plate_discipline import compute_hitter_discipline, compute_zone_tier_discip
 from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_figure, CONTACT_QUALITY_SCORE
 
 import ui_helpers
-
-
-def _fmt_pct(value):
-    return f"{value:.1f}%" if value is not None else "—"
+import format_helpers
+from format_helpers import (
+    format_pct as _fmt_pct,
+    opponent_display_name as _opponent_display_name,
+    game_label as _game_label,
+)
 
 
 def _fmt(value, decimals=3):
-    return f"{value:.{decimals}f}" if value is not None else "—"
-
-
-def _opponent_display_name(g):
-    if g.opponent_team:
-        return g.opponent_team.team_name
-    return g.opponent_name or "Unknown opponent"
-
-
-def _game_label(g):
-    loc = "vs" if g.is_home else ("@" if g.is_home is False else "vs (neutral)")
-    return f"{g.game_date.strftime('%Y-%m-%d (%a)')} — {loc} {_opponent_display_name(g)} ({g.status})"
+    return format_helpers.format_num(value, decimals)
 
 
 @module.ui
