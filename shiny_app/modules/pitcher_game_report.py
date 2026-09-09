@@ -23,9 +23,10 @@ in an earlier module yet.
 from shiny import module, ui, render, reactive, req
 from shinywidgets import output_widget, render_plotly
 from sqlalchemy.orm import joinedload
+import plotly.graph_objects as go
 
 from database import get_session
-from models import Player, Game, GamePitch
+from models import Player, Game, GamePitch, RapsodoPitch
 from game_stats import get_pitching_pitches, compute_pitching_line, compute_pitch_type_breakdown
 from pitch_location_stats import compute_command_precision, compute_attack_zones
 # Target-radius bands (Precision/Command/Competitive/Major Miss) and the
@@ -40,7 +41,11 @@ from pitch_location_stats import compute_command_precision, compute_attack_zones
 # replacement.
 from analytics import command_metrics, profile_queries
 from analytics.pitch_grading import stuff_plus, arsenal_summary, MIN_BASELINE_PITCHES
+from analytics.bullpen_metrics import average_estimated_arm_angle, pitch_type_label
 from visualizations import command_charts
+from visualizations.bullpen_charts import movement_chart, color_for_pitch_label
+from visualizations.pitcher_graphic import pitcher_release_svg
+from visualizations.chart_theme import apply_gbo_theme
 
 import ui_helpers
 
@@ -106,6 +111,91 @@ def _pitch_type_breakdown_with_stuff(pitches_subset, rap_by_gp, stuff_baselines)
     return out_rows
 
 
+def _pitch_shape_rows(pitches, rap_by_gp, stuff_baselines, pitcher):
+    """Physical pitch-shape table for the Pitch Shape (Rapsodo) section
+    (Ryker's Pitch Profiler-style reference, Sept 2026): Velocity/Spin
+    Rate/IVB/HB/VAA/HAA/vRel/hRel/Ext/Arm deg, plus Stuff+ and Whiff %,
+    one row per pitch type actually thrown -- grouped by the coach's own
+    charted GamePitch.pitch_type (not Rapsodo's independent auto-
+    classification), same convention as _pitch_type_breakdown_with_stuff
+    above, since Usage %/Whiff % are GamePitch-outcome facts that need
+    to agree with the rest of the page. Physical columns only average
+    the subset of that type's pitches with a Rapsodo reading linked
+    (rap_by_gp) -- a charted type with no Rapsodo match yet shows
+    Usage %/Whiff % from the charted count and "--" for every physical
+    column, same "shown anyway" philosophy as elsewhere, rather than
+    being dropped from the table.
+
+    No separate Barrel % column -- GBO doesn't track batted-ball
+    exit velocity/launch angle, so there's no GBO equivalent to
+    substitute (Ryker's own call: substitute a real GBO equivalent
+    where one exists, skip what doesn't rather than fabricating it).
+
+    Stuff+ reuses pitch_grading.stuff_plus/arsenal_summary against the
+    same team-wide baseline as the Arsenal table and Pitch Type
+    Breakdown above -- not a second Stuff+ computation. Small-sample
+    reality: MIN_BASELINE_PITCHES is 20, and a single outing rarely
+    throws 20+ of a secondary pitch, so most Stuff+ values here will be
+    on a thin sample -- shown anyway rather than hidden, with a caption
+    below the table flagging the floor, same convention as
+    _pitch_type_breakdown_with_stuff's own "Reliable" column."""
+    base_rows = {row["Pitch Type"]: row for row in compute_pitch_type_breakdown(pitches) if row["Pitch Type"] != "Total"}
+
+    type_order = []
+    rapsodo_groups = {}
+    for p in pitches:
+        if p.pitch_type is None:
+            continue
+        label = p.pitch_type.type_name
+        if label not in rapsodo_groups:
+            rapsodo_groups[label] = []
+            type_order.append(label)
+        rap = rap_by_gp.get(p.game_pitch_id)
+        if rap is not None:
+            rapsodo_groups[label].append(rap)
+
+    pitch_type_grades = {}
+    for label, raps in rapsodo_groups.items():
+        for rap in raps:
+            s_val = stuff_plus(rap, stuff_baselines.get(label))
+            if s_val is None:
+                continue
+            grp = pitch_type_grades.setdefault(label, {"n": 0, "stuff_plus": []})
+            grp["n"] += 1
+            grp["stuff_plus"].append(s_val)
+    stuff_by_label = {row["Pitch Type"]: row["Stuff+"] for row in arsenal_summary(pitch_type_grades)} if pitch_type_grades else {}
+
+    def _avg_field(raps, field, decimals=1):
+        vals = [float(getattr(r, field)) for r in raps if getattr(r, field) is not None]
+        return round(sum(vals) / len(vals), decimals) if vals else None
+
+    def _d(value, suffix=""):
+        return f"{value}{suffix}" if value is not None else "—"
+
+    rows = []
+    for label in type_order:
+        raps = rapsodo_groups[label]
+        base = base_rows.get(label, {})
+        arm_angle, _n = average_estimated_arm_angle(raps, pitcher)
+        rows.append({
+            "Pitch Type": label,
+            "% Thrown": _d(base.get("Pitch Usage %"), "%"),
+            "Velocity": _d(_avg_field(raps, "velocity"), " mph"),
+            "Spin Rate": _d(_avg_field(raps, "total_spin", 0), " rpm"),
+            "IVB": _d(_avg_field(raps, "vb_spin"), '"'),
+            "HB": _d(_avg_field(raps, "hb_spin"), '"'),
+            "VAA": _d(_avg_field(raps, "vertical_approach_angle"), "°"),
+            "HAA": _d(_avg_field(raps, "horizontal_approach_angle"), "°"),
+            "vRel": _d(_avg_field(raps, "release_height"), "'"),
+            "hRel": _d(_avg_field(raps, "release_side"), "'"),
+            "Ext": _d(_avg_field(raps, "release_extension"), "'"),
+            "Arm°": _d(round(arm_angle) if arm_angle is not None else None, "°"),
+            "Stuff+": _d(stuff_by_label.get(label)),
+            "Whiff %": _d(base.get("Whiff %"), "%"),
+        })
+    return rows
+
+
 def _fmt(value, decimals=2):
     return f"{value:.{decimals}f}" if value is not None else "—"
 
@@ -129,6 +219,7 @@ def pitcher_game_report_ui():
         ui.output_ui("pitcher_picker"),
         ui.output_ui("report_body"),
         ui.output_ui("command_target_section"),
+        ui.output_ui("rapsodo_shape_section"),
         ui_helpers.page_footer(),
     )
 
@@ -501,5 +592,284 @@ def pitcher_game_report_server(input, output, session, app_state):
             if not located:
                 return None
             return command_charts.command_chart(view_pitches)
+        finally:
+            db.close()
+
+
+
+    # -------------------------------------------------------------------
+    # Pitch Shape (Rapsodo) -- Sept 2026, restyled after Ryker's Pitch
+    # Profiler reference image: Release Point (silhouette), Movement
+    # Profile (with per-pitch-type Estimated Arm Angle rays), and Pitch
+    # Frequency by batter handedness side by side, then a full physical
+    # breakdown table below. Reuses the same pure chart/analytics
+    # functions the Bullpen Dashboard and the Pitch Type Breakdown tabs
+    # above already use (visualizations/bullpen_charts.py,
+    # visualizations/pitcher_graphic.py, analytics/bullpen_metrics.py,
+    # analytics/pitch_grading.py) -- no second implementation of any of
+    # this math, just fed this game's own Rapsodo-linked pitches.
+    #
+    # Deliberately still lean on controls, per Ryker's own call: no
+    # pitch-type/date filters, no individual-vs-average toggle -- fixed
+    # defaults only. The Bullpen Dashboard's full interactive version
+    # (arm-angle filters, mode toggles, etc.) stays the place a coach
+    # digs deeper for bullpen sessions; the equivalent for intrasquad
+    # games (season-wide, not just one outing) is planned for Pitcher
+    # Profile, not built yet as of this section.
+    #
+    # No Barrel % column anywhere here -- GBO doesn't track batted-ball
+    # exit velocity/launch angle, so there's no real GBO equivalent to
+    # substitute (Ryker's own call on the metric gap: substitute a real
+    # equivalent where one exists, skip what doesn't).
+    # -------------------------------------------------------------------
+
+    def _selected_pitcher_rapsodo_game_pitches(db):
+        if "game_select" not in input or "pitcher_select" not in input:
+            return None
+        game_id_raw, pitcher_id_raw = input.game_select(), input.pitcher_select()
+        if not game_id_raw or not pitcher_id_raw:
+            return None
+        pitches = (
+            db.query(RapsodoPitch)
+            .join(GamePitch, RapsodoPitch.game_pitch_id == GamePitch.game_pitch_id)
+            .options(joinedload(RapsodoPitch.pitch_type), joinedload(RapsodoPitch.player))
+            .filter(GamePitch.game_id == int(game_id_raw), RapsodoPitch.player_id == int(pitcher_id_raw))
+            .order_by(RapsodoPitch.pitch_number)
+            .all()
+        )
+        return pitches or None
+
+    def _rapsodo_arm_angles_by_type(pitches, player):
+        """[(label, color, angle_degrees), ...] for every pitch type with
+        a computable Estimated Arm Angle -- same grouping/coloring
+        bullpen_dashboard_display.py's own movement-chart panel uses, so
+        the ray colors always agree with the dots they're drawn against."""
+        type_groups = {}
+        type_order = []
+        for p in pitches:
+            label = pitch_type_label(p)
+            if label not in type_groups:
+                type_groups[label] = []
+                type_order.append(label)
+            type_groups[label].append(p)
+        out = []
+        for label in type_order:
+            angle, _n = average_estimated_arm_angle(type_groups[label], player)
+            if angle is not None:
+                out.append((label, color_for_pitch_label(label), angle))
+        return out
+
+    @render.ui
+    def rapsodo_shape_section():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        req("pitcher_select" in input)
+        db = get_session()
+        try:
+            pitches = _selected_pitcher_rapsodo_game_pitches(db)
+            if not pitches:
+                return None
+            return ui.div(
+                ui.hr(),
+                ui.p(ui.strong("Pitch Shape (Rapsodo)")),
+                ui.p(
+                    "Release point, movement, and pitch mix by batter handedness for this outing, from this "
+                    "game's Rapsodo-linked pitches.",
+                    class_="text-muted small",
+                ),
+                ui.layout_columns(
+                    ui.div(
+                        ui.p("Release Point", style="font-weight:700; text-align:center;"),
+                        ui.output_ui("rapsodo_release_point"),
+                    ),
+                    output_widget("rapsodo_movement_chart"),
+                    output_widget("rapsodo_pitch_frequency_chart"),
+                    col_widths=[4, 4, 4],
+                ),
+                ui.output_ui("rapsodo_pitch_shape_table"),
+            )
+        finally:
+            db.close()
+
+    @render.ui
+    def rapsodo_release_point():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        db = get_session()
+        try:
+            pitches = _selected_pitcher_rapsodo_game_pitches(db)
+            if not pitches:
+                return None
+            type_groups = {}
+            type_order = []
+            for p in pitches:
+                label = pitch_type_label(p)
+                if label not in type_groups:
+                    type_groups[label] = []
+                    type_order.append(label)
+                type_groups[label].append(p)
+
+            releases = []
+            for label in type_order:
+                group = type_groups[label]
+                heights = [float(p.release_height) for p in group if p.release_height is not None]
+                sides = [float(p.release_side) for p in group if p.release_side is not None]
+                if not heights or not sides:
+                    continue
+                releases.append({
+                    "label": label,
+                    "color": color_for_pitch_label(label),
+                    "side_ft": sum(sides) / len(sides),
+                    "height_ft": sum(heights) / len(heights),
+                    "count": len(group),
+                })
+
+            player = pitches[0].player
+            player_height_in = float(player.height_in) if player is not None and player.height_in is not None else None
+            throws = player.throws if player is not None else None
+            children = [ui.HTML(pitcher_release_svg(releases, throws=throws or "R", height_in=player_height_in or 73))]
+            if player is not None and player.height_in is None:
+                children.append(ui.p(
+                    "Using an average height -- add this pitcher's real height on the Players page for a more accurate figure.",
+                    class_="text-muted small", style="text-align:center;",
+                ))
+            return ui.div(*children)
+        finally:
+            db.close()
+
+    @render_plotly
+    def rapsodo_movement_chart():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        db = get_session()
+        try:
+            pitches = _selected_pitcher_rapsodo_game_pitches(db)
+            if not pitches:
+                return None
+            player = pitches[0].player
+            throws = player.throws if player is not None else None
+            arm_angles_by_type = _rapsodo_arm_angles_by_type(pitches, player)
+            return movement_chart(pitches, arm_angles_by_type=arm_angles_by_type, throws=throws)
+        finally:
+            db.close()
+
+    @render_plotly
+    def rapsodo_pitch_frequency_chart():
+        """Pitch mix vs RHH/vs LHH, tornado-style -- same vs_rhh/vs_lhh
+        split and Stuff+ baseline the Pitch Type Breakdown tabs above
+        already compute (GamePitch.opponent_hand, profile_queries'
+        team-wide Stuff+ baseline), just as one combined chart instead
+        of separate tabs. Stuff+ shown per pitch type overall (not
+        re-split by handedness) -- splitting the baseline further would
+        shrink an already-thin single-outing sample per type into
+        something too small to mean anything."""
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        req("pitcher_select" in input)
+        game_id_raw, pitcher_id_raw = input.game_select(), input.pitcher_select()
+        if not game_id_raw or not pitcher_id_raw:
+            return None
+        db = get_session()
+        try:
+            pitches = get_pitching_pitches(db, int(pitcher_id_raw), game_id=int(game_id_raw))
+            if not pitches:
+                return None
+            vs_rhh = [p for p in pitches if p.opponent_hand == "R"]
+            vs_lhh = [p for p in pitches if p.opponent_hand == "L"]
+            if not vs_rhh and not vs_lhh:
+                return None
+
+            rap_by_gp = profile_queries.rapsodo_by_game_pitch_id(db, [p.game_pitch_id for p in pitches])
+            stuff_baselines = profile_queries.team_stuff_plus_baselines(db)
+            pitch_type_grades = {}
+            for p in pitches:
+                if p.pitch_type is None:
+                    continue
+                rap = rap_by_gp.get(p.game_pitch_id)
+                if rap is None:
+                    continue
+                label = p.pitch_type.type_name
+                s_val = stuff_plus(rap, stuff_baselines.get(label))
+                if s_val is None:
+                    continue
+                grp = pitch_type_grades.setdefault(label, {"n": 0, "stuff_plus": []})
+                grp["n"] += 1
+                grp["stuff_plus"].append(s_val)
+            stuff_by_label = {row["Pitch Type"]: row["Stuff+"] for row in arsenal_summary(pitch_type_grades)} if pitch_type_grades else {}
+
+            def _counts_by_type(subset):
+                counts, order = {}, []
+                for p in subset:
+                    if p.pitch_type is None:
+                        continue
+                    label = p.pitch_type.type_name
+                    if label not in counts:
+                        counts[label] = 0
+                        order.append(label)
+                    counts[label] += 1
+                return counts, order
+
+            rhh_counts, rhh_order = _counts_by_type(vs_rhh)
+            lhh_counts, lhh_order = _counts_by_type(vs_lhh)
+            labels = list(dict.fromkeys(rhh_order + lhh_order))
+            if not labels:
+                return None
+            rhh_vals = [rhh_counts.get(l, 0) for l in labels]
+            lhh_vals = [lhh_counts.get(l, 0) for l in labels]
+            colors = [color_for_pitch_label(l) for l in labels]
+
+            def _bar_text(label, count):
+                stuff = stuff_by_label.get(label)
+                return f"Count: {count}" + (f"  ({round(stuff)} Stuff+)" if stuff is not None else "")
+
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                y=labels, x=[-v for v in lhh_vals], orientation="h", name="LHH",
+                marker_color=colors, text=[_bar_text(l, v) for l, v in zip(labels, lhh_vals)],
+                textposition="outside", hoverinfo="text",
+            ))
+            fig.add_trace(go.Bar(
+                y=labels, x=rhh_vals, orientation="h", name="RHH",
+                marker_color=colors, text=[_bar_text(l, v) for l, v in zip(labels, rhh_vals)],
+                textposition="outside", hoverinfo="text",
+            ))
+            max_val = max(rhh_vals + lhh_vals + [1])
+            fig.update_xaxes(range=[-max_val * 1.8, max_val * 1.8], zeroline=True, zerolinewidth=2, showticklabels=False)
+            fig.add_annotation(text="← LHH", x=0, xref="paper", xanchor="left", y=1.08, yref="paper", showarrow=False)
+            fig.add_annotation(text="RHH →", x=1, xref="paper", xanchor="right", y=1.08, yref="paper", showarrow=False)
+            return apply_gbo_theme(fig, title="Pitch Frequency", height=420, showlegend=False, barmode="overlay")
+        finally:
+            db.close()
+
+    @render.ui
+    def rapsodo_pitch_shape_table():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        req("pitcher_select" in input)
+        game_id_raw, pitcher_id_raw = input.game_select(), input.pitcher_select()
+        if not game_id_raw or not pitcher_id_raw:
+            return None
+        db = get_session()
+        try:
+            pitcher = db.query(Player).filter(Player.player_id == int(pitcher_id_raw)).first()
+            pitches = get_pitching_pitches(db, int(pitcher_id_raw), game_id=int(game_id_raw))
+            if not pitches or pitcher is None:
+                return None
+            rap_by_gp = profile_queries.rapsodo_by_game_pitch_id(db, [p.game_pitch_id for p in pitches])
+            stuff_baselines = profile_queries.team_stuff_plus_baselines(db)
+            rows = _pitch_shape_rows(pitches, rap_by_gp, stuff_baselines, pitcher)
+            if not rows:
+                return None
+            return ui.div(
+                ui_helpers.render_dict_table(rows),
+                ui.p(
+                    f"Stuff+ needs at least {MIN_BASELINE_PITCHES} pitches of that type (team-wide) to be a stable "
+                    "read -- a single outing rarely reaches that for a secondary pitch, shown anyway rather than hidden.",
+                    class_="text-muted small",
+                ),
+            )
         finally:
             db.close()
