@@ -350,24 +350,20 @@ role):
 
 import re
 import time
-import uuid
 from datetime import date
 
 from shiny import module, ui, render, reactive, req
 from shinywidgets import output_widget, render_plotly
 from sqlalchemy.orm import joinedload
-import plotly.graph_objects as go
 
 from database import get_session
-from r2_client import upload_video_to_r2
-from video_helpers import ShinyFileAdapter as _ShinyFileAdapter
 from format_helpers import opponent_display_name as _opponent_display_name
 import strike_zone
 import field_location
 from models import (
     Player, Position, PitchType, Game, GameLineupSlot, GamePitch, RunExpectancy,
     OpponentTeam, OpponentPlayer, Season, PitchingChange, PlayerPitchArsenal, OpponentLineupSlot,
-    GameVideoClip, LineupSubstitution, GameRunnerEvent,
+    LineupSubstitution, GameRunnerEvent,
 )
 from game_stats import (
     get_pitching_pitches, get_batting_pitches, compute_pitching_line, compute_batting_line,
