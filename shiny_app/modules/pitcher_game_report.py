@@ -41,7 +41,10 @@ from pitch_location_stats import compute_command_precision, compute_attack_zones
 # replacement.
 from analytics import command_metrics, profile_queries
 from analytics.pitch_grading import stuff_plus, arsenal_summary, MIN_BASELINE_PITCHES
-from analytics.bullpen_metrics import average_estimated_arm_angle, pitch_type_label
+from analytics.bullpen_metrics import (
+    average_estimated_arm_angle, pitch_type_label,
+    _pitch_level_vaa, _pitch_level_haa, _avg_pitch_level,
+)
 from visualizations import command_charts
 from visualizations.bullpen_charts import movement_chart, color_for_pitch_label
 from visualizations.pitcher_graphic import pitcher_release_svg
@@ -187,8 +190,8 @@ def _pitch_shape_rows(pitches, rap_by_gp, stuff_baselines, pitcher):
             "Spin Rate": _d(_avg_field(raps, "total_spin", 0), " rpm"),
             "IVB": _d(_avg_field(raps, "vb_spin"), '"'),
             "HB": _d(_avg_field(raps, "hb_spin"), '"'),
-            "VAA": _d(_avg_field(raps, "vertical_approach_angle"), "°"),
-            "HAA": _d(_avg_field(raps, "horizontal_approach_angle"), "°"),
+            "VAA": _d(_avg_pitch_level([_pitch_level_vaa(r)["value_degrees"] for r in raps])[0], "° (est.)"),
+            "HAA": _d(_avg_pitch_level([_pitch_level_haa(r)["value_degrees"] for r in raps])[0], "° (est.)"),
             "vRel": _d(_avg_field(raps, "release_height"), "'"),
             "hRel": _d(_avg_field(raps, "release_side"), "'"),
             "Ext": _d(_avg_field(raps, "release_extension"), "'"),
@@ -672,9 +675,14 @@ def pitcher_game_report_server(input, output, session, app_state):
                         ui.output_ui("rapsodo_release_point"),
                     ),
                     output_widget("rapsodo_movement_chart"),
-                    output_widget("rapsodo_pitch_frequency_chart"),
-                    col_widths=[4, 4, 4],
+                    col_widths=[5, 7],
                 ),
+                # Its own full-width row rather than a third equal column --
+                # it's a horizontal bar chart with a label past the tip of
+                # every bar, so a ~1/3-width column left it visibly cramped
+                # (labels overlapping/squeezed even after fixing the hard
+                # clipping). Full width gives every bar's label room.
+                output_widget("rapsodo_pitch_frequency_chart"),
                 ui.output_ui("rapsodo_pitch_shape_table"),
             )
         finally:
@@ -809,19 +817,31 @@ def pitcher_game_report_server(input, output, session, app_state):
             colors = [color_for_pitch_label(l) for l in labels]
 
             def _bar_text(label, count):
+                # A 0-length bar (this pitch type never thrown to that
+                # handedness) still sits at x=0 -- giving it a label too
+                # would overlap the other side's label right at the
+                # zero line, especially for low counts. Skip it.
+                if not count:
+                    return ""
                 stuff = stuff_by_label.get(label)
                 return f"Count: {count}" + (f"  ({round(stuff)} Stuff+)" if stuff is not None else "")
 
             fig = go.Figure()
+            # cliponaxis=False: "outside" bar text is positioned in data
+            # units, not pixels, so with three narrow side-by-side charts
+            # the longer "Count: N  (NNN Stuff+)" labels were getting hard
+            # -clipped at the axis range boundary before this. Letting the
+            # text draw past the axis (into the figure's own margin) fixes
+            # the truncation regardless of window width.
             fig.add_trace(go.Bar(
                 y=labels, x=[-v for v in lhh_vals], orientation="h", name="LHH",
                 marker_color=colors, text=[_bar_text(l, v) for l, v in zip(labels, lhh_vals)],
-                textposition="outside", hoverinfo="text",
+                textposition="outside", hoverinfo="text", cliponaxis=False,
             ))
             fig.add_trace(go.Bar(
                 y=labels, x=rhh_vals, orientation="h", name="RHH",
                 marker_color=colors, text=[_bar_text(l, v) for l, v in zip(labels, rhh_vals)],
-                textposition="outside", hoverinfo="text",
+                textposition="outside", hoverinfo="text", cliponaxis=False,
             ))
             max_val = max(rhh_vals + lhh_vals + [1])
             fig.update_xaxes(range=[-max_val * 1.8, max_val * 1.8], zeroline=True, zerolinewidth=2, showticklabels=False)
@@ -853,6 +873,12 @@ def pitcher_game_report_server(input, output, session, app_state):
                 return None
             return ui.div(
                 ui_helpers.render_dict_table(rows),
+                ui.p(
+                    "VAA/HAA are estimated from release point, release angle, extension, and actual plate-crossing "
+                    "location (not a direct Rapsodo measurement -- Rapsodo's own exported VAA/HAA columns are blank "
+                    "in these files), same approach as the Bullpen Dashboard's arm-angle/VAA/HAA estimates.",
+                    class_="text-muted small",
+                ),
                 ui.p(
                     f"Stuff+ needs at least {MIN_BASELINE_PITCHES} pitches of that type (team-wide) to be a stable "
                     "read -- a single outing rarely reaches that for a secondary pitch, shown anyway rather than hidden.",
