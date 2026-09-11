@@ -27,7 +27,7 @@ from shinywidgets import output_widget, render_plotly
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import Player, Game, GamePitch
+from models import Player, Game, GamePitch, User
 from game_stats import get_batting_pitches, compute_batting_line, compute_batted_ball_profile
 from plate_discipline import compute_hitter_discipline, compute_zone_tier_discipline
 # Reusing Hitter Tracking's own zone-score math/heatmap builder and its
@@ -66,18 +66,52 @@ def hitter_game_report_ui():
 
 @module.server
 def hitter_game_report_server(input, output, session, app_state):
-    ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
+    # "Player" added Sept 2026 (Ryker: players should be able to see game
+    # reports for themselves) -- same self-scoping pattern as
+    # pitcher_game_report.py/hitter_profile.py: a Player sees no game/
+    # batter pickers pointed at the whole roster, just their own outings;
+    # every other gated section below is unchanged, since they all just
+    # read game_select/batter_select, already restricted below to this
+    # player's own data. Nav only links this page for a non-pitcher-
+    # flagged Player (see nav.py's is_pitcher_player) -- the is_pitcher
+    # check here is defense-in-depth, not the only gate.
+    ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator", "Player")
+
+    def _my_hitter(db):
+        me = db.query(User).filter(User.user_id == app_state.user_id()).first()
+        if me is None or me.player_id is None:
+            return None
+        player = db.query(Player).filter(Player.player_id == me.player_id).first()
+        return player if (player is not None and not player.is_pitcher) else None
 
     @render.ui
     def game_picker():
         if not app_state.is_authenticated():
             return None
-        if app_state.role_name() not in ALLOWED_ROLES:
+        role = app_state.role_name()
+        if role not in ALLOWED_ROLES:
             return ui.p("You don't have access to this page.", class_="text-danger")
 
         db = get_session()
         try:
-            games = db.query(Game).options(joinedload(Game.opponent_team)).order_by(Game.game_date.desc()).all()
+            if role == "Player":
+                me = _my_hitter(db)
+                if me is None:
+                    return ui.p("You don't have access to this page.", class_="text-danger")
+                own_game_ids = {
+                    gid for (gid,) in db.query(GamePitch.game_id)
+                    .filter(GamePitch.our_player_id == me.player_id, GamePitch.is_our_team_batting.is_(True))
+                    .distinct().all()
+                }
+                if not own_game_ids:
+                    return ui_helpers.empty_state("No games recorded for you as a batter yet.")
+                games = (
+                    db.query(Game).options(joinedload(Game.opponent_team))
+                    .filter(Game.game_id.in_(own_game_ids))
+                    .order_by(Game.game_date.desc()).all()
+                )
+            else:
+                games = db.query(Game).options(joinedload(Game.opponent_team)).order_by(Game.game_date.desc()).all()
             if not games:
                 return ui_helpers.empty_state("No games tracked yet. Start one on Game Tracking first.")
             choices = {str(g.game_id): _game_label(g) for g in games}
@@ -94,6 +128,17 @@ def hitter_game_report_server(input, output, session, app_state):
 
         db = get_session()
         try:
+            if app_state.role_name() == "Player":
+                me = _my_hitter(db)
+                if me is None:
+                    return ui.p("You don't have access to this page.", class_="text-danger")
+                # No picker needed -- game_picker above already restricted
+                # game_select to games this player batted in, so there's
+                # exactly one batter to show: themselves. Still a real
+                # input_select so downstream sections keep reading
+                # input.batter_select() unchanged.
+                return ui.input_select("batter_select", "Batter", choices={str(me.player_id): f"{me.first_name} {me.last_name}"})
+
             batter_ids = [
                 pid for (pid,) in db.query(GamePitch.our_player_id)
                 .filter(GamePitch.game_id == selected_game_id, GamePitch.is_our_team_batting.is_(True))

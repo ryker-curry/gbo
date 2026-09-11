@@ -155,9 +155,18 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
         if is_pitcher_player:
             my_dev_pages.append(NavPage("player_bullpens", "My Bullpens", "trophy"))
             my_dev_pages.append(NavPage("pitcher_profile", "My Pitcher Profile", "graph-up-arrow"))
+            # My Game Report (Sept 2026, Ryker: players should be able to
+            # see game reports for themselves) -- same shared-module,
+            # self-scoped pattern as My Pitcher/Hitter Profile just above:
+            # pitcher_game_report.py/hitter_game_report.py each detect
+            # role_name() == "Player" and restrict the game/pitcher(batter)
+            # pickers to this player's own outings instead of showing a
+            # roster-wide picker.
+            my_dev_pages.append(NavPage("pitcher_game_report", "My Game Report", "file-text"))
         else:
             my_dev_pages.append(NavPage("player_hitting", "My Hitting", "trophy"))
             my_dev_pages.append(NavPage("hitter_profile", "My Hitter Profile", "graph-up-arrow"))
+            my_dev_pages.append(NavPage("hitter_game_report", "My Game Report", "file-text"))
         sections.append(NavSection("My Development", my_dev_pages))
 
     return sections
