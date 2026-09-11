@@ -98,11 +98,23 @@ def hitter_game_report_server(input, output, session, app_state):
                 me = _my_hitter(db)
                 if me is None:
                     return ui.p("You don't have access to this page.", class_="text-danger")
-                own_game_ids = {
+                # Union our_player_id (normal games, batting for our
+                # own team) with opponent_our_player_id (intrasquad games
+                # only -- this player batted while lined up as the "other
+                # squad," still one of our own roster) so intrasquad games
+                # aren't dropped from a player's own game list. Mirrors
+                # pitcher_game_report.py's pitcher_picker() union.
+                own_game_ids_batting = {
                     gid for (gid,) in db.query(GamePitch.game_id)
                     .filter(GamePitch.our_player_id == me.player_id, GamePitch.is_our_team_batting.is_(True))
                     .distinct().all()
                 }
+                own_game_ids_intrasquad = {
+                    gid for (gid,) in db.query(GamePitch.game_id)
+                    .filter(GamePitch.opponent_our_player_id == me.player_id, GamePitch.is_our_team_batting.is_(False))
+                    .distinct().all()
+                }
+                own_game_ids = own_game_ids_batting | own_game_ids_intrasquad
                 if not own_game_ids:
                     return ui_helpers.empty_state("No games recorded for you as a batter yet.")
                 games = (
@@ -139,12 +151,22 @@ def hitter_game_report_server(input, output, session, app_state):
                 # input.batter_select() unchanged.
                 return ui.input_select("batter_select", "Batter", choices={str(me.player_id): f"{me.first_name} {me.last_name}"})
 
-            batter_ids = [
+            # Union our_player_id (our team's own batters) with
+            # opponent_our_player_id (intrasquad games only -- the "other
+            # squad" batters, who are also our own roster) so intrasquad
+            # games show batters from both squads, not just one. Mirrors
+            # pitcher_game_report.py's pitcher_picker() union.
+            our_batter_ids = {
                 pid for (pid,) in db.query(GamePitch.our_player_id)
                 .filter(GamePitch.game_id == selected_game_id, GamePitch.is_our_team_batting.is_(True))
-                .distinct().all()
-                if pid is not None
-            ]
+                .distinct().all() if pid is not None
+            }
+            other_squad_batter_ids = {
+                pid for (pid,) in db.query(GamePitch.opponent_our_player_id)
+                .filter(GamePitch.game_id == selected_game_id, GamePitch.is_our_team_batting.is_(False))
+                .distinct().all() if pid is not None
+            }
+            batter_ids = list(our_batter_ids | other_squad_batter_ids)
             if not batter_ids:
                 return ui_helpers.empty_state("No pitches recorded for any of our batters in this game yet.")
             batters = db.query(Player).filter(Player.player_id.in_(batter_ids)).order_by(Player.last_name, Player.first_name).all()
