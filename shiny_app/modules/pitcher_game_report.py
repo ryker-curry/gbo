@@ -225,10 +225,14 @@ def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color):
     actual_x/z may be None if the pitch has no recorded location yet,
     in which case only the intended point is drawn.
 
-    Home plate drawn view="pitcher" (Sept 2026, Ryker: "add a home
-    plate to everything that has a strike zone... face the correct
-    way based on the view") -- matches pitch_locations_chart's own
-    viewpoint, which this figure already mirrors everywhere else."""
+    Home plate drawn view="catcher" (Sept 2026, Ryker: this card's
+    intended-vs-actual view is from behind the plate looking out at
+    the pitcher, same viewpoint as Command Tracker's location pickers
+    -- corrected from an initial view="pitcher" guess, which Ryker
+    caught as backwards for this particular chart). Note this diverges
+    from pitch_locations_chart's own view="pitcher" convention on
+    Command Tracking's dashboard -- the two charts share styling
+    (markers, connecting line, colors) but not viewpoint."""
     fig = go.Figure()
 
     if actual_x is not None and actual_z is not None:
@@ -255,7 +259,7 @@ def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color):
         y0=strike_zone.ZONE_BOTTOM, y1=strike_zone.ZONE_TOP,
         line=dict(color=TEXT_CREAM, width=2), fillcolor="rgba(0,0,0,0)",
     )
-    fig.add_shape(**home_plate_shape(half_width_ft=strike_zone.ZONE_HALF_WIDTH, ground_y=0.0, view="pitcher"))
+    fig.add_shape(**home_plate_shape(half_width_ft=strike_zone.ZONE_HALF_WIDTH, ground_y=0.0, view="catcher"))
 
     apply_gbo_theme(
         fig, height=280, margin=dict(l=0, r=0, t=0, b=0),
