@@ -1235,29 +1235,57 @@ def pitcher_game_report_server(input, output, session, app_state):
                     ui.p("Not located yet.", class_="text-muted small", style="text-align:center;"),
                 )
 
-            if rap is not None:
-                vaa = _pitch_level_vaa(rap)["value_degrees"]
-                haa = _pitch_level_haa(rap)["value_degrees"]
-                arm_angle, _n = average_estimated_arm_angle([rap], pitcher)
-                rapsodo_block = ui.div(
-                    ui.p("Rapsodo", style="font-weight:700;"),
-                    ui_helpers.render_kpi_cards([
-                        {"label": "Velocity", "value": f"{float(rap.velocity):.1f} mph" if rap.velocity is not None else "—"},
-                        {"label": "Spin Rate", "value": f"{float(rap.total_spin):.0f} rpm" if rap.total_spin is not None else "—"},
-                        {"label": "IVB", "value": f'{float(rap.vb_spin):.1f}"' if rap.vb_spin is not None else "—"},
-                        {"label": "HB", "value": f'{float(rap.hb_spin):.1f}"' if rap.hb_spin is not None else "—"},
-                        {"label": "VAA (est.)", "value": f"{vaa}°" if vaa is not None else "—"},
-                        {"label": "HAA (est.)", "value": f"{haa}°" if haa is not None else "—"},
-                        {"label": "Arm Angle (est.)", "value": f"{round(arm_angle)}°" if arm_angle is not None else "—"},
-                    ]),
-                )
+            # Trimmed from the full Rapsodo readout down to Velocity plus
+            # command/outcome context (Ryker, Sept 2026: "instead of
+            # showing all the rapsodo data i just want it to show
+            # velocity, miss distance, ball or strike") -- Spin Rate/IVB/
+            # HB/VAA/HAA/Arm Angle are still available in aggregate on
+            # this same page's Pitch Shape (Rapsodo) section, just not
+            # repeated per-pitch here. Added on top of Ryker's three:
+            # Count (the balls-strikes this pitch was thrown in -- context
+            # for why it was a take/swing) and Miss Direction alongside
+            # Miss Distance (same intended-vs-actual numbers already
+            # needed for the distance, showing which way it missed too,
+            # not just how far), reusing pitch_location_stats.py's own
+            # inches-and-direction convention (Arm-side/Glove-side when
+            # throws is known, else raw 3B-side/1B-side).
+            if has_intended and has_actual:
+                dx = (float(p.actual_plate_x) - float(p.intended_plate_x)) * 12
+                dz = (float(p.actual_plate_z) - float(p.intended_plate_z)) * 12
+                miss_distance = (dx ** 2 + dz ** 2) ** 0.5
+                throws = pitcher.throws if pitcher is not None else None
+                if throws == "R":
+                    horiz_label = "Arm-side" if dx < 0 else "Glove-side" if dx > 0 else "Even"
+                elif throws == "L":
+                    horiz_label = "Arm-side" if dx > 0 else "Glove-side" if dx < 0 else "Even"
+                else:
+                    horiz_label = "3B-side" if dx < 0 else "1B-side" if dx > 0 else "Even"
+                vert_label = "High" if dz > 0 else "Low" if dz < 0 else "Even"
+                miss_direction = f"{horiz_label} / {vert_label}" if abs(dx) > 0.1 or abs(dz) > 0.1 else "On target"
             else:
-                rapsodo_block = ui.div(
-                    ui.p("Rapsodo", style="font-weight:700;"),
-                    ui.p("No Rapsodo reading linked to this pitch.", class_="text-muted small"),
-                )
+                miss_distance = None
+                miss_direction = None
 
-            result_bits = [f"Result: {p.pitch_outcome or '—'}"]
+            count_str = (
+                f"{p.balls_before}-{p.strikes_before}"
+                if p.balls_before is not None and p.strikes_before is not None
+                else None
+            )
+
+            summary_block = ui.div(
+                ui.p("Summary", style="font-weight:700;"),
+                ui_helpers.render_kpi_cards([
+                    {"label": "Velocity", "value": f"{float(rap.velocity):.1f} mph" if (rap is not None and rap.velocity is not None) else "—"},
+                    {"label": "Count", "value": count_str or "—"},
+                    {"label": "Result", "value": p.pitch_outcome or "—"},
+                    {"label": "Miss Distance", "value": f'{miss_distance:.1f}"' if miss_distance is not None else "—"},
+                    {"label": "Miss Direction", "value": miss_direction or "—"},
+                ]),
+            )
+            if rap is None:
+                summary_block = ui.div(summary_block, ui.p("No Rapsodo reading linked to this pitch -- Velocity above is unavailable.", class_="text-muted small"))
+
+            result_bits = []
             if p.contact_quality:
                 result_bits.append(f"Contact Quality: {p.contact_quality}")
             if p.batted_ball_type:
@@ -1271,7 +1299,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                 ui.layout_columns(
                     location_block,
                     ui.div(
-                        rapsodo_block,
+                        summary_block,
                         ui.p(" · ".join(result_bits), class_="text-muted small", style="margin-top:12px;"),
                     ),
                     col_widths=[4, 8],
