@@ -40,7 +40,7 @@ from pitch_location_stats import compute_command_precision, compute_attack_zones
 # they always have been -- this is a new, additional section, not a
 # replacement.
 from analytics import command_metrics, profile_queries
-from analytics.pitch_grading import stuff_plus, arsenal_summary, MIN_BASELINE_PITCHES
+from analytics.pitch_grading import stuff_plus, arsenal_summary, location_plus, MIN_BASELINE_PITCHES
 from analytics.bullpen_metrics import (
     average_estimated_arm_angle, pitch_type_label,
     _pitch_level_vaa, _pitch_level_haa, _avg_pitch_level,
@@ -48,7 +48,7 @@ from analytics.bullpen_metrics import (
 from visualizations import command_charts
 from visualizations.bullpen_charts import movement_chart, color_for_pitch_label
 from visualizations.pitcher_graphic import pitcher_release_svg
-from visualizations.chart_theme import apply_gbo_theme, MUTED_GRAY, TEXT_CREAM
+from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, MUTED_GRAY, TEXT_CREAM
 from visualizations.hitter_graphic import home_plate_shape
 
 import strike_zone
@@ -272,6 +272,129 @@ def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color):
     return fig
 
 
+def _all_pitch_locations_figure(pitches, color_by, baseline):
+    """All-pitches location scatter for the Pitch Locations view (Ryker,
+    Sept 2026: "looking at pitch location for all pitches of a certain
+    pitch type vs LHH, RHH ... an option to see all each different
+    pitch with all of their locations" plus "is there also something
+    we could create to see if the locations that we are throwing to
+    is getting good results for the pitcher or poor results?"). Caller
+    has already filtered `pitches` by pitch type / batter hand (this
+    page's loc_pitch_type/loc_batter_hand inputs) -- this just draws
+    whatever it's handed.
+
+    color_by == "type": one trace per pitch type, using the same
+    app-wide pitch-type color convention (pitch_type_config via
+    color_for_pitch_label) as bullpen_charts.location_chart's own
+    mode="individual" -- lets a coach see e.g. "the slider's locations
+    cluster down-and-away" whether one type or every type is shown.
+
+    color_by == "result": every pitch in one trace, colored by its
+    Location+ grade (analytics.pitch_grading.location_plus against
+    `baseline` -- analytics.profile_queries.team_location_plus_baseline)
+    -- same 100-average/10-points-per-standard-deviation scale as
+    Stuff+/Command+ elsewhere on this page, so green reads as "this
+    location has actually worked out well for the pitcher" and red as
+    the opposite, using this team's own run-value history, not a
+    league benchmark. A pitch whose (attack zone, pitch type) cell has
+    no stable team-wide baseline yet (or has no run_value at all --
+    e.g. Video Review not done, or an unusual count RunExpectancy has
+    no entry for) gets its own muted-gray trace instead of being
+    silently dropped -- same "shown anyway, not hidden" small-sample
+    philosophy as every other grading feature on this page.
+
+    Same real plate-coordinate feet and view="catcher" home plate as
+    this page's own _pitch_location_figure above (same actual_plate_x/z
+    fields, same catcher's-eye-view Ryker corrected there)."""
+    fig = go.Figure()
+
+    if color_by == "result":
+        graded_x, graded_y, graded_vals, graded_custom = [], [], [], []
+        ungraded_x, ungraded_y, ungraded_custom = [], [], []
+        for p in pitches:
+            label = p.pitch_type.type_name if p.pitch_type is not None else "Unspecified"
+            lp = location_plus(p, baseline)
+            base_custom = [
+                p.pitch_sequence, label, p.pitch_outcome or "—",
+                p.ab_outcome if (p.ends_plate_appearance and p.ab_outcome) else "—",
+            ]
+            if lp is None:
+                ungraded_x.append(float(p.actual_plate_x))
+                ungraded_y.append(float(p.actual_plate_z))
+                ungraded_custom.append(base_custom)
+            else:
+                graded_x.append(float(p.actual_plate_x))
+                graded_y.append(float(p.actual_plate_z))
+                graded_vals.append(lp)
+                graded_custom.append(base_custom + [lp])
+
+        if ungraded_x:
+            fig.add_trace(go.Scatter(
+                x=ungraded_x, y=ungraded_y, mode="markers", name="Not enough team data yet",
+                marker=dict(color=MUTED_GRAY, size=11, opacity=0.6, line=dict(color="#1E1E1E", width=1)),
+                customdata=ungraded_custom,
+                hovertemplate=(
+                    "%{customdata[1]}<br>Pitch #%{customdata[0]}<br>Result: %{customdata[2]}<br>"
+                    "AB Outcome: %{customdata[3]}<br>No Location+ grade yet<extra></extra>"
+                ),
+            ))
+        if graded_x:
+            fig.add_trace(go.Scatter(
+                x=graded_x, y=graded_y, mode="markers", name="Location+",
+                marker=dict(
+                    color=graded_vals, colorscale="RdYlGn", cmid=100, size=13, opacity=0.9,
+                    line=dict(color="#1E1E1E", width=1),
+                    colorbar=dict(title="Location+", tickfont=dict(color=TEXT_CREAM), title_font=dict(color=TEXT_CREAM)),
+                ),
+                customdata=graded_custom,
+                hovertemplate=(
+                    "%{customdata[1]}<br>Pitch #%{customdata[0]}<br>Result: %{customdata[2]}<br>"
+                    "AB Outcome: %{customdata[3]}<br>Location+: %{customdata[4]:.0f}<extra></extra>"
+                ),
+            ))
+    else:
+        order, groups = [], {}
+        for p in pitches:
+            label = p.pitch_type.type_name if p.pitch_type is not None else "Unspecified"
+            if label not in groups:
+                groups[label] = []
+                order.append(label)
+            groups[label].append(p)
+        for label in order:
+            group = groups[label]
+            color = color_for_pitch_label(label) if label != "Unspecified" else MUTED_GRAY
+            fig.add_trace(go.Scatter(
+                x=[float(p.actual_plate_x) for p in group],
+                y=[float(p.actual_plate_z) for p in group],
+                mode="markers", name=label,
+                marker=dict(color=color, size=12, opacity=0.9, line=dict(color="#1E1E1E", width=1)),
+                customdata=[
+                    [p.pitch_sequence, p.pitch_outcome or "—",
+                     p.ab_outcome if (p.ends_plate_appearance and p.ab_outcome) else "—"]
+                    for p in group
+                ],
+                hovertemplate=(
+                    f"{label}<br>Pitch #%{{customdata[0]}}<br>Result: %{{customdata[1]}}<br>"
+                    "AB Outcome: %{customdata[2]}<extra></extra>"
+                ),
+            ))
+
+    fig.add_shape(
+        type="rect", x0=-strike_zone.ZONE_HALF_WIDTH, x1=strike_zone.ZONE_HALF_WIDTH,
+        y0=strike_zone.ZONE_BOTTOM, y1=strike_zone.ZONE_TOP,
+        line=dict(color=TEXT_CREAM, width=2), fillcolor="rgba(0,0,0,0)",
+    )
+    fig.add_shape(**home_plate_shape(half_width_ft=strike_zone.ZONE_HALF_WIDTH, ground_y=0.0, view="catcher"))
+
+    apply_gbo_theme(
+        fig, title="Pitch Locations", x_title="Plate Side (ft)", y_title="Plate Height (ft)", height=480,
+        xaxis=dict(range=[-2.5, 2.5], gridcolor=GRID_GRAY, zeroline=False, scaleanchor="y", scaleratio=1),
+        yaxis=dict(range=[-0.4, 5], gridcolor=GRID_GRAY, zeroline=False),
+        legend=dict(orientation="h", y=-0.15),
+    )
+    return fig
+
+
 @module.ui
 def pitcher_game_report_ui():
     return ui.div(
@@ -292,6 +415,7 @@ def pitcher_game_report_ui():
         ui.output_ui("pitch_type_breakdown_section"),
         ui.output_ui("command_execution_section"),
         ui.output_ui("command_target_section"),
+        ui.output_ui("pitch_locations_section"),
         ui.output_ui("rapsodo_shape_section"),
         ui.output_ui("pitch_by_pitch_section"),
         ui_helpers.page_footer(),
@@ -528,6 +652,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                     choices={
                         "pitch_type_breakdown": "Pitch Type Breakdown",
                         "command_execution": "Command & Execution",
+                        "pitch_locations": "Pitch Locations",
                         "pitch_shape": "Pitch Shape / Rapsodo",
                         "pitch_by_pitch": "Pitch-by-Pitch",
                     },
@@ -824,7 +949,123 @@ def pitcher_game_report_server(input, output, session, app_state):
         finally:
             db.close()
 
+    # -------------------------------------------------------------------
+    # Pitch Locations -- Sept 2026, Ryker: "looking at pitch location for
+    # all pitches of a certain pitch type vs left handed hitters (LHH),
+    # right handed hitters (RHH), and then just an option to see all
+    # each different pitch with all of their locations" plus "is there
+    # also something we could create to see if the locations that we
+    # are throwing to is getting good results for the pitcher or poor
+    # results?" Two independent filters (Pitch Type, Batters) plus a
+    # Color By toggle answering the second question: "Pitch Type"
+    # colors each dot by pitch type (see all types' locations at once,
+    # or one type on its own); "Result (Location+)" colors every dot
+    # by analytics.pitch_grading.location_plus instead, this team's own
+    # run-value-based grade of whether that location has actually
+    # helped or hurt the pitcher, regardless of which pitch type filter
+    # is active. See _all_pitch_locations_figure's own docstring above
+    # pitcher_game_report_ui for exactly how each mode is drawn.
+    # -------------------------------------------------------------------
 
+    def _selected_pitcher_located_pitches(db):
+        if "game_select" not in input or "pitcher_select" not in input:
+            return None
+        game_id_raw, pitcher_id_raw = input.game_select(), input.pitcher_select()
+        if not game_id_raw or not pitcher_id_raw:
+            return None
+        pitches = get_pitching_pitches(db, int(pitcher_id_raw), game_id=int(game_id_raw))
+        located = [p for p in pitches if p.actual_plate_x is not None and p.actual_plate_z is not None]
+        return located or None
+
+    @render.ui
+    def pitch_locations_section():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        req("pitcher_select" in input)
+        req("report_section" in input)
+        if input.report_section() != "pitch_locations":
+            return None
+        db = get_session()
+        try:
+            pitches = _selected_pitcher_located_pitches(db)
+            if not pitches:
+                return ui.div(
+                    ui.hr(),
+                    ui.p(ui.strong("Pitch Locations")),
+                    ui.p("No located pitches yet -- needs Video Review.", class_="text-muted small"),
+                )
+
+            type_counts = {}
+            type_order = []
+            for p in pitches:
+                label = p.pitch_type.type_name if p.pitch_type is not None else "Unspecified"
+                if label not in type_counts:
+                    type_counts[label] = 0
+                    type_order.append(label)
+                type_counts[label] += 1
+            type_order.sort(key=lambda label: type_counts[label], reverse=True)
+            type_choices = {"all": "All Pitch Types"}
+            for label in type_order:
+                type_choices[label] = f"{label} ({type_counts[label]})"
+
+            return ui.div(
+                ui.hr(),
+                ui.p(ui.strong("Pitch Locations")),
+                ui.p(
+                    "Every located pitch from this outing, plotted on the real strike zone. Filter by pitch "
+                    "type and/or batter handedness, and switch Color By to \"Result (Location+)\" to see whether "
+                    "these locations have actually been getting good or poor results for this pitcher, graded "
+                    "against your own team's history -- not an MLB comparison.",
+                    class_="text-muted small",
+                ),
+                ui.layout_columns(
+                    ui.input_select("loc_pitch_type", "Pitch Type", choices=type_choices),
+                    ui.input_select("loc_batter_hand", "Batters", choices={"all": "All Batters", "R": "vs RHH", "L": "vs LHH"}),
+                    ui.input_radio_buttons("loc_color_by", "Color By", choices={"type": "Pitch Type", "result": "Result (Location+)"}, inline=True),
+                    col_widths=[4, 4, 4],
+                ),
+                output_widget("pitch_locations_chart"),
+            )
+        finally:
+            db.close()
+
+    @render_plotly
+    def pitch_locations_chart():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        req("pitcher_select" in input)
+        req("report_section" in input)
+        if input.report_section() != "pitch_locations":
+            return None
+        req("loc_pitch_type" in input)
+        req("loc_batter_hand" in input)
+        req("loc_color_by" in input)
+        db = get_session()
+        try:
+            pitches = _selected_pitcher_located_pitches(db)
+            if not pitches:
+                return None
+
+            pitch_type_choice = input.loc_pitch_type()
+            hand_choice = input.loc_batter_hand()
+            color_by = input.loc_color_by()
+
+            if pitch_type_choice != "all":
+                pitches = [
+                    p for p in pitches
+                    if (p.pitch_type.type_name if p.pitch_type is not None else "Unspecified") == pitch_type_choice
+                ]
+            if hand_choice != "all":
+                pitches = [p for p in pitches if p.opponent_hand == hand_choice]
+            if not pitches:
+                return None
+
+            baseline = profile_queries.team_location_plus_baseline(db) if color_by == "result" else None
+            return _all_pitch_locations_figure(pitches, color_by, baseline)
+        finally:
+            db.close()
 
     # -------------------------------------------------------------------
     # Pitch Shape (Rapsodo) -- Sept 2026, restyled after Ryker's Pitch
