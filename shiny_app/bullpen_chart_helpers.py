@@ -28,6 +28,7 @@ two modules' own chart framing.
 import plotly.graph_objects as go
 
 import chart_helpers
+from visualizations.hitter_graphic import home_plate_shape
 
 ZONE_SIDE_BOUNDS = (-0.283, 0.283)
 ZONE_HEIGHT_BOUNDS = (2.167, 2.833)
@@ -43,10 +44,23 @@ PITCH_TYPE_COLORS = [
 ]
 
 
-def render_strike_zone_plot(title, data_by_type):
+def render_strike_zone_plot(title, data_by_type, view="pitcher"):
+    """view (Sept 2026, Ryker: "add a home plate to everything that
+    has a strike zone... face the correct way based on the view")
+    matches bullpen_tracking.py's existing "Grid perspective" toggle
+    (bp_zone_view, default "Pitcher's view") -- pass view="catcher"
+    when that toggle reads "Catcher's view" so the plate under this
+    chart agrees with the zone-tap button grid the coach is looking
+    at. player_bullpens.py has no such toggle (player-facing,
+    read-only) and just takes the default. Note this only flips the
+    plate's own point-vs-flat orientation, not the plotted dots'
+    left-right axis -- Plate Side here keeps its one fixed real-world
+    sign convention regardless of view, same as everywhere else Rapsodo
+    data is plotted."""
     fig = go.Figure()
     fig.add_shape(type="rect", x0=FULL_ZONE_SIDE[0], x1=FULL_ZONE_SIDE[1], y0=FULL_ZONE_HEIGHT[0], y1=FULL_ZONE_HEIGHT[1],
                   line=dict(color="#AEB6C2", width=2), fillcolor="rgba(0,0,0,0)")
+    fig.add_shape(**home_plate_shape(half_width_ft=ZONE_SIDE_BOUNDS[1], depth_ft=0.1, ground_y=FULL_ZONE_HEIGHT[0], view=view))
     for x in ZONE_SIDE_BOUNDS:
         fig.add_shape(type="line", x0=x, x1=x, y0=FULL_ZONE_HEIGHT[0], y1=FULL_ZONE_HEIGHT[1], line=dict(color="#5A5A5A", width=1, dash="dot"))
     for y in ZONE_HEIGHT_BOUNDS:
@@ -69,7 +83,9 @@ def render_strike_zone_plot(title, data_by_type):
         showlegend=True, height=480,
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#AEB6C2"),
         xaxis=dict(gridcolor="#2A3039", zerolinecolor="#2A3039", range=[FULL_ZONE_SIDE[0] - 1, FULL_ZONE_SIDE[1] + 1], scaleanchor="y", scaleratio=1),
-        yaxis=dict(gridcolor="#2A3039", zerolinecolor="#2A3039", range=[0, FULL_ZONE_HEIGHT[1] + 1.5]),
+        # Lower bound extended below FULL_ZONE_HEIGHT[0] so the plate
+        # (anchored there, partly below it) isn't clipped.
+        yaxis=dict(gridcolor="#2A3039", zerolinecolor="#2A3039", range=[FULL_ZONE_HEIGHT[0] - 0.2, FULL_ZONE_HEIGHT[1] + 1.5]),
         margin=dict(t=40, b=40, l=40, r=40),
         legend=dict(bgcolor="rgba(0,0,0,0)"),
     )

@@ -35,6 +35,8 @@ import re
 import numpy as np
 import plotly.graph_objects as go
 
+from visualizations.hitter_graphic import home_plate_shape
+
 X_MIN, X_MAX = -2.5, 2.5
 Z_MIN, Z_MAX = 0.0, 5.0
 
@@ -332,12 +334,25 @@ def distance_from_cell_in(level, zone, plate_x, plate_z):
     return math.hypot(dx, dz) * 12.0
 
 
-def build_zone_selector_figure(marker_x=None, marker_z=None):
+def build_zone_selector_figure(marker_x=None, marker_z=None, view="catcher"):
     """Pure figure builder -- strike zone rectangle, thirds gridlines,
-    invisible dense click-grid, and (if given) a marker at the
-    currently-recorded click. No Streamlit/UI-framework dependency:
-    returns a plain plotly Figure that any UI layer can render and
-    attach click-capture to on its own terms."""
+    invisible dense click-grid, a home plate on the ground line, and
+    (if given) a marker at the currently-recorded click. No
+    Streamlit/UI-framework dependency: returns a plain plotly Figure
+    that any UI layer can render and attach click-capture to on its
+    own terms.
+
+    view (Sept 2026, Ryker: "add a home plate to everything that has
+    a strike zone... face the correct way based on the view") defaults
+    to "catcher" -- every current caller of this function is a
+    click-to-place widget where a coach charts a pitch's intended or
+    actual location as if standing behind the plate looking out at the
+    pitcher (Command Tracker, Live Pitch Entry, Video Review), the
+    same Statcast/broadcast-style viewpoint this module's plate_x/
+    plate_z convention already assumes (see module docstring). Pass
+    view="pitcher" if a future caller ever needs the mound's-eye
+    orientation instead -- see visualizations.hitter_graphic.
+    home_plate_shape for exactly what each does differently."""
     xs, zs = np.meshgrid(_GRID_X, _GRID_Z)
     xs, zs = xs.flatten(), zs.flatten()
 
@@ -349,6 +364,7 @@ def build_zone_selector_figure(marker_x=None, marker_z=None):
     ))
 
     fig.add_shape(type="line", x0=X_MIN, x1=X_MAX, y0=0, y1=0, line=dict(color=GRID_GRAY, width=2))
+    fig.add_shape(**home_plate_shape(half_width_ft=ZONE_HALF_WIDTH, ground_y=0.0, view=view))
     fig.add_shape(type="rect", x0=-ZONE_HALF_WIDTH, x1=ZONE_HALF_WIDTH, y0=ZONE_BOTTOM, y1=ZONE_TOP, line=dict(color=GBO_CREAM, width=3))
     third_w = (2 * ZONE_HALF_WIDTH) / 3
     third_h = (ZONE_TOP - ZONE_BOTTOM) / 3
@@ -367,7 +383,11 @@ def build_zone_selector_figure(marker_x=None, marker_z=None):
 
     fig.update_layout(
         xaxis=dict(range=[X_MIN, X_MAX], visible=False, fixedrange=True),
-        yaxis=dict(range=[Z_MIN, Z_MAX], visible=False, fixedrange=True, scaleanchor="x", scaleratio=1),
+        # Lower bound extended a touch past Z_MIN (0.0) so the home
+        # plate above -- which sits partly below the ground line -- isn't
+        # clipped; Z_MIN itself is unchanged everywhere else (click grid,
+        # zone math), this is purely this figure's own display window.
+        yaxis=dict(range=[Z_MIN - 0.4, Z_MAX], visible=False, fixedrange=True, scaleanchor="x", scaleratio=1),
         paper_bgcolor=BG_DARK, plot_bgcolor=BG_DARK,
         height=350, margin=dict(l=0, r=0, t=0, b=0),
         # "event" only, not "event+select" -- the active Shiny click

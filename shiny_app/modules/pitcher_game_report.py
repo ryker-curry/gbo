@@ -49,6 +49,7 @@ from visualizations import command_charts
 from visualizations.bullpen_charts import movement_chart, color_for_pitch_label
 from visualizations.pitcher_graphic import pitcher_release_svg
 from visualizations.chart_theme import apply_gbo_theme, MUTED_GRAY, TEXT_CREAM
+from visualizations.hitter_graphic import home_plate_shape
 
 import strike_zone
 import chart_helpers
@@ -222,7 +223,12 @@ def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color):
     intended_x/z and actual_x/z are floats already, in the same
     plate-coordinate feet used by strike_zone.py's zone constants;
     actual_x/z may be None if the pitch has no recorded location yet,
-    in which case only the intended point is drawn."""
+    in which case only the intended point is drawn.
+
+    Home plate drawn view="pitcher" (Sept 2026, Ryker: "add a home
+    plate to everything that has a strike zone... face the correct
+    way based on the view") -- matches pitch_locations_chart's own
+    viewpoint, which this figure already mirrors everywhere else."""
     fig = go.Figure()
 
     if actual_x is not None and actual_z is not None:
@@ -249,11 +255,14 @@ def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color):
         y0=strike_zone.ZONE_BOTTOM, y1=strike_zone.ZONE_TOP,
         line=dict(color=TEXT_CREAM, width=2), fillcolor="rgba(0,0,0,0)",
     )
+    fig.add_shape(**home_plate_shape(half_width_ft=strike_zone.ZONE_HALF_WIDTH, ground_y=0.0, view="pitcher"))
 
     apply_gbo_theme(
         fig, height=280, margin=dict(l=0, r=0, t=0, b=0),
         xaxis=dict(range=[-2.0, 2.0], visible=False, fixedrange=True),
-        yaxis=dict(range=[0.5, 4.5], visible=False, fixedrange=True, scaleanchor="x", scaleratio=1),
+        # Lower bound extended past 0.5 down to -0.4 so the plate (on the
+        # ground line, partly below it) isn't clipped.
+        yaxis=dict(range=[-0.4, 4.5], visible=False, fixedrange=True, scaleanchor="x", scaleratio=1),
         legend=dict(orientation="h", y=-0.05, font=dict(size=10)),
     )
     return fig
@@ -376,11 +385,17 @@ def pitcher_game_report_server(input, output, session, app_state):
                 {"label": "WHIP", "value": _fmt(line["WHIP"])},
                 {"label": "K/BB", "value": _fmt(line["K/BB"])},
                 {"label": "K %", "value": _fmt_pct(line["K %"])},
-                {"label": "ERA*", "value": _fmt(line["ERA (runs-allowed avg -- ER not tracked)"])},
+                {"label": "ERA*", "value": _fmt(line["ERA"])},
                 {"label": "FIP", "value": _fmt(line["FIP"])},
                 {"label": "Execution %", "value": _fmt_pct(line["Execution %"])},
             ]))
-            sections.append(ui.p("*ERA here is runs-allowed average, not true ERA -- GBO doesn't distinguish earned from unearned runs yet.", class_="text-muted small"))
+            sections.append(ui.p(
+                "*ERA here is real earned-run average (runs an error didn't cause) -- GBO now tracks earned vs. "
+                "unearned runs, tagged per play as it's scored live. Historical games recorded before that "
+                "existed default to all-earned, so ERA equals the old runs-allowed average for any outing "
+                "nobody went back and marked unearned runs on.",
+                class_="text-muted small",
+            ))
 
             sections.append(ui.p(ui.strong("Count Control")))
             sections.append(ui_helpers.render_kpi_cards([

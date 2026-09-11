@@ -1220,7 +1220,12 @@ def bullpen_tracking_server(input, output, session, app_state):
 
             children = [ui.hr(), ui.h5("Charts", class_="gbo-section-title")]
             if has_location:
-                children.append(_render_strike_zone_plot("Actual Pitch Locations", movement_data))
+                # Match the home plate under this chart to whatever the
+                # "Grid perspective" toggle above is currently set to
+                # (Sept 2026, Ryker), so the two don't disagree about
+                # which way the coach is meant to be looking.
+                zone_view = "catcher" if ("bp_zone_view" in input and input.bp_zone_view() == "Catcher's view") else "pitcher"
+                children.append(_render_strike_zone_plot("Actual Pitch Locations", movement_data, view=zone_view))
                 children.append(ui.p("Where pitches actually crossed the plate -- from real Rapsodo Plate Side/Height, not the called intended zone.", class_="text-muted small"))
             children.append(ui.p("Bold labeled markers are the average per pitch type; smaller dots are individual pitches.", class_="text-muted small"))
             if has_movement:

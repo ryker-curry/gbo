@@ -44,6 +44,7 @@ from pitch_type_config import get_pitch_color
 from analytics.bullpen_metrics import pitch_type_label
 from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, TEXT_CREAM, GOLD, MUTED_GRAY
 from strike_zone import ZONE_HALF_WIDTH, ZONE_BOTTOM, ZONE_TOP
+from visualizations.hitter_graphic import home_plate_shape
 
 
 def _group_by_type(pitches):
@@ -457,9 +458,22 @@ def location_chart(pitches, mode="heatmap"):
         line=dict(color=TEXT_CREAM, width=2), fillcolor="rgba(0,0,0,0)",
     )
 
+    # Home plate on the ground line (Sept 2026, Ryker). This chart's
+    # plate_x_ft already follows the catcher-behind-the-plate/Statcast
+    # sign convention (rapsodo_conventions.py: positive = first-base
+    # side/catcher's right facing the pitcher) -- view="catcher" here
+    # matches that, not view="pitcher" like Command Tracking's
+    # pitch_locations_chart, which uses the opposite viewpoint. See
+    # visualizations.hitter_graphic.home_plate_shape for what each
+    # draws differently.
+    fig.add_shape(**home_plate_shape(half_width_ft=ZONE_HALF_WIDTH, ground_y=0.0, view="catcher"))
+
     apply_gbo_theme(
         fig, title="Pitch Location", x_title="Plate Side (ft)", y_title="Plate Height (ft)", height=480,
         xaxis=dict(range=[-2.5, 2.5], gridcolor=GRID_GRAY, zerolinecolor=GRID_GRAY, scaleanchor="y", scaleratio=1),
-        yaxis=dict(range=[0, 5], gridcolor=GRID_GRAY, zerolinecolor=GRID_GRAY),
+        # Lower bound extended a touch past 0 so the plate (partly below
+        # the ground line) isn't clipped -- purely this figure's display
+        # window, ZONE_BOTTOM/TOP and the zone math elsewhere are unaffected.
+        yaxis=dict(range=[-0.4, 5], gridcolor=GRID_GRAY, zerolinecolor=GRID_GRAY),
     )
     return fig
