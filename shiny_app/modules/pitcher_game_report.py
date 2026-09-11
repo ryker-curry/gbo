@@ -48,8 +48,10 @@ from analytics.bullpen_metrics import (
 from visualizations import command_charts
 from visualizations.bullpen_charts import movement_chart, color_for_pitch_label
 from visualizations.pitcher_graphic import pitcher_release_svg
-from visualizations.chart_theme import apply_gbo_theme
+from visualizations.chart_theme import apply_gbo_theme, MUTED_GRAY, TEXT_CREAM
 
+import strike_zone
+import chart_helpers
 import ui_helpers
 import format_helpers
 from format_helpers import (
@@ -202,6 +204,61 @@ def _pitch_shape_rows(pitches, rap_by_gp, stuff_baselines, pitcher):
     return rows
 
 
+def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color):
+    """Compact single-pitch intended-vs-actual location figure for the
+    Pitch-by-Pitch detail card (Ryker, Sept 2026: "add like how we
+    have in [Command Tracking] where we can see intended location and
+    then actual location and it shows the distance between with a
+    line"). Mirrors visualizations/command_charts.pitch_locations_chart's
+    established styling -- dotted gray connecting line drawn first
+    (layer="below"), hollow-ring marker for intended, filled marker
+    for actual, both colored by pitch type -- but scaled down to a
+    single pitch and a small fixed-size image (this renders via
+    chart_helpers.fig_to_img, same static-PNG pattern as the rest of
+    this per-selection card) rather than the full multi-pitch chart
+    with its batter silhouettes and legend, which wouldn't read at
+    280x280.
+
+    intended_x/z and actual_x/z are floats already, in the same
+    plate-coordinate feet used by strike_zone.py's zone constants;
+    actual_x/z may be None if the pitch has no recorded location yet,
+    in which case only the intended point is drawn."""
+    fig = go.Figure()
+
+    if actual_x is not None and actual_z is not None:
+        fig.add_shape(
+            type="line", xref="x", yref="y",
+            x0=intended_x, y0=intended_z, x1=actual_x, y1=actual_z,
+            line=dict(color=MUTED_GRAY, width=1, dash="dot"), layer="below",
+        )
+
+    fig.add_trace(go.Scatter(
+        x=[intended_x], y=[intended_z], mode="markers",
+        marker=dict(symbol="circle-open", color=color, size=22, line=dict(color=color, width=3)),
+        name="Intended", showlegend=True, hoverinfo="skip",
+    ))
+    if actual_x is not None and actual_z is not None:
+        fig.add_trace(go.Scatter(
+            x=[actual_x], y=[actual_z], mode="markers",
+            marker=dict(symbol="circle", color=color, size=22, opacity=0.9, line=dict(color="#1E1E1E", width=1)),
+            name="Actual", showlegend=True, hoverinfo="skip",
+        ))
+
+    fig.add_shape(
+        type="rect", x0=-strike_zone.ZONE_HALF_WIDTH, x1=strike_zone.ZONE_HALF_WIDTH,
+        y0=strike_zone.ZONE_BOTTOM, y1=strike_zone.ZONE_TOP,
+        line=dict(color=TEXT_CREAM, width=2), fillcolor="rgba(0,0,0,0)",
+    )
+
+    apply_gbo_theme(
+        fig, height=280, margin=dict(l=0, r=0, t=0, b=0),
+        xaxis=dict(range=[-2.0, 2.0], visible=False, fixedrange=True),
+        yaxis=dict(range=[0.5, 4.5], visible=False, fixedrange=True, scaleanchor="x", scaleratio=1),
+        legend=dict(orientation="h", y=-0.05, font=dict(size=10)),
+    )
+    return fig
+
+
 @module.ui
 def pitcher_game_report_ui():
     return ui.div(
@@ -209,8 +266,21 @@ def pitcher_game_report_ui():
         ui.output_ui("game_picker"),
         ui.output_ui("pitcher_picker"),
         ui.output_ui("report_body"),
+        # Everything below is one of the "View" dropdown's sections --
+        # each of these render.ui functions gates itself on
+        # input.report_section() and returns None when not selected, so
+        # only the chosen section actually queries the DB/builds charts
+        # (see report_section_picker below). All five stay statically
+        # listed here (Shiny needs a placeholder in the DOM for each
+        # output id), same as report_body/command_target_section/
+        # rapsodo_shape_section always were -- the change is what each
+        # function does internally, not whether it's wired up.
+        ui.output_ui("report_section_picker"),
+        ui.output_ui("pitch_type_breakdown_section"),
+        ui.output_ui("command_execution_section"),
         ui.output_ui("command_target_section"),
         ui.output_ui("rapsodo_shape_section"),
+        ui.output_ui("pitch_by_pitch_section"),
         ui_helpers.page_footer(),
     )
 
@@ -343,27 +413,118 @@ def pitcher_game_report_server(input, output, session, app_state):
             ]))
             sections.append(ui.p("*wOBA uses generic linear weights, not a season/league-specific set -- a relative read within your own games, not MLB-exact.", class_="text-muted small"))
 
-            sections.append(ui.hr())
-            sections.append(ui.p(ui.strong("Pitch Type Breakdown")))
-            sections.append(ui.p(
-                f"Stuff+ is team-relative (100 = your staff's average, 10 points = 1 SD) and only populates for "
-                f"pitches with a Rapsodo reading linked to this outing. 'Reliable' needs at least "
-                f"{MIN_BASELINE_PITCHES} pitches of that type in this game -- shown either way, just flagged below "
-                f"that floor.",
-                class_="text-muted small",
-            ))
+            # Pitch Type Breakdown / Command Precision / Attack Zones /
+            # Command Target Zones / Pitch Shape (Rapsodo) used to all be
+            # appended here too, making this one continuously-scrolling
+            # page. They're now each their own gated section, chosen via
+            # the "View" dropdown (report_section_picker) below, so only
+            # one renders (and queries the DB) at a time -- Ryker's Sept
+            # 2026 report request. See pitch_type_breakdown_section/
+            # command_execution_section/command_target_section/
+            # rapsodo_shape_section/pitch_by_pitch_section.
+            return ui.div(*sections)
+        finally:
+            db.close()
+
+    @render.ui
+    def report_section_picker():
+        """The "View" dropdown driving which of the five sections below
+        actually renders. Default (first dict entry, Python preserves
+        insertion order) is Pitch Type Breakdown -- each gated section
+        function checks input.report_section() itself and returns None
+        immediately when not selected, before doing any query, so
+        switching this dropdown is what stops the DB work for the other
+        four, not CSS visibility."""
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        req("pitcher_select" in input)
+        game_id_raw, pitcher_id_raw = input.game_select(), input.pitcher_select()
+        if not game_id_raw or not pitcher_id_raw:
+            return None
+        db = get_session()
+        try:
+            pitches = get_pitching_pitches(db, int(pitcher_id_raw), game_id=int(game_id_raw))
+            if not pitches:
+                return None
+            return ui.div(
+                ui.hr(),
+                ui.input_select(
+                    "report_section", "View",
+                    choices={
+                        "pitch_type_breakdown": "Pitch Type Breakdown",
+                        "command_execution": "Command & Execution",
+                        "pitch_shape": "Pitch Shape / Rapsodo",
+                        "pitch_by_pitch": "Pitch-by-Pitch",
+                    },
+                ),
+            )
+        finally:
+            db.close()
+
+    @render.ui
+    def pitch_type_breakdown_section():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        req("pitcher_select" in input)
+        req("report_section" in input)
+        if input.report_section() != "pitch_type_breakdown":
+            return None
+        selected_game_id = int(input.game_select())
+        selected_pitcher_id = int(input.pitcher_select())
+        db = get_session()
+        try:
+            pitches = get_pitching_pitches(db, selected_pitcher_id, game_id=selected_game_id)
+            if not pitches:
+                return None
             vs_rhh = [p for p in pitches if p.opponent_hand == "R"]
             vs_lhh = [p for p in pitches if p.opponent_hand == "L"]
             rap_by_gp = profile_queries.rapsodo_by_game_pitch_id(db, [p.game_pitch_id for p in pitches])
             stuff_baselines = profile_queries.team_stuff_plus_baselines(db)
-            sections.append(ui.navset_tab(
-                ui.nav_panel("All Batters", ui_helpers.render_dict_table(_pitch_type_breakdown_with_stuff(pitches, rap_by_gp, stuff_baselines))),
-                ui.nav_panel("vs RHH", ui_helpers.render_dict_table(_pitch_type_breakdown_with_stuff(vs_rhh, rap_by_gp, stuff_baselines)) if vs_rhh else ui.p("No pitches recorded against a right-handed batter yet.", class_="text-muted small")),
-                ui.nav_panel("vs LHH", ui_helpers.render_dict_table(_pitch_type_breakdown_with_stuff(vs_lhh, rap_by_gp, stuff_baselines)) if vs_lhh else ui.p("No pitches recorded against a left-handed batter yet.", class_="text-muted small")),
-            ))
+            return ui.div(
+                ui.p(ui.strong("Pitch Type Breakdown")),
+                ui.p(
+                    f"Stuff+ is team-relative (100 = your staff's average, 10 points = 1 SD) and only populates for "
+                    f"pitches with a Rapsodo reading linked to this outing. 'Reliable' needs at least "
+                    f"{MIN_BASELINE_PITCHES} pitches of that type in this game -- shown either way, just flagged below "
+                    f"that floor.",
+                    class_="text-muted small",
+                ),
+                ui.navset_tab(
+                    ui.nav_panel("All Batters", ui_helpers.render_dict_table(_pitch_type_breakdown_with_stuff(pitches, rap_by_gp, stuff_baselines))),
+                    ui.nav_panel("vs RHH", ui_helpers.render_dict_table(_pitch_type_breakdown_with_stuff(vs_rhh, rap_by_gp, stuff_baselines)) if vs_rhh else ui.p("No pitches recorded against a right-handed batter yet.", class_="text-muted small")),
+                    ui.nav_panel("vs LHH", ui_helpers.render_dict_table(_pitch_type_breakdown_with_stuff(vs_lhh, rap_by_gp, stuff_baselines)) if vs_lhh else ui.p("No pitches recorded against a left-handed batter yet.", class_="text-muted small")),
+                ),
+            )
+        finally:
+            db.close()
 
-            sections.append(ui.hr())
-            sections.append(ui.p(ui.strong("Command Precision")))
+    @render.ui
+    def command_execution_section():
+        """Command Precision + Attack Zones -- unchanged computation,
+        just moved out of report_body into their own gated section
+        (paired under the same "Command & Execution" dropdown value as
+        command_target_section below, which stays a separate function
+        since it also owns a render_plotly chart -- see that function's
+        own comment for why that split has to stay a separate output)."""
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        req("pitcher_select" in input)
+        req("report_section" in input)
+        if input.report_section() != "command_execution":
+            return None
+        selected_game_id = int(input.game_select())
+        selected_pitcher_id = int(input.pitcher_select())
+        db = get_session()
+        try:
+            pitcher = db.query(Player).filter(Player.player_id == selected_pitcher_id).first()
+            pitches = get_pitching_pitches(db, selected_pitcher_id, game_id=selected_game_id)
+            if not pitches or pitcher is None:
+                return None
+
+            sections = [ui.p(ui.strong("Command Precision"))]
             sections.append(ui.p(
                 "Real distance between where he aimed and where it actually crossed the plate -- only counts "
                 "pitches reviewed in Video Review (both an intended and an actual location on file).",
@@ -479,6 +640,9 @@ def pitcher_game_report_server(input, output, session, app_state):
             return None
         req("game_select" in input)
         req("pitcher_select" in input)
+        req("report_section" in input)
+        if input.report_section() != "command_execution":
+            return None
         db = get_session()
         try:
             view_pitches, _throws = _selected_pitcher_view_pitches(db)
@@ -656,6 +820,9 @@ def pitcher_game_report_server(input, output, session, app_state):
             return None
         req("game_select" in input)
         req("pitcher_select" in input)
+        req("report_section" in input)
+        if input.report_section() != "pitch_shape":
+            return None
         db = get_session()
         try:
             pitches = _selected_pitcher_rapsodo_game_pitches(db)
@@ -883,6 +1050,157 @@ def pitcher_game_report_server(input, output, session, app_state):
                     f"Stuff+ needs at least {MIN_BASELINE_PITCHES} pitches of that type (team-wide) to be a stable "
                     "read -- a single outing rarely reaches that for a secondary pitch, shown anyway rather than hidden.",
                     class_="text-muted small",
+                ),
+            )
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Pitch-by-Pitch -- Ryker's Sept 2026 report request: a per-pitch
+    # list for this outing (not a per-type average like the sections
+    # above), with a picker to drill into one pitch's Rapsodo numbers,
+    # its actual location on the zone, its estimated arm angle (reusing
+    # average_estimated_arm_angle on a one-pitch list rather than a new
+    # single-pitch helper), and its charted result. The zone plot is
+    # rendered as a static PNG via chart_helpers.fig_to_img (same
+    # pattern Bullpen Dashboard uses) rather than a registered
+    # render_plotly/output_widget, since it's a small, non-interactive,
+    # per-selection image -- simpler than managing another widget id.
+    # -------------------------------------------------------------------
+
+    @render.ui
+    def pitch_by_pitch_section():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        req("pitcher_select" in input)
+        req("report_section" in input)
+        if input.report_section() != "pitch_by_pitch":
+            return None
+        selected_game_id = int(input.game_select())
+        selected_pitcher_id = int(input.pitcher_select())
+        db = get_session()
+        try:
+            pitches = get_pitching_pitches(db, selected_pitcher_id, game_id=selected_game_id)
+            if not pitches:
+                return None
+            pitches = sorted(pitches, key=lambda p: p.pitch_sequence)
+            rap_by_gp = profile_queries.rapsodo_by_game_pitch_id(db, [p.game_pitch_id for p in pitches])
+
+            rows = []
+            choices = {}
+            for p in pitches:
+                label = p.pitch_type.type_name if p.pitch_type is not None else "Unspecified"
+                rap = rap_by_gp.get(p.game_pitch_id)
+                rows.append({
+                    "#": p.pitch_sequence,
+                    "Pitch Type": label,
+                    "Velo": f"{float(rap.velocity):.1f} mph" if rap is not None and rap.velocity is not None else "—",
+                    "Result": p.pitch_outcome or "—",
+                    "AB Outcome": p.ab_outcome if (p.ends_plate_appearance and p.ab_outcome) else "—",
+                })
+                choices[str(p.game_pitch_id)] = f"Pitch {p.pitch_sequence} — {label} — {p.pitch_outcome or 'unknown result'}"
+
+            return ui.div(
+                ui.p(ui.strong("Pitch-by-Pitch")),
+                ui.p(
+                    "Every pitch in this outing, in order. Pick one below to see its Rapsodo numbers, actual "
+                    "location, and estimated arm angle.",
+                    class_="text-muted small",
+                ),
+                ui_helpers.render_dict_table(rows),
+                ui.input_select("selected_pitch_id", "Pitch detail", choices=choices),
+                ui.output_ui("pitch_detail_card"),
+            )
+        finally:
+            db.close()
+
+    @render.ui
+    def pitch_detail_card():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        req("pitcher_select" in input)
+        req("report_section" in input)
+        if input.report_section() != "pitch_by_pitch":
+            return None
+        req("selected_pitch_id" in input)
+        selected_raw = input.selected_pitch_id()
+        if not selected_raw:
+            return None
+        db = get_session()
+        try:
+            p = (
+                db.query(GamePitch)
+                .options(joinedload(GamePitch.pitch_type))
+                .filter(GamePitch.game_pitch_id == int(selected_raw))
+                .first()
+            )
+            if p is None:
+                return None
+            pitcher = db.query(Player).filter(Player.player_id == int(input.pitcher_select())).first()
+            rap = db.query(RapsodoPitch).filter(RapsodoPitch.game_pitch_id == p.game_pitch_id).first()
+            label = p.pitch_type.type_name if p.pitch_type is not None else "Unspecified"
+
+            has_intended = p.intended_plate_x is not None and p.intended_plate_z is not None
+            has_actual = p.actual_plate_x is not None and p.actual_plate_z is not None
+            if has_intended:
+                location_fig = _pitch_location_figure(
+                    intended_x=float(p.intended_plate_x), intended_z=float(p.intended_plate_z),
+                    actual_x=float(p.actual_plate_x) if has_actual else None,
+                    actual_z=float(p.actual_plate_z) if has_actual else None,
+                    color=color_for_pitch_label(label),
+                )
+                location_block = ui.div(
+                    ui.p("Location", style="font-weight:700; text-align:center;"),
+                    chart_helpers.fig_to_img(location_fig, width=280, height=280),
+                )
+            else:
+                location_block = ui.div(
+                    ui.p("Location", style="font-weight:700; text-align:center;"),
+                    ui.p("Not located yet.", class_="text-muted small", style="text-align:center;"),
+                )
+
+            if rap is not None:
+                vaa = _pitch_level_vaa(rap)["value_degrees"]
+                haa = _pitch_level_haa(rap)["value_degrees"]
+                arm_angle, _n = average_estimated_arm_angle([rap], pitcher)
+                rapsodo_block = ui.div(
+                    ui.p("Rapsodo", style="font-weight:700;"),
+                    ui_helpers.render_kpi_cards([
+                        {"label": "Velocity", "value": f"{float(rap.velocity):.1f} mph" if rap.velocity is not None else "—"},
+                        {"label": "Spin Rate", "value": f"{float(rap.total_spin):.0f} rpm" if rap.total_spin is not None else "—"},
+                        {"label": "IVB", "value": f'{float(rap.vb_spin):.1f}"' if rap.vb_spin is not None else "—"},
+                        {"label": "HB", "value": f'{float(rap.hb_spin):.1f}"' if rap.hb_spin is not None else "—"},
+                        {"label": "VAA (est.)", "value": f"{vaa}°" if vaa is not None else "—"},
+                        {"label": "HAA (est.)", "value": f"{haa}°" if haa is not None else "—"},
+                        {"label": "Arm Angle (est.)", "value": f"{round(arm_angle)}°" if arm_angle is not None else "—"},
+                    ]),
+                )
+            else:
+                rapsodo_block = ui.div(
+                    ui.p("Rapsodo", style="font-weight:700;"),
+                    ui.p("No Rapsodo reading linked to this pitch.", class_="text-muted small"),
+                )
+
+            result_bits = [f"Result: {p.pitch_outcome or '—'}"]
+            if p.contact_quality:
+                result_bits.append(f"Contact Quality: {p.contact_quality}")
+            if p.batted_ball_type:
+                result_bits.append(f"Batted Ball: {p.batted_ball_type}")
+            if p.ends_plate_appearance and p.ab_outcome:
+                result_bits.append(f"AB Outcome: {p.ab_outcome}")
+
+            return ui.div(
+                ui.hr(),
+                ui.p(ui.strong(f"Pitch {p.pitch_sequence} — {label}")),
+                ui.layout_columns(
+                    location_block,
+                    ui.div(
+                        rapsodo_block,
+                        ui.p(" · ".join(result_bits), class_="text-muted small", style="margin-top:12px;"),
+                    ),
+                    col_widths=[4, 8],
                 ),
             )
         finally:
