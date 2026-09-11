@@ -301,7 +301,7 @@ def pitch_locations_chart(pitches):
         fig.add_layout_image(**img)
     for img in hitter_images(center_x=-HITTER_CENTER_X, facing="left", height_ft=HITTER_HEIGHT_FT):
         fig.add_layout_image(**img)
-    fig.add_shape(**home_plate_shape(half_width_ft=ZONE_HALF_WIDTH))
+    fig.add_shape(**home_plate_shape(half_width_ft=ZONE_HALF_WIDTH, view="pitcher"))
 
     apply_gbo_theme(
         fig, title="Pitch Locations — Intended vs. Actual", x_title="Plate Side (ft)", y_title="Plate Height (ft)", height=500,

@@ -45,7 +45,7 @@ Usage:
         fig.add_layout_image(**img)
     for img in hitter_images(center_x=1.7, facing="right"):
         fig.add_layout_image(**img)
-    fig.add_shape(**home_plate_shape())
+    fig.add_shape(**home_plate_shape(view="pitcher"))
 """
 
 PLATE_COLOR = "#AEB6C2"
@@ -87,7 +87,7 @@ def hitter_images(center_x, facing="right", height_ft=4.2, ground_y=0.0):
     )]
 
 
-def home_plate_shape(half_width_ft=0.708, depth_ft=0.22, ground_y=0.0, center_x=0.0):
+def home_plate_shape(half_width_ft=0.708, depth_ft=0.22, ground_y=0.0, center_x=0.0, view="pitcher"):
     """Home plate, drawn at the ground line -- same half-width as the
     strike zone (strike_zone.ZONE_HALF_WIDTH, passed in by the caller
     so the two stay in sync) so it reads as directly under the zone.
@@ -96,31 +96,59 @@ def home_plate_shape(half_width_ft=0.708, depth_ft=0.22, ground_y=0.0, center_x=
     one on, just enough of a pentagon silhouette sitting on the ground
     line to read as a plate.
 
-    Orientation: on a real plate the flat 17in edge faces the pitcher
-    and the back point faces the catcher. This chart's viewpoint is
-    the PITCHER's (see hitter_graphic module docstring), so the point
-    -- the edge nearest the catcher/backstop, i.e. farthest from the
-    pitcher -- reads as farthest from the viewer too, which in this
+    Orientation (Sept 2026, Ryker -- "add a home plate to everything
+    that has a strike zone... face the correct way based on the view,
+    either pitcher or catcher view, that way the viewer can tell which
+    view they're looking at based on the plate"): on a real plate the
+    flat 17in edge faces the pitcher and the back point faces the
+    catcher. view="pitcher" (default) draws the point -- the edge
+    nearest the catcher/backstop, i.e. farthest from the pitcher --
+    reading as farthest from the viewer too, which in this
     ground-level side elevation means closest to the zone above; the
-    flat pitcher-facing edge is nearest the viewer, at the bottom. An
-    earlier version had this reversed (flat edge up touching the zone,
-    point hanging down) -- correct for a catcher's/ump's-eye chart like
-    Statcast's, backwards for this pitcher's-eye one, per Ryker's
-    "the plate is backwards" -- fixed by flipping which end is which.
+    flat pitcher-facing edge is nearest the viewer, at the bottom. This
+    is Command Tracking's pitch_locations_chart convention (see
+    hitter_graphic module docstring) -- an earlier version had this
+    reversed (flat edge up touching the zone, point hanging down),
+    which Ryker caught as "the plate is backwards" for THIS chart.
+    That reversed shape is exactly view="catcher": the flat edge
+    (nearest the pitcher, i.e. farthest from a viewer standing behind
+    the plate) sits touching the zone, and the point (nearest the
+    catcher/viewer) hangs down toward the viewer -- correct for the
+    click-to-place location widgets (strike_zone.py) and any other
+    chart drawn from behind the plate, Statcast/broadcast-style. The
+    two are exact vertical mirrors of each other (same total depth,
+    point and flat edge swap ends) so a caller can tell at a glance
+    which viewpoint a given chart uses just by which end of the plate
+    touches the zone.
+
     Still a plain fig.add_shape shape (not an image) -- a five-point
     polygon is simpler to draw directly than to round-trip through an
     image asset."""
     hw = half_width_ft
-    y_point = ground_y
-    y_mid = ground_y - depth_ft
-    y_flat = ground_y - depth_ft * 1.7
-    path = (
-        f"M {center_x:.3f} {y_point:.3f} "
-        f"L {center_x + hw:.3f} {y_mid:.3f} "
-        f"L {center_x + hw:.3f} {y_flat:.3f} "
-        f"L {center_x - hw:.3f} {y_flat:.3f} "
-        f"L {center_x - hw:.3f} {y_mid:.3f} Z"
-    )
+    if view == "pitcher":
+        y_point = ground_y
+        y_mid = ground_y - depth_ft
+        y_flat = ground_y - depth_ft * 1.7
+        path = (
+            f"M {center_x:.3f} {y_point:.3f} "
+            f"L {center_x + hw:.3f} {y_mid:.3f} "
+            f"L {center_x + hw:.3f} {y_flat:.3f} "
+            f"L {center_x - hw:.3f} {y_flat:.3f} "
+            f"L {center_x - hw:.3f} {y_mid:.3f} Z"
+        )
+    elif view == "catcher":
+        y_flat = ground_y
+        y_mid = ground_y - (depth_ft * 0.7)
+        y_point = ground_y - depth_ft * 1.7
+        path = (
+            f"M {center_x - hw:.3f} {y_flat:.3f} "
+            f"L {center_x + hw:.3f} {y_flat:.3f} "
+            f"L {center_x + hw:.3f} {y_mid:.3f} "
+            f"L {center_x:.3f} {y_point:.3f} "
+            f"L {center_x - hw:.3f} {y_mid:.3f} Z"
+        )
+    else:
+        raise ValueError(f"home_plate_shape: view must be 'pitcher' or 'catcher', got {view!r}")
     return dict(
         type="path", xref="x", yref="y", path=path,
         fillcolor=PLATE_COLOR, opacity=0.85,
