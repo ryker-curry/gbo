@@ -26,7 +26,7 @@ from sqlalchemy.orm import joinedload
 import plotly.graph_objects as go
 
 from database import get_session
-from models import Player, Game, GamePitch, RapsodoPitch
+from models import Player, Game, GamePitch, RapsodoPitch, User
 from game_stats import get_pitching_pitches, compute_pitching_line, compute_pitch_type_breakdown
 from pitch_location_stats import compute_command_precision, compute_attack_zones
 # Target-radius bands (Precision/Command/Competitive/Major Miss) and the
@@ -300,18 +300,62 @@ def pitcher_game_report_ui():
 
 @module.server
 def pitcher_game_report_server(input, output, session, app_state):
-    ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
+    # "Player" added Sept 2026 (Ryker: players should be able to see game
+    # reports for themselves) -- self-scoped, same pattern pitcher_profile.py
+    # already established: a Player sees no game/pitcher pickers pointed at
+    # the whole roster, just their own outings, and every other gated
+    # section below (report_body, command_execution_section, etc.) stays
+    # completely unchanged -- they all just read game_select/pitcher_select,
+    # which game_picker/pitcher_picker below already restrict to this
+    # player's own data, so the rest of the page needs no per-section
+    # Player-specific logic. Nav only links this page for a pitcher-flagged
+    # Player (see nav.py's is_pitcher_player) -- the is_pitcher check here
+    # is defense-in-depth, not the only gate.
+    ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator", "Player")
+
+    def _my_pitcher(db):
+        me = db.query(User).filter(User.user_id == app_state.user_id()).first()
+        if me is None or me.player_id is None:
+            return None
+        player = db.query(Player).filter(Player.player_id == me.player_id).first()
+        return player if (player is not None and player.is_pitcher) else None
 
     @render.ui
     def game_picker():
         if not app_state.is_authenticated():
             return None
-        if app_state.role_name() not in ALLOWED_ROLES:
+        role = app_state.role_name()
+        if role not in ALLOWED_ROLES:
             return ui.p("You don't have access to this page.", class_="text-danger")
 
         db = get_session()
         try:
-            games = db.query(Game).options(joinedload(Game.opponent_team)).order_by(Game.game_date.desc()).all()
+            if role == "Player":
+                me = _my_pitcher(db)
+                if me is None:
+                    return ui.p("You don't have access to this page.", class_="text-danger")
+                # Same our_player_id/opponent_our_player_id dual lookup as
+                # pitcher_picker below (intrasquad games record "the other
+                # squad's" pitcher under opponent_our_player_id), just
+                # narrowed to this one player instead of every pitcher.
+                own_game_ids = {
+                    gid for (gid,) in db.query(GamePitch.game_id)
+                    .filter(GamePitch.our_player_id == me.player_id, GamePitch.is_our_team_batting.is_(False))
+                    .distinct().all()
+                } | {
+                    gid for (gid,) in db.query(GamePitch.game_id)
+                    .filter(GamePitch.opponent_our_player_id == me.player_id, GamePitch.is_our_team_batting.is_(True))
+                    .distinct().all()
+                }
+                if not own_game_ids:
+                    return ui_helpers.empty_state("No games recorded for you as a pitcher yet.")
+                games = (
+                    db.query(Game).options(joinedload(Game.opponent_team))
+                    .filter(Game.game_id.in_(own_game_ids))
+                    .order_by(Game.game_date.desc()).all()
+                )
+            else:
+                games = db.query(Game).options(joinedload(Game.opponent_team)).order_by(Game.game_date.desc()).all()
             if not games:
                 return ui_helpers.empty_state("No games tracked yet. Start one on Game Tracking first.")
             choices = {str(g.game_id): _game_label(g) for g in games}
@@ -328,6 +372,17 @@ def pitcher_game_report_server(input, output, session, app_state):
 
         db = get_session()
         try:
+            if app_state.role_name() == "Player":
+                me = _my_pitcher(db)
+                if me is None:
+                    return ui.p("You don't have access to this page.", class_="text-danger")
+                # No picker needed -- game_picker above already restricted
+                # game_select to games this player pitched in, so there's
+                # exactly one pitcher to show: themselves. Still a real
+                # input_select (not skipped) so every downstream section
+                # keeps reading input.pitcher_select() unchanged.
+                return ui.input_select("pitcher_select", "Pitcher", choices={str(me.player_id): f"{me.first_name} {me.last_name}"})
+
             our_pitcher_ids = {
                 pid for (pid,) in db.query(GamePitch.our_player_id)
                 .filter(GamePitch.game_id == selected_game_id, GamePitch.is_our_team_batting.is_(False))
