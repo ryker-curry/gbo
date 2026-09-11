@@ -820,7 +820,7 @@ def _pitching_staff_section(db, players, window):
         return ui.div(*sections)
 
     team_line = compute_pitching_line(all_pitches)
-    era_key = "ERA (runs-allowed avg -- ER not tracked)"
+    era_key = "ERA"
 
     sections.append(ui_helpers.render_kpi_cards([
         {"label": "Team ERA*", "value": str(team_line[era_key]) if team_line[era_key] is not None else "—"},
@@ -830,7 +830,7 @@ def _pitching_staff_section(db, players, window):
         {"label": "First Pitch Strike %", "value": f'{team_line["First Pitch Strike %"]}%' if team_line["First Pitch Strike %"] is not None else "—"},
     ]))
     sections.append(ui.p(
-        "*Runs-allowed average -- GBO doesn't track earned vs. unearned runs.",
+        "*Real earned-run ERA -- defaults to all-earned for any game nobody tagged unearned runs on while scoring live.",
         class_="text-muted small",
     ))
 

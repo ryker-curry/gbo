@@ -256,12 +256,13 @@ def analytics_server(input, output, session, app_state):
                         {"label": "WHIP", "value": _fmt_num(pitching_line["WHIP"])},
                         {"label": "K/BB", "value": _fmt_num(pitching_line["K/BB"])},
                         {"label": "K %", "value": _fmt_pct1(pitching_line["K %"])},
-                        {"label": "ERA*", "value": _fmt_num(pitching_line["ERA (runs-allowed avg -- ER not tracked)"])},
+                        {"label": "ERA*", "value": _fmt_num(pitching_line["ERA"])},
                         {"label": "FIP", "value": _fmt_num(pitching_line["FIP"])},
                         {"label": "Execution %", "value": _fmt_pct1(pitching_line["Execution %"])},
                     ]))
                     sections.append(ui.p(
-                        f"*ERA here is runs-allowed average, not true ERA -- GBO doesn't distinguish earned from unearned runs yet. "
+                        f"*ERA here is real earned-run average -- defaults to all-earned for any game nobody tagged "
+                        f"unearned runs on while scoring live. "
                         f"Total RV Allowed: {pitching_line['Total RV Allowed']} · Avg RV Allowed/Pitch: {pitching_line['Avg RV Allowed/Pitch']}",
                         class_="text-muted small",
                     ))
