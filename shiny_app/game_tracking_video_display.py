@@ -43,6 +43,44 @@ def _upload_game_video_clip(file_info: dict, identifier: str):
         return None
 
 
+def _pitcher_identity(p):
+    """(key, label) identifying who actually threw one GamePitch --
+    Video Review's Pitcher filter groups by this (Ryker, Sept 2026:
+    "select the pitcher, and their individual pitch number rather than
+    just pitch # of the game"). Same union GBO uses everywhere else for
+    "who pitched this pitch" (pitcher_game_report.py's pitcher_picker,
+    profile_queries._base_pitching_query):
+      - is_our_team_batting False -> our_player_id, one of our own
+        roster pitchers -- the common case.
+      - is_our_team_batting True & opponent_our_player_id set ->
+        intrasquad games only, the "other squad" pitcher -- still one
+        of our own roster players, just tracked on the batting side of
+        this row.
+      - is_our_team_batting True & opponent_player_id set (and no
+        opponent_our_player_id) -> a named player from a real
+        opponent's roster, if that team's roster was built out.
+      - Otherwise -> one shared fallback bucket for opponent pitches
+        with no player identity on file at all (hand only) -- grouped
+        together rather than hidden, same "shown anyway" philosophy as
+        every other small-sample/missing-data case in this app.
+
+    Caller is responsible for eager-loading .our_player/
+    .opponent_our_player/.opponent_player (joinedload) -- this never
+    queries the database itself."""
+    if not p.is_our_team_batting:
+        name = f"{p.our_player.first_name} {p.our_player.last_name}" if p.our_player is not None else "Unknown pitcher"
+        return (f"our:{p.our_player_id}", name)
+    if p.opponent_our_player_id is not None:
+        op = p.opponent_our_player
+        name = f"{op.first_name} {op.last_name} (Squad B)" if op is not None else "Squad B pitcher"
+        return (f"our:{p.opponent_our_player_id}", name)
+    if p.opponent_player_id is not None:
+        op = p.opponent_player
+        name = f"{op.player_name} (Opponent)" if op is not None else "Opponent pitcher"
+        return (f"opp_player:{p.opponent_player_id}", name)
+    return ("opp:unknown", "Opponent Pitcher (unidentified)")
+
+
 def register_game_tracking_video(input, output, session, _refresh_tick, _active_game_id, _access_ok, _can_edit, _bump_refresh):
     _vr_current_pitch_id = reactive.Value(None)
     _registered_clip_match_ids = set()
@@ -217,6 +255,44 @@ def register_game_tracking_video(input, output, session, _refresh_tick, _active_
         finally:
             db.close()
 
+    def _review_scope_pitches(db, game_id):
+        """This game's pitches, pitch_sequence order, narrowed to the
+        currently selected Pitcher (vr_pitcher_select) when one is
+        chosen -- shared by the jump picker, Previous/Next stepping, and
+        the auto-advance-after-save logic, so all three agree on what
+        "next pitch" means once a specific pitcher is selected instead
+        of "All Pitchers"."""
+        pitches = (
+            db.query(GamePitch)
+            .options(
+                joinedload(GamePitch.our_player),
+                joinedload(GamePitch.opponent_our_player),
+                joinedload(GamePitch.opponent_player),
+            )
+            .filter(GamePitch.game_id == game_id)
+            .order_by(GamePitch.pitch_sequence).all()
+        )
+        pitcher_key = input.vr_pitcher_select() if "vr_pitcher_select" in input else "all"
+        if pitcher_key and pitcher_key != "all":
+            pitches = [p for p in pitches if _pitcher_identity(p)[0] == pitcher_key]
+        return pitches
+
+    @reactive.effect
+    def _reset_vr_on_pitcher_change():
+        req("vr_pitcher_select" in input)
+        game_id = _active_game_id()
+        if game_id is None:
+            return
+        db = get_session()
+        try:
+            pitches_to_review = _review_scope_pitches(db, game_id)
+            if not pitches_to_review:
+                return
+            missing = [p.game_pitch_id for p in pitches_to_review if p.actual_plate_x is None]
+            _vr_current_pitch_id.set(missing[0] if missing else pitches_to_review[0].game_pitch_id)
+        finally:
+            db.close()
+
     @render.ui
     def video_review_jump_picker():
         _refresh_tick()
@@ -227,33 +303,78 @@ def register_game_tracking_video(input, output, session, _refresh_tick, _active_
             return None
         db = get_session()
         try:
-            pitches_to_review = (
-                db.query(GamePitch).options(joinedload(GamePitch.pitch_type))
+            all_pitches = (
+                db.query(GamePitch)
+                .options(
+                    joinedload(GamePitch.pitch_type),
+                    joinedload(GamePitch.our_player),
+                    joinedload(GamePitch.opponent_our_player),
+                    joinedload(GamePitch.opponent_player),
+                )
                 .filter(GamePitch.game_id == game_id)
                 .order_by(GamePitch.pitch_sequence).all()
             )
-            if not pitches_to_review:
+            if not all_pitches:
                 return ui.div(
                     ui.h5("Video Review — Actual Pitch Locations", class_="gbo-section-title"),
                     ui_helpers.empty_state("No pitches logged yet in this game to review."),
                 )
+
+            # Group by who actually threw each pitch (see _pitcher_identity)
+            # so a coach reviewing one specific pitcher's outing doesn't
+            # have to hunt through a flat, game-wide pitch list that mixes
+            # in every other pitcher plus our own team's batting pitches
+            # against the opponent. Ryker, Sept 2026: "select the pitcher,
+            # and their individual pitch number rather than just pitch #
+            # of the game."
+            pitcher_groups = {}
+            pitcher_order = []
+            for p in all_pitches:
+                key, label = _pitcher_identity(p)
+                if key not in pitcher_groups:
+                    pitcher_groups[key] = {"label": label, "pitches": []}
+                    pitcher_order.append(key)
+                pitcher_groups[key]["pitches"].append(p)
+
+            pitcher_choices = {"all": f"All Pitchers ({len(all_pitches)})"}
+            for key in pitcher_order:
+                group = pitcher_groups[key]
+                pitcher_choices[key] = f"{group['label']} ({len(group['pitches'])})"
+
+            current_pitcher = input.vr_pitcher_select() if "vr_pitcher_select" in input else "all"
+            if current_pitcher not in pitcher_choices:
+                current_pitcher = "all"
+
+            pitches_to_review = all_pitches if current_pitcher == "all" else pitcher_groups[current_pitcher]["pitches"]
             missing_count = sum(1 for p in pitches_to_review if p.actual_plate_x is None)
+
             choices = {}
-            for p in pitches_to_review:
+            for own_idx, p in enumerate(pitches_to_review, start=1):
                 mark = "unmarked" if p.actual_plate_x is None else "done"
                 pt_name = p.pitch_type.type_name if p.pitch_type else "?"
                 video_tag = " [video]" if p.video_url else ""
                 side_tag = "Us pitching" if not p.is_our_team_batting else "Us batting"
-                choices[str(p.game_pitch_id)] = f"[{mark}] #{p.pitch_sequence} — Inn {p.inning}, {p.balls_before}-{p.strikes_before}, {side_tag}, {pt_name}{video_tag}"
+                # Once a specific pitcher is selected, lead with THEIR
+                # own pitch count for this outing (what Ryker asked for)
+                # rather than the game-wide pitch_sequence -- the game
+                # number is kept in parens for cross-referencing against
+                # Pitch Log/other reports, which all use pitch_sequence.
+                pitch_num_label = f"#{own_idx} (game #{p.pitch_sequence})" if current_pitcher != "all" else f"#{p.pitch_sequence}"
+                choices[str(p.game_pitch_id)] = (
+                    f"[{mark}] {pitch_num_label} — Inn {p.inning}, {p.balls_before}-{p.strikes_before}, "
+                    f"{side_tag}, {pt_name}{video_tag}"
+                )
             current = _vr_current_pitch_id()
             selected = str(current) if current is not None and str(current) in choices else None
             return ui.div(
                 ui.h5("Video Review — Actual Pitch Locations", class_="gbo-section-title"),
                 ui.p(
                     "Step through every pitch of the game and mark where it actually crossed, watching the "
-                    "center-field angle (or the matched clip below, if there is one).",
+                    "center-field angle (or the matched clip below, if there is one). Pick a pitcher below to "
+                    "step through just their own pitches, numbered within that outing.",
                     class_="text-muted small",
                 ),
+                ui.input_select("vr_pitcher_select", "Pitcher", choices=pitcher_choices, selected=current_pitcher),
                 ui.p(f"{missing_count} of {len(pitches_to_review)} pitch(es) still need an actual location.", class_="text-muted small"),
                 ui.input_select("vr_jump_select", "Jump to pitch", choices=choices, selected=selected),
             )
@@ -366,10 +487,7 @@ def register_game_tracking_video(input, output, session, _refresh_tick, _active_
             return None
         db = get_session()
         try:
-            ids = [
-                p.game_pitch_id for p in
-                db.query(GamePitch).filter(GamePitch.game_id == game_id).order_by(GamePitch.pitch_sequence).all()
-            ]
+            ids = [p.game_pitch_id for p in _review_scope_pitches(db, game_id)]
             if pitch_id not in ids:
                 return None
             idx = ids.index(pitch_id)
@@ -388,10 +506,7 @@ def register_game_tracking_video(input, output, session, _refresh_tick, _active_
             return
         db = get_session()
         try:
-            ids = [
-                p.game_pitch_id for p in
-                db.query(GamePitch).filter(GamePitch.game_id == game_id).order_by(GamePitch.pitch_sequence).all()
-            ]
+            ids = [p.game_pitch_id for p in _review_scope_pitches(db, game_id)]
             if pitch_id not in ids:
                 return
             idx = ids.index(pitch_id)
@@ -428,12 +543,16 @@ def register_game_tracking_video(input, output, session, _refresh_tick, _active_
             p.pitch_zone = strike_zone.derive_old_zone(x, z)
             db.commit()
             game_id = p.game_id
-            pitches_to_review = (
-                db.query(GamePitch).filter(GamePitch.game_id == game_id)
-                .order_by(GamePitch.pitch_sequence).all()
-            )
+            ui.notification_show(f"Saved actual location for pitch #{p.pitch_sequence}.", type="message", duration=8)
+            pitches_to_review = _review_scope_pitches(db, game_id)
             ids = [pp.game_pitch_id for pp in pitches_to_review]
             still_missing = [pp.game_pitch_id for pp in pitches_to_review if pp.actual_plate_x is None]
+            if pitch_id not in ids:
+                # The just-saved pitch fell out of scope (e.g. the
+                # Pitcher filter changed underneath this save) -- nothing
+                # sensible to auto-advance to within the current scope.
+                _bump_refresh()
+                return
             idx = ids.index(pitch_id)
             later_missing = [gpid for gpid in still_missing if ids.index(gpid) > idx]
             if later_missing:
@@ -442,7 +561,6 @@ def register_game_tracking_video(input, output, session, _refresh_tick, _active_
                 _vr_current_pitch_id.set(still_missing[0])
             else:
                 _vr_current_pitch_id.set(ids[min(idx + 1, len(ids) - 1)])
-            ui.notification_show(f"Saved actual location for pitch #{p.pitch_sequence}.", type="message", duration=8)
             _bump_refresh()
         finally:
             db.close()
