@@ -51,6 +51,7 @@ IMPORTANT caveats, not silently glossed over:
 """
 
 from strike_zone import classify_attack_zone
+from analytics.command_metrics import compute_miss
 
 
 def _pct(numerator, denominator):
@@ -90,9 +91,14 @@ def _command_row(label, plist, throws):
         }
     dists, horiz, vert = [], [], []
     for p in plist:
-        dx = (float(p.actual_plate_x) - float(p.intended_plate_x)) * 12  # feet -> inches
-        dz = (float(p.actual_plate_z) - float(p.intended_plate_z)) * 12
-        dists.append((dx ** 2 + dz ** 2) ** 0.5)
+        # Zone-based miss (Ryker, Sept 2026): measured from the called
+        # Level-Zone cell's nearest edge, not the exact intended point --
+        # see analytics/command_metrics.compute_miss for the full
+        # reasoning. Single source of truth with every other "Miss
+        # Distance" on this page, instead of a second inline point-to-
+        # point calc.
+        dx, dz, dist = compute_miss(p.intended_plate_x, p.intended_plate_z, p.actual_plate_x, p.actual_plate_z)
+        dists.append(dist)
         horiz.append(dx)
         vert.append(dz)
     avg_dist = sum(dists) / n

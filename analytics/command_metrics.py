@@ -56,27 +56,45 @@ ON_TARGET_LABEL = "On Target"
 # ---------------------------------------------------------------------------
 
 def compute_miss(intended_x, intended_z, actual_x, actual_z):
-    """Section 8: horizontal miss, vertical miss, and Euclidean miss
-    distance -- all converted to INCHES (intended_x/z and actual_x/z
-    themselves are in feet, GBO's usual plate_x/plate_z convention; see
+    """Section 8: horizontal miss, vertical miss, and miss distance --
+    all converted to INCHES (intended_x/z and actual_x/z themselves are
+    in feet, GBO's usual plate_x/plate_z convention; see
     command_config.py's module docstring for why the derived miss values
     are stored in inches instead).
 
-    horizontal_miss = (actual_x - intended_x) * 12, sign preserved
-    (RAW plate-coordinate direction, NOT yet handedness-adjusted -- see
-    classify_miss_direction for the arm-side/glove-side interpretation
-    of this sign). vertical_miss = (actual_z - intended_z) * 12,
-    positive = high, negative = low.
+    Sept 2026, Ryker: pitches are CALLED as a spoken level/zone sequence
+    (see strike_zone.call_cell) -- a called "212" is a target CELL, not
+    one exact coordinate, so a miss should be measured from that cell's
+    nearest edge, not from the single intended_x/z point wherever it
+    happened to be clicked/decoded (a pitch that's just off the black on
+    the called side should barely miss, not show a big number just
+    because it's far from that one point). The called cell is derived
+    from intended_x/z itself (wherever it was entered IS where the call
+    was aimed -- no separate level/zone field needed), then actual_x/z
+    is measured against that cell's boundaries via
+    strike_zone.zone_miss_components_in (same math
+    strike_zone.distance_from_cell_in already used for
+    pitch_execution_score, just also broken into the per-axis
+    components this function has always returned).
+
+    horizontal_miss = 0 if actual_x already falls within the called
+    cell's horizontal bounds, else the signed distance from the near
+    edge (positive = beyond the high edge, negative = beyond the low
+    edge -- RAW plate-coordinate direction, NOT yet handedness-adjusted,
+    same convention as before; see classify_miss_direction for the
+    arm-side/glove-side interpretation of this sign). vertical_miss = 0
+    if actual_z falls within the cell's vertical bounds, else the
+    signed distance from the near edge, positive = high, negative = low.
 
     Returns (horizontal_miss_in, vertical_miss_in, miss_distance_in), or
     (None, None, None) if any of the four inputs is None (most commonly:
     actual_x/z not entered yet -- a pitch tracked with intent only)."""
     if intended_x is None or intended_z is None or actual_x is None or actual_z is None:
         return None, None, None
-    horizontal_miss_in = round((float(actual_x) - float(intended_x)) * FEET_TO_INCHES, 2)
-    vertical_miss_in = round((float(actual_z) - float(intended_z)) * FEET_TO_INCHES, 2)
-    miss_distance_in = round(math.hypot(horizontal_miss_in, vertical_miss_in), 2)
-    return horizontal_miss_in, vertical_miss_in, miss_distance_in
+    intended_x, intended_z = float(intended_x), float(intended_z)
+    actual_x, actual_z = float(actual_x), float(actual_z)
+    level, zone = strike_zone.call_cell(intended_x, intended_z)
+    return strike_zone.zone_miss_components_in(level, zone, actual_x, actual_z)
 
 
 def classify_miss_direction(horizontal_miss_in, vertical_miss_in, throws):
