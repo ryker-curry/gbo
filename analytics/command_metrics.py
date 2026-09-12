@@ -98,22 +98,21 @@ def compute_miss(intended_x, intended_z, actual_x, actual_z):
     return strike_zone.zone_miss_components_in(level, zone, actual_x, actual_z)
 
 
-def classify_miss_direction(horizontal_miss_in, vertical_miss_in, throws):
-    """Section 9: handedness-aware miss direction label -- one of High,
-    Low, Arm Side, Glove Side, High Arm Side, High Glove Side, Low Arm
-    Side, Low Glove Side, or (an addition beyond the spec's 8, for a
-    pitch that landed essentially exactly on its target on both axes,
-    per command_config.MISS_DIRECTION_DEADZONE_IN) "On Target".
+def miss_direction_axes(horizontal_miss_in, vertical_miss_in, throws):
+    """The same handedness-aware per-axis labels classify_miss_direction
+    combines into one string below, returned SEPARATELY instead --
+    (horizontal_label, vertical_label), each one of Arm Side/Glove Side
+    (or Left/Right if throws is unknown) / High/Low, or None on an axis
+    within command_config.MISS_DIRECTION_DEADZONE_IN of the target (no
+    meaningful direction on that axis). (None, None) if either miss
+    value is None.
 
-    throws: Player.throws, "R" / "L" / None. See module docstring for
-    the sign convention this matches. Unknown throws falls back to
-    plain Left/Right (no arm-side concept without knowing the pitcher's
-    hand), same fallback shiny_app/modules/bullpen_tracking.py's
-    get_zone_labels() already uses.
-
-    Returns None if either miss value is None (no actual location yet)."""
+    Ryker, Sept 2026: "would like to be able to see a miss bias for
+    each individual pitch ... just if they miss glove or arm side and
+    up or down" -- no combined string, no inches, just these two facts
+    per pitch, for command_metrics.miss_direction_rows below."""
     if horizontal_miss_in is None or vertical_miss_in is None:
-        return None
+        return None, None
     h = float(horizontal_miss_in)
     v = float(vertical_miss_in)
     dz = command_config.MISS_DIRECTION_DEADZONE_IN
@@ -133,6 +132,28 @@ def classify_miss_direction(horizontal_miss_in, vertical_miss_in, throws):
         else:
             horizontal_label = RIGHT_LABEL if h > 0 else LEFT_LABEL
 
+    return horizontal_label, vertical_label
+
+
+def classify_miss_direction(horizontal_miss_in, vertical_miss_in, throws):
+    """Section 9: handedness-aware miss direction label -- one of High,
+    Low, Arm Side, Glove Side, High Arm Side, High Glove Side, Low Arm
+    Side, Low Glove Side, or (an addition beyond the spec's 8, for a
+    pitch that landed essentially exactly on its target on both axes,
+    per command_config.MISS_DIRECTION_DEADZONE_IN) "On Target".
+
+    throws: Player.throws, "R" / "L" / None. See module docstring for
+    the sign convention this matches. Unknown throws falls back to
+    plain Left/Right (no arm-side concept without knowing the pitcher's
+    hand), same fallback shiny_app/modules/bullpen_tracking.py's
+    get_zone_labels() already uses.
+
+    Returns None if either miss value is None (no actual location yet).
+    Just combines miss_direction_axes' two labels into one string --
+    see that function if only one axis is needed on its own."""
+    if horizontal_miss_in is None or vertical_miss_in is None:
+        return None
+    horizontal_label, vertical_label = miss_direction_axes(horizontal_miss_in, vertical_miss_in, throws)
     if vertical_label and horizontal_label:
         return f"{vertical_label} {horizontal_label}"
     return vertical_label or horizontal_label or ON_TARGET_LABEL
@@ -603,5 +624,50 @@ def individual_pitch_rows(pitches):
             "Direction": p.miss_direction or "—",
             "Execution": score,
             "Execution Label": command_config.execution_score_label(score) or "—",
+        })
+    return rows
+
+
+def miss_direction_rows(pitches, throws):
+    """Per-pitch #, Pitch Type, Called (the pitcher's own Level+Zone
+    shorthand, e.g. "25"), Horizontal (Arm Side/Glove Side/Even),
+    Vertical (High/Low/Even) -- deliberately no inches or distance, and
+    no combined Direction string. Ryker, Sept 2026: "would like to be
+    able to see a miss bias for each individual pitch, that would be
+    one of the main takeaways from command tracking ... figure out why
+    they miss where they miss ... it could even be based on where they
+    are trying to throw the pitch. like if i am trying to go down and
+    away do i always miss arm side, am i trying to go too far or am i
+    not getting it out there" -- scanning down the Called column for a
+    repeated code (e.g. every "25") and comparing the Horizontal/
+    Vertical next to it is exactly this: does a given call tend to miss
+    the same way.
+
+    "Called" is the raw two-digit code (Level then Zone -- see
+    strike_zone.py's coach's-call grid comment) instead of a translated
+    English zone name like "Down & Away": that translation is relative
+    to the BATTER's hand, not the pitcher's, and needs a convention this
+    module hasn't verified is unambiguous yet (see strike_zone.py's
+    ZONE_TO_PLATE_X comments, which describe zones by arm/glove side for
+    a RHP -- a different frame than game_tracking.py's own in/away UI
+    hint text). The raw code is exactly what the coach already calls
+    live, so nothing is lost by leaving it untranslated for now.
+
+    Only includes located pitches (has an actual location -- see
+    _located)."""
+    rows = []
+    for p in _located(pitches):
+        horizontal, vertical = miss_direction_axes(p.horizontal_miss, p.vertical_miss, throws)
+        called = "—"
+        if p.intended_x is not None and p.intended_z is not None:
+            level, zone = strike_zone.call_cell(float(p.intended_x), float(p.intended_z))
+            if level is not None and zone is not None:
+                called = f"{level}{zone}"
+        rows.append({
+            "#": p.pitch_number,
+            "Pitch Type": pitch_type_label(p),
+            "Called": called,
+            "Horizontal": horizontal or "Even",
+            "Vertical": vertical or "Even",
         })
     return rows

@@ -957,6 +957,20 @@ def command_tracker_server(input, output, session, app_state):
                 children.append(ui.h6("By pitch type", class_="mt-3"))
                 children.append(ui_helpers.render_dict_table(rows))
 
+            # Per-pitch miss direction (Ryker, Sept 2026: "would like to
+            # be able to see a miss bias for each individual pitch ...
+            # figure out why they miss where they miss ... if i am
+            # trying to go down and away do i always miss arm side") --
+            # no inches, just which way each pitch missed and what it
+            # was called, so a pattern by call is scannable at a glance.
+            children.append(ui.h6("Miss direction by pitch", class_="mt-3"))
+            children.append(ui.p(
+                "Called is the pitcher's own Level+Zone code (e.g. \"25\") for that pitch's target -- scan for a "
+                "repeated code to see whether that call tends to miss the same way.",
+                class_="text-muted small",
+            ))
+            children.append(ui_helpers.render_dict_table(command_metrics.miss_direction_rows(pitches, throws)))
+
             return ui.div(*children)
         finally:
             db.close()
