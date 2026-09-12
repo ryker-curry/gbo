@@ -89,7 +89,7 @@ from shiny import ui, render, reactive, req
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import Game, GamePitch, GameRunnerEvent, GameForcedHalfInningEnd, PitchType
+from models import Game, GamePitch, GameRunnerEvent, GameForcedHalfInningEnd, GameLineupSlot, LineupSubstitution, PitchType
 import strike_zone
 import ui_helpers
 
@@ -111,6 +111,69 @@ REPLAY_OWNED_FIELDS = (
     "inning", "is_our_team_batting", "pa_pitch_number",
     "re_before", "re_after", "run_value",
 )
+
+
+# "Runner on"/"Advances to" labels for the retroactive "Log runner
+# event" form below -- same small dicts
+# game_tracking_runner_events_display.py keeps its own copy of, rather
+# than a cross-import (these two files are deliberately independent
+# leaf modules under game_tracking.py -- see this module's own
+# docstring, and that module's, for why neither imports the other).
+BASE_LABEL = {1: "1st", 2: "2nd", 3: "3rd"}
+TO_BASE_LABEL = {2: "2nd", 3: "3rd", 4: "Home"}
+
+
+def _players_from_slots(slots):
+    """Every Player who ever occupied one of `slots` this game -- the
+    slot's original starter plus everyone who substituted in, deduped
+    by player_id, sorted by name. Same helper
+    game_tracking_runner_events_display.py uses for the same reason:
+    we're picking a runner for something that already happened (a
+    retroactive add anchored to a past pitch), not the live "who's up
+    right now" picker (get_current_slot_occupant_id, game_tracking.py)."""
+    players = {}
+    for slot in slots:
+        if slot.player_id and slot.player is not None:
+            players[slot.player_id] = slot.player
+        for sub in slot.substitutions:
+            if sub.player_id and sub.player is not None:
+                players[sub.player_id] = sub.player
+    return sorted(players.values(), key=lambda p: (p.last_name, p.first_name))
+
+
+def _runner_choices_for_event(db, game, is_our_team_batting, batting_squad):
+    """Returns (our_choices_dict, opp_roster_list) -- exactly one is
+    populated (the other is None). Same split
+    game_tracking_runner_events_display.py's own copy uses, built from
+    this GAME's saved lineup history rather than "who's up live right
+    now" -- see _players_from_slots above."""
+    if game.uses_three_squad_intrasquad or game.is_intrasquad:
+        squad = batting_squad or ("A" if is_our_team_batting else "B")
+        slots = (
+            db.query(GameLineupSlot)
+            .options(
+                joinedload(GameLineupSlot.player),
+                joinedload(GameLineupSlot.substitutions).joinedload(LineupSubstitution.player),
+            )
+            .filter(GameLineupSlot.game_id == game.game_id, GameLineupSlot.squad == squad)
+            .all()
+        )
+        players = _players_from_slots(slots)
+        return {str(p.player_id): f"{p.first_name} {p.last_name}" for p in players}, None
+    if is_our_team_batting:
+        slots = (
+            db.query(GameLineupSlot)
+            .options(
+                joinedload(GameLineupSlot.player),
+                joinedload(GameLineupSlot.substitutions).joinedload(LineupSubstitution.player),
+            )
+            .filter(GameLineupSlot.game_id == game.game_id, GameLineupSlot.squad == "A")
+            .all()
+        )
+        players = _players_from_slots(slots)
+        return {str(p.player_id): f"{p.first_name} {p.last_name}" for p in players}, None
+    opp_roster = game.opponent_team.roster if game.opponent_team else []
+    return None, opp_roster
 
 
 def _apply_field_values(pitch, values):
@@ -288,12 +351,58 @@ def _render_forced_end_preview(preview):
     return ui.div(*children, class_="border border-warning rounded p-2 mb-2")
 
 
+def _render_runner_add_preview(preview):
+    """Same border+Confirm/Cancel convention the other two preview
+    blocks in this file use, for INSERTING a brand-new GameRunnerEvent
+    anchored right after a past pitch -- the retroactive counterpart to
+    the live "+ Log a runner event" form (game_tracking.py's
+    runner_events_panel, which can only ever anchor to the pitch just
+    thrown). Built so a steal/wild pitch/etc. missed in the moment can
+    still be logged after the fact, on any already-tracked game, live
+    or completed (Ryker, Sept 2026: "if i need to add a runner event to
+    something that i logged before how do i do that")."""
+    who = f" ({preview['runner_label']})" if preview.get("runner_label") else ""
+    outcome = "out" if preview["is_out"] else TO_BASE_LABEL.get(preview["to_base"], "?")
+    summary = f"{preview['event_type']}{who}: {BASE_LABEL.get(preview['from_base'], '?')} \u2192 {outcome}"
+    children = [
+        ui.h6(f"Preview: log runner event after pitch #{preview['target_seq']}", class_="mt-2"),
+        ui.p(
+            "Nothing has been saved yet -- review what would change below, then Confirm or Cancel.",
+            class_="text-muted small",
+        ),
+        ui.p(summary, class_="small fw-bold mb-1"),
+    ]
+    if preview["side_changed_seqs"]:
+        children.append(ui.p(
+            "Side/inning changed for pitch(es) " + ", ".join(preview["side_changed_seqs"]) +
+            " -- this pitch's recorded batter/pitcher may no longer match who was "
+            "actually up; review it manually. The count/RE numbers will still be "
+            "corrected, but who's listed as playing won't be reassigned automatically.",
+            class_="text-warning small fw-bold mb-1",
+        ))
+    if preview["rows"]:
+        children.append(ui.p("Pitches that would change:", class_="small fw-bold mb-1"))
+        children.append(ui_helpers.render_dict_table(preview["rows"]))
+    else:
+        children.append(ui.p("No other pitch's stored count/inning/RE would change.", class_="text-muted small"))
+    if preview["score_changes"]:
+        children.append(ui.p("Score change: " + "; ".join(preview["score_changes"]), class_="small fw-bold mt-1"))
+    children.append(ui.layout_columns(
+        ui.input_action_button("gt_pl_confirm_runner_add_btn", "Confirm & Save", class_="btn-warning btn-sm mt-2"),
+        ui.input_action_button("gt_pl_cancel_runner_add_btn", "Cancel", class_="btn-outline-secondary btn-sm mt-2"),
+        col_widths=[6, 6],
+    ))
+    return ui.div(*children, class_="border border-warning rounded p-2 mb-2")
+
+
 def register_game_tracking_pitch_log(
     input, output, session, app_state,
     _refresh_tick, _active_game_id, _access_ok, _can_edit, _bump_pa, _bump_refresh,
     _registered_pitch_row_ids, _gt_editing_pitch_id, _gt_pending_delete_pitch_id, _pitch_log_limit,
     _gt_pl_pending_preview, _gt_pl_pending_forced_end,
+    _gt_pl_adding_runner_event_pitch_id, _gt_pl_pending_runner_add,
     PITCH_OUTCOMES, CONTACT_QUALITY_OPTIONS, AB_OUTCOMES,
+    RUNNER_EVENT_TYPES, RUNNER_EVENT_OUT_TYPES,
     build_re_lookup, replay_game,
 ):
 
@@ -325,6 +434,8 @@ def register_game_tracking_pitch_log(
             pending_delete_id = _gt_pending_delete_pitch_id() if can_edit else None
             pending_preview = _gt_pl_pending_preview() if can_edit else None
             pending_forced_end = _gt_pl_pending_forced_end() if can_edit else None
+            pending_runner_add = _gt_pl_pending_runner_add() if can_edit else None
+            adding_runner_event_id = _gt_pl_adding_runner_event_pitch_id() if can_edit else None
             pitch_type_choices = {}
             ab_outcome_choices = {}
             if editing_id is not None:
@@ -428,6 +539,33 @@ def register_game_tracking_pitch_log(
                     rows.append(_render_forced_end_preview(pending_forced_end))
                     continue
 
+                if can_edit and pending_runner_add is not None and pending_runner_add.get("pitch_id") == p.game_pitch_id:
+                    rows.append(_render_runner_add_preview(pending_runner_add))
+                    continue
+
+                if can_edit and p.game_pitch_id == adding_runner_event_id:
+                    bases_here = (p.bases_after if p.ends_plate_appearance else p.bases_before) or "000"
+                    occupied_here = [i + 1 for i, c in enumerate(bases_here) if c == "1"]
+                    add_children = [ui.h6(f"Log runner event after pitch #{p.pitch_sequence}", class_="mt-2")]
+                    if not occupied_here:
+                        add_children.append(ui.p("No runners on base at this point -- nothing to log here.", class_="text-muted small"))
+                        add_children.append(ui.input_action_button("gt_pl_cancel_runner_add_form_btn", "Cancel", class_="btn-outline-secondary btn-sm"))
+                    else:
+                        from_choices_here = {str(b): BASE_LABEL[b] for b in occupied_here}
+                        add_children.append(ui.layout_columns(
+                            ui.input_select("gt_pl_add_event_type", "Event", choices=RUNNER_EVENT_TYPES),
+                            ui.input_select("gt_pl_add_from_base", "Runner on", choices=from_choices_here),
+                            col_widths=[7, 5],
+                        ))
+                        add_children.append(ui.output_ui("pitch_log_runner_add_fields"))
+                        add_children.append(ui.layout_columns(
+                            ui.input_action_button("gt_pl_save_runner_add_btn", "Log runner event", class_="btn-primary btn-sm mt-2"),
+                            ui.input_action_button("gt_pl_cancel_runner_add_form_btn", "Cancel", class_="btn-outline-secondary btn-sm mt-2"),
+                            col_widths=[6, 6],
+                        ))
+                    rows.append(ui.div(*add_children, class_="border rounded p-2 mb-2"))
+                    continue
+
                 side = "Us batting" if p.is_our_team_batting else "Us pitching"
                 # Distinguish the three states a coach can hit here, rather
                 # than a bare "—" that reads the same whether location never
@@ -471,26 +609,36 @@ def register_game_tracking_pitch_log(
                     # outing that already ended this way without a formal
                     # 3rd out being recorded (Ryker's Kurt Kassner example).
                     can_end_here = bool(game is not None and game.is_intrasquad and not p.is_our_team_batting)
+                    # "Log runner event" -- offered on ANY pitch that left
+                    # at least one runner on base (steals/caught stealing/
+                    # pickoffs/wild pitches/passed balls/balks can happen
+                    # regardless of which side is batting or whether this
+                    # is an intrasquad game), so a coach can go back and
+                    # log something missed in the moment on an
+                    # already-tracked game (Ryker, Sept 2026 -- see
+                    # _render_runner_add_preview above for the full story).
+                    bases_now = (p.bases_after if p.ends_plate_appearance else p.bases_before) or "000"
+                    can_add_runner_event_here = "1" in bases_now
+                    buttons = [
+                        ui.input_action_button(edit_btn_id, "Edit", class_="btn-outline-primary btn-sm"),
+                        ui.input_action_button(delete_btn_id, "Delete", class_="btn-outline-danger btn-sm"),
+                    ]
                     if can_end_here:
                         forced_end_btn_id = f"gt_pl_forced_end_btn_{p.game_pitch_id}"
-                        rows.append(ui.layout_columns(
-                            ui.div(*summary_children),
-                            ui.input_action_button(edit_btn_id, "Edit", class_="btn-outline-primary btn-sm"),
-                            ui.input_action_button(delete_btn_id, "Delete", class_="btn-outline-danger btn-sm"),
-                            ui.input_action_button(forced_end_btn_id, "End half-inning after this", class_="btn-outline-warning btn-sm"),
-                            col_widths=[6, 2, 2, 2],
-                        ))
-                    else:
-                        rows.append(ui.layout_columns(
-                            ui.div(*summary_children),
-                            ui.input_action_button(edit_btn_id, "Edit", class_="btn-outline-primary btn-sm"),
-                            ui.input_action_button(delete_btn_id, "Delete", class_="btn-outline-danger btn-sm"),
-                            col_widths=[8, 2, 2],
-                        ))
+                        buttons.append(ui.input_action_button(forced_end_btn_id, "End half-inning after this", class_="btn-outline-warning btn-sm"))
+                    if can_add_runner_event_here:
+                        add_runner_btn_id = f"gt_pl_add_runner_btn_{p.game_pitch_id}"
+                        buttons.append(ui.input_action_button(add_runner_btn_id, "Log runner event", class_="btn-outline-info btn-sm"))
+                    summary_width = 12 - 2 * len(buttons)
+                    rows.append(ui.layout_columns(
+                        ui.div(*summary_children),
+                        *buttons,
+                        col_widths=[summary_width] + [2] * len(buttons),
+                    ))
                     if edit_btn_id not in _registered_pitch_row_ids:
                         _registered_pitch_row_ids.add(edit_btn_id)
                         _registered_pitch_row_ids.add(delete_btn_id)
-                        _register_pitch_row_handlers(p.game_pitch_id, can_end_here)
+                        _register_pitch_row_handlers(p.game_pitch_id, can_end_here, can_add_runner_event_here)
                 else:
                     rows.append(ui.div(*summary_children))
 
@@ -506,7 +654,7 @@ def register_game_tracking_pitch_log(
     def _load_more_pitch_log():
         _pitch_log_limit.set(_pitch_log_limit() + 50)
 
-    def _register_pitch_row_handlers(pitch_id, can_end_here=False):
+    def _register_pitch_row_handlers(pitch_id, can_end_here=False, can_add_runner_event_here=False):
         edit_btn_id = f"gt_pl_edit_btn_{pitch_id}"
         delete_btn_id = f"gt_pl_delete_btn_{pitch_id}"
 
@@ -516,6 +664,8 @@ def register_game_tracking_pitch_log(
             _gt_pending_delete_pitch_id.set(None)
             _gt_pl_pending_preview.set(None)
             _gt_pl_pending_forced_end.set(None)
+            _gt_pl_adding_runner_event_pitch_id.set(None)
+            _gt_pl_pending_runner_add.set(None)
             _gt_editing_pitch_id.set(pitch_id)
             _bump_refresh()
 
@@ -525,8 +675,24 @@ def register_game_tracking_pitch_log(
             _gt_editing_pitch_id.set(None)
             _gt_pl_pending_preview.set(None)
             _gt_pl_pending_forced_end.set(None)
+            _gt_pl_adding_runner_event_pitch_id.set(None)
+            _gt_pl_pending_runner_add.set(None)
             _gt_pending_delete_pitch_id.set(pitch_id)
             _bump_refresh()
+
+        if can_add_runner_event_here:
+            add_runner_btn_id = f"gt_pl_add_runner_btn_{pitch_id}"
+
+            @reactive.effect
+            @reactive.event(input[add_runner_btn_id])
+            def _on_pitch_log_add_runner_trigger():
+                _gt_editing_pitch_id.set(None)
+                _gt_pending_delete_pitch_id.set(None)
+                _gt_pl_pending_preview.set(None)
+                _gt_pl_pending_forced_end.set(None)
+                _gt_pl_pending_runner_add.set(None)
+                _gt_pl_adding_runner_event_pitch_id.set(pitch_id)
+                _bump_refresh()
 
         if not can_end_here:
             return
@@ -588,6 +754,8 @@ def register_game_tracking_pitch_log(
                 _gt_editing_pitch_id.set(None)
                 _gt_pending_delete_pitch_id.set(None)
                 _gt_pl_pending_preview.set(None)
+                _gt_pl_adding_runner_event_pitch_id.set(None)
+                _gt_pl_pending_runner_add.set(None)
                 _bump_refresh()
             finally:
                 db.close()
@@ -598,6 +766,8 @@ def register_game_tracking_pitch_log(
         _gt_editing_pitch_id.set(None)
         _gt_pl_pending_preview.set(None)
         _gt_pl_pending_forced_end.set(None)
+        _gt_pl_adding_runner_event_pitch_id.set(None)
+        _gt_pl_pending_runner_add.set(None)
         _bump_refresh()
 
     @reactive.effect
@@ -880,6 +1050,8 @@ def register_game_tracking_pitch_log(
     def _cancel_pitch_log_delete():
         _gt_pending_delete_pitch_id.set(None)
         _gt_pl_pending_forced_end.set(None)
+        _gt_pl_adding_runner_event_pitch_id.set(None)
+        _gt_pl_pending_runner_add.set(None)
         _bump_refresh()
 
     @reactive.effect
@@ -914,5 +1086,200 @@ def register_game_tracking_pitch_log(
         finally:
             db.close()
         _gt_pending_delete_pitch_id.set(None)
+        _bump_pa()
+        _bump_refresh()
+
+    @render.ui
+    def pitch_log_runner_add_fields():
+        """Dynamic to_base/runner-identity sub-fields for the
+        retroactive "Log runner event" form -- same split
+        runner_event_fields() (the live version, game_tracking.py)
+        uses, just anchored to a past pitch instead of "right now"."""
+        if not _can_edit():
+            return None
+        pitch_id = _gt_pl_adding_runner_event_pitch_id()
+        if pitch_id is None:
+            return None
+        req("gt_pl_add_event_type" in input)
+        req("gt_pl_add_from_base" in input)
+        db = get_session()
+        try:
+            p = db.query(GamePitch).filter(GamePitch.game_pitch_id == pitch_id).first()
+            if p is None:
+                return None
+            game = db.query(Game).filter(Game.game_id == p.game_id).first()
+            if game is None:
+                return None
+
+            event_type = input.gt_pl_add_event_type()
+            from_base_val = int(input.gt_pl_add_from_base())
+            is_out_type = event_type in RUNNER_EVENT_OUT_TYPES
+
+            fields = []
+            if is_out_type:
+                fields.append(ui.p(f"Recorded as an out at {BASE_LABEL.get(from_base_val, '?')}.", class_="text-muted small"))
+            else:
+                to_choices = {str(b): TO_BASE_LABEL[b] for b in (2, 3, 4) if b > from_base_val}
+                fields.append(ui.input_select("gt_pl_add_to_base", "Advances to", choices=to_choices))
+
+            our_choices, opp_roster = _runner_choices_for_event(db, game, p.is_our_team_batting, p.batting_squad)
+            runner_choices = {"": "-- Unspecified --"}
+            if our_choices:
+                runner_choices.update(our_choices)
+            elif opp_roster:
+                runner_choices.update({str(op.opponent_player_id): op.player_name for op in opp_roster})
+            fields.append(ui.input_select("gt_pl_add_runner", "Runner (optional)", choices=runner_choices))
+            fields.append(ui.input_text("gt_pl_add_notes", "Notes (optional)", value=""))
+            return ui.div(*fields)
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.gt_pl_cancel_runner_add_form_btn)
+    def _cancel_runner_add_form():
+        _gt_pl_adding_runner_event_pitch_id.set(None)
+        _gt_pl_pending_runner_add.set(None)
+        _bump_refresh()
+
+    @reactive.effect
+    @reactive.event(input.gt_pl_save_runner_add_btn)
+    def _save_runner_add():
+        pitch_id = _gt_pl_adding_runner_event_pitch_id()
+        if pitch_id is None:
+            return
+        req("gt_pl_add_event_type" in input)
+        req("gt_pl_add_from_base" in input)
+
+        event_type = input.gt_pl_add_event_type()
+        from_base = int(input.gt_pl_add_from_base())
+        is_out = event_type in RUNNER_EVENT_OUT_TYPES
+        to_base = None
+        if not is_out:
+            if "gt_pl_add_to_base" not in input or not input.gt_pl_add_to_base():
+                ui.notification_show("Pick where the runner advances to.", type="error", duration=8)
+                return
+            to_base = int(input.gt_pl_add_to_base())
+
+        runner_raw = input.gt_pl_add_runner() if "gt_pl_add_runner" in input else ""
+        notes = (input.gt_pl_add_notes() or "").strip() if "gt_pl_add_notes" in input else ""
+        notes = notes or None
+
+        db = get_session()
+        try:
+            p = db.query(GamePitch).filter(GamePitch.game_pitch_id == pitch_id).first()
+            if p is None:
+                ui.notification_show("That pitch no longer exists -- not saved.", type="warning", duration=8)
+                _gt_pl_adding_runner_event_pitch_id.set(None)
+                _bump_refresh()
+                return
+            game_id = p.game_id
+            game = db.query(Game).filter(Game.game_id == game_id).first()
+
+            our_choices, opp_roster = _runner_choices_for_event(db, game, p.is_our_team_batting, p.batting_squad)
+            our_player_id = None
+            opponent_player_id = None
+            runner_label = None
+            if runner_raw:
+                if our_choices is not None:
+                    our_player_id = int(runner_raw)
+                    runner_label = our_choices.get(runner_raw)
+                else:
+                    opponent_player_id = int(runner_raw)
+                    runner_label = next((op.player_name for op in (opp_roster or []) if str(op.opponent_player_id) == runner_raw), None)
+
+            pending_event = GameRunnerEvent(
+                game_id=game_id, pitch_sequence_after=p.pitch_sequence,
+                is_our_team_batting=p.is_our_team_batting, batting_squad=p.batting_squad,
+                event_type=event_type, from_base=from_base, to_base=to_base, is_out=is_out,
+                our_player_id=our_player_id, opponent_player_id=opponent_player_id, notes=notes,
+            )
+
+            all_pitches = db.query(GamePitch).filter(GamePitch.game_id == game_id).all()
+            all_events = db.query(GameRunnerEvent).filter(GameRunnerEvent.game_id == game_id).all()
+            all_forced_ends = db.query(GameForcedHalfInningEnd).filter(GameForcedHalfInningEnd.game_id == game_id).all()
+            re_lookup = build_re_lookup(db)
+            result = replay_game(all_pitches, all_events + [pending_event], re_lookup, all_forced_ends)
+            rows, side_changed_seqs, score_changes = _build_preview_rows(all_pitches, result, game)
+
+            _gt_pl_pending_runner_add.set({
+                "pitch_id": pitch_id,
+                "target_seq": p.pitch_sequence,
+                "event_type": event_type, "from_base": from_base, "to_base": to_base, "is_out": is_out,
+                "our_player_id": our_player_id, "opponent_player_id": opponent_player_id, "notes": notes,
+                "runner_label": runner_label,
+                "rows": rows,
+                "side_changed_seqs": side_changed_seqs,
+                "score_changes": score_changes,
+            })
+            # Deliberately no db.commit() -- pending_event was never
+            # added to `db` (db.add was never called), so closing this
+            # session below discards it for free, same dry-run posture
+            # every other preview in this file uses.
+        finally:
+            db.close()
+        _bump_refresh()
+
+    @reactive.effect
+    @reactive.event(input.gt_pl_cancel_runner_add_btn)
+    def _cancel_runner_add_preview():
+        _gt_pl_pending_runner_add.set(None)
+        _gt_pl_adding_runner_event_pitch_id.set(None)
+        _bump_refresh()
+
+    @reactive.effect
+    @reactive.event(input.gt_pl_confirm_runner_add_btn)
+    def _confirm_runner_add():
+        """Writes the new GameRunnerEvent, then re-syncs the whole game
+        exactly like the other two preview-then-confirm flows in this
+        file -- re-derived fresh from the DB rather than trusting the
+        preview's cached numbers, same staleness guard
+        _confirm_pitch_log_preview/_confirm_pitch_log_forced_end use."""
+        preview = _gt_pl_pending_runner_add()
+        if preview is None:
+            return
+        pitch_id = preview["pitch_id"]
+        db = get_session()
+        try:
+            p = db.query(GamePitch).filter(GamePitch.game_pitch_id == pitch_id).first()
+            if p is None:
+                ui.notification_show("That pitch no longer exists -- nothing saved.", type="warning", duration=8)
+            else:
+                game_id = p.game_id
+                game = db.query(Game).filter(Game.game_id == game_id).first()
+                all_pitches = db.query(GamePitch).filter(GamePitch.game_id == game_id).all()
+                all_events = db.query(GameRunnerEvent).filter(GameRunnerEvent.game_id == game_id).all()
+                all_forced_ends = db.query(GameForcedHalfInningEnd).filter(GameForcedHalfInningEnd.game_id == game_id).all()
+
+                new_event = GameRunnerEvent(
+                    game_id=game_id, pitch_sequence_after=p.pitch_sequence,
+                    is_our_team_batting=p.is_our_team_batting, batting_squad=p.batting_squad,
+                    event_type=preview["event_type"], from_base=preview["from_base"],
+                    to_base=preview["to_base"], is_out=preview["is_out"],
+                    our_player_id=preview["our_player_id"], opponent_player_id=preview["opponent_player_id"],
+                    notes=preview["notes"], created_by_user_id=app_state.user_id(),
+                )
+                db.add(new_event)
+
+                re_lookup = build_re_lookup(db)
+                result = replay_game(all_pitches, all_events + [new_event], re_lookup, all_forced_ends)
+                for p2 in all_pitches:
+                    r = result["by_pitch"].get(p2.game_pitch_id)
+                    if r is None:
+                        continue
+                    for field in REPLAY_OWNED_FIELDS:
+                        setattr(p2, field, r[field])
+                if game is not None:
+                    game.our_score = result["our_score"]
+                    game.opponent_score = result["opponent_score"]
+                    game.squad_c_score = result["squad_c_score"]
+                db.commit()
+                ui.notification_show(
+                    f"Logged {preview['event_type']} after pitch #{p.pitch_sequence} -- {len(all_pitches)} pitch(es) re-synced.",
+                    type="message", duration=8,
+                )
+        finally:
+            db.close()
+        _gt_pl_pending_runner_add.set(None)
+        _gt_pl_adding_runner_event_pitch_id.set(None)
         _bump_pa()
         _bump_refresh()
