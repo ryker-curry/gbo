@@ -89,7 +89,7 @@ from shiny import ui, render, reactive, req
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import Game, GamePitch, GameRunnerEvent, PitchType
+from models import Game, GamePitch, GameRunnerEvent, GameForcedHalfInningEnd, PitchType
 import strike_zone
 import ui_helpers
 
@@ -240,11 +240,59 @@ def _render_preview_block(preview):
     return ui.div(*children, class_="border border-warning rounded p-2 mb-2")
 
 
+def _render_forced_end_preview(preview):
+    """Same border+Confirm/Cancel convention _render_preview_block uses
+    above for editing a pitch, but for INSERTING a brand-new
+    GameForcedHalfInningEnd anchored right after this pitch -- the
+    retroactive fix for a pitcher's outing that ended on a pitch count
+    with runners left on base (Ryker, Sept 2026 -- the Kurt Kassner
+    example; see forced_half_inning_end_panel in game_tracking.py for
+    the live version of this same action, and models.
+    GameForcedHalfInningEnd for the full design)."""
+    if preview["runs_scored"]:
+        charge = (
+            f"charged to {preview['credited_player_label']}'s ERA" if preview["credited_player_label"]
+            else "not charged to anyone's ERA (no pitcher on file for this pitch)"
+        )
+        runs_line = f"{preview['runs_scored']} runner(s) on base at this point will score and {charge}."
+    else:
+        runs_line = "No runners on base at this point -- the half-inning just ends here, no runs charged."
+    children = [
+        ui.h6(f"Preview: end half-inning after pitch #{preview['target_seq']}", class_="mt-2"),
+        ui.p(
+            "Nothing has been saved yet -- review what would change below, then Confirm or Cancel.",
+            class_="text-muted small",
+        ),
+        ui.p(runs_line, class_="small fw-bold mb-1"),
+    ]
+    if preview["side_changed_seqs"]:
+        children.append(ui.p(
+            "Side/inning changed for pitch(es) " + ", ".join(preview["side_changed_seqs"]) +
+            " -- this pitch's recorded batter/pitcher may no longer match who was "
+            "actually up; review it manually. The count/RE numbers will still be "
+            "corrected, but who's listed as playing won't be reassigned automatically.",
+            class_="text-warning small fw-bold mb-1",
+        ))
+    if preview["rows"]:
+        children.append(ui.p("Pitches that would change:", class_="small fw-bold mb-1"))
+        children.append(ui_helpers.render_dict_table(preview["rows"]))
+    else:
+        children.append(ui.p("No other pitch's stored count/inning/RE would change.", class_="text-muted small"))
+    if preview["score_changes"]:
+        children.append(ui.p("Score change: " + "; ".join(preview["score_changes"]), class_="small fw-bold mt-1"))
+    children.append(ui.layout_columns(
+        ui.input_action_button("gt_pl_confirm_forced_end_btn", "Confirm -- end half-inning", class_="btn-warning btn-sm mt-2"),
+        ui.input_action_button("gt_pl_cancel_forced_end_btn", "Cancel", class_="btn-outline-secondary btn-sm mt-2"),
+        col_widths=[6, 6],
+    ))
+    return ui.div(*children, class_="border border-warning rounded p-2 mb-2")
+
+
 def register_game_tracking_pitch_log(
-    input, output, session,
+    input, output, session, app_state,
     _refresh_tick, _active_game_id, _access_ok, _can_edit, _bump_pa, _bump_refresh,
     _registered_pitch_row_ids, _gt_editing_pitch_id, _gt_pending_delete_pitch_id, _pitch_log_limit,
-    _gt_pl_pending_preview,
+    _gt_pl_pending_preview, _gt_pl_pending_forced_end,
     PITCH_OUTCOMES, CONTACT_QUALITY_OPTIONS, AB_OUTCOMES,
     build_re_lookup, replay_game,
 ):
@@ -260,6 +308,7 @@ def register_game_tracking_pitch_log(
         db = get_session()
         try:
             limit = _pitch_log_limit()
+            game = db.query(Game).filter(Game.game_id == game_id).first()
             total_count = db.query(GamePitch).filter(GamePitch.game_id == game_id).count()
             pitches = (
                 db.query(GamePitch)
@@ -275,6 +324,7 @@ def register_game_tracking_pitch_log(
             editing_id = _gt_editing_pitch_id() if can_edit else None
             pending_delete_id = _gt_pending_delete_pitch_id() if can_edit else None
             pending_preview = _gt_pl_pending_preview() if can_edit else None
+            pending_forced_end = _gt_pl_pending_forced_end() if can_edit else None
             pitch_type_choices = {}
             ab_outcome_choices = {}
             if editing_id is not None:
@@ -374,6 +424,10 @@ def register_game_tracking_pitch_log(
                     ))
                     continue
 
+                if can_edit and pending_forced_end is not None and pending_forced_end.get("pitch_id") == p.game_pitch_id:
+                    rows.append(_render_forced_end_preview(pending_forced_end))
+                    continue
+
                 side = "Us batting" if p.is_our_team_batting else "Us pitching"
                 # Distinguish the three states a coach can hit here, rather
                 # than a bare "—" that reads the same whether location never
@@ -409,16 +463,34 @@ def register_game_tracking_pitch_log(
                 if can_edit:
                     edit_btn_id = f"gt_pl_edit_btn_{p.game_pitch_id}"
                     delete_btn_id = f"gt_pl_delete_btn_{p.game_pitch_id}"
-                    rows.append(ui.layout_columns(
-                        ui.div(*summary_children),
-                        ui.input_action_button(edit_btn_id, "Edit", class_="btn-outline-primary btn-sm"),
-                        ui.input_action_button(delete_btn_id, "Delete", class_="btn-outline-danger btn-sm"),
-                        col_widths=[8, 2, 2],
-                    ))
+                    # "End half-inning after this" -- intrasquad only, and
+                    # only offered on a pitch where we were PITCHING (the
+                    # side a pitch-count limit actually applies to). See
+                    # forced_half_inning_end_panel (game_tracking.py) for
+                    # the live version; this is the retroactive fix for an
+                    # outing that already ended this way without a formal
+                    # 3rd out being recorded (Ryker's Kurt Kassner example).
+                    can_end_here = bool(game is not None and game.is_intrasquad and not p.is_our_team_batting)
+                    if can_end_here:
+                        forced_end_btn_id = f"gt_pl_forced_end_btn_{p.game_pitch_id}"
+                        rows.append(ui.layout_columns(
+                            ui.div(*summary_children),
+                            ui.input_action_button(edit_btn_id, "Edit", class_="btn-outline-primary btn-sm"),
+                            ui.input_action_button(delete_btn_id, "Delete", class_="btn-outline-danger btn-sm"),
+                            ui.input_action_button(forced_end_btn_id, "End half-inning after this", class_="btn-outline-warning btn-sm"),
+                            col_widths=[6, 2, 2, 2],
+                        ))
+                    else:
+                        rows.append(ui.layout_columns(
+                            ui.div(*summary_children),
+                            ui.input_action_button(edit_btn_id, "Edit", class_="btn-outline-primary btn-sm"),
+                            ui.input_action_button(delete_btn_id, "Delete", class_="btn-outline-danger btn-sm"),
+                            col_widths=[8, 2, 2],
+                        ))
                     if edit_btn_id not in _registered_pitch_row_ids:
                         _registered_pitch_row_ids.add(edit_btn_id)
                         _registered_pitch_row_ids.add(delete_btn_id)
-                        _register_pitch_row_handlers(p.game_pitch_id)
+                        _register_pitch_row_handlers(p.game_pitch_id, can_end_here)
                 else:
                     rows.append(ui.div(*summary_children))
 
@@ -434,7 +506,7 @@ def register_game_tracking_pitch_log(
     def _load_more_pitch_log():
         _pitch_log_limit.set(_pitch_log_limit() + 50)
 
-    def _register_pitch_row_handlers(pitch_id):
+    def _register_pitch_row_handlers(pitch_id, can_end_here=False):
         edit_btn_id = f"gt_pl_edit_btn_{pitch_id}"
         delete_btn_id = f"gt_pl_delete_btn_{pitch_id}"
 
@@ -443,6 +515,7 @@ def register_game_tracking_pitch_log(
         def _on_pitch_log_edit_trigger():
             _gt_pending_delete_pitch_id.set(None)
             _gt_pl_pending_preview.set(None)
+            _gt_pl_pending_forced_end.set(None)
             _gt_editing_pitch_id.set(pitch_id)
             _bump_refresh()
 
@@ -451,14 +524,80 @@ def register_game_tracking_pitch_log(
         def _on_pitch_log_delete_trigger():
             _gt_editing_pitch_id.set(None)
             _gt_pl_pending_preview.set(None)
+            _gt_pl_pending_forced_end.set(None)
             _gt_pending_delete_pitch_id.set(pitch_id)
             _bump_refresh()
+
+        if not can_end_here:
+            return
+
+        forced_end_btn_id = f"gt_pl_forced_end_btn_{pitch_id}"
+
+        @reactive.effect
+        @reactive.event(input[forced_end_btn_id])
+        def _on_pitch_log_forced_end_trigger():
+            game_id = _active_game_id()
+            if game_id is None:
+                return
+            db = get_session()
+            try:
+                game = (
+                    db.query(Game)
+                    .options(joinedload(Game.runner_events), joinedload(Game.forced_half_inning_ends))
+                    .filter(Game.game_id == game_id)
+                    .first()
+                )
+                p = (
+                    db.query(GamePitch).options(joinedload(GamePitch.our_player))
+                    .filter(GamePitch.game_pitch_id == pitch_id).first()
+                )
+                if game is None or p is None or p.is_our_team_batting:
+                    return
+
+                all_pitches = sorted(game.pitches, key=lambda x: x.pitch_sequence)
+                all_events = sorted(game.runner_events, key=lambda e: (e.pitch_sequence_after, e.created_at))
+                existing_forced_ends = sorted(game.forced_half_inning_ends, key=lambda e: e.pitch_sequence_after)
+
+                # Runners on base right after this specific pitch -- the
+                # same state compute_current_state would land on if this
+                # were the last pitch recorded (bases_after when this
+                # pitch ended the PA, otherwise bases_before carries
+                # straight through since a non-ending pitch never changes
+                # bases). See models.GameForcedHalfInningEnd's docstring.
+                bases = (p.bases_after if p.ends_plate_appearance else p.bases_before) or "000"
+                runs_scored = bases.count("1")
+                pending_event = GameForcedHalfInningEnd(
+                    game_id=game_id, pitch_sequence_after=p.pitch_sequence,
+                    inning=p.inning, is_our_team_batting=p.is_our_team_batting,
+                    batting_squad=p.batting_squad, runs_scored=runs_scored,
+                    credited_player_id=p.our_player_id,
+                )
+                re_lookup = build_re_lookup(db)
+                result = replay_game(all_pitches, all_events, re_lookup, existing_forced_ends + [pending_event])
+                rows, side_changed_seqs, score_changes = _build_preview_rows(all_pitches, result, game)
+
+                _gt_pl_pending_forced_end.set({
+                    "pitch_id": pitch_id,
+                    "target_seq": p.pitch_sequence,
+                    "runs_scored": runs_scored,
+                    "credited_player_label": f"{p.our_player.first_name} {p.our_player.last_name}" if p.our_player else None,
+                    "rows": rows,
+                    "side_changed_seqs": side_changed_seqs,
+                    "score_changes": score_changes,
+                })
+                _gt_editing_pitch_id.set(None)
+                _gt_pending_delete_pitch_id.set(None)
+                _gt_pl_pending_preview.set(None)
+                _bump_refresh()
+            finally:
+                db.close()
 
     @reactive.effect
     @reactive.event(input.gt_pl_cancel_edit_btn)
     def _cancel_pitch_log_edit():
         _gt_editing_pitch_id.set(None)
         _gt_pl_pending_preview.set(None)
+        _gt_pl_pending_forced_end.set(None)
         _bump_refresh()
 
     @reactive.effect
@@ -585,9 +724,10 @@ def register_game_tracking_pitch_log(
                 game = db.query(Game).filter(Game.game_id == game_id).first()
                 all_pitches = db.query(GamePitch).filter(GamePitch.game_id == game_id).all()
                 all_events = db.query(GameRunnerEvent).filter(GameRunnerEvent.game_id == game_id).all()
+                all_forced_ends = db.query(GameForcedHalfInningEnd).filter(GameForcedHalfInningEnd.game_id == game_id).all()
                 _apply_field_values(pitch, values)  # in-memory only, on the ORM object already inside all_pitches
                 re_lookup = build_re_lookup(db)
-                result = replay_game(all_pitches, all_events, re_lookup)
+                result = replay_game(all_pitches, all_events, re_lookup, all_forced_ends)
                 preview_rows, side_changed_seqs, score_changes = _build_preview_rows(all_pitches, result, game)
                 _gt_pl_pending_preview.set({
                     "pitch_id": pitch_id,
@@ -646,9 +786,10 @@ def register_game_tracking_pitch_log(
                 game = db.query(Game).filter(Game.game_id == game_id).first()
                 all_pitches = db.query(GamePitch).filter(GamePitch.game_id == game_id).all()
                 all_events = db.query(GameRunnerEvent).filter(GameRunnerEvent.game_id == game_id).all()
+                all_forced_ends = db.query(GameForcedHalfInningEnd).filter(GameForcedHalfInningEnd.game_id == game_id).all()
                 _apply_field_values(pitch, preview["edits"])
                 re_lookup = build_re_lookup(db)
-                result = replay_game(all_pitches, all_events, re_lookup)
+                result = replay_game(all_pitches, all_events, re_lookup, all_forced_ends)
                 for p2 in all_pitches:
                     r = result["by_pitch"].get(p2.game_pitch_id)
                     if r is None:
@@ -672,9 +813,73 @@ def register_game_tracking_pitch_log(
         _bump_refresh()
 
     @reactive.effect
+    @reactive.event(input.gt_pl_cancel_forced_end_btn)
+    def _cancel_pitch_log_forced_end():
+        _gt_pl_pending_forced_end.set(None)
+        _bump_refresh()
+
+    @reactive.effect
+    @reactive.event(input.gt_pl_confirm_forced_end_btn)
+    def _confirm_pitch_log_forced_end():
+        """Writes the new GameForcedHalfInningEnd, then re-syncs the
+        whole game exactly like _confirm_pitch_log_preview does for an
+        edited pitch -- re-derived fresh from the DB rather than trusting
+        the preview's cached numbers, same staleness guard."""
+        preview = _gt_pl_pending_forced_end()
+        if preview is None:
+            return
+        pitch_id = preview["pitch_id"]
+        db = get_session()
+        try:
+            p = db.query(GamePitch).filter(GamePitch.game_pitch_id == pitch_id).first()
+            if p is None:
+                ui.notification_show("That pitch no longer exists -- nothing saved.", type="warning", duration=8)
+            else:
+                game_id = p.game_id
+                game = db.query(Game).filter(Game.game_id == game_id).first()
+                all_pitches = db.query(GamePitch).filter(GamePitch.game_id == game_id).all()
+                all_events = db.query(GameRunnerEvent).filter(GameRunnerEvent.game_id == game_id).all()
+                existing_forced_ends = db.query(GameForcedHalfInningEnd).filter(GameForcedHalfInningEnd.game_id == game_id).all()
+
+                bases = (p.bases_after if p.ends_plate_appearance else p.bases_before) or "000"
+                runs_scored = bases.count("1")
+                new_event = GameForcedHalfInningEnd(
+                    game_id=game_id, pitch_sequence_after=p.pitch_sequence,
+                    inning=p.inning, is_our_team_batting=p.is_our_team_batting,
+                    batting_squad=p.batting_squad, runs_scored=runs_scored,
+                    credited_player_id=p.our_player_id,
+                    created_by_user_id=app_state.user_id(),
+                )
+                db.add(new_event)
+
+                re_lookup = build_re_lookup(db)
+                result = replay_game(all_pitches, all_events, re_lookup, existing_forced_ends + [new_event])
+                for p2 in all_pitches:
+                    r = result["by_pitch"].get(p2.game_pitch_id)
+                    if r is None:
+                        continue
+                    for field in REPLAY_OWNED_FIELDS:
+                        setattr(p2, field, r[field])
+                if game is not None:
+                    game.our_score = result["our_score"]
+                    game.opponent_score = result["opponent_score"]
+                    game.squad_c_score = result["squad_c_score"]
+                db.commit()
+                ui.notification_show(
+                    f"Half-inning ended after pitch #{p.pitch_sequence} -- {len(all_pitches)} pitch(es) re-synced.",
+                    type="message", duration=8,
+                )
+        finally:
+            db.close()
+        _gt_pl_pending_forced_end.set(None)
+        _bump_pa()
+        _bump_refresh()
+
+    @reactive.effect
     @reactive.event(input.gt_pl_cancel_delete_btn)
     def _cancel_pitch_log_delete():
         _gt_pending_delete_pitch_id.set(None)
+        _gt_pl_pending_forced_end.set(None)
         _bump_refresh()
 
     @reactive.effect

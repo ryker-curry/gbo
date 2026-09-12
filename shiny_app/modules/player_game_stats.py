@@ -20,7 +20,7 @@ from database import get_session
 from models import Player, User, Season
 from game_stats import (
     get_batting_pitches, get_pitching_pitches, compute_batting_line, compute_pitching_line,
-    compute_pitch_type_breakdown, compute_batted_ball_profile,
+    compute_pitch_type_breakdown, compute_batted_ball_profile, get_forced_half_inning_end_runs,
 )
 from plate_discipline import compute_hitter_discipline, compute_pitcher_command, compute_zone_tier_discipline
 from pitch_location_stats import compute_command_precision, compute_attack_zones
@@ -100,6 +100,7 @@ def player_game_stats_server(input, output, session, app_state):
 
             batting_pitches = get_batting_pitches(db, my_player.player_id, season_choice)
             pitching_pitches = get_pitching_pitches(db, my_player.player_id, season_choice)
+            extra_earned_runs = get_forced_half_inning_end_runs(db, my_player.player_id, season_choice)
 
             sections = []
 
@@ -211,7 +212,7 @@ def player_game_stats_server(input, output, session, app_state):
                 if not pitching_pitches:
                     sections.append(ui_helpers.empty_state("No pitching data recorded yet for you in Game Tracking."))
                 else:
-                    pl = compute_pitching_line(pitching_pitches)
+                    pl = compute_pitching_line(pitching_pitches, extra_earned_runs=extra_earned_runs)
 
                     sections.append(ui.p(ui.strong("Line" + (f" — {season_label}" if season_label else " — All seasons"))))
                     sections.append(ui_helpers.render_kpi_cards([

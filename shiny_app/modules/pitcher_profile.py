@@ -291,6 +291,15 @@ def pitcher_profile_server(input, output, session, app_state):
             # on Pitcher Game Report, per-outing; this is the aggregate
             # read across the filtered window) ---
             if game_pitches:
+                # NOTE: unlike Pitcher Game Report/Analytics/Dashboard/My
+                # Stats, this aggregate line does NOT fold in "End
+                # half-inning early" runs (models.GameForcedHalfInningEnd)
+                # -- this view's date_from/date_to/game_scope filtering
+                # (profile_queries.get_pitcher_profile_pitches) has no
+                # season_id/game_id equivalent to look those events up
+                # by. Rare enough in practice (only intrasquad
+                # pitch-count-limited outings) that it's flagged here
+                # rather than duplicating _apply_filters for one table.
                 line = compute_pitching_line(game_pitches)
                 sections.append(ui.p(ui.strong("Line")))
                 sections.append(ui_helpers.render_kpi_cards([
