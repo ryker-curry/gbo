@@ -35,6 +35,7 @@ plain "Left"/"Right" labels, same as get_zone_labels() does.
 """
 
 import math
+from collections import defaultdict
 from statistics import mean, median, stdev
 
 import command_config
@@ -258,9 +259,9 @@ class _GamePitchCommandView:
         "within_precision_target", "within_command_target", "within_competitive_target",
     )
 
-    def __init__(self, game_pitch, throws):
+    def __init__(self, game_pitch, throws, pitch_number):
         p = game_pitch
-        self.pitch_number = p.pitch_sequence
+        self.pitch_number = pitch_number
         self.pitch_type = p.pitch_type
         self.intended_x = p.intended_plate_x
         self.intended_z = p.intended_plate_z
@@ -281,8 +282,29 @@ def game_pitches_command_view(game_pitches, throws):
     intent GBO never captures -- see game_tracking.py's show_intended)
     are silently excluded here, same as this module's own docstring:
     command is fundamentally an intent-vs-actual comparison, not
-    computable without a known intent."""
-    return [_GamePitchCommandView(p, throws) for p in game_pitches if p.intended_plate_x is not None]
+    computable without a known intent.
+
+    pitch_number (Ryker, Sept 2026: the Command Chart -- Miss From
+    Target hover text was showing "Pitch #52" using GamePitch's own
+    pitch_sequence, which is the game-wide count across BOTH pitchers,
+    not this pitcher's own count -- same "specific to that pitcher"
+    complaint already fixed elsewhere on Pitcher Game Report) is
+    computed here as each pitch's own 1-based position within ITS GAME,
+    in pitch_sequence order -- grouped by game_id first so (a) two
+    pitchers who both threw in the same game are numbered
+    independently instead of sharing one running count, and (b) a
+    multi-game view (Pitcher Profile's own use of this same function
+    across a date range) restarts the count at 1 for each game instead
+    of running one continuous number across game boundaries."""
+    eligible = [p for p in game_pitches if p.intended_plate_x is not None]
+    by_game = defaultdict(list)
+    for p in eligible:
+        by_game[p.game_id].append(p)
+    pitch_number_by_id = {}
+    for pitches_in_game in by_game.values():
+        for idx, p in enumerate(sorted(pitches_in_game, key=lambda p: p.pitch_sequence), start=1):
+            pitch_number_by_id[p.game_pitch_id] = idx
+    return [_GamePitchCommandView(p, throws, pitch_number_by_id[p.game_pitch_id]) for p in eligible]
 
 
 # ---------------------------------------------------------------------------
