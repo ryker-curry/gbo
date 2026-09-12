@@ -976,6 +976,214 @@ def compute_current_state(pitches, runner_events=None):
     return state
 
 
+def replay_game(pitches, runner_events, re_lookup):
+    """Recompute every pitch's forward-derived chain (balls_before,
+    strikes_before, outs_before, bases_before, inning, is_our_team_batting,
+    pa_pitch_number, re_before, re_after, run_value) plus the game's
+    score totals, by walking the ENTIRE game from the start -- unlike
+    compute_current_state (above), which only ever looks at the single
+    last-recorded pitch to figure out what the NEXT pitch's state should
+    be. This is that same one-step transition, just applied at every
+    step of a full replay instead of once at the end.
+
+    Built for the Pitch Log "edit any past pitch" feature (Ryker, Sept
+    2026: "can we adjust game tracking to be able and go back and edit
+    anything that has happened but not having to undo pitches"). Editing
+    an EARLIER pitch's pitch_outcome/ab_outcome/outs_after/bases_after/
+    runs_scored_on_play silently desyncs every later pitch's stored
+    chain fields, since those were only ever computed once, at insert
+    time, from whatever came before them at THAT moment -- nothing
+    re-derives them when an earlier row changes. This function is the
+    fix: give it the game's full pitch list (with a pending, not-yet-
+    committed edit already applied in memory by the caller -- see
+    game_tracking_pitch_log_display._save_pitch_log_edit) and every
+    GameRunnerEvent, and it returns what SHOULD be stored everywhere,
+    so the caller can diff against what IS stored and write only what
+    changed.
+
+    Deliberately INPUT, never recomputed/returned, because these are
+    facts about what actually happened (or the coach's own judgment
+    calls), not something derivable from count math: ab_outcome,
+    outs_after, bases_after, runs_scored_on_play, unearned_runs_on_play,
+    ends_plate_appearance, pitch_outcome, pitch_type_id, every location/
+    contact/batted-ball field, notes, our_player_id, opponent_hand,
+    opponent_player_id, opponent_our_player_id, opponent_batting_order,
+    batting_slot_id, batting_squad, pitch_sequence. Each historical
+    row's own ends_plate_appearance/outs_after/bases_after/
+    runs_scored_on_play is trusted as given -- this only recomputes the
+    count/RE/RV/inning/side chain that flows FROM those facts, exactly
+    the same way compute_current_state does for one pitch at a time.
+
+    inning and is_our_team_batting ARE recomputed/returned (an earlier
+    edit that changes how many outs a half-inning took can shift where
+    every later half-inning boundary falls) -- but a pitch whose
+    recomputed inning/is_our_team_batting differs from what's currently
+    stored is also listed separately in side_changed_pitch_ids, because
+    that pitch's already-recorded our_player_id/opponent_* identity
+    fields describe who was ACTUALLY batting/pitching live and this
+    function has no way to know who that should be instead -- reassigning
+    those is a human judgment call (see the module docstring's Milestone
+    on Pitch Log editing), not something this replay attempts.
+
+    Score reconstruction sums every PA-ending pitch's runs_scored_on_play
+    and every runner event's to_base == 4, crediting our_score/
+    opponent_score/squad_c_score with the exact same 5-way branch used
+    at every other score-mutating site in this file (batting_squad
+    'A'/'B'/'C' first, falling back to is_our_team_batting for ordinary
+    two-side games) -- except that for a pitch, the is_our_team_batting
+    used in that fallback is the just-RECOMPUTED value for that pitch
+    (the value this function is about to have the caller write onto the
+    row), not the stale stored one -- so the score total this function
+    returns always agrees with the inning/side chain it also returns.
+    batting_squad itself is never recomputed (same reasoning as player
+    identity above: which of three squads was actually up isn't
+    derivable from count math), so a three-squad game with a side change
+    still needs the same manual review flagged by side_changed_pitch_ids.
+    Runner events are simpler: neither their is_our_team_batting nor
+    their batting_squad is ever recomputed (events aren't reordered or
+    re-attributed by this function), so their score credit always uses
+    their own stored values, unchanged.
+
+    Args:
+        pitches: every GamePitch for one game (any order -- sorted here
+            by pitch_sequence). May already have one pending, not-yet-
+            committed edit applied in memory; that's the caller's job.
+        runner_events: every GameRunnerEvent for the same game (any
+            order -- sorted here, same as compute_current_state).
+        re_lookup: build_re_lookup(db)'s {(outs, bases, count): re_value}
+            dict.
+
+    Returns a dict:
+        "by_pitch": {game_pitch_id: {"balls_before", "strikes_before",
+            "outs_before", "bases_before", "inning", "is_our_team_batting",
+            "pa_pitch_number", "re_before", "re_after", "run_value"}}
+            for every pitch passed in.
+        "side_changed_pitch_ids": game_pitch_ids where the recomputed
+            inning or is_our_team_batting differs from what's currently
+            stored on that row.
+        "our_score", "opponent_score", "squad_c_score": reconstructed
+            from scratch (not incremental deltas).
+    """
+    ordered_pitches = sorted(pitches, key=lambda p: p.pitch_sequence)
+    events = list(runner_events or [])
+
+    state = {
+        "inning": 1, "is_our_batting": True, "outs": 0, "bases": "000",
+        "balls": 0, "strikes": 0, "pa_pitch_number": 1,
+    }
+    our_score = opponent_score = squad_c_score = 0
+
+    def _credit(batting_squad, is_our_team_batting, runs):
+        nonlocal our_score, opponent_score, squad_c_score
+        if not runs:
+            return
+        if batting_squad == "A":
+            our_score += runs
+        elif batting_squad == "B":
+            opponent_score += runs
+        elif batting_squad == "C":
+            squad_c_score += runs
+        elif is_our_team_batting:
+            our_score += runs
+        else:
+            opponent_score += runs
+
+    def _fold_pending(anchor_seq):
+        pending = sorted(
+            (e for e in events if e.pitch_sequence_after == anchor_seq),
+            key=lambda e: e.created_at,
+        )
+        for ev in pending:
+            if ev.is_out is False and ev.to_base == 4:
+                _credit(ev.batting_squad, ev.is_our_team_batting, 1)
+        if not pending:
+            return
+        bases, outs = apply_runner_events(state["bases"], state["outs"], pending)
+        if outs >= 3:
+            state["inning"] += 1
+            state["is_our_batting"] = not state["is_our_batting"]
+            outs, bases = 0, "000"
+            state["balls"], state["strikes"], state["pa_pitch_number"] = 0, 0, 1
+        state["outs"], state["bases"] = outs, bases
+
+    by_pitch = {}
+    side_changed_pitch_ids = []
+
+    # Events recorded before this game's very first pitch (anchor 0),
+    # same convention compute_current_state uses for an empty pitch list.
+    _fold_pending(0)
+
+    for p in ordered_pitches:
+        by_pitch[p.game_pitch_id] = {
+            "balls_before": state["balls"],
+            "strikes_before": state["strikes"],
+            "outs_before": state["outs"],
+            "bases_before": state["bases"],
+            "inning": state["inning"],
+            "is_our_team_batting": state["is_our_batting"],
+            "pa_pitch_number": state["pa_pitch_number"],
+        }
+        if state["inning"] != p.inning or state["is_our_batting"] != p.is_our_team_batting:
+            side_changed_pitch_ids.append(p.game_pitch_id)
+
+        ends_pa = bool(p.ends_plate_appearance)
+        if ends_pa:
+            new_balls = new_strikes = None
+        else:
+            new_balls = state["balls"] + (1 if p.pitch_outcome == "Ball" else 0)
+            new_strikes = state["strikes"]
+            if p.pitch_outcome in ("Called Strike", "Swing and Miss"):
+                new_strikes += 1
+            elif p.pitch_outcome == "Foul" and new_strikes < 2:
+                new_strikes += 1
+
+        re_before, re_after, run_value = compute_re_and_rv(
+            re_lookup, state["outs"], state["bases"], state["balls"], state["strikes"],
+            ends_pa, p.outs_after if ends_pa else None, p.bases_after if ends_pa else None,
+            (p.runs_scored_on_play or 0) if ends_pa else 0,
+            new_balls=new_balls, new_strikes=new_strikes,
+        )
+        by_pitch[p.game_pitch_id]["re_before"] = re_before
+        by_pitch[p.game_pitch_id]["re_after"] = re_after
+        by_pitch[p.game_pitch_id]["run_value"] = run_value
+
+        if ends_pa and p.runs_scored_on_play:
+            # Use the just-recomputed is_our_team_batting (state["is_our_batting"],
+            # already stashed above as this pitch's "is_our_team_batting" result)
+            # rather than the pitch's own stale stored value, so the score this
+            # function returns always agrees with the side/inning chain it also
+            # returns -- see docstring.
+            _credit(p.batting_squad, state["is_our_batting"], p.runs_scored_on_play)
+
+        if not ends_pa:
+            state["balls"], state["strikes"] = new_balls, new_strikes
+            state["pa_pitch_number"] = (state["pa_pitch_number"] or 1) + 1
+            # inning/is_our_batting/outs/bases are unchanged by a pitch
+            # that doesn't end the PA.
+        else:
+            outs = p.outs_after if p.outs_after is not None else state["outs"]
+            bases = p.bases_after if p.bases_after is not None else "000"
+            inning = state["inning"]
+            is_our_batting = state["is_our_batting"]
+            if outs >= 3:
+                inning += 1
+                is_our_batting = not is_our_batting
+                outs, bases = 0, "000"
+            state["inning"], state["is_our_batting"] = inning, is_our_batting
+            state["outs"], state["bases"] = outs, bases
+            state["balls"], state["strikes"], state["pa_pitch_number"] = 0, 0, 1
+
+        _fold_pending(p.pitch_sequence)
+
+    return {
+        "by_pitch": by_pitch,
+        "side_changed_pitch_ids": side_changed_pitch_ids,
+        "our_score": our_score,
+        "opponent_score": opponent_score,
+        "squad_c_score": squad_c_score,
+    }
+
+
 def _current_pa_pitches(pitches):
     """Trailing pitches of the still-open plate appearance -- everything
     after the last pitch that ended a PA (sorted ascending, same order
@@ -1126,6 +1334,16 @@ def game_tracking_server(input, output, session, app_state):
     _gt_editing_pitch_id = reactive.Value(None)
     _gt_pending_delete_pitch_id = reactive.Value(None)
     _pitch_log_limit = reactive.Value(50)  # "Load more" bumps this by 50 at a time -- see pitch_log_body
+    # Set only while a state-affecting Pitch Log edit (pitch_outcome/
+    # ab_outcome/ends_plate_appearance/outs_after/bases_after/
+    # runs_scored_on_play/unearned_runs_on_play) is awaiting the
+    # coach's explicit "Confirm & Save" -- holds the pending edit's
+    # values plus the replay_game()-computed preview to render. See
+    # game_tracking_pitch_log_display.py's module docstring for the
+    # full preview-then-confirm design (Sept 2026, Ryker: "can we
+    # adjust game tracking to be able and go back and edit anything
+    # that has happened but not having to undo pitches").
+    _gt_pl_pending_preview = reactive.Value(None)
     _runner_event_form_open = reactive.Value(False)  # collapsed by default -- see runner_events_panel (Ryker, 2026-08-26)
 
     def _bump_refresh():
@@ -1299,6 +1517,7 @@ def game_tracking_server(input, output, session, app_state):
         _gt_editing_pitch_id.set(None)
         _gt_pending_delete_pitch_id.set(None)
         _pitch_log_limit.set(50)
+        _gt_pl_pending_preview.set(None)
 
     # -------------------------------------------------------------------
     # New game
@@ -3970,15 +4189,20 @@ def game_tracking_server(input, output, session, app_state):
     # Extracted to game_tracking_pitch_log_display.py (Tier 2 split,
     # 2026-09 -- see that file's module docstring for why
     # _registered_pitch_row_ids/_gt_editing_pitch_id/
-    # _gt_pending_delete_pitch_id/_pitch_log_limit stay defined here
-    # (below) rather than moving with the functions -- _sync_active_
-    # game_id above still resets them on game change). Registered here,
-    # once, synchronously, same pattern as the other extracted sections.
+    # _gt_pending_delete_pitch_id/_pitch_log_limit/_gt_pl_pending_preview
+    # stay defined here (below) rather than moving with the functions --
+    # _sync_active_game_id above still resets them on game change).
+    # AB_OUTCOMES/build_re_lookup/replay_game are threaded in the same
+    # way PITCH_OUTCOMES/CONTACT_QUALITY_OPTIONS already were, for the
+    # same circular-import reason. Registered here, once, synchronously,
+    # same pattern as the other extracted sections.
     game_tracking_pitch_log_display.register_game_tracking_pitch_log(
         input, output, session,
         _refresh_tick, _active_game_id, _access_ok, _can_edit, _bump_pa, _bump_refresh,
         _registered_pitch_row_ids, _gt_editing_pitch_id, _gt_pending_delete_pitch_id, _pitch_log_limit,
-        PITCH_OUTCOMES, CONTACT_QUALITY_OPTIONS,
+        _gt_pl_pending_preview,
+        PITCH_OUTCOMES, CONTACT_QUALITY_OPTIONS, AB_OUTCOMES,
+        build_re_lookup, replay_game,
     )
 
     # -------------------------------------------------------------------
