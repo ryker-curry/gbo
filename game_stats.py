@@ -21,7 +21,7 @@ function's docstring.
 """
 
 from sqlalchemy.orm import joinedload
-from models import GamePitch, Game
+from models import GamePitch, Game, GameForcedHalfInningEnd
 from plate_discipline import SWING_OUTCOMES, WHIFF_OUTCOMES
 from strike_zone import is_in_zone
 from field_location import classify_spray_direction
@@ -68,6 +68,34 @@ def get_pitching_pitches(session, player_id, season_id=None, game_id=None):
     if game_id is not None:
         query = query.filter(GamePitch.game_id == game_id)
     return query.all()
+
+
+def get_forced_half_inning_end_runs(session, player_id, season_id=None, game_id=None):
+    """Total runs charged to this player via the "End half-inning
+    early" control (GameForcedHalfInningEnd -- see models.py's
+    docstring and game_tracking.py's compute_current_state()/
+    replay_game()) -- runners left on base when an intrasquad
+    half-inning is force-ended for a pitch count, swept home and
+    charged as earned runs (Ryker, Sept 2026: "if there are runners on
+    base when the half innings ends those runs score and count towards
+    era"). These runs never land on any GamePitch row (the half-inning
+    ended before another pitch/PA-ending play could record them there),
+    so compute_pitching_line() can't see them just from a pitches list
+    -- callers that want an accurate ERA/Runs Allowed pass this total
+    in as compute_pitching_line(pitches, extra_earned_runs=...).
+    game_id/season_id: see get_batting_pitches' docstring, same
+    convention -- intrasquad-only feature, so credited_player_id is
+    always one of our own roster Players, never an OpponentPlayer."""
+    query = session.query(GameForcedHalfInningEnd).filter(
+        GameForcedHalfInningEnd.credited_player_id == player_id
+    )
+    if season_id is not None or game_id is not None:
+        query = query.join(Game, GameForcedHalfInningEnd.game_id == Game.game_id)
+        if season_id is not None:
+            query = query.filter(Game.season_id == season_id)
+        if game_id is not None:
+            query = query.filter(GameForcedHalfInningEnd.game_id == game_id)
+    return sum(row.runs_scored or 0 for row in query.all())
 
 
 def get_pitches_thrown_to_opponent_batter(session, opponent_player_id, season_id=None, game_id=None):
@@ -342,10 +370,22 @@ def _is_leadoff_pa(pa_pitches_for_this_pa_first_pitch):
     return p.pa_pitch_number == 1 and p.outs_before == 0 and (p.bases_before or "000") == "000"
 
 
-def compute_pitching_line(pitches):
+def compute_pitching_line(pitches, extra_earned_runs=0):
     """The box-score-style header line for a pitcher -- either for a
     single game (pass pitches from get_pitching_pitches(..., game_id=))
     or aggregated across a season/all-time, same function either way.
+
+    extra_earned_runs: runs charged to this pitcher that don't live on
+    any GamePitch row -- today, only runners swept home by the "End
+    half-inning early" control (see get_forced_half_inning_end_runs()
+    above and models.GameForcedHalfInningEnd). Defaults to 0 (every
+    existing caller is unaffected); a caller showing ERA/Runs Allowed
+    for an intrasquad pitcher should pass
+    get_forced_half_inning_end_runs(db, player_id, ...) here so those
+    runs actually show up in both "Runs Allowed" and "ERA" -- they're
+    always fully earned (Ryker: "those runs score and count towards
+    era"), so this adds equally to runs_allowed and earned_runs_allowed
+    below, never to unearned.
 
     Early/Ahead here use Ryker's exact per-plate-appearance definitions
     (confirmed directly with him, see compute_pitch_type_breakdown's
@@ -376,7 +416,7 @@ def compute_pitching_line(pitches):
     hits_allowed = sum(1 for p in pa_pitches if p.ab_outcome in HIT_OUTCOMES)
     hr_allowed = sum(1 for p in pa_pitches if p.ab_outcome == "HR")
     xbh_allowed = sum(1 for p in pa_pitches if p.ab_outcome in ("2B", "3B", "HR"))
-    runs_allowed = sum(p.runs_scored_on_play or 0 for p in pitches)
+    runs_allowed = sum(p.runs_scored_on_play or 0 for p in pitches) + extra_earned_runs
     # Real earned runs, now that game_pitches.unearned_runs_on_play
     # exists (Aug 31 2026, manual per-play tagging -- see
     # models.GamePitch for why this is manual, not derived). Every row
@@ -384,8 +424,9 @@ def compute_pitching_line(pitches):
     # didn't mark anything unearned, has unearned_runs_on_play=0, so
     # earned_runs_allowed == runs_allowed for all of that data -- this
     # is a strict refinement, not a break, of the old runs-allowed-only
-    # picture.
-    earned_runs_allowed = sum(p.earned_runs_on_play for p in pitches)
+    # picture. extra_earned_runs (forced-half-inning-end runs, always
+    # fully earned) is folded into both this and runs_allowed above.
+    earned_runs_allowed = sum(p.earned_runs_on_play for p in pitches) + extra_earned_runs
     sac = sum(1 for p in pa_pitches if p.ab_outcome in ("Sac Bunt", "Sac Fly"))
     sf = sum(1 for p in pa_pitches if p.ab_outcome == "Sac Fly")
     ab = batters_faced - bb - hbp - sac

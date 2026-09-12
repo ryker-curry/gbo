@@ -32,7 +32,7 @@ from database import get_session
 from models import Player, Season
 from game_stats import (
     get_batting_pitches, get_pitching_pitches, compute_batting_line, compute_pitching_line,
-    compute_pitch_type_breakdown, compute_batted_ball_profile,
+    compute_pitch_type_breakdown, compute_batted_ball_profile, get_forced_half_inning_end_runs,
 )
 from plate_discipline import (
     compute_hitter_discipline, compute_pitcher_command, compute_zone_performance,
@@ -117,6 +117,7 @@ def analytics_server(input, output, session, app_state):
 
             batting_pitches = get_batting_pitches(db, selected_player_id, season_choice)
             pitching_pitches = get_pitching_pitches(db, selected_player_id, season_choice)
+            extra_earned_runs = get_forced_half_inning_end_runs(db, selected_player_id, season_choice)
 
             if not player.is_pitcher:
                 sections.append(ui.h6("Hitting", class_="gbo-section-title"))
@@ -227,7 +228,7 @@ def analytics_server(input, output, session, app_state):
                 if not pitching_pitches:
                     sections.append(ui_helpers.empty_state("No pitching data recorded yet for this player in Game Tracking."))
                 else:
-                    pitching_line = compute_pitching_line(pitching_pitches)
+                    pitching_line = compute_pitching_line(pitching_pitches, extra_earned_runs=extra_earned_runs)
                     command = compute_pitcher_command(pitching_pitches)
 
                     sections.append(ui.p(ui.strong("Pitching KPIs")))

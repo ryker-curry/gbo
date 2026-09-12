@@ -363,7 +363,7 @@ import field_location
 from models import (
     Player, Position, PitchType, Game, GameLineupSlot, GamePitch, RunExpectancy,
     OpponentTeam, OpponentPlayer, Season, PitchingChange, PlayerPitchArsenal, OpponentLineupSlot,
-    LineupSubstitution, GameRunnerEvent,
+    LineupSubstitution, GameRunnerEvent, GameForcedHalfInningEnd,
 )
 from game_stats import (
     get_pitching_pitches, get_batting_pitches, compute_pitching_line, compute_batting_line,
@@ -374,6 +374,7 @@ import ui_helpers
 import game_tracking_manage_display
 import game_tracking_video_display
 import game_tracking_pitch_log_display
+import game_tracking_runner_events_display
 
 ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
 
@@ -901,15 +902,23 @@ def apply_runner_events(bases, outs, events):
     return "".join(b), outs
 
 
-def compute_current_state(pitches, runner_events=None):
+def compute_current_state(pitches, runner_events=None, forced_ends=None):
     """runner_events: every GameRunnerEvent for this game (any order --
     this function sorts and filters). Folded in AFTER the pitch-derived
     state below, using the SAME rollover rule (outs >= 3 -> next half-
     inning) whether the pitch-derived state or a runner event supplied
     the 3rd out -- see GameRunnerEvent's docstring in models.py for why
     this exists at all (mid-PA base-running events previously had no
-    way to change bases/outs)."""
+    way to change bases/outs).
+
+    forced_ends: every GameForcedHalfInningEnd for this game (any
+    order). Folded in last, at the same anchor -- but UNCONDITIONALLY
+    rolls to the next half-inning (a coach ended it here on purpose),
+    regardless of whatever bases/outs the pitch- and runner-event-
+    derived state above just computed. See models.GameForcedHalfInningEnd's
+    docstring."""
     runner_events = runner_events or []
+    forced_ends = forced_ends or []
     if not pitches:
         state = {
             "inning": 1, "is_our_batting": True, "outs": 0, "bases": "000",
@@ -973,10 +982,18 @@ def compute_current_state(pitches, runner_events=None):
                 state.pop(k, None)
         state["outs"], state["bases"] = outs, bases
 
+    if any(fe.pitch_sequence_after == anchor for fe in forced_ends):
+        state["inning"] += 1
+        state["is_our_batting"] = not state["is_our_batting"]
+        state["outs"], state["bases"] = 0, "000"
+        state["balls"], state["strikes"], state["pa_pitch_number"], state["new_pa"] = 0, 0, 1, True
+        for k in ("current_our_player", "current_opp_hand", "current_opp_order", "current_opp_player", "current_opp_our_player"):
+            state.pop(k, None)
+
     return state
 
 
-def replay_game(pitches, runner_events, re_lookup):
+def replay_game(pitches, runner_events, re_lookup, forced_ends=None):
     """Recompute every pitch's forward-derived chain (balls_before,
     strikes_before, outs_before, bases_before, inning, is_our_team_batting,
     pa_pitch_number, re_before, re_after, run_value) plus the game's
@@ -1050,6 +1067,17 @@ def replay_game(pitches, runner_events, re_lookup):
             committed edit applied in memory; that's the caller's job.
         runner_events: every GameRunnerEvent for the same game (any
             order -- sorted here, same as compute_current_state).
+        forced_ends: every GameForcedHalfInningEnd for the same game
+            (any order), folded in at its own pitch_sequence_after the
+            same way a runner event supplying the 3rd out is, except it
+            ALWAYS forces the rollover (outs to 3, bases to "000",
+            inning +1, is_our_team_batting flips) regardless of the
+            actual bases/outs at that point, and its own runs_scored is
+            credited via the same batting_squad/is_our_team_batting
+            5-way branch every other score site here uses -- see
+            models.GameForcedHalfInningEnd's docstring. Defaults to
+            None/[] so every existing caller (no forced ends yet) is
+            unaffected.
         re_lookup: build_re_lookup(db)'s {(outs, bases, count): re_value}
             dict.
 
@@ -1066,6 +1094,7 @@ def replay_game(pitches, runner_events, re_lookup):
     """
     ordered_pitches = sorted(pitches, key=lambda p: p.pitch_sequence)
     events = list(runner_events or [])
+    forced = list(forced_ends or [])
 
     state = {
         "inning": 1, "is_our_batting": True, "outs": 0, "bases": "000",
@@ -1096,15 +1125,26 @@ def replay_game(pitches, runner_events, re_lookup):
         for ev in pending:
             if ev.is_out is False and ev.to_base == 4:
                 _credit(ev.batting_squad, ev.is_our_team_batting, 1)
-        if not pending:
-            return
-        bases, outs = apply_runner_events(state["bases"], state["outs"], pending)
-        if outs >= 3:
+        if pending:
+            bases, outs = apply_runner_events(state["bases"], state["outs"], pending)
+            if outs >= 3:
+                state["inning"] += 1
+                state["is_our_batting"] = not state["is_our_batting"]
+                outs, bases = 0, "000"
+                state["balls"], state["strikes"], state["pa_pitch_number"] = 0, 0, 1
+            state["outs"], state["bases"] = outs, bases
+
+        # Forced half-inning ends (models.GameForcedHalfInningEnd) --
+        # same anchor convention, but ALWAYS roll over (a coach ended
+        # it here on purpose, regardless of the real out count) and
+        # credit its own runs_scored, all-earned, to whichever score
+        # column its batting_squad/is_our_team_batting resolves to.
+        for fe in (e for e in forced if e.pitch_sequence_after == anchor_seq):
+            _credit(fe.batting_squad, fe.is_our_team_batting, fe.runs_scored)
             state["inning"] += 1
             state["is_our_batting"] = not state["is_our_batting"]
-            outs, bases = 0, "000"
+            state["outs"], state["bases"] = 0, "000"
             state["balls"], state["strikes"], state["pa_pitch_number"] = 0, 0, 1
-        state["outs"], state["bases"] = outs, bases
 
     by_pitch = {}
     side_changed_pitch_ids = []
@@ -1344,7 +1384,34 @@ def game_tracking_server(input, output, session, app_state):
     # adjust game tracking to be able and go back and edit anything
     # that has happened but not having to undo pitches").
     _gt_pl_pending_preview = reactive.Value(None)
+    # Pending "End half-inning after this pitch" confirmation (Pitch Log
+    # retroactive fix -- see forced_half_inning_end_panel above for the
+    # live version, and game_tracking_pitch_log_display.py for how this
+    # is built/rendered/confirmed). A separate Value from
+    # _gt_pl_pending_preview above rather than reusing it -- inserting a
+    # brand-new GameForcedHalfInningEnd is a different shape of pending
+    # action from "here's the edited pitch's replay preview", and
+    # keeping them separate avoids teaching that dict two shapes.
+    _gt_pl_pending_forced_end = reactive.Value(None)
     _runner_event_form_open = reactive.Value(False)  # collapsed by default -- see runner_events_panel (Ryker, 2026-08-26)
+    _forced_end_form_open = reactive.Value(False)  # collapsed by default -- see forced_half_inning_end_panel (Ryker, Sept 2026)
+
+    # Runner Events Log tab (Sept 2026, Ryker: "also need to be able to
+    # edit runner events such as wild pitch, stolen base etc.") -- same
+    # editing/delete/preview-then-confirm shape as Pitch Log, since a
+    # GameRunnerEvent feeds replay_game exactly like a GamePitch does.
+    # See game_tracking_runner_events_display.py's module docstring.
+    _registered_runner_event_row_ids = set()
+    _gt_re_editing_event_id = reactive.Value(None)
+    # Holds either an edit-preview (kind="edit", built after "Save" on a
+    # state-affecting field change) or a delete-preview (kind="delete",
+    # built immediately on "Delete" -- deleting an event always needs a
+    # replay pass too, since it might have supplied an out or a base
+    # advance later state depends on, unlike Pitch Log's delete which
+    # is safe without one; see game_tracking_runner_events_display.py).
+    # No separate pending-delete Value needed -- delete has no form of
+    # its own to show before its preview, unlike edit.
+    _gt_re_pending_preview = reactive.Value(None)
 
     def _bump_refresh():
         _refresh_tick.set(_refresh_tick() + 1)
@@ -1386,7 +1453,10 @@ def game_tracking_server(input, output, session, app_state):
     def _load_tracking_context(db, game_id):
         game = (
             db.query(Game)
-            .options(joinedload(Game.pitching_changes), joinedload(Game.runner_events))
+            .options(
+                joinedload(Game.pitching_changes), joinedload(Game.runner_events),
+                joinedload(Game.forced_half_inning_ends),
+            )
             .filter(Game.game_id == game_id)
             .first()
         )
@@ -1394,6 +1464,7 @@ def game_tracking_server(input, output, session, app_state):
             return None
         pitches = sorted(game.pitches, key=lambda p: p.pitch_sequence)
         runner_events = sorted(game.runner_events, key=lambda e: (e.pitch_sequence_after, e.created_at))
+        forced_ends = sorted(game.forced_half_inning_ends, key=lambda e: e.pitch_sequence_after)
         squad_a_slots = (
             db.query(GameLineupSlot).options(joinedload(GameLineupSlot.player), joinedload(GameLineupSlot.substitutions))
             .filter(GameLineupSlot.game_id == game_id, GameLineupSlot.squad == "A")
@@ -1419,7 +1490,7 @@ def game_tracking_server(input, output, session, app_state):
             .filter(OpponentLineupSlot.game_id == game_id)
             .order_by(OpponentLineupSlot.batting_order).all()
         )
-        state = compute_current_state(pitches, runner_events)
+        state = compute_current_state(pitches, runner_events, forced_ends)
         # squad_c_slots is appended at the END of this tuple (not
         # interleaved alongside squad_a_slots/squad_b_slots) so every
         # existing index-based access (ctx[0], ctx[5], etc.) elsewhere in
@@ -1518,6 +1589,9 @@ def game_tracking_server(input, output, session, app_state):
         _gt_pending_delete_pitch_id.set(None)
         _pitch_log_limit.set(50)
         _gt_pl_pending_preview.set(None)
+        _gt_pl_pending_forced_end.set(None)
+        _gt_re_editing_event_id.set(None)
+        _gt_re_pending_preview.set(None)
 
     # -------------------------------------------------------------------
     # New game
@@ -1693,6 +1767,7 @@ def game_tracking_server(input, output, session, app_state):
             ui.nav_panel("Lineup & Setup", ui.output_ui("lineup_setup_body")),
             ui.nav_panel("Video Review", ui.output_ui("video_review_body")),
             ui.nav_panel("Pitch Log", ui.output_ui("pitch_log_body")),
+            ui.nav_panel("Runner Events", ui.output_ui("runner_events_log_body")),
             ui.nav_panel("Manage Game", ui.output_ui("manage_game_body")),
         )
 
@@ -2552,6 +2627,7 @@ def game_tracking_server(input, output, session, app_state):
                 ui.hr(),
                 ui.output_ui("game_state_display"),
                 ui.output_ui("runner_events_panel"),
+                ui.output_ui("forced_half_inning_end_panel"),
                 ui.hr(),
                 ui.h5("Who's Up", class_="gbo-section-title"),
                 ui.output_ui("who_is_up_identity_picker"),
@@ -2947,6 +3023,128 @@ def game_tracking_server(input, output, session, app_state):
             db.commit()
             ui.notification_show("Last runner event undone.", type="message", duration=6)
             _runner_event_form_open.set(False)  # collapse back down -- see runner_events_panel
+            _bump_pa()
+            _bump_refresh()
+        finally:
+            db.close()
+
+    # Intrasquad-only manual override: a pitcher's outing (and the
+    # current half-inning) sometimes has to end on a pitch count before
+    # 3 real outs are recorded (Ryker, Sept 2026: "some innings may be
+    # ended due to pitch counts... i need to be able to click something
+    # that ends that inning where it was and moves on to the next" --
+    # the Kurt Kassner example: his outing ended on a pitch count with
+    # runners on, and the team just moved to the next pitcher/lineup).
+    # See models.GameForcedHalfInningEnd, and compute_current_state()/
+    # replay_game() above for how this is folded into state either way.
+    @render.ui
+    def forced_half_inning_end_panel():
+        _pa_tick()
+        if not _access_ok() or not _can_edit():
+            return None
+        game_id = _active_game_id()
+        if game_id is None:
+            return None
+        db = get_session()
+        try:
+            ctx = _load_tracking_context(db, game_id)
+            if ctx is None:
+                return None
+            game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
+            if game.status != "In Progress" or not game.is_intrasquad:
+                return None
+
+            runs_pending = state["bases"].count("1")
+            last_pitch = pitches[-1] if pitches else None
+            pitcher = None
+            if last_pitch is not None:
+                pitcher_id = (
+                    last_pitch.our_player_id if not last_pitch.is_our_team_batting
+                    else last_pitch.opponent_our_player_id
+                )
+                if pitcher_id is not None:
+                    pitcher = db.query(Player).filter(Player.player_id == pitcher_id).first()
+
+            children = [ui.h5("Pitch count / early end", class_="gbo-section-title")]
+
+            if not _forced_end_form_open():
+                children.append(ui.input_action_button(
+                    "open_forced_end_form_btn", "End half-inning now (pitch count)",
+                    class_="btn-outline-warning btn-sm mt-1",
+                ))
+            else:
+                who = f"{pitcher.first_name} {pitcher.last_name}" if pitcher else None
+                if runs_pending:
+                    charge = f"charged to {who}'s ERA" if who else "not charged to anyone's ERA (no pitcher on file for this half)"
+                    run_note = f"{runs_pending} runner(s) on base will score and {charge}."
+                else:
+                    run_note = "No runners on base -- the half-inning just ends here, no runs charged."
+                children.append(ui.p(run_note, class_="text-muted small"))
+                children.append(ui.input_action_button("confirm_forced_end_btn", "Confirm -- end half-inning", class_="btn-warning btn-sm mt-1"))
+                children.append(ui.input_action_link("cancel_forced_end_btn", "Cancel", class_="text-muted small d-block mt-1"))
+
+            return ui.div(*children)
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.open_forced_end_form_btn)
+    def _open_forced_end_form():
+        _forced_end_form_open.set(True)
+
+    @reactive.effect
+    @reactive.event(input.cancel_forced_end_btn)
+    def _cancel_forced_end_form():
+        _forced_end_form_open.set(False)
+
+    @reactive.effect
+    @reactive.event(input.confirm_forced_end_btn)
+    def _confirm_forced_end():
+        game_id = _active_game_id()
+        if game_id is None:
+            return
+        db = get_session()
+        try:
+            ctx = _load_tracking_context(db, game_id)
+            if ctx is None:
+                return
+            game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
+            if game.status != "In Progress" or not game.is_intrasquad:
+                return
+
+            runs_scored = state["bases"].count("1")
+            last_pitch = pitches[-1] if pitches else None
+            credited_player_id = None
+            if last_pitch is not None:
+                credited_player_id = (
+                    last_pitch.our_player_id if not last_pitch.is_our_team_batting
+                    else last_pitch.opponent_our_player_id
+                )
+            anchor = last_pitch.pitch_sequence if last_pitch else 0
+            batting_squad = suggest_current_batting_squad(pitches, state) if game.uses_three_squad_intrasquad else None
+
+            db.add(GameForcedHalfInningEnd(
+                game_id=game_id, pitch_sequence_after=anchor,
+                inning=state["inning"], is_our_team_batting=state["is_our_batting"],
+                batting_squad=batting_squad, runs_scored=runs_scored,
+                credited_player_id=credited_player_id,
+                created_by_user_id=app_state.user_id(),
+            ))
+            if runs_scored:
+                if batting_squad == "A":
+                    game.our_score += runs_scored
+                elif batting_squad == "B":
+                    game.opponent_score += runs_scored
+                elif batting_squad == "C":
+                    game.squad_c_score += runs_scored
+                elif state["is_our_batting"]:
+                    game.our_score += runs_scored
+                else:
+                    game.opponent_score += runs_scored
+            db.commit()
+            ui.notification_show("Half-inning ended -- moving on to the next pitcher/lineup.", type="message", duration=6)
+            _forced_end_form_open.set(False)
+            _runner_event_form_open.set(False)  # a stale open runner-event form no longer applies to the new half
             _bump_pa()
             _bump_refresh()
         finally:
@@ -4197,12 +4395,27 @@ def game_tracking_server(input, output, session, app_state):
     # same circular-import reason. Registered here, once, synchronously,
     # same pattern as the other extracted sections.
     game_tracking_pitch_log_display.register_game_tracking_pitch_log(
-        input, output, session,
+        input, output, session, app_state,
         _refresh_tick, _active_game_id, _access_ok, _can_edit, _bump_pa, _bump_refresh,
         _registered_pitch_row_ids, _gt_editing_pitch_id, _gt_pending_delete_pitch_id, _pitch_log_limit,
-        _gt_pl_pending_preview,
+        _gt_pl_pending_preview, _gt_pl_pending_forced_end,
         PITCH_OUTCOMES, CONTACT_QUALITY_OPTIONS, AB_OUTCOMES,
         build_re_lookup, replay_game,
+    )
+
+    # -------------------------------------------------------------------
+    # Runner Events Log
+    # -------------------------------------------------------------------
+    # Extracted to game_tracking_runner_events_display.py, mirroring the
+    # Pitch Log split above (same reasons: _registered_runner_event_row_ids/
+    # _gt_re_editing_event_id/_gt_re_pending_preview stay defined here so
+    # _sync_active_game_id can keep resetting them on game change).
+    game_tracking_runner_events_display.register_game_tracking_runner_events(
+        input, output, session,
+        _refresh_tick, _active_game_id, _access_ok, _can_edit, _bump_pa, _bump_refresh,
+        _registered_runner_event_row_ids, _gt_re_editing_event_id, _gt_re_pending_preview,
+        build_re_lookup, replay_game,
+        RUNNER_EVENT_TYPES, RUNNER_EVENT_OUT_TYPES,
     )
 
     # -------------------------------------------------------------------

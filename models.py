@@ -1166,6 +1166,7 @@ class Game(Base):
     lineup_substitutions = relationship("LineupSubstitution", back_populates="game", cascade="all, delete-orphan", order_by="LineupSubstitution.pitch_sequence_at_entry")
     video_clips = relationship("GameVideoClip", back_populates="game", cascade="all, delete-orphan", order_by="GameVideoClip.uploaded_at")
     runner_events = relationship("GameRunnerEvent", back_populates="game", cascade="all, delete-orphan", order_by="GameRunnerEvent.pitch_sequence_after")
+    forced_half_inning_ends = relationship("GameForcedHalfInningEnd", back_populates="game", cascade="all, delete-orphan", order_by="GameForcedHalfInningEnd.pitch_sequence_after")
 
 
 class GameLineupSlot(Base):
@@ -1556,6 +1557,77 @@ class GameRunnerEvent(Base):
     game = relationship("Game", back_populates="runner_events")
     our_player = relationship("Player")
     opponent_player = relationship("OpponentPlayer")
+    created_by = relationship("User")
+
+
+class GameForcedHalfInningEnd(Base):
+    """A coach's manual override that ends the CURRENT half-inning right
+    where it stands, regardless of the actual out count -- built for
+    intrasquad pitch-count limits (Ryker, Sept 2026: "i also need the
+    ability to end the inning during intrasquads even if 3 outs haven't
+    been achieved because some innings may be ended due to pitch
+    counts... i need to be able to click something that ends that
+    inning where it was and moves on to the next", with a real example:
+    Kurt Kassner's outing ended on a pitch count with runners on base,
+    and the team just moved on to the next pitcher/lineup without
+    recording the extra outs that would have been needed to end the
+    half-inning normally).
+
+    Anchored by pitch_sequence_after (the pitch_sequence of the last
+    GamePitch actually recorded when this happened -- 0 if before the
+    game's first pitch), the same convention PitchingChange/
+    LineupSubstitution/GameRunnerEvent already use in this file.
+    compute_current_state()/replay_game() (game_tracking.py) fold this
+    in at that anchor the same way a runner event supplying the 3rd out
+    already does: outs are forced to 3, bases reset to "000", inning
+    increments, and is_our_team_batting flips -- regardless of what the
+    real out count was.
+
+    runs_scored: every runner left on base at the moment this fires
+    gets swept home (Ryker: "if there are runners on base when the half
+    inning ends those runs score and count towards era") -- always ALL
+    runners on base at the anchor, computed once at creation time, not
+    re-derived later. Added to Game.our_score/opponent_score/
+    squad_c_score the same way GameRunnerEvent's to_base==4 already is
+    (see replay_game()/the live "End half-inning now" handler), and
+    ALSO counted as EARNED runs against credited_player_id for that
+    pitcher's ERA (see game_stats.get_forced_half_inning_end_runs() and
+    compute_pitching_line()'s extra_earned_runs parameter) -- these
+    runs were never recorded on any GamePitch row (the half-inning
+    ended before another pitch or PA-ending play could record them
+    there), so they can't flow through runs_scored_on_play/
+    earned_runs_on_play like a normal play's runs do; this table is
+    their only record. Always treated as fully earned -- Ryker's own
+    framing ("count towards era") didn't distinguish earned/unearned,
+    unlike GamePitch.unearned_runs_on_play's manual per-play tagging.
+
+    credited_player_id: the pitcher being charged -- always the Player
+    who threw the anchor pitch (the GamePitch at pitch_sequence_after's
+    own our_player_id), since this feature is scoped to intrasquad
+    games only, where the pitcher being pulled for a pitch count is
+    always one of our own roster players, never an OpponentPlayer.
+
+    batting_squad: same three-squad-game meaning as GamePitch.
+    batting_squad -- which score column runs_scored credits. NULL for
+    an ordinary two-squad intrasquad game (falls back to
+    is_our_team_batting, same 5-way branch every other scoring site in
+    game_tracking.py already uses)."""
+    __tablename__ = "game_forced_half_inning_ends"
+
+    forced_end_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id"), nullable=False)
+    pitch_sequence_after = Column(Integer, nullable=False)  # the pitch_sequence of the last actual pitch recorded before this fired; 0 if none yet this game
+    inning = Column(Integer, nullable=False)  # the inning of the half being ended
+    is_our_team_batting = Column(Boolean, nullable=False)  # which side was batting in the half being ended
+    batting_squad = Column(String(1), nullable=True)  # three-team intrasquad mode only -- 'A'/'B'/'C', mirroring GamePitch.batting_squad. NULL for every ordinary game.
+    runs_scored = Column(Integer, nullable=False, default=0)  # every runner on base at the anchor, swept home
+    credited_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)  # the pitcher charged with runs_scored for ERA purposes
+    notes = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    game = relationship("Game", back_populates="forced_half_inning_ends")
+    credited_player = relationship("Player")
     created_by = relationship("User")
 
 
