@@ -272,7 +272,7 @@ def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color):
     return fig
 
 
-def _all_pitch_locations_figure(pitches, color_by, baseline):
+def _all_pitch_locations_figure(pitches, color_by, baseline, own_idx_map=None):
     """All-pitches location scatter for the Pitch Locations view (Ryker,
     Sept 2026: "looking at pitch location for all pitches of a certain
     pitch type vs LHH, RHH ... an option to see all each different
@@ -305,7 +305,13 @@ def _all_pitch_locations_figure(pitches, color_by, baseline):
 
     Same real plate-coordinate feet and view="catcher" home plate as
     this page's own _pitch_location_figure above (same actual_plate_x/z
-    fields, same catcher's-eye-view Ryker corrected there)."""
+    fields, same catcher's-eye-view Ryker corrected there).
+
+    own_idx_map: optional {game_pitch_id: pitcher-specific pitch number}
+    (see _own_pitch_index_map) -- when given, hover text shows this
+    pitcher's own pitch count for the game instead of the game-wide
+    pitch_sequence (Ryker, Sept 2026: same "specific to that pitcher"
+    request as Pitch Detail's numbering)."""
     fig = go.Figure()
 
     if color_by == "result":
@@ -315,7 +321,8 @@ def _all_pitch_locations_figure(pitches, color_by, baseline):
             label = p.pitch_type.type_name if p.pitch_type is not None else "Unspecified"
             lp = location_plus(p, baseline)
             base_custom = [
-                p.pitch_sequence, label, p.pitch_outcome or "—",
+                own_idx_map.get(p.game_pitch_id, p.pitch_sequence) if own_idx_map else p.pitch_sequence,
+                label, p.pitch_outcome or "—",
                 p.ab_outcome if (p.ends_plate_appearance and p.ab_outcome) else "—",
             ]
             if lp is None:
@@ -369,7 +376,8 @@ def _all_pitch_locations_figure(pitches, color_by, baseline):
                 mode="markers", name=label,
                 marker=dict(color=color, size=12, opacity=0.9, line=dict(color="#1E1E1E", width=1)),
                 customdata=[
-                    [p.pitch_sequence, p.pitch_outcome or "—",
+                    [own_idx_map.get(p.game_pitch_id, p.pitch_sequence) if own_idx_map else p.pitch_sequence,
+                     p.pitch_outcome or "—",
                      p.ab_outcome if (p.ends_plate_appearance and p.ab_outcome) else "—"]
                     for p in group
                 ],
@@ -967,6 +975,16 @@ def pitcher_game_report_server(input, output, session, app_state):
     # pitcher_game_report_ui for exactly how each mode is drawn.
     # -------------------------------------------------------------------
 
+    def _own_pitch_index_map(db, pitcher_id, game_id):
+        """{game_pitch_id: pitcher-specific pitch number} for every pitch
+        this pitcher threw in this game, numbered in pitch_sequence order
+        (Ryker, Sept 2026: pitch_sequence is the game-wide count across
+        both pitchers -- e.g. the 52nd pitch of the game could be this
+        pitcher's 5th -- and Pitch Locations' hover text should show the
+        latter, same as Pitch Detail)."""
+        all_pitches = sorted(get_pitching_pitches(db, pitcher_id, game_id=game_id), key=lambda p: p.pitch_sequence)
+        return {p.game_pitch_id: idx for idx, p in enumerate(all_pitches, start=1)}
+
     def _selected_pitcher_located_pitches(db):
         if "game_select" not in input or "pitcher_select" not in input:
             return None
@@ -1063,7 +1081,8 @@ def pitcher_game_report_server(input, output, session, app_state):
                 return None
 
             baseline = profile_queries.team_location_plus_baseline(db) if color_by == "result" else None
-            return _all_pitch_locations_figure(pitches, color_by, baseline)
+            own_idx_map = _own_pitch_index_map(db, int(input.pitcher_select()), int(input.game_select()))
+            return _all_pitch_locations_figure(pitches, color_by, baseline, own_idx_map)
         finally:
             db.close()
 
@@ -1404,17 +1423,23 @@ def pitcher_game_report_server(input, output, session, app_state):
 
             rows = []
             choices = {}
-            for p in pitches:
+            # Per-pitcher pitch number (Ryker, Sept 2026: "I want the pitch
+            # number to be specific to that specific pitcher" -- pitch_sequence
+            # is the game-wide count across both pitchers, e.g. the 52nd pitch
+            # of the game could be this pitcher's 5th). `pitches` here is
+            # already filtered to this one pitcher+game and sorted above, so
+            # the pitcher-specific number is just its position in this list.
+            for own_idx, p in enumerate(pitches, start=1):
                 label = p.pitch_type.type_name if p.pitch_type is not None else "Unspecified"
                 rap = rap_by_gp.get(p.game_pitch_id)
                 rows.append({
-                    "#": p.pitch_sequence,
+                    "#": own_idx,
                     "Pitch Type": label,
                     "Velo": f"{float(rap.velocity):.1f} mph" if rap is not None and rap.velocity is not None else "—",
                     "Result": p.pitch_outcome or "—",
                     "AB Outcome": p.ab_outcome if (p.ends_plate_appearance and p.ab_outcome) else "—",
                 })
-                choices[str(p.game_pitch_id)] = f"Pitch {p.pitch_sequence} — {label} — {p.pitch_outcome or 'unknown result'}"
+                choices[str(p.game_pitch_id)] = f"Pitch {own_idx} — {label} — {p.pitch_outcome or 'unknown result'}"
 
             return ui.div(
                 ui.p(ui.strong("Pitch-by-Pitch")),
@@ -1453,6 +1478,19 @@ def pitcher_game_report_server(input, output, session, app_state):
             )
             if p is None:
                 return None
+            # Same per-pitcher numbering as pitch_by_pitch_section's own_idx
+            # above, recomputed here since this card is a separate render
+            # keyed only on the selected game_pitch_id (falls back to the
+            # game-wide pitch_sequence in the unexpected case this pitch
+            # isn't found in the pitcher's own list).
+            own_pitches = sorted(
+                get_pitching_pitches(db, int(input.pitcher_select()), game_id=int(input.game_select())),
+                key=lambda gp: gp.pitch_sequence,
+            )
+            own_idx = next(
+                (i for i, gp in enumerate(own_pitches, start=1) if gp.game_pitch_id == p.game_pitch_id),
+                p.pitch_sequence,
+            )
             pitcher = db.query(Player).filter(Player.player_id == int(input.pitcher_select())).first()
             rap = db.query(RapsodoPitch).filter(RapsodoPitch.game_pitch_id == p.game_pitch_id).first()
             label = p.pitch_type.type_name if p.pitch_type is not None else "Unspecified"
@@ -1536,7 +1574,7 @@ def pitcher_game_report_server(input, output, session, app_state):
 
             return ui.div(
                 ui.hr(),
-                ui.p(ui.strong(f"Pitch {p.pitch_sequence} — {label}")),
+                ui.p(ui.strong(f"Pitch {own_idx} — {label}")),
                 ui.layout_columns(
                     location_block,
                     ui.div(
