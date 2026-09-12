@@ -44,7 +44,16 @@ Usage:
     python3 scripts/backfill_opponent_hand.py --apply    # writes changes
 """
 import argparse
+import sys
 from collections import defaultdict
+from pathlib import Path
+
+# Repo root is this script's parent directory -- add it to sys.path so
+# `python3 scripts/backfill_opponent_hand.py` finds database.py/models.py
+# at the repo root regardless of the caller's own working directory or
+# PYTHONPATH (Ryker hit ModuleNotFoundError: No module named 'database'
+# running it straight from the repo root without this).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from database import get_session
 from models import GamePitch, Player, OpponentPlayer, Game
