@@ -1393,6 +1393,20 @@ def game_tracking_server(input, output, session, app_state):
     # action from "here's the edited pitch's replay preview", and
     # keeping them separate avoids teaching that dict two shapes.
     _gt_pl_pending_forced_end = reactive.Value(None)
+    # Retroactive "Log runner event after this pitch" (Pitch Log --
+    # the counterpart to the live "+ Log a runner event" form in
+    # runner_events_panel below, which can only ever anchor to
+    # whatever pitch was just thrown; this one can anchor to ANY
+    # past pitch in an already-tracked game, live or completed --
+    # Ryker, Sept 2026: "if i need to add a runner event to
+    # something that i logged before how do i do that"). Two
+    # separate Values, same reasoning as the forced-end pair above:
+    # _gt_pl_adding_runner_event_pitch_id is which pitch's row has
+    # the add-form open (None otherwise); _gt_pl_pending_runner_add
+    # is the built-but-not-yet-saved preview once that form is
+    # submitted (see game_tracking_pitch_log_display.py).
+    _gt_pl_adding_runner_event_pitch_id = reactive.Value(None)
+    _gt_pl_pending_runner_add = reactive.Value(None)
     _runner_event_form_open = reactive.Value(False)  # collapsed by default -- see runner_events_panel (Ryker, 2026-08-26)
     _forced_end_form_open = reactive.Value(False)  # collapsed by default -- see forced_half_inning_end_panel (Ryker, Sept 2026)
 
@@ -1590,6 +1604,8 @@ def game_tracking_server(input, output, session, app_state):
         _pitch_log_limit.set(50)
         _gt_pl_pending_preview.set(None)
         _gt_pl_pending_forced_end.set(None)
+        _gt_pl_adding_runner_event_pitch_id.set(None)
+        _gt_pl_pending_runner_add.set(None)
         _gt_re_editing_event_id.set(None)
         _gt_re_pending_preview.set(None)
 
@@ -4399,7 +4415,9 @@ def game_tracking_server(input, output, session, app_state):
         _refresh_tick, _active_game_id, _access_ok, _can_edit, _bump_pa, _bump_refresh,
         _registered_pitch_row_ids, _gt_editing_pitch_id, _gt_pending_delete_pitch_id, _pitch_log_limit,
         _gt_pl_pending_preview, _gt_pl_pending_forced_end,
+        _gt_pl_adding_runner_event_pitch_id, _gt_pl_pending_runner_add,
         PITCH_OUTCOMES, CONTACT_QUALITY_OPTIONS, AB_OUTCOMES,
+        RUNNER_EVENT_TYPES, RUNNER_EVENT_OUT_TYPES,
         build_re_lookup, replay_game,
     )
 
