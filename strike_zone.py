@@ -334,6 +334,57 @@ def distance_from_cell_in(level, zone, plate_x, plate_z):
     return math.hypot(dx, dz) * 12.0
 
 
+def zone_miss_components_in(level, zone, actual_x, actual_z):
+    """Signed horizontal/vertical miss components (inches), plus the
+    combined distance, of (actual_x, actual_z) relative to the
+    (level, zone) CALLED CELL's nearest edge on each axis -- the
+    axis-by-axis counterpart of distance_from_cell_in above (Ryker,
+    Sept 2026: miss distance should be measured "from that zone, not
+    necessarily the center of that zone, just that zone" -- e.g. a
+    called "212" that lands just off the black should barely miss, not
+    show a big number because it's far from the cell's center point).
+
+    0 on an axis where actual_x/z already falls within the cell's
+    bounds on that axis; otherwise the signed distance past the near
+    edge -- positive = beyond the high edge, negative = beyond the low
+    edge, same actual-minus-target sign convention
+    analytics/command_metrics.compute_miss used when it measured from a
+    single intended point. Combining both axes with math.hypot
+    reproduces distance_from_cell_in's own magnitude exactly; this just
+    also hands back the per-axis breakdown distance_from_cell_in
+    doesn't, since callers need that for miss-direction labeling and
+    directional bias, not just a magnitude.
+
+    Returns (horizontal_in, vertical_in, distance_in), or
+    (None, None, None) if level/zone/actual_x/actual_z is missing, or
+    level/zone is out of range (mirrors distance_from_cell_in's own
+    None handling)."""
+    if level is None or zone is None or actual_x is None or actual_z is None:
+        return None, None, None
+    z_bounds = _LEVEL_Z_BOUNDS.get(level)
+    x_bounds = _ZONE_X_BOUNDS.get(zone)
+    if z_bounds is None or x_bounds is None:
+        return None, None, None
+    x_lo, x_hi = x_bounds
+    z_lo, z_hi = z_bounds
+    if actual_x < x_lo:
+        dx = actual_x - x_lo
+    elif actual_x > x_hi:
+        dx = actual_x - x_hi
+    else:
+        dx = 0.0
+    if actual_z < z_lo:
+        dz = actual_z - z_lo
+    elif actual_z > z_hi:
+        dz = actual_z - z_hi
+    else:
+        dz = 0.0
+    horizontal_in = round(dx * 12.0, 2)
+    vertical_in = round(dz * 12.0, 2)
+    distance_in = round(math.hypot(dx, dz) * 12.0, 2)
+    return horizontal_in, vertical_in, distance_in
+
+
 def build_zone_selector_figure(marker_x=None, marker_z=None, view="catcher"):
     """Pure figure builder -- strike zone rectangle, thirds gridlines,
     invisible dense click-grid, a home plate on the ground line, and

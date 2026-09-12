@@ -1529,18 +1529,19 @@ def pitcher_game_report_server(input, output, session, app_state):
             # inches-and-direction convention (Arm-side/Glove-side when
             # throws is known, else raw 3B-side/1B-side).
             if has_intended and has_actual:
-                dx = (float(p.actual_plate_x) - float(p.intended_plate_x)) * 12
-                dz = (float(p.actual_plate_z) - float(p.intended_plate_z)) * 12
-                miss_distance = (dx ** 2 + dz ** 2) ** 0.5
+                # Zone-based miss (Ryker, Sept 2026): measured from the
+                # called Level-Zone cell's nearest edge, not the exact
+                # intended point -- see analytics/command_metrics.compute_miss
+                # for the full reasoning. Reuses the same compute_miss/
+                # classify_miss_direction the Command Target Zones
+                # section below already calls, instead of a third inline
+                # calc with its own point-to-point math and its own
+                # Arm-side/Glove-side labeling.
                 throws = pitcher.throws if pitcher is not None else None
-                if throws == "R":
-                    horiz_label = "Arm-side" if dx < 0 else "Glove-side" if dx > 0 else "Even"
-                elif throws == "L":
-                    horiz_label = "Arm-side" if dx > 0 else "Glove-side" if dx < 0 else "Even"
-                else:
-                    horiz_label = "3B-side" if dx < 0 else "1B-side" if dx > 0 else "Even"
-                vert_label = "High" if dz > 0 else "Low" if dz < 0 else "Even"
-                miss_direction = f"{horiz_label} / {vert_label}" if abs(dx) > 0.1 or abs(dz) > 0.1 else "On target"
+                dx, dz, miss_distance = command_metrics.compute_miss(
+                    p.intended_plate_x, p.intended_plate_z, p.actual_plate_x, p.actual_plate_z,
+                )
+                miss_direction = command_metrics.classify_miss_direction(dx, dz, throws)
             else:
                 miss_distance = None
                 miss_direction = None
