@@ -899,9 +899,17 @@ def rapsodo_import_server(input, output, session, app_state):
                 get_pitching_pitches(db, selected_pitcher_id, game_id=game_id),
                 key=lambda p: p.pitch_sequence,
             )
+            # Label each option by this PITCHER's own pitch count within
+            # this outing (1st pitch of his stint, 2nd, ...) rather than
+            # GamePitch.pitch_sequence's absolute in-game number -- Ryker,
+            # Sept 2026: "pitch number being in the 90s/100s is
+            # confusing... I want it to say the pitch number for the
+            # specific pitcher, not for the game." game_pitches is already
+            # this pitcher's own pitches for this game, sorted by
+            # pitch_sequence, so its 1-based position IS that count.
             game_pitch_choices = {"": "-- unmatched --"}
-            for gp in game_pitches:
-                game_pitch_choices[str(gp.game_pitch_id)] = f"#{gp.pitch_sequence} — {gp.pitch_outcome or '—'}"
+            for stint_pitch_number, gp in enumerate(game_pitches, start=1):
+                game_pitch_choices[str(gp.game_pitch_id)] = f"#{stint_pitch_number} — {gp.pitch_outcome or '—'}"
 
             rows = []
             for i, rp in enumerate(rapsodo_pitches):
