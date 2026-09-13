@@ -229,13 +229,11 @@ def player_game_stats_server(input, output, session, app_state):
                         {"label": "WHIP", "value": _fmt_num(pl["WHIP"])},
                         {"label": "K/BB", "value": _fmt_num(pl["K/BB"])},
                         {"label": "K %", "value": _fmt_pct1(pl["K %"])},
-                        {"label": "ERA*", "value": _fmt_num(pl["ERA"])},
+                        {"label": "ERA", "value": _fmt_num(pl["ERA"])},
                         {"label": "FIP", "value": _fmt_num(pl["FIP"])},
                         {"label": "Execution %", "value": _fmt_pct1(pl["Execution %"])},
                     ]))
                     sections.append(ui.p(
-                        f"*ERA here is real earned-run average -- defaults to all-earned for any game nobody tagged "
-                        f"unearned runs on while scoring live. "
                         f"Total RV Allowed: {pl['Total RV Allowed']} · Avg RV Allowed/Pitch: {pl['Avg RV Allowed/Pitch']}",
                         class_="text-muted small",
                     ))
