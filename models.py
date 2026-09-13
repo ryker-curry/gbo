@@ -1521,7 +1521,15 @@ class GameRunnerEvent(Base):
 
     from_base/to_base: 1/2/3 for a base, 4 for home (the runner scored).
     to_base is NULL when is_out is True (Caught Stealing/Picked Off --
-    Wild Pitch/Passed Ball/Balk/Stolen Base always advance, never out).
+    Wild Pitch/Passed Ball/Balk/Stolen Base/Defensive Indifference/
+    Throwing Error always advance, never out). Throwing Error (added
+    Sept 2026, Ryker: "like if a catcher throws it into center field
+    and then he goes from second to third") covers any defensive
+    misplay -- catcher, pitcher, or otherwise -- that lets a runner
+    take an extra base with no out recorded; whether the run it later
+    leads to counts as earned is tagged separately and manually via
+    GamePitch.unearned_runs_on_play, same as any other error, since
+    this event only records the base-state change itself.
     Runs scored via to_base == 4 are added to Game.our_score/
     opponent_score at the moment the event is recorded (mirroring how
     record_pitch() bumps the score for a live-ball run), NOT re-derived
@@ -1544,7 +1552,7 @@ class GameRunnerEvent(Base):
     pitch_sequence_after = Column(Integer, nullable=False)  # the pitch_sequence of the last actual pitch recorded before this event; 0 if none yet this game
     is_our_team_batting = Column(Boolean, nullable=False)  # which side had the runner -- same convention as GamePitch.is_our_team_batting, stored (not just used transiently) so an undo can reverse a scored run against the right side's total without re-deriving it
     batting_squad = Column(String(1), nullable=True)  # three-team intrasquad mode only -- 'A'/'B'/'C', mirroring GamePitch.batting_squad, so a run scored via to_base==4 credits the right one of three score totals (and undo reverses the right one). NULL for every ordinary game.
-    event_type = Column(String(30), nullable=False)  # "Stolen Base" / "Caught Stealing" / "Picked Off" / "Wild Pitch" / "Passed Ball" / "Balk" / "Defensive Indifference"
+    event_type = Column(String(30), nullable=False)  # "Stolen Base" / "Caught Stealing" / "Picked Off" / "Wild Pitch" / "Passed Ball" / "Balk" / "Defensive Indifference" / "Throwing Error"
     from_base = Column(Integer, nullable=False)  # 1, 2, or 3
     to_base = Column(Integer, nullable=True)  # 2, 3, or 4 (home) -- NULL when is_out
     is_out = Column(Boolean, default=False, nullable=False)

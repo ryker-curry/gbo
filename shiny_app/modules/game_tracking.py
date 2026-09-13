@@ -402,7 +402,7 @@ CONTACT_QUALITY_OPTIONS = ["Barreled/Squared Up", "Solid", "Jammed", "Off the En
 # advance; every other type always advances (never an out) -- so the
 # UI only ever needs to show a to-base picker OR an "out" note, never
 # both, per event type.
-RUNNER_EVENT_TYPES = ["Stolen Base", "Caught Stealing", "Picked Off", "Wild Pitch", "Passed Ball", "Balk", "Defensive Indifference"]
+RUNNER_EVENT_TYPES = ["Stolen Base", "Caught Stealing", "Picked Off", "Wild Pitch", "Passed Ball", "Balk", "Defensive Indifference", "Throwing Error"]
 RUNNER_EVENT_OUT_TYPES = ("Caught Stealing", "Picked Off")
 
 # Display-only label for each squad letter (Sep 2026, Ryker: show "Team
