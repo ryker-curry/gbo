@@ -3098,10 +3098,16 @@ def game_tracking_server(input, output, session, app_state):
                 who = f"{pitcher.first_name} {pitcher.last_name}" if pitcher else None
                 if runs_pending:
                     charge = f"charged to {who}'s ERA" if who else "not charged to anyone's ERA (no pitcher on file for this half)"
-                    run_note = f"{runs_pending} runner(s) on base will score and {charge}."
+                    run_note = f"{runs_pending} runner(s) currently on base -- count as scored ({charge})?"
                 else:
                     run_note = "No runners on base -- the half-inning just ends here, no runs charged."
                 children.append(ui.p(run_note, class_="text-muted small"))
+                if runs_pending:
+                    children.append(ui.input_checkbox(
+                        "forced_end_count_runners_chk",
+                        "Count runner(s) currently on base as scored",
+                        value=True,
+                    ))
                 if game.uses_three_squad_intrasquad:
                     children.append(ui.input_action_button("confirm_forced_end_btn", "Confirm -- new team is up", class_="btn-warning btn-sm mt-1"))
                     children.append(ui.p(
@@ -3144,6 +3150,8 @@ def game_tracking_server(input, output, session, app_state):
                 return
 
             runs_scored = state["bases"].count("1")
+            if runs_scored and "forced_end_count_runners_chk" in input and not input.forced_end_count_runners_chk():
+                runs_scored = 0
             last_pitch = pitches[-1] if pitches else None
             credited_player_id = None
             if last_pitch is not None:

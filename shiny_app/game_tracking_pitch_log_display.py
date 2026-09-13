@@ -317,7 +317,7 @@ def _render_forced_end_preview(preview):
             f"charged to {preview['credited_player_label']}'s ERA" if preview["credited_player_label"]
             else "not charged to anyone's ERA (no pitcher on file for this pitch)"
         )
-        runs_line = f"{preview['runs_scored']} runner(s) on base at this point will score and {charge}."
+        runs_line = f"{preview['runs_scored']} runner(s) on base at this point -- count as scored ({charge})?"
     else:
         runs_line = "No runners on base at this point -- the half-inning just ends here, no runs charged."
     children = [
@@ -328,6 +328,12 @@ def _render_forced_end_preview(preview):
         ),
         ui.p(runs_line, class_="small fw-bold mb-1"),
     ]
+    if preview["runs_scored"]:
+        children.append(ui.input_checkbox(
+            "gt_pl_forced_end_count_runners_chk",
+            "Count runner(s) currently on base as scored",
+            value=True,
+        ))
     if preview.get("same_side_continues"):
         children.append(ui.p(
             "Mode: same team continues pitching to a fresh lineup -- who's pitching/batting "
@@ -1035,6 +1041,8 @@ def register_game_tracking_pitch_log(
 
                 bases = (p.bases_after if p.ends_plate_appearance else p.bases_before) or "000"
                 runs_scored = bases.count("1")
+                if runs_scored and "gt_pl_forced_end_count_runners_chk" in input and not input.gt_pl_forced_end_count_runners_chk():
+                    runs_scored = 0
                 new_event = GameForcedHalfInningEnd(
                     game_id=game_id, pitch_sequence_after=p.pitch_sequence,
                     inning=p.inning, is_our_team_batting=p.is_our_team_batting,
