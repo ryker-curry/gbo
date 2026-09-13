@@ -29,7 +29,7 @@ from database import get_session
 from models import Player, Game, GamePitch, RapsodoPitch, User
 from game_stats import (
     get_pitching_pitches, compute_pitching_line, compute_pitch_type_breakdown,
-    get_forced_half_inning_end_runs, get_runner_event_outs,
+    get_forced_half_inning_end_runs, get_runner_event_outs, get_batter_hands,
 )
 from pitch_location_stats import compute_command_precision, compute_attack_zones
 # Target-radius bands (Precision/Command/Competitive/Major Miss) and the
@@ -694,8 +694,9 @@ def pitcher_game_report_server(input, output, session, app_state):
             pitches = get_pitching_pitches(db, selected_pitcher_id, game_id=selected_game_id)
             if not pitches:
                 return None
-            vs_rhh = [p for p in pitches if p.opponent_hand == "R"]
-            vs_lhh = [p for p in pitches if p.opponent_hand == "L"]
+            hands = get_batter_hands(db, pitches)
+            vs_rhh = [p for p in pitches if hands.get(p.game_pitch_id) == "R"]
+            vs_lhh = [p for p in pitches if hands.get(p.game_pitch_id) == "L"]
             rap_by_gp = profile_queries.rapsodo_by_game_pitch_id(db, [p.game_pitch_id for p in pitches])
             stuff_baselines = profile_queries.team_stuff_plus_baselines(db)
             return ui.div(
@@ -1099,7 +1100,8 @@ def pitcher_game_report_server(input, output, session, app_state):
                     if (p.pitch_type.type_name if p.pitch_type is not None else "Unspecified") == pitch_type_choice
                 ]
             if hand_choice != "all":
-                pitches = [p for p in pitches if p.opponent_hand == hand_choice]
+                hands = get_batter_hands(db, pitches)
+                pitches = [p for p in pitches if hands.get(p.game_pitch_id) == hand_choice]
             if not pitches:
                 return None
 
@@ -1296,8 +1298,9 @@ def pitcher_game_report_server(input, output, session, app_state):
             pitches = get_pitching_pitches(db, int(pitcher_id_raw), game_id=int(game_id_raw))
             if not pitches:
                 return None
-            vs_rhh = [p for p in pitches if p.opponent_hand == "R"]
-            vs_lhh = [p for p in pitches if p.opponent_hand == "L"]
+            hands = get_batter_hands(db, pitches)
+            vs_rhh = [p for p in pitches if hands.get(p.game_pitch_id) == "R"]
+            vs_lhh = [p for p in pitches if hands.get(p.game_pitch_id) == "L"]
             if not vs_rhh and not vs_lhh:
                 return None
 

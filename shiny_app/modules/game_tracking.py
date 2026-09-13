@@ -3348,13 +3348,20 @@ def game_tracking_server(input, output, session, app_state):
                 suggested_pitcher_id = get_current_three_squad_pitcher_id(game)
                 pitcher_selected = str(suggested_pitcher_id) if suggested_pitcher_id is not None and str(suggested_pitcher_id) in pitcher_choices else None
                 children.append(ui.input_select("three_squad_pitcher_select", "Pitcher (free pick -- from either fielding squad)", choices=pitcher_choices, selected=pitcher_selected))
-                default_hand = "R"
-                suggested_pitcher = players_by_id_all = None
-                if suggested_pitcher_id is not None:
-                    suggested_pitcher = db.query(Player).filter(Player.player_id == suggested_pitcher_id).first()
-                if suggested_pitcher and suggested_pitcher.throws:
-                    default_hand = suggested_pitcher.throws
-                children.append(ui.input_radio_buttons("three_squad_pitcher_hand_radio", "Pitcher's throwing hand", choices=["R", "L"], selected=default_hand, inline=True))
+                # No manual hand pick here (Ryker, Sept 2026: "i
+                # shouldn't even need to select pitchers throwing hand,
+                # why is that there?") -- the pitcher is always a known
+                # roster player in a three-squad game (free-picked from
+                # either fielding squad, never an external opponent),
+                # so his hand is always looked up fresh from his own
+                # Player.throws at record time instead (see
+                # _do_record_pitch's three-squad branch). This also
+                # used to be the actual source of the "every hitter
+                # this pitcher faced shows his own hand" bug -- this
+                # radio's value was being saved onto opponent_hand,
+                # which reports read expecting the BATTER's hand, not
+                # the pitcher's (see get_batter_hands in game_stats.py
+                # for the report-side half of that fix).
             return ui.div(*children)
         finally:
             db.close()
@@ -4211,7 +4218,12 @@ def game_tracking_server(input, output, session, app_state):
                         ui.notification_show("Select the pitcher first.", type="error", duration=8)
                         return
                     pitcher_id = int(input.three_squad_pitcher_select())
-                    opp_hand_choice = input.three_squad_pitcher_hand_radio() if "three_squad_pitcher_hand_radio" in input else "R"
+                    # Always the pitcher's own roster hand -- see the
+                    # comment on three_squad_pitcher_select's render
+                    # above for why there's no manual radio for this
+                    # anymore.
+                    pitcher_for_hand = db.query(Player).filter(Player.player_id == pitcher_id).first()
+                    opp_hand_choice = pitcher_for_hand.throws if pitcher_for_hand and pitcher_for_hand.throws else "R"
                     if state["is_our_batting"]:
                         our_player_choice, opp_our_player_choice = batter_id, pitcher_id
                     else:

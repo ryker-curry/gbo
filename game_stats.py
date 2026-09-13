@@ -21,7 +21,7 @@ function's docstring.
 """
 
 from sqlalchemy.orm import joinedload
-from models import GamePitch, Game, GameForcedHalfInningEnd, GameRunnerEvent
+from models import GamePitch, Game, GameForcedHalfInningEnd, GameRunnerEvent, Player, OpponentPlayer
 from plate_discipline import SWING_OUTCOMES, WHIFF_OUTCOMES
 from strike_zone import is_in_zone
 from field_location import classify_spray_direction
@@ -68,6 +68,75 @@ def get_pitching_pitches(session, player_id, season_id=None, game_id=None):
     if game_id is not None:
         query = query.filter(GamePitch.game_id == game_id)
     return query.all()
+
+
+def get_batter_hands(session, pitches):
+    """{game_pitch_id: 'R'/'L'/None} for every pitch in `pitches` --
+    the real BATTER's hand for hand-based splits (vs LHH/vs RHH),
+    looked up fresh from the batter's own roster Player.bats (or
+    OpponentPlayer.bats for a real, identified external-opponent
+    batter), never from the stored GamePitch.opponent_hand.
+
+    Why not just read opponent_hand: for a three-squad intrasquad
+    pitch specifically, opponent_hand is NOT the batter's hand at all
+    -- it's the PITCHER's own throwing hand, because
+    who_is_up_three_squad_batter_and_pitcher's live-tracking panel
+    (game_tracking.py) never showed a separate batter-hand control,
+    only "Pitcher's throwing hand" (removed entirely as of this fix --
+    that's now looked up the same way, from Player.throws, rather than
+    picked live at all). So a pitcher's whole outing -- which naturally
+    has one constant throwing hand -- silently made every hitter he
+    faced look like they shared that same hand (Ryker, Sept 2026:
+    "Gavin Derr...only faced left handed hitters" / "Webb Fern only
+    faced right handed hitters" -- both were seeing each pitcher's OWN
+    hand, never their hitters'). Deriving batter hand fresh from the
+    roster here, instead of trusting anything stored on the pitch
+    itself, also means every already-recorded three-squad pitch
+    self-corrects automatically the moment this renders -- no backfill
+    script needed, unlike the stale-default problem
+    backfill_opponent_hand.py fixes for real external-opponent games.
+
+    batter_id resolution mirrors _three_squad_batter_id in
+    game_tracking.py (our_player_id holds the batter when
+    is_our_team_batting is True, opponent_our_player_id when it's
+    False) -- the same convention regardless of two-squad or
+    three-squad intrasquad, and it degrades correctly for a real
+    external opponent too (opponent_our_player_id is simply always
+    None there, so batter_id resolution lands on opponent_player_id
+    below instead).
+
+    Switch hitters (bats == 'S') and any batter with no roster/opponent
+    row on file fall back to the pitch's own recorded opponent_hand --
+    same "can't know which side without more game context" reasoning
+    backfill_opponent_hand.py already uses for switch hitters."""
+    our_ids = {p.our_player_id for p in pitches if p.is_our_team_batting and p.our_player_id is not None}
+    our_ids |= {p.opponent_our_player_id for p in pitches if not p.is_our_team_batting and p.opponent_our_player_id is not None}
+    opp_ids = {p.opponent_player_id for p in pitches if p.opponent_player_id is not None}
+    our_players = (
+        {pl.player_id: pl for pl in session.query(Player).filter(Player.player_id.in_(our_ids)).all()}
+        if our_ids else {}
+    )
+    opp_players = (
+        {pl.opponent_player_id: pl for pl in session.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id.in_(opp_ids)).all()}
+        if opp_ids else {}
+    )
+
+    hands = {}
+    for p in pitches:
+        batter_id = p.our_player_id if p.is_our_team_batting else p.opponent_our_player_id
+        hand = None
+        if batter_id is not None:
+            player = our_players.get(batter_id)
+            if player is not None and player.bats in ("R", "L"):
+                hand = player.bats
+        if hand is None and p.opponent_player_id is not None:
+            opp = opp_players.get(p.opponent_player_id)
+            if opp is not None and opp.bats in ("R", "L"):
+                hand = opp.bats
+        if hand is None:
+            hand = p.opponent_hand
+        hands[p.game_pitch_id] = hand
+    return hands
 
 
 def get_forced_half_inning_end_runs(session, player_id, season_id=None, game_id=None):
