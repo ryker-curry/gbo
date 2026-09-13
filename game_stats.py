@@ -21,7 +21,7 @@ function's docstring.
 """
 
 from sqlalchemy.orm import joinedload
-from models import GamePitch, Game, GameForcedHalfInningEnd
+from models import GamePitch, Game, GameForcedHalfInningEnd, GameRunnerEvent
 from plate_discipline import SWING_OUTCOMES, WHIFF_OUTCOMES
 from strike_zone import is_in_zone
 from field_location import classify_spray_direction
@@ -96,6 +96,56 @@ def get_forced_half_inning_end_runs(session, player_id, season_id=None, game_id=
         if game_id is not None:
             query = query.filter(GameForcedHalfInningEnd.game_id == game_id)
     return sum(row.runs_scored or 0 for row in query.all())
+
+
+def get_runner_event_outs(session, player_id, season_id=None, game_id=None):
+    """Total outs recorded via GameRunnerEvent (Picked Off / Caught
+    Stealing -- see RUNNER_EVENT_OUT_TYPES in game_tracking.py) while
+    this player was pitching. These outs never land on any GamePitch
+    row's outs_after/outs_before delta -- they happen BETWEEN pitches,
+    folded into the next pitch's inherited outs_before instead (see
+    compute_current_state's apply_runner_events), so _innings_pitched
+    below (which only sums deltas on PA-ending pitches) silently misses
+    them entirely (Ryker, Sept 2026: a pickoff during Webb Fern's
+    outing didn't count toward his IP). Callers that want an accurate
+    IP/ERA/WHIP pass this total in as compute_pitching_line(pitches,
+    extra_outs=...), same convention as
+    get_forced_half_inning_end_runs()/extra_earned_runs above.
+
+    Which pitcher gets credit: whoever was pitching on the anchor pitch
+    (pitch_sequence_after) -- the same "our_player_id if not
+    is_our_team_batting else opponent_our_player_id" convention
+    get_pitching_pitches' own filter above uses to resolve the current
+    pitcher from a GamePitch row. A runner event anchored at
+    pitch_sequence_after=0 (before this game's first pitch) has no
+    anchor pitch and credits nobody -- there's no pitcher on record yet
+    for that PA. game_id/season_id: see get_batting_pitches' docstring,
+    same convention."""
+    query = (
+        session.query(GameRunnerEvent, GamePitch)
+        .join(Game, GameRunnerEvent.game_id == Game.game_id)
+        .outerjoin(
+            GamePitch,
+            (GamePitch.game_id == GameRunnerEvent.game_id)
+            & (GamePitch.pitch_sequence == GameRunnerEvent.pitch_sequence_after),
+        )
+        .filter(GameRunnerEvent.is_out.is_(True))
+    )
+    if season_id is not None:
+        query = query.filter(Game.season_id == season_id)
+    if game_id is not None:
+        query = query.filter(GameRunnerEvent.game_id == game_id)
+    total = 0
+    for ev, anchor_pitch in query.all():
+        if anchor_pitch is None:
+            continue
+        pitcher_id = (
+            anchor_pitch.our_player_id if not anchor_pitch.is_our_team_batting
+            else anchor_pitch.opponent_our_player_id
+        )
+        if pitcher_id == player_id:
+            total += 1
+    return total
 
 
 def get_pitches_thrown_to_opponent_batter(session, opponent_player_id, season_id=None, game_id=None):
@@ -344,7 +394,7 @@ WOBA_WEIGHTS = {"uBB": 0.69, "HBP": 0.72, "1B": 0.89, "2B": 1.27, "3B": 1.62, "H
 FIP_CONSTANT = 4.47
 
 
-def _innings_pitched(pa_pitches):
+def _innings_pitched(pa_pitches, extra_outs=0):
     """Outs recorded on this pitcher's own PA-ending pitches, converted
     to the X.Y innings-pitched display convention (Y = outs past the
     last full inning, 0-2, NOT a true decimal third). Each ending
@@ -353,6 +403,12 @@ def _innings_pitched(pa_pitches):
     normalization -- game_tracking.py's compute_current_state() does
     that normalization only for the live display, never on the stored
     row, so summing the raw deltas here is exact, not an approximation.
+
+    extra_outs: outs this pitcher recorded that never land on any
+    GamePitch row's delta -- today, only GameRunnerEvent outs (Picked
+    Off / Caught Stealing; see get_runner_event_outs()). Defaults to 0
+    (every existing caller is unaffected).
+
     Returns (display_string, decimal_value) -- decimal_value is the
     real fractional innings (outs/3), used for rate stats (ERA, WHIP,
     K/9) where X.Y would silently be wrong (X.2 innings is NOT X + 0.2
@@ -360,7 +416,7 @@ def _innings_pitched(pa_pitches):
     total_outs = sum(
         (p.outs_after - p.outs_before) for p in pa_pitches
         if p.outs_after is not None and p.outs_before is not None
-    )
+    ) + extra_outs
     whole, partial = divmod(total_outs, 3)
     return f"{whole}.{partial}", whole + partial / 3.0
 
@@ -370,7 +426,7 @@ def _is_leadoff_pa(pa_pitches_for_this_pa_first_pitch):
     return p.pa_pitch_number == 1 and p.outs_before == 0 and (p.bases_before or "000") == "000"
 
 
-def compute_pitching_line(pitches, extra_earned_runs=0):
+def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0):
     """The box-score-style header line for a pitcher -- either for a
     single game (pass pitches from get_pitching_pitches(..., game_id=))
     or aggregated across a season/all-time, same function either way.
@@ -386,6 +442,14 @@ def compute_pitching_line(pitches, extra_earned_runs=0):
     always fully earned (Ryker: "those runs score and count towards
     era"), so this adds equally to runs_allowed and earned_runs_allowed
     below, never to unearned.
+
+    extra_outs: outs this pitcher recorded that don't live on any
+    GamePitch row either -- today, only GameRunnerEvent outs (Picked
+    Off / Caught Stealing; see get_runner_event_outs() above). Defaults
+    to 0; a caller showing IP/ERA/WHIP should pass
+    get_runner_event_outs(db, player_id, ...) here so a pickoff or
+    caught-stealing actually counts toward innings pitched -- it never
+    otherwise will, since it happens between pitches, not on one.
 
     Early/Ahead here use Ryker's exact per-plate-appearance definitions
     (confirmed directly with him, see compute_pitch_type_breakdown's
@@ -437,7 +501,7 @@ def compute_pitching_line(pitches, extra_earned_runs=0):
 
     strikes = sum(1 for p in pitches if p.pitch_outcome in STRIKE_OUTCOMES)
     balls_thrown = sum(1 for p in pitches if p.pitch_outcome == "Ball")
-    ip_display, ip_decimal = _innings_pitched(pa_pitches)
+    ip_display, ip_decimal = _innings_pitched(pa_pitches, extra_outs=extra_outs)
 
     # PA groups, needed for Early/Ahead/Leadoff/situational-count stats
     # below -- reconstructed the same way compute_pitch_type_breakdown

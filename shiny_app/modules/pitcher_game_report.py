@@ -29,7 +29,7 @@ from database import get_session
 from models import Player, Game, GamePitch, RapsodoPitch, User
 from game_stats import (
     get_pitching_pitches, compute_pitching_line, compute_pitch_type_breakdown,
-    get_forced_half_inning_end_runs,
+    get_forced_half_inning_end_runs, get_runner_event_outs,
 )
 from pitch_location_stats import compute_command_precision, compute_attack_zones
 # Target-radius bands (Precision/Command/Competitive/Major Miss) and the
@@ -568,7 +568,8 @@ def pitcher_game_report_server(input, output, session, app_state):
             # pitcher's earned runs even though they never landed on a
             # GamePitch row -- fold them into Runs Allowed/ERA here too.
             extra_earned_runs = get_forced_half_inning_end_runs(db, selected_pitcher_id, game_id=selected_game_id)
-            line = compute_pitching_line(pitches, extra_earned_runs=extra_earned_runs)
+            extra_outs = get_runner_event_outs(db, selected_pitcher_id, game_id=selected_game_id)
+            line = compute_pitching_line(pitches, extra_earned_runs=extra_earned_runs, extra_outs=extra_outs)
             sections = [ui.h5(f"{pitcher.first_name} {pitcher.last_name} — {_game_label(game)}", class_="gbo-section-title")]
 
             sections.append(ui.p(ui.strong("Line")))
