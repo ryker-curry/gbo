@@ -643,24 +643,41 @@ def auto_match_rapsodo_to_game_pitches(db_session, import_id: int, game_id: int)
 
 
 def apply_manual_rapsodo_game_pitch_matches(db_session, import_id: int, matches: dict) -> dict:
-    """Manual reconciliation for a game-linked import whose pitch count
-    didn't line up with the game stint (auto_match_rapsodo_to_game_pitches
-    returned "count_mismatch") -- a coach pairs individual Rapsodo
-    readings with individual charted pitches by hand instead of GBO
-    guessing at an order that may no longer hold once the counts
-    disagree.
+    """Manual reconciliation for a game-linked import -- either one
+    whose pitch count didn't line up with the game stint
+    (auto_match_rapsodo_to_game_pitches returned "count_mismatch") or
+    one that matched cleanly by count but paired positions wrong anyway
+    (a misread/garbage reading still counts as a row, so it never trips
+    the count check -- see the "Reassign pitches by hand" flow in
+    shiny_app/modules/rapsodo_import.py). Either way, a coach pairs
+    individual Rapsodo readings with individual charted pitches by hand
+    instead of GBO guessing at an order that may not hold.
 
-    matches: {rapsodo_pitch_id: game_pitch_id}. Only pairs present in the
-    dict are applied; any RapsodoPitch left out simply keeps
-    game_pitch_id unset (imported, but not linked to a specific charted
-    pitch) -- a valid, visible end state, not an error.
+    matches: {rapsodo_pitch_id: game_pitch_id_or_None}. None means "no
+    charted pitch" (the coach picked "-- unmatched --", e.g. for a
+    misread that shouldn't be linked to any real pitch). Every
+    RapsodoPitch the coach's table covered should be a key here, even
+    when its choice is unchanged from before -- unlike the plain-insert
+    path, this can be REPOINTING an already-linked pitch (the reassign-
+    after-a-clean-match case), so a pair silently left out would leave
+    a stale wrong link in place rather than the "not linked yet" state
+    that used to be the only possibility here.
+
+    Before applying a new pointer (or None) for a RapsodoPitch that was
+    already linked to a different GamePitch, clears that OLD GamePitch's
+    actual_plate_x/z and pitch_zone -- but only when they still exactly
+    match this same RapsodoPitch's own plate_x_ft/plate_z_ft, i.e. they
+    really did come from this reading and not from a video-review pass
+    or a different Rapsodo row since. Otherwise a corrected reassignment
+    would fix the link but leave the wrong pitch's location/zone data
+    behind, still wrong.
 
     Applies the same "don't overwrite an existing video-reviewed
-    location" rule as the automatic path. Raises RapsodoImportError and
-    rolls back (applying none of the pairs) if any pair references a
-    Rapsodo pitch outside this import or a nonexistent game pitch,
-    rather than partially applying a table that may have been built from
-    stale data.
+    location" rule as the automatic path for the NEW target. Raises
+    RapsodoImportError and rolls back (applying none of the pairs) if
+    any pair references a Rapsodo pitch outside this import or a
+    nonexistent game pitch, rather than partially applying a table that
+    may have been built from stale data.
     """
     if not matches:
         return {"status": "no_pitches", "matched_count": 0}
@@ -679,12 +696,30 @@ def apply_manual_rapsodo_game_pitch_matches(db_session, import_id: int, matches:
                     f"Rapsodo pitch {rapsodo_pitch_id} doesn't belong to import {import_id} -- refusing to apply "
                     f"a possibly-stale reconciliation table."
                 )
-            gp = db_session.query(GamePitch).filter(GamePitch.game_pitch_id == game_pitch_id).first()
-            if gp is None:
-                raise RapsodoImportError(f"No game pitch found with id {game_pitch_id}.")
-            rp.game_pitch_id = gp.game_pitch_id
+            gp = None
+            if game_pitch_id is not None:
+                gp = db_session.query(GamePitch).filter(GamePitch.game_pitch_id == game_pitch_id).first()
+                if gp is None:
+                    raise RapsodoImportError(f"No game pitch found with id {game_pitch_id}.")
+
+            old_game_pitch_id = rp.game_pitch_id
+            if old_game_pitch_id is not None and old_game_pitch_id != game_pitch_id:
+                old_gp = db_session.query(GamePitch).filter(GamePitch.game_pitch_id == old_game_pitch_id).first()
+                if (
+                    old_gp is not None
+                    and rp.plate_x_ft is not None
+                    and rp.plate_z_ft is not None
+                    and old_gp.actual_plate_x == rp.plate_x_ft
+                    and old_gp.actual_plate_z == rp.plate_z_ft
+                ):
+                    old_gp.actual_plate_x = None
+                    old_gp.actual_plate_z = None
+                    old_gp.pitch_zone = None
+
+            rp.game_pitch_id = game_pitch_id
             if (
-                gp.actual_plate_x is None
+                gp is not None
+                and gp.actual_plate_x is None
                 and gp.actual_plate_z is None
                 and rp.plate_x_ft is not None
                 and rp.plate_z_ft is not None

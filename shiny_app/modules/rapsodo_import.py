@@ -942,8 +942,15 @@ def rapsodo_import_server(input, output, session, app_state):
             matches = {}
             for rp in rapsodo_pitches:
                 field_id = f"manual_match_{rp.rapsodo_pitch_id}"
-                if field_id in input and input[field_id]():
-                    matches[rp.rapsodo_pitch_id] = int(input[field_id]())
+                if field_id in input:
+                    # Every rendered row goes in, even "-- unmatched --"
+                    # (blank -> None) -- this table can be repointing an
+                    # already-linked pitch (see apply_manual_rapsodo_
+                    # game_pitch_matches's docstring), so leaving a row
+                    # out would keep whatever wrong link it already had
+                    # instead of applying the coach's actual choice.
+                    val = input[field_id]()
+                    matches[rp.rapsodo_pitch_id] = int(val) if val else None
             try:
                 result = apply_manual_rapsodo_game_pitch_matches(db, import_id, matches)
             except RapsodoImportError as e:
