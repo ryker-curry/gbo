@@ -567,6 +567,15 @@ def rapsodo_import_server(input, output, session, app_state):
             _upload_key.set(_upload_key() + 1)
 
             summary_msg = f"Imported {import_record.imported_row_count} pitch(es) for this outing."
+            no_read_count = sum(
+                1 for p in import_record.pitches
+                if not any(getattr(p, field) is not None for field in ("velocity", "total_spin", "vb_spin", "hb_spin", "true_spin"))
+            )
+            if no_read_count:
+                summary_msg += (
+                    f" {no_read_count} had no Rapsodo reading (a no-read) -- kept in place so pitch numbering "
+                    f"stays aligned with the charted stint, rather than shifting everything after it."
+                )
             if import_record.rejected_row_count:
                 summary_msg += f" {import_record.rejected_row_count} row(s) were skipped -- see details below."
             status = match_result.get("status") if match_result else None
@@ -914,11 +923,23 @@ def rapsodo_import_server(input, output, session, app_state):
             rows = []
             for i, rp in enumerate(rapsodo_pitches):
                 default_match = str(game_pitches[i].game_pitch_id) if i < len(game_pitches) else ""
-                pitch_type_label = rp.pitch_type.type_name if rp.pitch_type else (rp.raw_pitch_type or "—")
-                velo_label = f", {float(rp.velocity):.1f} mph" if rp.velocity is not None else ""
+                # A no-read placeholder (kept in position instead of
+                # dropped -- see import_rapsodo_file's no-read handling
+                # above) has no velocity/spin/break at all; say so
+                # plainly instead of showing a bare pitch type that
+                # looks like an ordinary, if terse, reading.
+                is_no_read = not any(
+                    getattr(rp, field) is not None for field in ("velocity", "total_spin", "vb_spin", "hb_spin", "true_spin")
+                )
+                if is_no_read:
+                    row_label = f"Rapsodo #{rp.pitch_number} — No read (Rapsodo captured no data for this pitch)"
+                else:
+                    pitch_type_label = rp.pitch_type.type_name if rp.pitch_type else (rp.raw_pitch_type or "—")
+                    velo_label = f", {float(rp.velocity):.1f} mph" if rp.velocity is not None else ""
+                    row_label = f"Rapsodo #{rp.pitch_number} — {pitch_type_label}{velo_label}"
                 rows.append(
                     ui.layout_columns(
-                        ui.p(f"Rapsodo #{rp.pitch_number} — {pitch_type_label}{velo_label}", class_="mb-1"),
+                        ui.p(row_label, class_="mb-1"),
                         ui.input_select(f"manual_match_{rp.rapsodo_pitch_id}", None, choices=game_pitch_choices, selected=default_match),
                         col_widths=[7, 5],
                     )
