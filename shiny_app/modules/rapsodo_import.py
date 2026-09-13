@@ -60,6 +60,12 @@ of a clean-match message, and manual_match_table takes over: one row
 per Rapsodo pitch, each pre-matched by order to the game pitch in the
 same position (a starting point, not a claim it's already correct) and
 freely reassignable, applied via apply_manual_rapsodo_game_pitch_matches.
+The same table is also reachable on a clean "matched" result via the
+"Reassign pitches by hand" button (_force_manual_reconcile) -- a
+misread or garbage reading still counts as one row on Rapsodo's side,
+so it never trips the count-mismatch check above; it just silently
+shifts every pitch after it out of position (Ryker, Sept 2026: Gavin
+Derr's outing).
 Kept as a separate reactive.Value (_last_game_import) and separate
 render outputs from the original bullpen-session result section rather
 than widening that flow's state shape -- see _last_game_import's inline
@@ -120,6 +126,18 @@ def rapsodo_import_server(input, output, session, app_state):
     # _last_import's (import_id, bullpen_id, session_date) shape is relied
     # on unchanged by the existing bullpen-session flow below.
     _last_game_import = reactive.Value(None)
+    # True once a coach asks to reassign an already-"matched" game
+    # import by hand (Ryker, Sept 2026: Gavin Derr's Rapsodo unit
+    # mis-read one live pitch -- still one row, so the count still
+    # lined up with the charted stint and auto_match_rapsodo_to_game_pitches
+    # paired everything positionally without ever flagging a mismatch,
+    # silently shifting every pitch after the bad one off by one).
+    # manual_match_table below only showed for an actual count
+    # mismatch; this flag lets a coach reopen that same table even when
+    # the counts happened to agree but the pairing itself is wrong.
+    # Reset to False whenever a fresh import lands (see _do_game_import)
+    # so it never leaks onto an unrelated later import.
+    _force_manual_reconcile = reactive.Value(False)
 
     def _bump_refresh():
         _refresh_tick.set(_refresh_tick() + 1)
@@ -517,6 +535,7 @@ def rapsodo_import_server(input, output, session, app_state):
                         ui.notification_show(f"{e} Also couldn't re-check the match: {match_err}", type="error", duration=12)
                         return
                     _last_game_import.set((e.import_id, target_game_id, match_result))
+                    _force_manual_reconcile.set(False)
                     ui.notification_show(
                         f"{e} Re-checked the match against this game's charted pitches -- see below.",
                         type="message", duration=10,
@@ -544,6 +563,7 @@ def rapsodo_import_server(input, output, session, app_state):
                 match_result = {"status": "error", "error": str(e)}
 
             _last_game_import.set((import_record.import_id, target_game_id, match_result))
+            _force_manual_reconcile.set(False)
             _upload_key.set(_upload_key() + 1)
 
             summary_msg = f"Imported {import_record.imported_row_count} pitch(es) for this outing."
@@ -785,6 +805,17 @@ def rapsodo_import_server(input, output, session, app_state):
                     f"pitches -- actual location and physical pitch data are now linked on those game pitches.",
                     class_="text-success",
                 ))
+                sections.append(ui.p(
+                    "Need to fix one anyway? A misread or a garbage reading still counts as a pitch on Rapsodo's "
+                    "side, so it won't trip the count-mismatch check above -- it just quietly shifts every pitch "
+                    "after it out of line. Reassign pitches by hand below to fix a misread, or to mark one as "
+                    "having no Rapsodo reading at all.",
+                    class_="text-muted small",
+                ))
+                sections.append(ui.input_action_button(
+                    "force_manual_reconcile_btn", "Reassign pitches by hand", class_="btn-outline-secondary btn-sm mb-2",
+                ))
+                sections.append(ui.output_ui("manual_match_table"))
             elif status == "count_mismatch":
                 sections.append(ui.p(
                     f"This file has {match_result['rapsodo_pitch_count']} pitch(es), but the charted stint for "
@@ -850,7 +881,9 @@ def rapsodo_import_server(input, output, session, app_state):
         if last is None:
             return None
         import_id, game_id, match_result = last
-        if not match_result or match_result.get("status") != "count_mismatch":
+        if not match_result:
+            return None
+        if match_result.get("status") != "count_mismatch" and not _force_manual_reconcile():
             return None
         req("selected_pitcher_id" in input)
         selected_pitcher_id = int(input.selected_pitcher_id())
@@ -891,6 +924,12 @@ def rapsodo_import_server(input, output, session, app_state):
             db.close()
 
     @reactive.effect
+    @reactive.event(input.force_manual_reconcile_btn)
+    def _force_manual_reconcile_on():
+        _force_manual_reconcile.set(True)
+        _bump_refresh()
+
+    @reactive.effect
     @reactive.event(input.apply_manual_matches_btn)
     def _apply_manual_matches():
         last = _last_game_import()
@@ -916,6 +955,7 @@ def rapsodo_import_server(input, output, session, app_state):
             # re-running auto-match would just report the same count
             # mismatch again, since the underlying counts haven't changed.
             _last_game_import.set((import_id, game_id, {"status": "matched", "matched_count": result["matched_count"]}))
+            _force_manual_reconcile.set(False)
             _bump_refresh()
         finally:
             db.close()
