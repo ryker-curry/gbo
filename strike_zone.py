@@ -276,6 +276,45 @@ _ZONE_X_BOUNDS = {
     5: (ZONE_HALF_WIDTH, float("inf")),
 }
 
+# Zones 1 and 5 are both "off the plate, at the chalk" waste/chase
+# calls -- Ryker, Sept 2026: "for a zone 1 or zone 5 anything off the
+# plate is good ... if a 1 or 5 is called [landing in] the other
+# batter's box ... would not be a miss at all because it is supposed
+# to be outside of the strike zone ... as long as it is off the plate
+# they should not get a horizontal miss." So unlike zones 2-4 (each a
+# single one-sided column, per _ZONE_X_BOUNDS above), a called 1 or 5's
+# real horizontal target is BOTH tails outside the strike zone width --
+# landing off the plate on EITHER side is a 0, not just the one side
+# the zone's own number/name describes. _ZONE_X_BOUNDS itself is left
+# one-sided for zones 1/5 (used as-is by call_zone below, which decides
+# which zone an INTENDED click falls into -- that's always the
+# physically-correct side, so no ambiguity there); this widening only
+# applies to grading where an ACTUAL pitch landed relative to a called
+# 1 or 5, in distance_from_cell_in/zone_miss_components_in below.
+def _zone_horizontal_offset_ft(zone, actual_x):
+    """Signed horizontal offset (feet) of actual_x from zone's target
+    region -- 0 if actual_x is already within it. Zones 2-4 use their
+    normal single column from _ZONE_X_BOUNDS (positive = beyond the
+    high edge, negative = beyond the low edge, same convention
+    zone_miss_components_in has always used). Zones 1 and 5 share the
+    same two-tailed target region instead (anything at or beyond either
+    edge of the strike zone width): 0 if actual_x is off the plate on
+    either side; otherwise actual_x landed inside the strike zone width
+    (the pitcher failed to get it off the plate) and the offset is the
+    signed distance to whichever edge is nearer."""
+    if zone in (1, 5):
+        if actual_x <= -ZONE_HALF_WIDTH or actual_x >= ZONE_HALF_WIDTH:
+            return 0.0
+        dist_to_low = actual_x - (-ZONE_HALF_WIDTH)
+        dist_to_high = actual_x - ZONE_HALF_WIDTH
+        return dist_to_low if abs(dist_to_low) <= abs(dist_to_high) else dist_to_high
+    x_lo, x_hi = _ZONE_X_BOUNDS[zone]
+    if actual_x < x_lo:
+        return actual_x - x_lo
+    if actual_x > x_hi:
+        return actual_x - x_hi
+    return 0.0
+
 
 def call_level(plate_z):
     """plate_z (feet) -> the 1-4 level band it falls in (see the block
@@ -327,9 +366,8 @@ def distance_from_cell_in(level, zone, plate_x, plate_z):
     x_bounds = _ZONE_X_BOUNDS.get(zone)
     if z_bounds is None or x_bounds is None:
         return None
-    x_lo, x_hi = x_bounds
     z_lo, z_hi = z_bounds
-    dx = max(x_lo - plate_x, 0.0, plate_x - x_hi)
+    dx = abs(_zone_horizontal_offset_ft(zone, plate_x))
     dz = max(z_lo - plate_z, 0.0, plate_z - z_hi)
     return math.hypot(dx, dz) * 12.0
 
@@ -365,14 +403,8 @@ def zone_miss_components_in(level, zone, actual_x, actual_z):
     x_bounds = _ZONE_X_BOUNDS.get(zone)
     if z_bounds is None or x_bounds is None:
         return None, None, None
-    x_lo, x_hi = x_bounds
     z_lo, z_hi = z_bounds
-    if actual_x < x_lo:
-        dx = actual_x - x_lo
-    elif actual_x > x_hi:
-        dx = actual_x - x_hi
-    else:
-        dx = 0.0
+    dx = _zone_horizontal_offset_ft(zone, actual_x)
     if actual_z < z_lo:
         dz = actual_z - z_lo
     elif actual_z > z_hi:
