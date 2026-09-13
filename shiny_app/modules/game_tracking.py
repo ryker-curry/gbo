@@ -982,9 +982,14 @@ def compute_current_state(pitches, runner_events=None, forced_ends=None):
                 state.pop(k, None)
         state["outs"], state["bases"] = outs, bases
 
-    if any(fe.pitch_sequence_after == anchor for fe in forced_ends):
+    # Loop (not `any(...)`) so two forced ends anchored at the identical
+    # pitch (a real, supported case -- see the game #14 forced-end rows
+    # from Sept 2026) each apply their own rollover instead of only one
+    # of them counting, matching replay_game's own per-fe loop below.
+    for fe in (e for e in forced_ends if e.pitch_sequence_after == anchor):
         state["inning"] += 1
-        state["is_our_batting"] = not state["is_our_batting"]
+        if not fe.same_side_continues:
+            state["is_our_batting"] = not state["is_our_batting"]
         state["outs"], state["bases"] = 0, "000"
         state["balls"], state["strikes"], state["pa_pitch_number"], state["new_pa"] = 0, 0, 1, True
         for k in ("current_our_player", "current_opp_hand", "current_opp_order", "current_opp_player", "current_opp_our_player"):
@@ -1142,7 +1147,8 @@ def replay_game(pitches, runner_events, re_lookup, forced_ends=None):
         for fe in (e for e in forced if e.pitch_sequence_after == anchor_seq):
             _credit(fe.batting_squad, fe.is_our_team_batting, fe.runs_scored)
             state["inning"] += 1
-            state["is_our_batting"] = not state["is_our_batting"]
+            if not fe.same_side_continues:
+                state["is_our_batting"] = not state["is_our_batting"]
             state["outs"], state["bases"] = 0, "000"
             state["balls"], state["strikes"], state["pa_pitch_number"] = 0, 0, 1
 
@@ -3096,7 +3102,18 @@ def game_tracking_server(input, output, session, app_state):
                 else:
                     run_note = "No runners on base -- the half-inning just ends here, no runs charged."
                 children.append(ui.p(run_note, class_="text-muted small"))
-                children.append(ui.input_action_button("confirm_forced_end_btn", "Confirm -- end half-inning", class_="btn-warning btn-sm mt-1"))
+                if game.uses_three_squad_intrasquad:
+                    children.append(ui.input_action_button("confirm_forced_end_btn", "Confirm -- new team is up", class_="btn-warning btn-sm mt-1"))
+                    children.append(ui.p(
+                        "Use \"new team is up\" for a genuine half-inning end. Use \"same team "
+                        f"continues\" instead when {who or 'this pitcher'} is being pulled on a pitch "
+                        "count and the SAME squad keeps pitching to a fresh lineup -- that keeps "
+                        "who's-pitching/who's-batting straight for every pitch after this one.",
+                        class_="text-muted small mt-1",
+                    ))
+                    children.append(ui.input_action_button("confirm_forced_end_same_side_btn", "Confirm -- same team continues (pitch count)", class_="btn-warning btn-sm mt-1"))
+                else:
+                    children.append(ui.input_action_button("confirm_forced_end_btn", "Confirm -- end half-inning", class_="btn-warning btn-sm mt-1"))
                 children.append(ui.input_action_link("cancel_forced_end_btn", "Cancel", class_="text-muted small d-block mt-1"))
 
             return ui.div(*children)
@@ -3113,9 +3130,7 @@ def game_tracking_server(input, output, session, app_state):
     def _cancel_forced_end_form():
         _forced_end_form_open.set(False)
 
-    @reactive.effect
-    @reactive.event(input.confirm_forced_end_btn)
-    def _confirm_forced_end():
+    def _do_confirm_forced_end(same_side_continues):
         game_id = _active_game_id()
         if game_id is None:
             return
@@ -3144,6 +3159,7 @@ def game_tracking_server(input, output, session, app_state):
                 inning=state["inning"], is_our_team_batting=state["is_our_batting"],
                 batting_squad=batting_squad, runs_scored=runs_scored,
                 credited_player_id=credited_player_id,
+                same_side_continues=same_side_continues,
                 created_by_user_id=app_state.user_id(),
             ))
             if runs_scored:
@@ -3158,13 +3174,26 @@ def game_tracking_server(input, output, session, app_state):
                 else:
                     game.opponent_score += runs_scored
             db.commit()
-            ui.notification_show("Half-inning ended -- moving on to the next pitcher/lineup.", type="message", duration=6)
+            if same_side_continues:
+                ui.notification_show("Half-inning ended -- same team continues pitching to a fresh lineup.", type="message", duration=6)
+            else:
+                ui.notification_show("Half-inning ended -- moving on to the next pitcher/lineup.", type="message", duration=6)
             _forced_end_form_open.set(False)
             _runner_event_form_open.set(False)  # a stale open runner-event form no longer applies to the new half
             _bump_pa()
             _bump_refresh()
         finally:
             db.close()
+
+    @reactive.effect
+    @reactive.event(input.confirm_forced_end_btn)
+    def _confirm_forced_end():
+        _do_confirm_forced_end(False)
+
+    @reactive.effect
+    @reactive.event(input.confirm_forced_end_same_side_btn)
+    def _confirm_forced_end_same_side():
+        _do_confirm_forced_end(True)
 
     @render.ui
     def who_is_up_identity_picker():

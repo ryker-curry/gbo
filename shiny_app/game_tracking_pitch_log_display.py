@@ -328,6 +328,12 @@ def _render_forced_end_preview(preview):
         ),
         ui.p(runs_line, class_="small fw-bold mb-1"),
     ]
+    if preview.get("same_side_continues"):
+        children.append(ui.p(
+            "Mode: same team continues pitching to a fresh lineup -- who's pitching/batting "
+            "will NOT flip after this point; only the count/bases reset and the inning advances.",
+            class_="small fw-bold text-info mb-1",
+        ))
     if preview["side_changed_seqs"]:
         children.append(ui.p(
             "Side/inning changed for pitch(es) " + ", ".join(preview["side_changed_seqs"]) +
@@ -625,7 +631,12 @@ def register_game_tracking_pitch_log(
                     ]
                     if can_end_here:
                         forced_end_btn_id = f"gt_pl_forced_end_btn_{p.game_pitch_id}"
-                        buttons.append(ui.input_action_button(forced_end_btn_id, "End half-inning after this", class_="btn-outline-warning btn-sm"))
+                        forced_end_same_side_btn_id = f"gt_pl_forced_end_same_side_btn_{p.game_pitch_id}"
+                        if game is not None and game.uses_three_squad_intrasquad:
+                            buttons.append(ui.input_action_button(forced_end_btn_id, "End half-inning (new team up)", class_="btn-outline-warning btn-sm"))
+                            buttons.append(ui.input_action_button(forced_end_same_side_btn_id, "End half-inning (same team continues)", class_="btn-outline-warning btn-sm"))
+                        else:
+                            buttons.append(ui.input_action_button(forced_end_btn_id, "End half-inning after this", class_="btn-outline-warning btn-sm"))
                     if can_add_runner_event_here:
                         add_runner_btn_id = f"gt_pl_add_runner_btn_{p.game_pitch_id}"
                         buttons.append(ui.input_action_button(add_runner_btn_id, "Log runner event", class_="btn-outline-info btn-sm"))
@@ -698,10 +709,9 @@ def register_game_tracking_pitch_log(
             return
 
         forced_end_btn_id = f"gt_pl_forced_end_btn_{pitch_id}"
+        forced_end_same_side_btn_id = f"gt_pl_forced_end_same_side_btn_{pitch_id}"
 
-        @reactive.effect
-        @reactive.event(input[forced_end_btn_id])
-        def _on_pitch_log_forced_end_trigger():
+        def _build_forced_end_preview(same_side_continues):
             game_id = _active_game_id()
             if game_id is None:
                 return
@@ -737,6 +747,7 @@ def register_game_tracking_pitch_log(
                     inning=p.inning, is_our_team_batting=p.is_our_team_batting,
                     batting_squad=p.batting_squad, runs_scored=runs_scored,
                     credited_player_id=p.our_player_id,
+                    same_side_continues=same_side_continues,
                 )
                 re_lookup = build_re_lookup(db)
                 result = replay_game(all_pitches, all_events, re_lookup, existing_forced_ends + [pending_event])
@@ -750,6 +761,7 @@ def register_game_tracking_pitch_log(
                     "rows": rows,
                     "side_changed_seqs": side_changed_seqs,
                     "score_changes": score_changes,
+                    "same_side_continues": same_side_continues,
                 })
                 _gt_editing_pitch_id.set(None)
                 _gt_pending_delete_pitch_id.set(None)
@@ -759,6 +771,16 @@ def register_game_tracking_pitch_log(
                 _bump_refresh()
             finally:
                 db.close()
+
+        @reactive.effect
+        @reactive.event(input[forced_end_btn_id])
+        def _on_pitch_log_forced_end_trigger():
+            _build_forced_end_preview(False)
+
+        @reactive.effect
+        @reactive.event(input[forced_end_same_side_btn_id])
+        def _on_pitch_log_forced_end_same_side_trigger():
+            _build_forced_end_preview(True)
 
     @reactive.effect
     @reactive.event(input.gt_pl_cancel_edit_btn)
@@ -1018,6 +1040,7 @@ def register_game_tracking_pitch_log(
                     inning=p.inning, is_our_team_batting=p.is_our_team_batting,
                     batting_squad=p.batting_squad, runs_scored=runs_scored,
                     credited_player_id=p.our_player_id,
+                    same_side_continues=bool(preview.get("same_side_continues")),
                     created_by_user_id=app_state.user_id(),
                 )
                 db.add(new_event)
