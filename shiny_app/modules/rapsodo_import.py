@@ -996,10 +996,20 @@ def rapsodo_import_server(input, output, session, app_state):
             except RapsodoImportError as e:
                 ui.notification_show(str(e), type="error", duration=10)
                 return
-            ui.notification_show(
-                f"Deleted \"{summary['original_filename']}\" -- removed {summary['deleted_pitch_count']} pitch(es).",
-                type="message", duration=8,
-            )
+            delete_msg = f"Deleted \"{summary['original_filename']}\" -- removed {summary['deleted_pitch_count']} pitch(es)."
+            if summary.get("cleared_location_count"):
+                # Ryker, Sept 2026: deleting a game-linked import used to
+                # leave the actual locations it had copied onto charted
+                # pitches sitting there -- Command Target Zones / "Miss
+                # direction by pitch" kept showing data from an import
+                # that no longer existed. delete_rapsodo_import now clears
+                # those too; say so explicitly since it's not obvious a
+                # delete here touches anything beyond the Rapsodo rows.
+                delete_msg += (
+                    f" Also cleared the actual location this import had set on "
+                    f"{summary['cleared_location_count']} charted pitch(es)."
+                )
+            ui.notification_show(delete_msg, type="message", duration=10)
             _last_game_import.set(None)
             _bump_refresh()
         finally:
