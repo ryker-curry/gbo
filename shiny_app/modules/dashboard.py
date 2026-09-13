@@ -69,9 +69,10 @@ from models import (
 )
 from game_stats import (
     get_pitching_pitches, get_batting_pitches, compute_pitching_line, compute_batting_line,
-    get_forced_half_inning_end_runs,
+    get_forced_half_inning_end_runs, get_runner_event_outs,
 )
 from models import GameForcedHalfInningEnd
+from models import GamePitch, GameRunnerEvent
 from bucket_system import compute_bucket_system
 
 import ui_helpers
@@ -788,6 +789,37 @@ def _forced_end_runs_for_window(db, player_id, window, season, recent_game_ids):
     return get_forced_half_inning_end_runs(db, player_id, season_id=season.season_id if season else None)
 
 
+def _runner_event_outs_for_window(db, player_id, window, season, recent_game_ids):
+    """Window-matched counterpart to _pitching_pitches_for_window above,
+    for outs recorded via GameRunnerEvent (Picked Off / Caught Stealing
+    -- see get_runner_event_outs' docstring in game_stats.py) -- so
+    IP/ERA/WHIP shown here include them too, consistent with every
+    other pitching-line view."""
+    if window == "recent":
+        rows = (
+            db.query(GameRunnerEvent, GamePitch)
+            .outerjoin(
+                GamePitch,
+                (GamePitch.game_id == GameRunnerEvent.game_id)
+                & (GamePitch.pitch_sequence == GameRunnerEvent.pitch_sequence_after),
+            )
+            .filter(GameRunnerEvent.is_out.is_(True), GameRunnerEvent.game_id.in_(recent_game_ids))
+            .all()
+        )
+        total = 0
+        for ev, anchor_pitch in rows:
+            if anchor_pitch is None:
+                continue
+            pitcher_id = (
+                anchor_pitch.our_player_id if not anchor_pitch.is_our_team_batting
+                else anchor_pitch.opponent_our_player_id
+            )
+            if pitcher_id == player_id:
+                total += 1
+        return total
+    return get_runner_event_outs(db, player_id, season_id=season.season_id if season else None)
+
+
 def _batting_pitches_for_window(db, player_id, window, season, recent_game_ids):
     if window == "recent":
         return [p for p in get_batting_pitches(db, player_id) if p.game_id in recent_game_ids]
@@ -822,15 +854,18 @@ def _pitching_staff_section(db, players, window):
     per_pitcher = []
     all_pitches = []
     total_extra_earned_runs = 0
+    total_extra_outs = 0
     for p in players:
         pitches = _pitching_pitches_for_window(db, p.player_id, window, season, recent_game_ids)
         extra_earned_runs = _forced_end_runs_for_window(db, p.player_id, window, season, recent_game_ids)
-        if not pitches and not extra_earned_runs:
+        extra_outs = _runner_event_outs_for_window(db, p.player_id, window, season, recent_game_ids)
+        if not pitches and not extra_earned_runs and not extra_outs:
             continue
-        line = compute_pitching_line(pitches, extra_earned_runs=extra_earned_runs)
+        line = compute_pitching_line(pitches, extra_earned_runs=extra_earned_runs, extra_outs=extra_outs)
         per_pitcher.append((p, line))
         all_pitches.extend(pitches)
         total_extra_earned_runs += extra_earned_runs
+        total_extra_outs += extra_outs
 
     per_pitcher.sort(key=lambda row: row[1]["IP (decimal)"] or 0, reverse=True)
 
@@ -842,7 +877,7 @@ def _pitching_staff_section(db, players, window):
         ))
         return ui.div(*sections)
 
-    team_line = compute_pitching_line(all_pitches, extra_earned_runs=total_extra_earned_runs)
+    team_line = compute_pitching_line(all_pitches, extra_earned_runs=total_extra_earned_runs, extra_outs=total_extra_outs)
     era_key = "ERA"
 
     sections.append(ui_helpers.render_kpi_cards([
