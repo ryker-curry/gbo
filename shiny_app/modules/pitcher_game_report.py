@@ -585,18 +585,10 @@ def pitcher_game_report_server(input, output, session, app_state):
                 {"label": "WHIP", "value": _fmt(line["WHIP"])},
                 {"label": "K/BB", "value": _fmt(line["K/BB"])},
                 {"label": "K %", "value": _fmt_pct(line["K %"])},
-                {"label": "ERA*", "value": _fmt(line["ERA"])},
+                {"label": "ERA", "value": _fmt(line["ERA"])},
                 {"label": "FIP", "value": _fmt(line["FIP"])},
                 {"label": "Execution %", "value": _fmt_pct(line["Execution %"])},
             ]))
-            sections.append(ui.p(
-                "*ERA here is real earned-run average (runs an error didn't cause) -- GBO now tracks earned vs. "
-                "unearned runs, tagged per play as it's scored live. Historical games recorded before that "
-                "existed default to all-earned, so ERA equals the old runs-allowed average for any outing "
-                "nobody went back and marked unearned runs on.",
-                class_="text-muted small",
-            ))
-
             sections.append(ui.p(ui.strong("Count Control")))
             sections.append(ui_helpers.render_kpi_cards([
                 {"label": "Strike %", "value": _fmt_pct(line["Strike %"])},
