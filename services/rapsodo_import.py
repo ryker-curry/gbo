@@ -487,6 +487,21 @@ def delete_rapsodo_import(db_session, import_id: int) -> dict:
     message above, which points a coach here when a re-upload is a
     correction rather than a mistake.
 
+    For a game-linked import (RapsodoImport.game_id set) whose readings
+    were matched to charted GamePitch rows, also clears actual_plate_x/z
+    and pitch_zone on each matched GamePitch -- but ONLY when they still
+    exactly equal that RapsodoPitch's own plate_x_ft/plate_z_ft, i.e. this
+    import is still what put them there and nothing else (a video review
+    pass, a different Rapsodo row) has overwritten them since. Ryker,
+    Sept 2026: deleted a bad Gavin Derr import and Command Target Zones /
+    "Miss direction by pitch" kept showing data anyway -- those read
+    GamePitch.actual_plate_x/z directly (a one-time copy made at match
+    time), never RapsodoPitch, so deleting the import used to leave every
+    location it had copied over sitting on the game's own pitches intact.
+    Without this, "delete this import" didn't actually undo the import's
+    effect on any stat that depends on location -- only its own audit
+    rows disappeared.
+
     RapsodoPitch rows are deleted explicitly rather than relying on ORM
     cascade -- RapsodoImport.pitches has no cascade="delete-orphan"
     configured (only BullpenSession -> RapsodoPitch has that, for deleting
@@ -506,8 +521,9 @@ def delete_rapsodo_import(db_session, import_id: int) -> dict:
     deleted, or a bad id). Raises RapsodoImportError if the delete itself
     fails partway through, leaving nothing changed. Commits on success and
     returns a small summary dict (player_id, bullpen_id,
-    original_filename, uploaded_at, deleted_pitch_count) so the caller can
-    build a confirmation message without a second query.
+    original_filename, uploaded_at, deleted_pitch_count,
+    cleared_location_count) so the caller can build a confirmation message
+    without a second query.
     """
     import_record = db_session.query(RapsodoImport).filter(RapsodoImport.import_id == import_id).first()
     if import_record is None:
@@ -523,6 +539,26 @@ def delete_rapsodo_import(db_session, import_id: int) -> dict:
     }
 
     try:
+        cleared_location_count = 0
+        matched_pitches = (
+            db_session.query(RapsodoPitch)
+            .filter(RapsodoPitch.import_id == import_id, RapsodoPitch.game_pitch_id.isnot(None))
+            .all()
+        )
+        for rp in matched_pitches:
+            gp = db_session.query(GamePitch).filter(GamePitch.game_pitch_id == rp.game_pitch_id).first()
+            if (
+                gp is not None
+                and rp.plate_x_ft is not None
+                and rp.plate_z_ft is not None
+                and gp.actual_plate_x == rp.plate_x_ft
+                and gp.actual_plate_z == rp.plate_z_ft
+            ):
+                gp.actual_plate_x = None
+                gp.actual_plate_z = None
+                gp.pitch_zone = None
+                cleared_location_count += 1
+
         deleted_pitch_count = (
             db_session.query(RapsodoPitch)
             .filter(RapsodoPitch.import_id == import_id)
@@ -538,6 +574,7 @@ def delete_rapsodo_import(db_session, import_id: int) -> dict:
         )
 
     summary["deleted_pitch_count"] = deleted_pitch_count
+    summary["cleared_location_count"] = cleared_location_count
     return summary
 
 
