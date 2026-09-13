@@ -359,12 +359,24 @@ def import_rapsodo_file(
             rejected.append((file_row_num, "unparseable or missing Date -- can't establish chronological order"))
             continue
 
-        has_any_measurement = any(
+        # A row with a real timestamp but no velocity/spin/break data is
+        # a genuine Rapsodo "no read" (the unit saw the pitch attempt but
+        # couldn't get a reading) -- NOT the same as a blank/junk row.
+        # Kept as a placeholder RapsodoPitch (every numeric field None)
+        # rather than rejected, so its pitch_number still occupies its
+        # true chronological slot instead of leaving a hole that silently
+        # shifts every later pitch's number down by one everywhere else
+        # in the app compares to it (Ryker, Sept 2026, re: Gavin Derr's
+        # game 14 outing -- pitch 6 was a no-read, and dropping it
+        # entirely made Rapsodo's own numbering disagree with the
+        # charted pitch count until manually reconciled). Auto-matching
+        # will still link this placeholder to its real charted pitch by
+        # position -- it just has no plate_x_ft/plate_z_ft to copy, so
+        # that pitch correctly ends up with no actual location, with no
+        # manual reconciliation needed at all.
+        is_no_read = not any(
             raw.get(k) is not None for k in ("velocity", "total_spin", "vb_spin", "hb_spin", "true_spin")
         )
-        if not has_any_measurement:
-            rejected.append((file_row_num, "no velocity, spin, or break data present -- nothing usable to import"))
-            continue
 
         unique_id = raw.get("rapsodo_unique_id")
         if unique_id is not None and unique_id in already_imported_unique_ids:
@@ -379,7 +391,7 @@ def import_rapsodo_file(
                 if s not in ("", "-"):
                     raw_extra[col] = s
 
-        parsed_rows.append({"raw": raw, "raw_extra": raw_extra, "file_row_num": file_row_num})
+        parsed_rows.append({"raw": raw, "raw_extra": raw_extra, "file_row_num": file_row_num, "is_no_read": is_no_read})
 
     if not parsed_rows:
         reason_summary = "; ".join(f"row {n}: {r}" for n, r in rejected[:10])
