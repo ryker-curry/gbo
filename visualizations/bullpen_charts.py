@@ -20,10 +20,20 @@ did that). Pitch-type colors and display labels come from
 pitch_type_config.py / analytics.bullpen_metrics.pitch_type_label --
 never hardcoded or positionally assigned here, per spec Section 23.
 
-Movement (IVB/HB) uses vb_spin/hb_spin (Rapsodo's spin-induced break
-columns) -- matches the mapping already established in Phase 1's
-importer and Phase 2's pitch-type summary table, not the trajectory-
-fit or seam-shifted-wake break columns also preserved on RapsodoPitch.
+Movement chart axes: vertical (IVB) uses vb_spin (Rapsodo's
+spin-induced vertical break -- confirmed Sept 2026 against Rapsodo's
+own displayed session V-Break averages, matches exactly); horizontal
+(HB) uses hb_trajectory, NOT hb_spin (Sept 2026 fix, Ryker: a 2-seamer
+of Porter Starnes's showed 10.7" HB in GBO vs 16.4" on Rapsodo's own
+site -- hb_spin is the theoretical Magnus-only estimate and
+undershoots real movement on pitches with meaningful seam-shifted-wake
+effect, which trajectory-based hb_trajectory already includes;
+vb_spin/vb_trajectory don't have this gap since gravity, not seam
+effects, dominates the vertical-vs-spin difference). Both axes
+previously used the spin-induced pair for consistency with Phase 1's
+importer and Phase 2's summary table -- those shared the same HB bug,
+fixed alongside this at the same time (see bullpen_metrics.py,
+rapsodo_import.py, pitcher_game_report.py).
 
 Aug 2026 addition: movement_chart() takes optional arm_angle_degrees/
 throws kwargs (both default None -- every existing call site,
@@ -227,7 +237,7 @@ def movement_chart(pitches, min_pitches_for_shading=2, arm_angle_degrees=None, t
     """
     fig = go.Figure()
 
-    usable = [p for p in pitches if p.hb_spin is not None and p.vb_spin is not None]
+    usable = [p for p in pitches if p.hb_trajectory is not None and p.vb_spin is not None]
     order, groups = _group_by_type(usable)
 
     # Axis extent: fixed at -25"/+25" on both axes per Ryker's call, not
@@ -247,7 +257,7 @@ def movement_chart(pitches, min_pitches_for_shading=2, arm_angle_degrees=None, t
         group = groups[label]
         if len(group) < min_pitches_for_shading:
             continue
-        xs = [float(p.hb_spin) for p in group]
+        xs = [float(p.hb_trajectory) for p in group]
         ys = [float(p.vb_spin) for p in group]
         cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
         spread = max(max(xs) - min(xs), max(ys) - min(ys)) / 2 + 1.5
@@ -274,7 +284,7 @@ def movement_chart(pitches, min_pitches_for_shading=2, arm_angle_degrees=None, t
     for label in order:
         group = groups[label]
         color = color_for_pitch_label(label)
-        xs = [float(p.hb_spin) for p in group]
+        xs = [float(p.hb_trajectory) for p in group]
         ys = [float(p.vb_spin) for p in group]
         customdata = [
             [p.pitch_number, float(p.velocity) if p.velocity is not None else None,
