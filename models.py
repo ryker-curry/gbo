@@ -1622,6 +1622,20 @@ class GameForcedHalfInningEnd(Base):
     batting_squad = Column(String(1), nullable=True)  # three-team intrasquad mode only -- 'A'/'B'/'C', mirroring GamePitch.batting_squad. NULL for every ordinary game.
     runs_scored = Column(Integer, nullable=False, default=0)  # every runner on base at the anchor, swept home
     credited_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)  # the pitcher charged with runs_scored for ERA purposes
+    # True: the SAME side keeps pitching/batting after this fires (e.g. a
+    # three-squad pitch-count rotation to a fresh lineup/pitcher -- the
+    # ORIGINAL Kurt Kassner scenario this whole table was built for, Sept
+    # 2026) -- is_our_team_batting is NOT flipped by replay_game/
+    # compute_current_state when this is set; only outs/bases reset and
+    # inning still advances. False (default -- every row created before
+    # this field existed) is the original behavior: a genuine half-inning
+    # end, the other side comes up next. Flipping unconditionally when the
+    # same side actually continues corrupts which id column (our_player_id/
+    # opponent_our_player_id) reads as "batter" vs. "pitcher" for every
+    # pitch after the anchor, without the ids themselves being reassigned
+    # -- see the game #14 incident this field was added to fix. Only
+    # meaningful for uses_three_squad_intrasquad games.
+    same_side_continues = Column(Boolean, nullable=False, default=False)
     notes = Column(Text, nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
