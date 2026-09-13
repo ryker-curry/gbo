@@ -711,7 +711,7 @@ def rapsodo_import_server(input, output, session, app_state):
                         "Velocity (mph)": float(p.velocity) if p.velocity is not None else "—",
                         "Total Spin (rpm)": float(p.total_spin) if p.total_spin is not None else "—",
                         "IVB (in)": float(p.vb_spin) if p.vb_spin is not None else "—",
-                        "HB (in)": float(p.hb_spin) if p.hb_spin is not None else "—",
+                        "HB (in)": float(p.hb_trajectory) if p.hb_trajectory is not None else "—",
                         "Extension (ft)": float(p.release_extension) if p.release_extension is not None else "—",
                         "Strike": "Y" if p.is_strike else ("N" if p.is_strike is False else "—"),
                     }
@@ -861,7 +861,7 @@ def rapsodo_import_server(input, output, session, app_state):
                         "Velocity (mph)": float(p.velocity) if p.velocity is not None else "—",
                         "Total Spin (rpm)": float(p.total_spin) if p.total_spin is not None else "—",
                         "IVB (in)": float(p.vb_spin) if p.vb_spin is not None else "—",
-                        "HB (in)": float(p.hb_spin) if p.hb_spin is not None else "—",
+                        "HB (in)": float(p.hb_trajectory) if p.hb_trajectory is not None else "—",
                         "Matched to game pitch": "Yes" if p.game_pitch_id else "No",
                     }
                     for p in imported_pitches

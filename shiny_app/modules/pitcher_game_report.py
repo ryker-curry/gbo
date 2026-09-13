@@ -195,7 +195,7 @@ def _pitch_shape_rows(pitches, rap_by_gp, stuff_baselines, pitcher):
             "Velocity": _d(_avg_field(raps, "velocity"), " mph"),
             "Spin Rate": _d(_avg_field(raps, "total_spin", 0), " rpm"),
             "IVB": _d(_avg_field(raps, "vb_spin"), '"'),
-            "HB": _d(_avg_field(raps, "hb_spin"), '"'),
+            "HB": _d(_avg_field(raps, "hb_trajectory"), '"'),
             "VAA": _d(_avg_pitch_level([_pitch_level_vaa(r)["value_degrees"] for r in raps])[0], "° (est.)"),
             "HAA": _d(_avg_pitch_level([_pitch_level_haa(r)["value_degrees"] for r in raps])[0], "° (est.)"),
             "vRel": _d(_avg_field(raps, "release_height"), "'"),
