@@ -414,6 +414,30 @@ RUNNER_EVENT_OUT_TYPES = ("Caught Stealing", "Picked Off")
 TEAM_LABEL = {"A": "Team 1", "B": "Team 2", "C": "Team 3"}
 
 
+def _squad_display(game, squad):
+    """Home/Away/Team-N word for `squad` in THIS game (Sep 2026,
+    Ryker: "for two squad intrasquad want home and away lineups" --
+    Team 1 vs Team 2 read wrong for an ordinary two-squad scrimmage).
+    Three-squad intrasquad games keep the existing Team 1/2/3 wording
+    (TEAM_LABEL) unconditionally -- there's no natural home/away with
+    three teams rotating through the field. Every caller of this
+    already only reaches squad B/C on an intrasquad game, so squad A
+    on a real external game (no meaningful "home" here either, see
+    Game.is_home instead) never hits this function."""
+    if game.uses_three_squad_intrasquad:
+        return TEAM_LABEL[squad]
+    return "Away" if squad == "B" else "Home"
+
+
+def _lineup_label(game, squad):
+    """'<word> Lineup' header for Lineup & Setup / its save-toast --
+    squad A on a non-intrasquad game just says 'Lineup' (no second
+    team to distinguish it from)."""
+    if squad == "A" and not game.is_intrasquad:
+        return "Lineup"
+    return f"{_squad_display(game, squad)} Lineup"
+
+
 # -----------------------------------------------------------------------
 # Pure helpers -- ported verbatim from pages/game_tracking.py (none of
 # these touched Streamlit in the original either).
@@ -1638,7 +1662,7 @@ def game_tracking_server(input, output, session, app_state):
             return ui.div(
                 ui.h5("Start a new game", class_="gbo-section-title"),
                 ui.input_select("new_game_season_choice", "Season", choices=choices),
-                ui.input_checkbox("new_game_intrasquad", "Intrasquad scrimmage (Team 1 vs Team 2, our own roster on both sides)"),
+                ui.input_checkbox("new_game_intrasquad", "Intrasquad scrimmage (Home vs Away, our own roster on both sides)"),
                 ui.input_checkbox("new_game_three_squad", "Three-team intrasquad (Team 1/2/3 rotating through, one team bats while the other two field -- only used when Intrasquad scrimmage above is also checked)"),
             )
         finally:
@@ -1837,7 +1861,6 @@ def game_tracking_server(input, output, session, app_state):
         # game.uses_three_squad_intrasquad before showing anything for
         # squad "C", the same way they already re-check game.is_intrasquad
         # for squad "B", so this stays safe even if that ever changes.
-        squad_label = {"A": "Team 1 Lineup", "B": "Team 2 Lineup", "C": "Team 3 Lineup"}[squad]
         _edit_open = reactive.Value(False)  # toggles the "Edit lineup" form below _display -- Ryker's ask (Sep 2026): edit a saved lineup directly in Lineup & Setup
 
         @output(id=f"{prefix}_setup_picker")
@@ -1857,7 +1880,7 @@ def game_tracking_server(input, output, session, app_state):
                 existing = db.query(GameLineupSlot).filter(GameLineupSlot.game_id == game_id, GameLineupSlot.squad == squad).count()
                 if existing:
                     return None
-                label = squad_label if squad in ("B", "C") else ("Team 1 Lineup" if game.is_intrasquad else "Lineup")
+                label = _lineup_label(game, squad)
                 return ui.div(
                     ui.h5(f"Set {label}", class_="gbo-section-title"),
                     ui.input_checkbox(f"{prefix}_include_pitchers", "Include pitchers in the batting order (two-way players)"),
@@ -1946,12 +1969,12 @@ def game_tracking_server(input, output, session, app_state):
                 if not game.uses_three_squad_intrasquad:
                     pitcher_choices = {"": "-- Select --"}
                     pitcher_choices.update({str(p.player_id): f"{p.first_name} {p.last_name}" for p in pitcher_candidates})
-                    pitcher_label = {"A": "Starting pitcher", "B": "Starting pitcher (Team 2)", "C": "Starting pitcher (Team 3)"}[squad]
+                    pitcher_label = "Starting pitcher" if squad == "A" else f"Starting pitcher ({_squad_display(game, squad)})"
                     children.append(ui.input_select(f"{prefix}_starting_pitcher", pitcher_label, choices=pitcher_choices))
                     if squad in ("B", "C"):
                         children.append(ui.p(
                             "Saved as a default for the live \"who's pitching\" picker during other teams' at-bats -- "
-                            f"{TEAM_LABEL[squad]} doesn't get formal pitching-change history the way Team 1 does, so this is a "
+                            f"{_squad_display(game, squad)} doesn't get formal pitching-change history the way {_squad_display(game, 'A')} does, so this is a "
                             "starting point you can still override any at-bat, not a lock-in.",
                             class_="text-muted small",
                         ))
@@ -1986,7 +2009,7 @@ def game_tracking_server(input, output, session, app_state):
                 )
                 if not slots:
                     return None
-                label = squad_label if squad in ("B", "C") else ("Team 1 Lineup" if game.is_intrasquad else "Lineup")
+                label = _lineup_label(game, squad)
                 # Milestone 4 -- shows each slot's CURRENT occupant/position
                 # (post-substitution), not the original starter; see
                 # get_current_slot_occupant_id/get_current_slot_position_id.
@@ -2107,10 +2130,10 @@ def game_tracking_server(input, output, session, app_state):
                     pitcher_candidates = [p for p in players if p.is_pitcher]
                     pitcher_choices = {"": "-- Select --"}
                     pitcher_choices.update({str(p.player_id): f"{p.first_name} {p.last_name}" for p in pitcher_candidates})
-                    pitcher_label = {"A": "Starting pitcher", "B": "Starting pitcher (Team 2)", "C": "Starting pitcher (Team 3)"}[squad]
+                    pitcher_label = "Starting pitcher" if squad == "A" else f"Starting pitcher ({_squad_display(game, squad)})"
                     pitcher_children.append(ui.input_select(f"{prefix}_edit_starting_pitcher", pitcher_label, choices=pitcher_choices, selected=str(current_pitcher_id) if current_pitcher_id else ""))
 
-                edit_label = squad_label if squad in ("B", "C") else ("Team 1 Lineup" if game.is_intrasquad else "Lineup")
+                edit_label = _lineup_label(game, squad)
                 return ui.div(
                     ui.h5(f"Edit {edit_label}", class_="gbo-section-title"),
                     ui.p(
@@ -2470,7 +2493,7 @@ def game_tracking_server(input, output, session, app_state):
                 else:
                     game.squad_c_starting_pitcher_id = pitcher_id
                 db.commit()
-                label = "lineup" if squad == "A" else f"{TEAM_LABEL[squad]} lineup"
+                label = "lineup" if squad == "A" else f"{_squad_display(game, squad)} lineup"
                 ui.notification_show(f"Saved {label} ({len(picks)} batters).", type="message", duration=8)
                 _bump_refresh()
             finally:
@@ -3274,7 +3297,7 @@ def game_tracking_server(input, output, session, app_state):
                         pitcher_choices = {str(p.player_id): f"{p.first_name} {p.last_name}" for p in pitcher_candidates}
                         suggested_pitcher = get_current_squad_b_pitcher_id(game)
                         pitcher_selected = str(suggested_pitcher) if suggested_pitcher is not None and str(suggested_pitcher) in pitcher_choices else None
-                        children.append(ui.input_select("opp_pitcher_select", "Opposing pitcher (Team 2)", choices=pitcher_choices, selected=pitcher_selected))
+                        children.append(ui.input_select("opp_pitcher_select", "Opposing pitcher (Away)", choices=pitcher_choices, selected=pitcher_selected))
             else:
                 if game.is_intrasquad:
                     if squad_b_slots:
@@ -3285,7 +3308,7 @@ def game_tracking_server(input, output, session, app_state):
                     choices = {str(pid): f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}" for pid in squad_b_ids if pid in players_by_id}
                     suggested = suggest_next_squad_b_batter(game, squad_b_slots) if squad_b_slots else None
                     selected = str(suggested) if suggested is not None and str(suggested) in choices else None
-                    children.append(ui.input_select("opp_our_batter_select", "Opposing batter (Team 2)", choices=choices, selected=selected))
+                    children.append(ui.input_select("opp_our_batter_select", "Opposing batter (Away)", choices=choices, selected=selected))
                 else:
                     opp_roster = game.opponent_team.roster if game.opponent_team else []
                     if opp_roster:
@@ -3395,13 +3418,20 @@ def game_tracking_server(input, output, session, app_state):
             children = []
             if state["new_pa"]:
                 if state["is_our_batting"]:
-                    default_hand = "R"
-                    if game.is_intrasquad and "opp_pitcher_select" in input and input.opp_pitcher_select():
-                        pitcher = db.query(Player).filter(Player.player_id == int(input.opp_pitcher_select())).first()
-                        if pitcher and pitcher.throws:
-                            default_hand = pitcher.throws
-                    label = "Opposing pitcher's throwing hand" if game.is_intrasquad else "Opposing pitcher's hand"
-                    children.append(ui.input_radio_buttons("opp_pitcher_hand_radio", label, choices=["R", "L"], selected=default_hand, inline=True))
+                    # Sept 2026 (Ryker: "why is opposing pitcher's
+                    # throwing hand still a click? i thought we got
+                    # rid of that") -- for intrasquad games the
+                    # opposing pitcher is always a known roster
+                    # Player, so no manual radio here at all, same
+                    # fix already applied to three-squad games
+                    # above (see that branch's own comment). His
+                    # hand is looked up fresh from Player.throws at
+                    # record time instead (_do_record_pitch). Real
+                    # external opponents still get the manual radio
+                    # since we usually don't have a reliable
+                    # Player.throws for them.
+                    if not game.is_intrasquad:
+                        children.append(ui.input_radio_buttons("opp_pitcher_hand_radio", "Opposing pitcher's hand", choices=["R", "L"], selected="R", inline=True))
                 else:
                     default_hand = "R"
                     if game.is_intrasquad and "opp_our_batter_select" in input and input.opp_our_batter_select():
@@ -3650,7 +3680,7 @@ def game_tracking_server(input, output, session, app_state):
                 max_order = max((s.batting_order for s in slots), default=0)
                 order_choices = {str(i): str(i) for i in range(1, max_order + 2)}
 
-                title_suffix = " (Team 2)" if squad == "B" else ""
+                title_suffix = f" ({_squad_display(game, 'B')})" if squad == "B" else ""
 
                 return ui.accordion(
                     ui.accordion_panel(
@@ -4243,7 +4273,14 @@ def game_tracking_server(input, output, session, app_state):
                     our_player_choice = int(input.our_batter_select())
                     if game.is_intrasquad and "opp_pitcher_select" in input and input.opp_pitcher_select():
                         opp_our_player_choice = int(input.opp_pitcher_select())
-                    opp_hand_choice = input.opp_pitcher_hand_radio() if "opp_pitcher_hand_radio" in input else "R"
+                        # Always the pitcher's own roster hand for
+                        # intrasquad games -- no radio is rendered
+                        # for this case anymore, see
+                        # who_is_up_hand_and_order above.
+                        pitcher_for_hand = db.query(Player).filter(Player.player_id == opp_our_player_choice).first()
+                        opp_hand_choice = pitcher_for_hand.throws if pitcher_for_hand and pitcher_for_hand.throws else "R"
+                    else:
+                        opp_hand_choice = input.opp_pitcher_hand_radio() if "opp_pitcher_hand_radio" in input else "R"
                 else:
                     our_player_choice = get_current_pitcher_id(game)
                     if our_player_choice is None:
