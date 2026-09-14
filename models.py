@@ -1098,6 +1098,21 @@ class Game(Base):
     is_intrasquad = Column(Boolean, default=False, nullable=False)
     game_date = Column(Date, default=date.today, nullable=False)
     is_home = Column(Boolean, nullable=True)  # True=home, False=away, None=unspecified (e.g. neutral site)
+    # Two-squad intrasquad games only ('A' or 'B'): which squad is Away
+    # (bats first, top of the inning -- matching real baseball; the
+    # other squad is Home). NULL for every other game (external,
+    # three-squad, or a two-squad intrasquad game created before this
+    # column existed) -- game_tracking.py's _squad_display/
+    # compute_current_state both treat NULL the same as 'A', matching
+    # the fixed default this column replaces (Ryker, Sep 2026: first
+    # asked for Home/Away labels, then caught that Home was batting
+    # first when it should be Away, then asked to be able to pick which
+    # squad is which instead of a fixed mapping). Settable when
+    # creating the game, or later on Manage Game while status is still
+    # "Scheduled" -- locked once the game starts, since pitches already
+    # recorded encode the batting order this column would otherwise
+    # silently contradict.
+    intrasquad_away_squad = Column(String(1), nullable=True)
     our_score = Column(Integer, default=0, nullable=False)
     opponent_score = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="Scheduled", nullable=False)  # "Scheduled" / "In Progress" / "Paused" / "Final" / "Cancelled"
