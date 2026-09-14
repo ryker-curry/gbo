@@ -35,7 +35,7 @@ Who lands here: coaches via the Roster (app_state.deep_link_player_id
 their own linked player and gets no picker.
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 from shiny import module, ui, render, reactive
 from sqlalchemy import func
@@ -44,8 +44,9 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from models import (Player, StaffPlayerAssignment, Assessment, AssessmentCategory, BullpenSession,
                     RapsodoPitch, IDPGoal, Video)
-from bucket_system import compute_bucket_system, list_seasons, current_season_label
+from bucket_system import compute_bucket_system, list_seasons, current_season_label, season_date_range
 from analytics.bullpen_metrics import session_summary, pitch_type_summary
+from analytics.profile_queries import get_pitcher_profile_pitches, rapsodo_by_game_pitch_id
 from assessment_history import assessment_history_query, assessment_history_rows
 from pitch_type_config import FASTBALL_TYPES
 import bucket_display
@@ -231,6 +232,29 @@ def player_profile_server(input, output, session, app_state):
             bullpen = db.query(BullpenSession).options(joinedload(BullpenSession.bullpen_type)).filter(BullpenSession.player_id == pid).order_by(BullpenSession.session_date.desc()).first()
             pitches = db.query(RapsodoPitch).options(joinedload(RapsodoPitch.pitch_type)).filter(RapsodoPitch.bullpen_id == bullpen.bullpen_id).order_by(RapsodoPitch.pitch_number).all() if bullpen else []
             n_bullpens = db.query(BullpenSession).filter(BullpenSession.player_id == pid).count()
+            # Sept 2026 (Ryker's call): the hero card's VELO stat
+            # (see game_fastball_summ below / _render) should reflect
+            # real GAME outings, not bullpen reps -- a bullpen max/avg
+            # can run hot or cold in a way a real outing doesn't.
+            # Scoped to whichever season the page's season picker has
+            # selected (falls back to current season), same as bd
+            # above. GamePitch itself has no velocity column -- only
+            # the RapsodoPitch it's linked to does (game_pitch_id set,
+            # bullpen_id null -- see that column's own comment on
+            # models.RapsodoPitch) -- so this goes GamePitch ->
+            # game_pitch_id -> RapsodoPitch via the same
+            # profile_queries helpers pitcher_profile.py already uses
+            # for Stuff+. season_end is EXCLUSIVE (season_date_range's
+            # own convention) but get_pitcher_profile_pitches' date_to
+            # filters with <=, hence the -1 day.
+            season_label = _selected_season() or current_season_label()
+            season_start, season_end = season_date_range(season_label)
+            game_date_to = (season_end - timedelta(days=1)) if season_end else None
+            game_pitches = get_pitcher_profile_pitches(db, pid, date_from=season_start, date_to=game_date_to) if p.is_pitcher else []
+            game_pitch_ids = [gp.game_pitch_id for gp in game_pitches if gp.game_pitch_id is not None]
+            game_rapsodo_by_id = rapsodo_by_game_pitch_id(db, game_pitch_ids)
+            game_fastball_pitches = [rp for rp in game_rapsodo_by_id.values() if rp.pitch_type and rp.pitch_type.type_name in FASTBALL_TYPES]
+            game_fastball_summ = session_summary(game_fastball_pitches) if game_fastball_pitches else None
             goals = db.query(IDPGoal).options(joinedload(IDPGoal.category), joinedload(IDPGoal.status)).filter(IDPGoal.player_id == pid).order_by(IDPGoal.created_at.desc()).all()
             videos = db.query(Video).filter(Video.player_id == pid).order_by(Video.recorded_date.desc().nullslast()).limit(10).all()
             mode = app_state.dark_mode() or "dark"
@@ -246,11 +270,11 @@ def player_profile_server(input, output, session, app_state):
                 rows = assessment_history_rows(assessment_history_query(db, pid, cat.category_id).all())
                 if rows:
                     history_panels.append(ui.accordion_panel(f"{cat.category_name} ({len(rows)})", ui_helpers.render_dict_table(rows)))
-            return _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels)
+            return _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ)
         finally:
             db.close()
 
-    def _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels):
+    def _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ):
         pos = p.player_position.position_name if p.player_position else None
         cls = p.player_class.class_name if p.player_class else None
         meta = " · ".join(x for x in [f"#{p.jersey_number}" if p.jersey_number else None, pos, cls, f"{p.bats or '-'}/{p.throws or '-'}",
@@ -270,18 +294,15 @@ def player_profile_server(input, output, session, app_state):
         flag = ui_helpers.STATUS_NEUTRAL if not bd.get("total_score") and not pris else (ui_helpers.STATUS_FLAG if any(s == "flag" for s, _, _ in pris) else ui_helpers.STATUS_WATCH if pris else ui_helpers.STATUS_GOOD)
         mf = bd.get("movement_flag") or {}
         summ = session_summary(pitches) if pitches else None
-        # Fastball-only slice of the same latest-session pitch list, for
-        # the card's VELO stat (Aug 2026, Ryker: VELO should read as
-        # average fastball velocity, not an average across every pitch
-        # type thrown that session -- see FASTBALL_TYPES in
-        # pitch_type_config.py). pitch_type is already joinedloaded on
-        # `pitches` above, so this doesn't cost another query. None (not
-        # an all-zero summary) when the pitcher threw no fastballs that
-        # session, so the card shows "—" rather than a misleading 0.
-        fastball_pitches = [pt for pt in pitches if pt.pitch_type and pt.pitch_type.type_name in FASTBALL_TYPES]
-        fastball_summ = session_summary(fastball_pitches) if fastball_pitches else None
+        # Sept 2026 (Ryker's call): the card's VELO stat now comes
+        # from real GAME outings this season, not the latest bullpen
+        # -- see game_fastball_summ's computation in body() above.
+        # `summ` above (still bullpen-derived) is unchanged and still
+        # feeds the Overview tab's "Latest bullpen" card and the
+        # Pitching tab below, which are both explicitly about the
+        # latest bullpen session, not the hero card.
 
-        card = ui_helpers.show_card(p, bd, summ, flag, fastball_summary=fastball_summ)
+        card = ui_helpers.show_card(p, bd, summ, flag, fastball_summary=game_fastball_summ)
         tiles = ui.div(
             ui_helpers.kpi_tile("Status", ui_helpers.status_chip(flag), delta=f"{sum(1 for s,_,_ in pris if s=='flag')} priority · {sum(1 for s,_,_ in pris if s=='watch')} attention" if pris else "No flags"),
             ui_helpers.kpi_tile("Last assessed", last_date.strftime("%b %d") if last_date else "—", delta=f"{last_cat} · {(date.today()-last_date).days} days ago" if last_date else "No assessments yet"),
