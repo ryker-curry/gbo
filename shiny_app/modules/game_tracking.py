@@ -423,10 +423,22 @@ def _squad_display(game, squad):
     three teams rotating through the field. Every caller of this
     already only reaches squad B/C on an intrasquad game, so squad A
     on a real external game (no meaningful "home" here either, see
-    Game.is_home instead) never hits this function."""
+    Game.is_home instead) never hits this function.
+
+    Which squad is Away comes from Game.intrasquad_away_squad (settable
+    at game creation, or on Manage Game while still Scheduled -- see
+    new_game_form_body/intrasquad_home_away_controls), NOT a fixed
+    squad-letter mapping. NULL (unset) treated as 'A', matching
+    compute_current_state's own NULL-safe default -- both read the
+    same column so the label here and who ACTUALLY bats first always
+    agree (Ryker first asked for Home/Away labels with a fixed A=Home
+    mapping, then caught that Home was batting first when real
+    baseball has Away bat first, then asked to just be able to pick
+    which squad is which instead of guessing a fixed pairing)."""
     if game.uses_three_squad_intrasquad:
         return TEAM_LABEL[squad]
-    return "Away" if squad == "B" else "Home"
+    away_squad = game.intrasquad_away_squad or "A"
+    return "Away" if squad == away_squad else "Home"
 
 
 def _lineup_label(game, squad):
@@ -926,7 +938,7 @@ def apply_runner_events(bases, outs, events):
     return "".join(b), outs
 
 
-def compute_current_state(pitches, runner_events=None, forced_ends=None):
+def compute_current_state(pitches, runner_events=None, forced_ends=None, game=None):
     """runner_events: every GameRunnerEvent for this game (any order --
     this function sorts and filters). Folded in AFTER the pitch-derived
     state below, using the SAME rollover rule (outs >= 3 -> next half-
@@ -940,12 +952,26 @@ def compute_current_state(pitches, runner_events=None, forced_ends=None):
     rolls to the next half-inning (a coach ended it here on purpose),
     regardless of whatever bases/outs the pitch- and runner-event-
     derived state above just computed. See models.GameForcedHalfInningEnd's
-    docstring."""
+    docstring.
+
+    game: optional -- only consulted in the no-pitches-yet branch below,
+    to seed is_our_batting correctly for a two-squad intrasquad game
+    whose Away squad is B, not the default A (Sep 2026, Ryker: "i want
+    to be able to select which team is home and away" -- Away always
+    bats first, top of the inning, real baseball convention). Every
+    other case (game=None, a non-intrasquad game, or a three-squad
+    game, which doesn't use is_our_batting to decide who's up at all --
+    see who_is_up_three_squad_batter_and_pitcher) keeps the original
+    fixed True (squad A bats first)."""
     runner_events = runner_events or []
     forced_ends = forced_ends or []
     if not pitches:
+        away_is_squad_b = bool(
+            game and game.is_intrasquad and not game.uses_three_squad_intrasquad
+            and game.intrasquad_away_squad == "B"
+        )
         state = {
-            "inning": 1, "is_our_batting": True, "outs": 0, "bases": "000",
+            "inning": 1, "is_our_batting": not away_is_squad_b, "outs": 0, "bases": "000",
             "balls": 0, "strikes": 0, "pa_pitch_number": 1, "new_pa": True,
         }
         anchor = 0
@@ -1534,7 +1560,7 @@ def game_tracking_server(input, output, session, app_state):
             .filter(OpponentLineupSlot.game_id == game_id)
             .order_by(OpponentLineupSlot.batting_order).all()
         )
-        state = compute_current_state(pitches, runner_events, forced_ends)
+        state = compute_current_state(pitches, runner_events, forced_ends, game=game)
         # squad_c_slots is appended at the END of this tuple (not
         # interleaved alongside squad_a_slots/squad_b_slots) so every
         # existing index-based access (ctx[0], ctx[5], etc.) elsewhere in
@@ -1700,13 +1726,35 @@ def game_tracking_server(input, output, session, app_state):
         req("new_game_season_choice" in input)
         req("new_game_intrasquad" in input)
         is_intrasquad = input.new_game_intrasquad()
+        uses_three_squad = bool(is_intrasquad and "new_game_three_squad" in input and input.new_game_three_squad())
         opponent_team_raw = (input.new_game_opponent_team_choice() if "new_game_opponent_team_choice" in input else "") if not is_intrasquad else ""
 
         children = []
         if not is_intrasquad and not opponent_team_raw:
             children.append(ui.input_text("new_game_opponent_name", "Opponent name"))
         children.append(ui.input_date("new_game_date", "Date", value=date.today()))
-        children.append(ui.input_select("new_game_location", "Location", choices=["Home", "Away", "Neutral site"], selected="Home"))
+        # Sep 2026 (Ryker: "i want to be able to select which team is
+        # home and away") -- ordinary two-squad intrasquad games get a
+        # real Home/Away pick instead of the "Location" select, which
+        # was always meaningless there anyway (is_home is forced to
+        # None for every intrasquad game either way, see _create_game
+        # below -- this picker's value was previously read and simply
+        # discarded). Three-squad games get neither -- no natural
+        # home/away with three teams rotating through.
+        if is_intrasquad:
+            if not uses_three_squad:
+                children.append(ui.input_select(
+                    "new_game_away_squad", "Which team bats first (Away)?",
+                    choices={"A": "Team A", "B": "Team B"}, selected="A",
+                ))
+                children.append(ui.p(
+                    "You'll set up each team's actual lineup afterward on Lineup & Setup -- whichever you pick "
+                    "here bats first (top of the inning), same as the Away team in a real game; the other is Home. "
+                    "Changeable later on Manage Game, until the game starts.",
+                    class_="text-muted small",
+                ))
+        else:
+            children.append(ui.input_select("new_game_location", "Location", choices=["Home", "Away", "Neutral site"], selected="Home"))
         children.append(ui.input_action_button("create_game_btn", "Create game", class_="btn-primary mt-2"))
         return ui.div(*children)
 
@@ -1724,14 +1772,20 @@ def game_tracking_server(input, output, session, app_state):
         try:
             season_id = int(input.new_game_season_choice())
             opponent_team_id = int(opponent_team_raw) if opponent_team_raw else None
-            location_choice = input.new_game_location()
+            # "Location" isn't rendered at all for intrasquad games
+            # (see new_game_form_body) -- guard the read the same way
+            # every other maybe-absent widget on this page is read.
+            location_choice = input.new_game_location() if "new_game_location" in input else "Home"
             is_home = None if is_intrasquad else {"Home": True, "Away": False, "Neutral site": None}[location_choice]
+            away_squad_raw = input.new_game_away_squad() if "new_game_away_squad" in input else "A"
+            intrasquad_away_squad = (away_squad_raw if away_squad_raw in ("A", "B") else "A") if (is_intrasquad and not uses_three_squad) else None
             new_game = Game(
                 season_id=season_id,
                 opponent_team_id=opponent_team_id if not is_intrasquad else None,
                 opponent_name=(opponent_name_raw.strip() if opponent_name_raw else None) if not is_intrasquad else "Intrasquad Scrimmage",
                 is_intrasquad=is_intrasquad,
                 uses_three_squad_intrasquad=uses_three_squad,
+                intrasquad_away_squad=intrasquad_away_squad,
                 game_date=input.new_game_date(),
                 is_home=is_home,
                 status="Scheduled",

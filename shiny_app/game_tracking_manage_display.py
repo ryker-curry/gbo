@@ -41,6 +41,7 @@ def register_game_tracking_manage(input, output, session, _refresh_tick, _active
             return ui.p("Game management is only available to edit-enabled roles.", class_="text-muted")
         return ui.div(
             ui.output_ui("game_status_controls"),
+            ui.output_ui("intrasquad_home_away_controls"),
             ui.output_ui("game_delete_section"),
         )
 
@@ -88,6 +89,64 @@ def register_game_tracking_manage(input, output, session, _refresh_tick, _active
                 row.append(ui.input_action_button("mark_final_btn", "Mark game Final", class_="btn-outline-secondary"))
             row.append(ui.input_action_button("cancel_game_btn", "Cancel game", class_="btn-outline-danger"))
             return ui.div(ui.p(f"Status: {game.status}", class_="text-muted small"), ui.layout_columns(*row))
+        finally:
+            db.close()
+
+    @render.ui
+    def intrasquad_home_away_controls():
+        """Sep 2026, Ryker: "i want to be able to select which team is
+        home and away" -- lets a two-squad intrasquad game's Home/Away
+        pick be set (or changed) here too, not just at creation (see
+        new_game_form_body/_create_game), covering games already
+        created before this existed. Locked once the game leaves
+        "Scheduled" -- by then pitches may already be recorded against
+        the batting order this pick determines (see
+        compute_current_state's game= param), and changing it out from
+        under those would silently misattribute who batted when."""
+        _refresh_tick()
+        if not _access_ok() or not _can_edit():
+            return None
+        game_id = _active_game_id()
+        if game_id is None:
+            return None
+        db = get_session()
+        try:
+            game = db.query(Game).filter(Game.game_id == game_id).first()
+            if game is None or not game.is_intrasquad or game.uses_three_squad_intrasquad or game.status != "Scheduled":
+                return None
+            current = game.intrasquad_away_squad or "A"
+            return ui.div(
+                ui.h6("Home / Away", class_="gbo-section-title"),
+                ui.input_select(
+                    "manage_away_squad", "Which team bats first (Away)?",
+                    choices={"A": "Team A", "B": "Team B"}, selected=current,
+                ),
+                ui.input_action_button("save_away_squad_btn", "Save", class_="btn-outline-primary btn-sm"),
+                ui.p(
+                    "Locks once you hit \"Start game\" above -- changing it after pitches are recorded would "
+                    "silently misattribute who batted when.",
+                    class_="text-muted small",
+                ),
+            )
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.save_away_squad_btn)
+    def _save_away_squad():
+        game_id = _active_game_id()
+        if game_id is None:
+            return
+        db = get_session()
+        try:
+            game = db.query(Game).filter(Game.game_id == game_id).first()
+            if game is None or not game.is_intrasquad or game.uses_three_squad_intrasquad or game.status != "Scheduled":
+                return
+            away_raw = input.manage_away_squad() if "manage_away_squad" in input else "A"
+            game.intrasquad_away_squad = away_raw if away_raw in ("A", "B") else "A"
+            db.commit()
+            ui.notification_show("Saved.", type="message", duration=5)
+            _bump_refresh()
         finally:
             db.close()
 
