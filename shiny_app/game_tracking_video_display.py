@@ -72,7 +72,7 @@ def _pitcher_identity(p):
         return (f"our:{p.our_player_id}", name)
     if p.opponent_our_player_id is not None:
         op = p.opponent_our_player
-        name = f"{op.first_name} {op.last_name} (Squad B)" if op is not None else "Squad B pitcher"
+        name = f"{op.first_name} {op.last_name} (Team 2)" if op is not None else "Team 2 pitcher"
         return (f"our:{p.opponent_our_player_id}", name)
     if p.opponent_player_id is not None:
         op = p.opponent_player
