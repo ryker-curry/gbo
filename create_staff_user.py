@@ -36,7 +36,7 @@ def main():
         print("Invalid choice.")
         return
 
-    email = input("Email (this becomes their GBO login): ").strip()
+    email = input("Email (this becomes their GBO login): ").strip().lower()
     password = getpass("Password (min 6 characters): ").strip()
     first_name = input("First name: ").strip()
     last_name = input("Last name: ").strip()

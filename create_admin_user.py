@@ -18,7 +18,7 @@ from supabase_client import get_supabase_admin_client
 
 
 def main():
-    email = input("Your email (this becomes your GBO login): ").strip()
+    email = input("Your email (this becomes your GBO login): ").strip().lower()
     password = getpass("Choose a password (min 6 characters): ").strip()
     first_name = input("First name: ").strip()
     last_name = input("Last name: ").strip()
