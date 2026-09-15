@@ -231,7 +231,7 @@ def player_game_stats_server(input, output, session, app_state):
                         {"label": "K %", "value": _fmt_pct1(pl["K %"])},
                         {"label": "ERA", "value": _fmt_num(pl["ERA"])},
                         {"label": "FIP", "value": _fmt_num(pl["FIP"])},
-                        {"label": "Execution %", "value": _fmt_pct1(pl["Execution %"])},
+                        {"label": "Zone Execution %", "value": _fmt_pct1(pl["Zone Execution %"])},
                     ]))
                     sections.append(ui.p(
                         f"Total RV Allowed: {pl['Total RV Allowed']} · Avg RV Allowed/Pitch: {pl['Avg RV Allowed/Pitch']}",

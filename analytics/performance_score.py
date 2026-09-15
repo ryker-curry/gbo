@@ -43,9 +43,9 @@ other composite in this codebase (Stuff+'s equal-weighted features,
 Pitching+'s own 60/40 blend).
 
 Results composite inputs (Ryker's pick, Aug 31 2026): FIP, WHIP, K/BB,
-CSW %, Execution % -- FIP and WHIP are lower-is-better (sign flipped,
+CSW %, Zone Execution % -- FIP and WHIP are lower-is-better (sign flipped,
 same convention as command_metrics.command_plus's miss-distance
-grading); K/BB, CSW %, Execution % are higher-is-better. CSW % isn't a
+grading); K/BB, CSW %, Zone Execution % are higher-is-better. CSW % isn't a
 field game_stats.compute_pitching_line() returns on its own (only
 compute_pitch_type_breakdown's per-type/Total rows have it) --
 csw_pct() below computes it directly off the same raw pitches instead
@@ -82,7 +82,7 @@ MIN_BASELINE_PLAYERS = 5
 
 # {metric_name: higher_is_better}
 PITCHER_RESULTS_METRICS = {
-    "FIP": False, "WHIP": False, "K/BB": True, "CSW %": True, "Execution %": True,
+    "FIP": False, "WHIP": False, "K/BB": True, "CSW %": True, "Zone Execution %": True,
 }
 HITTER_RESULTS_METRICS = {
     "wOBA": True, "AVG": True, "Chase %": False, "Whiff %": False, "Zone Swing %": True,

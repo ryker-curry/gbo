@@ -235,7 +235,7 @@ def _pct_false(flags):
 
 
 def _execution_pct(located_pitches):
-    """Session/pitch-type "Execution %" -- the average 0/1/2 execution
+    """Session/pitch-type "Command Execution %" -- the average 0/1/2 execution
     score (see pitch_execution_score) across already-located pitches,
     scaled to 0-100 against the max possible score (2) so it
     reads on the same 0-100 scale as Precision %/Command Target %/
@@ -562,7 +562,7 @@ def command_by_pitch_type(pitches, throws):
             "Command Target %": _pct_true([p.within_command_target for p in located]) if n else None,
             "Competitive %": _pct_true([p.within_competitive_target for p in located]) if n else None,
             "Major Miss %": _pct_false([p.within_competitive_target for p in located]) if n else None,
-            "Execution %": _execution_pct(located),
+            "Command Execution %": _execution_pct(located),
             "Horizontal Miss": _avg([abs(p.horizontal_miss) for p in located]) if n else None,
             "Vertical Miss": _avg([abs(p.vertical_miss) for p in located]) if n else None,
             "Miss Bias": miss_bias(group, throws),

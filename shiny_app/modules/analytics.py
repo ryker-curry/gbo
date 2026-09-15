@@ -239,7 +239,7 @@ def analytics_server(input, output, session, app_state):
                             ("Zone %", command["Zone %"]),
                             ("Whiff % Induced", command["Whiff % Induced"]),
                             ("Chase % Induced", command["Chase % Induced"]),
-                            ("Execution %", pitching_line["Execution %"]),
+                            ("Zone Execution %", pitching_line["Zone Execution %"]),
                         ],
                         key_prefix=f"pitch_kpi_{selected_player_id}",
                     )
@@ -261,7 +261,7 @@ def analytics_server(input, output, session, app_state):
                         {"label": "K %", "value": _fmt_pct1(pitching_line["K %"])},
                         {"label": "ERA", "value": _fmt_num(pitching_line["ERA"])},
                         {"label": "FIP", "value": _fmt_num(pitching_line["FIP"])},
-                        {"label": "Execution %", "value": _fmt_pct1(pitching_line["Execution %"])},
+                        {"label": "Zone Execution %", "value": _fmt_pct1(pitching_line["Zone Execution %"])},
                     ]))
                     sections.append(ui.p(
                         f"Total RV Allowed: {pitching_line['Total RV Allowed']} · Avg RV Allowed/Pitch: {pitching_line['Avg RV Allowed/Pitch']}",

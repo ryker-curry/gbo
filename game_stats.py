@@ -618,7 +618,7 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0):
     return {
         "Batters Faced": batters_faced, "Pitches": len(pitches), "K": k, "BB": bb,
         "H Allowed": hits_allowed, "HR Allowed": hr_allowed, "Runs Allowed": runs_allowed,
-        "Execution %": round(100 * exec_hits / len(exec_attempts), 1) if exec_attempts else None,
+        "Zone Execution %": round(100 * exec_hits / len(exec_attempts), 1) if exec_attempts else None,
         "Total RV Allowed": round(sum(rv_values), 3) if rv_values else None,
         "Avg RV Allowed/Pitch": round(sum(rv_values) / len(rv_values), 3) if rv_values else None,
         # New box-score-style stats, added to match Ryker's Game Stat Sheet:
@@ -722,8 +722,8 @@ def compute_pitch_type_breakdown(pitches):
     their definition unambiguous:
       - "Execution Score" -- Ryker's sheet implies a per-pitch score;
         confirmed with him this IS an intended-vs-actual zone match,
-        matching GBO's existing "Execution %" in compute_pitching_line()
-        exactly -- see this table's own "Execution %" column, which now
+        matching GBO's existing "Zone Execution %" in compute_pitching_line()
+        exactly -- see this table's own "Zone Execution %" column, which now
         reuses that same logic per pitch type.
       - "IBB" as distinct from "BB" -- GamePitch.ab_outcome's
         documented vocabulary doesn't include a separate intentional-
@@ -849,7 +849,7 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
     dominant = [p for p in pitches if p.pitch_outcome in DOMINANT_OUTCOMES]
     swords = [p for p in pitches if getattr(p, "is_sword", False)]
 
-    # Execution %: intended-vs-actual zone match, same logic as
+    # Zone Execution %: intended-vs-actual zone match, same logic as
     # compute_pitching_line()'s game-level version, just scoped to this
     # pitch type -- confirmed with Ryker this IS what "Execution Score"
     # means in his sheet (see compute_pitch_type_breakdown's docstring).
@@ -914,7 +914,7 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
         "Early": early_pas, "Ahead": ahead_pas, "E+A %": _rate(early_pas + ahead_pas, bf_for_early),
         "A3P Opportunities": a3p_attempts, "A3P": a3p_ahead, "A3P %": _rate(a3p_ahead, a3p_attempts),
         "Swords": len(swords), "Sword %": _rate(len(swords), len(swings)),
-        "Execution": exec_hits, "Execution Reviewed": len(exec_attempts), "Execution %": _rate(exec_hits, len(exec_attempts)),
+        "Zone Execution": exec_hits, "Zone Execution Reviewed": len(exec_attempts), "Zone Execution %": _rate(exec_hits, len(exec_attempts)),
         "Balls in Play": len(balls_in_play),
         "GroundBalls": batted_ball_counts["Ground Ball"], "Ground Ball %": _rate(batted_ball_counts["Ground Ball"], len(balls_in_play)),
         "FlyBalls": batted_ball_counts["Fly Ball"], "Fly Ball %": _rate(batted_ball_counts["Fly Ball"], len(balls_in_play)),

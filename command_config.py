@@ -87,7 +87,7 @@ def classify_miss(miss_distance_in):
 # flags, or the Precision/Competitive/Major Miss percentages already
 # shown everywhere -- just a friendlier read of the same math. Averaged
 # across a session's pitches and scaled to 0-100, this is also the
-# "Execution %" shown on the command scorecard (see
+# "Command Execution %" shown on the command scorecard (see
 # analytics/command_metrics.py's session_command_scorecard).
 EXECUTION_SCORE_PERFECT = 2
 EXECUTION_SCORE_CLOSE = 1

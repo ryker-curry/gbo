@@ -4,7 +4,7 @@ GBO — Plate discipline & pitch command/usage analytics.
 Derived from raw GamePitch coordinate data (actual_plate_x/z, captured
 in Phase 2) and pitch_outcome, per Ryker's architecture doc Section 14
 ("Hitting Analytics") and the pitcher-side equivalent. Doesn't
-duplicate game_stats.py's Execution % (intended vs actual zone match)
+duplicate game_stats.py's Zone Execution % (intended vs actual zone match)
 -- that already exists there and uses the same underlying coordinates.
 
 Swing/contact/whiff are all DERIVED from pitch_outcome, never entered
@@ -109,7 +109,7 @@ def compute_zone_tier_discipline(pitches):
 def compute_pitcher_command(pitches):
     """Command/usage metrics for a pitcher, from their own
     get_pitching_pitches() list (game_stats.py). Doesn't duplicate
-    Execution % -- that's already in game_stats.py's
+    Zone Execution % -- that's already in game_stats.py's
     compute_pitching_line, using the same intended/actual data."""
     total = len(pitches)
     located = [p for p in pitches if p.actual_plate_x is not None and p.actual_plate_z is not None]

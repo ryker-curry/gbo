@@ -3,7 +3,7 @@ GBO — Location-based pitcher command analytics, built from the precise
 plate_x/plate_z coordinates Game Tracking captures (see strike_zone.py)
 rather than just the binary in-zone/out-of-zone check plate_discipline.py
 already uses, or the single intended-vs-actual zone MATCH game_stats.py's
-Execution % already uses. Requested directly by Ryker once real
+Zone Execution % already uses. Requested directly by Ryker once real
 coordinates were available instead of the old 9-zone buttons.
 
 Two additions:
@@ -12,7 +12,7 @@ Two additions:
      intended and actual location, per pitch and averaged per pitch
      type) plus Directional Miss Bias (average horizontal/vertical
      miss, labeled Arm-side/Glove-side and High/Low). A continuous
-     command-precision number, unlike Execution %'s binary hit/miss (a
+     command-precision number, unlike Zone Execution %'s binary hit/miss (a
      1-inch miss and a 12-inch miss currently score identically there).
 
   2. compute_attack_zones() -- Heart/Shadow/Chase/Waste rates per pitch
