@@ -36,11 +36,15 @@ here calls it anymore) so callers didn't need to change.
 
 from shiny import ui
 
-from bucket_system import BODY_COMP_METRICS
+from bucket_system import BODY_COMP_METRICS, POWER_SUBGROUPS, flying_10_mph, FLYING_10_TEST_NAME
 import force_plate_standards
 import ui_helpers
 
 BODY_COMP_BAR_NAMES = {name for name, _ in BODY_COMP_METRICS}
+# Med Ball Throw's scored metric (Distance) vs. its Sept 2026
+# reference-only addition (Velocity) -- same bar-vs-raw split as Body
+# Comp above, used by build_full_breakdown's Power loop.
+MED_BALL_THROW_BAR_NAMES = {name for name, _ in POWER_SUBGROUPS["Med Ball Throw"]}
 
 MOBILITY_ROM_REGION_ORDER = ["Shoulder", "Elbow", "Hip", "Other"]
 
@@ -436,6 +440,14 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark", is_pitcher=None):
         pct = raw_percentile if raw_percentile is not None else 0
         pct = max(0, min(100, pct))
         raw_label = f"{d['raw']:.2f}{d['unit'] or ''}"
+        # Sept 2026 (Ryker: "I would also like to have top speed from
+        # the 20/10 fly to be the time itself as well as in mph") --
+        # purely a display append, computed from the same raw time
+        # already being shown; no separate mph field is stored.
+        if name == FLYING_10_TEST_NAME:
+            mph = flying_10_mph(d["raw"])
+            if mph is not None:
+                raw_label += f" ({mph} mph)"
         percentile_label = f"{ordinal(raw_percentile)} percentile" if raw_percentile is not None else "No percentile data"
         header_children = [
             ui.span(name, class_="gbo-metric-bar-name"),
@@ -506,7 +518,18 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark"):
         if not metrics:
             continue
         sections.append(ui.p(f"{sub_name} — {sub_score if sub_score is not None else '—'}", class_="gbo-subgroup-label"))
-        sections.append(build_metric_bars(metrics, f"{key_prefix}_power_{sub_name}", mode=mode, is_pitcher=is_pitcher))
+        if sub_name == "Med Ball Throw":
+            # Same bar-vs-raw split as Body Comp above -- Distance is
+            # scored (bar), Velocity is reference-only (KPI tile), see
+            # bucket_system.MED_BALL_THROW_REFERENCE_METRICS.
+            bar_metrics = {name: v for name, v in metrics.items() if name in MED_BALL_THROW_BAR_NAMES}
+            raw_only_metrics = {name: v for name, v in metrics.items() if name not in MED_BALL_THROW_BAR_NAMES}
+            sections.append(build_metric_bars(bar_metrics, f"{key_prefix}_power_{sub_name}", mode=mode, is_pitcher=is_pitcher))
+            raw_ui = build_raw_metrics(raw_only_metrics)
+            if raw_ui is not None:
+                sections.append(raw_ui)
+        else:
+            sections.append(build_metric_bars(metrics, f"{key_prefix}_power_{sub_name}", mode=mode, is_pitcher=is_pitcher))
 
     sections.append(ui.p(f"Strength — {bucket_data['strength_score'] if bucket_data['strength_score'] is not None else '—'}", class_="gbo-category-title"))
     for sub_name, sub_score in bucket_data["strength_subgroup_scores"].items():
