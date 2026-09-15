@@ -3351,7 +3351,15 @@ def game_tracking_server(input, output, session, app_state):
                         pitcher_choices = {str(p.player_id): f"{p.first_name} {p.last_name}" for p in pitcher_candidates}
                         suggested_pitcher = get_current_squad_b_pitcher_id(game)
                         pitcher_selected = str(suggested_pitcher) if suggested_pitcher is not None and str(suggested_pitcher) in pitcher_choices else None
-                        children.append(ui.input_select("opp_pitcher_select", "Opposing pitcher (Away)", choices=pitcher_choices, selected=pitcher_selected))
+                        # Sept 2026, Ryker: squad B isn't really an
+                        # "opponent" in an intrasquad game, and it's
+                        # not always Away either (intrasquad_away_squad
+                        # is a pick, not a fixed A=Home mapping -- see
+                        # _squad_display) -- label matches the
+                        # "Starting pitcher (Home/Away)" wording already
+                        # used elsewhere for this same squad instead of
+                        # hardcoding "Opposing ... (Away)".
+                        children.append(ui.input_select("opp_pitcher_select", f"{_squad_display(game, 'B')} pitcher", choices=pitcher_choices, selected=pitcher_selected))
             else:
                 if game.is_intrasquad:
                     if squad_b_slots:
@@ -3362,7 +3370,9 @@ def game_tracking_server(input, output, session, app_state):
                     choices = {str(pid): f"{players_by_id[pid].first_name} {players_by_id[pid].last_name}" for pid in squad_b_ids if pid in players_by_id}
                     suggested = suggest_next_squad_b_batter(game, squad_b_slots) if squad_b_slots else None
                     selected = str(suggested) if suggested is not None and str(suggested) in choices else None
-                    children.append(ui.input_select("opp_our_batter_select", "Opposing batter (Away)", choices=choices, selected=selected))
+                    # Same fix as opp_pitcher_select above -- squad B
+                    # isn't an "opponent" here and isn't always Away.
+                    children.append(ui.input_select("opp_our_batter_select", f"{_squad_display(game, 'B')} batter", choices=choices, selected=selected))
                 else:
                     opp_roster = game.opponent_team.roster if game.opponent_team else []
                     if opp_roster:
@@ -4349,7 +4359,7 @@ def game_tracking_server(input, output, session, app_state):
                         return
                     if game.is_intrasquad:
                         if "opp_our_batter_select" not in input or not input.opp_our_batter_select():
-                            ui.notification_show("Select the opposing batter first.", type="error", duration=8)
+                            ui.notification_show(f"Select the {_squad_display(game, 'B')} batter first.", type="error", duration=8)
                             return
                         opp_our_player_choice = int(input.opp_our_batter_select())
                         # Always the batter's own roster hand for
