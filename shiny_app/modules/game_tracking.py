@@ -3487,17 +3487,24 @@ def game_tracking_server(input, output, session, app_state):
                     if not game.is_intrasquad:
                         children.append(ui.input_radio_buttons("opp_pitcher_hand_radio", "Opposing pitcher's hand", choices=["R", "L"], selected="R", inline=True))
                 else:
-                    default_hand = "R"
-                    if game.is_intrasquad and "opp_our_batter_select" in input and input.opp_our_batter_select():
-                        batter = db.query(Player).filter(Player.player_id == int(input.opp_our_batter_select())).first()
-                        if batter and batter.bats:
-                            default_hand = batter.bats
-                    elif not game.is_intrasquad and "opp_roster_player_select" in input and input.opp_roster_player_select():
-                        rp = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == int(input.opp_roster_player_select())).first()
-                        if rp and rp.bats in ("R", "L"):
-                            default_hand = rp.bats
-                    children.append(ui.input_radio_buttons("opp_batter_hand_radio", "Opposing batter's hand", choices=["R", "L"], selected=default_hand, inline=True))
+                    # Sept 2026 (Ryker: "why does opposing batter's
+                    # hand show up ... it should not be there" for an
+                    # intrasquad game) -- same fix already applied to
+                    # the opposing pitcher's hand above: for intrasquad
+                    # games the opposing batter is always a known
+                    # roster Player (opp_our_batter_select), so no
+                    # manual radio at all. His hand is looked up fresh
+                    # from Player.bats at record time instead
+                    # (_do_record_pitch). Real external opponents still
+                    # get the manual radio since we usually don't have
+                    # a reliable OpponentPlayer.bats for them.
                     if not game.is_intrasquad:
+                        default_hand = "R"
+                        if "opp_roster_player_select" in input and input.opp_roster_player_select():
+                            rp = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == int(input.opp_roster_player_select())).first()
+                            if rp and rp.bats in ("R", "L"):
+                                default_hand = rp.bats
+                        children.append(ui.input_radio_buttons("opp_batter_hand_radio", "Opposing batter's hand", choices=["R", "L"], selected=default_hand, inline=True))
                         children.append(ui.input_numeric("opp_batting_order_input", "Opponent's batting order #", value=suggest_next_opponent_order(game), min=1, max=12, step=1))
 
             if not state["is_our_batting"]:
@@ -4345,11 +4352,18 @@ def game_tracking_server(input, output, session, app_state):
                             ui.notification_show("Select the opposing batter first.", type="error", duration=8)
                             return
                         opp_our_player_choice = int(input.opp_our_batter_select())
+                        # Always the batter's own roster hand for
+                        # intrasquad games -- no radio is rendered for
+                        # this case anymore, see who_is_up_hand_and_order
+                        # above (same fix already applied to the
+                        # opposing pitcher's hand above).
+                        batter_for_hand = db.query(Player).filter(Player.player_id == opp_our_player_choice).first()
+                        opp_hand_choice = batter_for_hand.bats if batter_for_hand and batter_for_hand.bats else "R"
                     else:
                         if "opp_roster_player_select" in input and input.opp_roster_player_select():
                             opp_player_choice = int(input.opp_roster_player_select())
                         opp_batting_order_choice = int(input.opp_batting_order_input()) if "opp_batting_order_input" in input else None
-                    opp_hand_choice = input.opp_batter_hand_radio() if "opp_batter_hand_radio" in input else "R"
+                        opp_hand_choice = input.opp_batter_hand_radio() if "opp_batter_hand_radio" in input else "R"
             else:
                 our_player_choice = state.get("current_our_player")
                 opp_hand_choice = state.get("current_opp_hand")
