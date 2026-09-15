@@ -570,6 +570,20 @@ def pitcher_game_report_server(input, output, session, app_state):
             extra_earned_runs = get_forced_half_inning_end_runs(db, selected_pitcher_id, game_id=selected_game_id)
             extra_outs = get_runner_event_outs(db, selected_pitcher_id, game_id=selected_game_id)
             line = compute_pitching_line(pitches, extra_earned_runs=extra_earned_runs, extra_outs=extra_outs)
+            # Sept 2026, Ryker: wants Command Execution % (the graded
+            # 0/1/2 distance-from-called-target score, see Command &
+            # Execution section / analytics/command_metrics.py) in the
+            # Line row instead of Zone Execution % (the binary same-
+            # zone match this "line" dict itself computes -- see
+            # game_stats.compute_pitching_line). Reuses the exact same
+            # game_pitches_command_view()/session_command_scorecard()
+            # pair the Command & Execution section below builds off of,
+            # not a second implementation -- see that section's own
+            # module comment (command_target_section/_selected_pitcher_
+            # view_pitches) for why. Zone Execution % isn't removed
+            # anywhere else on the page, just no longer duplicated here.
+            cmd_view_pitches = command_metrics.game_pitches_command_view(pitches, pitcher.throws)
+            cmd_scorecard = command_metrics.session_command_scorecard(cmd_view_pitches)
             sections = [ui.h5(f"{pitcher.first_name} {pitcher.last_name} — {_game_label(game)}", class_="gbo-section-title")]
 
             sections.append(ui.p(ui.strong("Line")))
@@ -587,7 +601,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                 {"label": "K %", "value": _fmt_pct(line["K %"])},
                 {"label": "ERA", "value": _fmt(line["ERA"])},
                 {"label": "FIP", "value": _fmt(line["FIP"])},
-                {"label": "Zone Execution %", "value": _fmt_pct(line["Zone Execution %"])},
+                {"label": "Command Execution %", "value": _cmd_fmt(cmd_scorecard["execution_pct"], "%")},
             ]))
             # Count Control/Situational/Against tucked behind one
             # collapsed-by-default accordion panel -- Sept 2026, Ryker:
