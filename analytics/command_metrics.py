@@ -453,6 +453,91 @@ def team_command_plus_baseline(pitches):
 
 
 # ---------------------------------------------------------------------------
+# Pitch-type-fair Command+ -- Sept 2026, informed by FanGraphs' "Kirby
+# Index" article (Ryker: "make sure the command+ model is good"). The
+# original Command+ above compares a whole session's OVERALL average
+# danger_adjusted_miss to one pooled, all-pitch-types team baseline --
+# but a called slider and a called fastball don't miss by the same
+# amount even when both are well commanded (breaking stuff is just
+# harder to spot up), so pooling them lets a pitcher's SCORE be a
+# function of his pitch MIX, not just his command. This section grades
+# every located pitch against its own pitch type's team baseline
+# instead, and averages those per-pitch scores into one session number
+# -- mathematically identical to averaging z-scores first and
+# converting once, since command_plus()'s formula is linear in z
+# (100 + 10*z_i averaged == 100 + 10*avg(z_i)).
+#
+# Thin-sample fallback (Ryker's call, Sept 2026): a pitch type below
+# MIN_BASELINE_PITCHES team-wide (curveball/changeup/etc. right now,
+# almost certainly, this early in a season) falls back to the POOLED
+# baseline for that one pitch's z-score rather than going unscored --
+# same "not enough of its own kind yet, use the wider pool" idea as
+# Stuff+/Arsenal's own Reliable Yes/No flag elsewhere in GBO, just
+# applied silently per pitch here (no separate flag surfaced -- a
+# thin-type pitch still gets a real Command+ contribution, just a less
+# type-specific one, the same way it always did before this change).
+# ---------------------------------------------------------------------------
+
+def team_command_plus_baselines(pitches):
+    """Same population team_command_plus_baseline() above normalizes
+    against, split by pitch type as well as pooled. Returns
+    {"pooled": (mean, stdev, n), "by_type": {pitch_type_label: (mean,
+    stdev, n)}} -- "pooled" is exactly team_command_plus_baseline()'s
+    own return (kept as the thin-type fallback, see module comment
+    above), "by_type" has one entry per pitch type actually thrown among
+    the located pitches passed in (Unspecified included, same
+    pitch_type_label() convention command_by_pitch_type already uses)."""
+    pooled = team_command_plus_baseline(pitches)
+    by_type = defaultdict(list)
+    for p in _located(pitches):
+        by_type[pitch_type_label(p)].append(p)
+    return {
+        "pooled": pooled,
+        "by_type": {label: team_command_plus_baseline(group) for label, group in by_type.items()},
+    }
+
+
+def _baseline_for_pitch(pitch, baselines):
+    """Which (mean, stdev, n) one pitch's Command+ z-score should be
+    graded against -- its own pitch type's baseline if that type has
+    hit MIN_BASELINE_PITCHES team-wide, else baselines["pooled"] (see
+    module comment above for why)."""
+    type_baseline = baselines["by_type"].get(pitch_type_label(pitch))
+    if type_baseline is not None and type_baseline[2] >= MIN_BASELINE_PITCHES:
+        return type_baseline
+    return baselines["pooled"]
+
+
+def session_command_plus(pitches, baselines):
+    """Command+ for a window of pitches (a game, a date range, a
+    bullpen session) -- pitch-type-fair replacement for the old "compare
+    this window's overall average danger_adjusted_miss to one pooled
+    baseline" approach (see module comment above for why that could
+    distort a score by pitch mix). `baselines` is
+    team_command_plus_baselines()'s return -- computed once by the
+    caller and reused across every pitcher/window being scored against
+    the same team population, same precedent as the old
+    team_command_plus_baseline() being computed once per page render
+    rather than per pitcher.
+
+    None if there are no located pitches in `pitches`, or none of them
+    has a usable baseline (missing mean, or a zero/undefined stdev --
+    e.g. every located pitch of every applicable type/pool has an
+    identical danger_adjusted_miss, or the pooled fallback itself has
+    fewer than 2 located pitches team-wide)."""
+    z_scores = []
+    for p in _located(pitches):
+        mean, stdev, _n = _baseline_for_pitch(p, baselines)
+        value = danger_adjusted_miss(p)
+        if value is None or mean is None or not stdev:
+            continue
+        z_scores.append((mean - value) / stdev)
+    if not z_scores:
+        return None
+    return round(100 + 10 * (sum(z_scores) / len(z_scores)), 1)
+
+
+# ---------------------------------------------------------------------------
 # Layer 2: aggregate reports -- read already-stored CommandPitch fields
 # ---------------------------------------------------------------------------
 

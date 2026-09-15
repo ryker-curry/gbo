@@ -806,7 +806,7 @@ def pitcher_game_report_server(input, output, session, app_state):
             return None, None
         return command_metrics.game_pitches_command_view(pitches, pitcher.throws), pitcher.throws
 
-    def _team_command_plus_baseline(db):
+    def _team_command_plus_baselines(db):
         """Every located pitch, across every game (intrasquad and real
         opponents alike -- fall scrimmages and the spring season both),
         from our own pitchers -- Ryker's 2026-08-23 call on what counts
@@ -826,11 +826,14 @@ def pitcher_game_report_server(input, output, session, app_state):
         on throws at all (only the miss_direction/within_*_target labels
         do, neither of which this baseline needs).
 
-        Returns (mean, stdev, n) from
-        command_metrics.team_command_plus_baseline."""
+        Returns command_metrics.team_command_plus_baselines()'s
+        {"pooled": (mean, stdev, n), "by_type": {...}} -- Sept 2026,
+        widened from just the pooled (mean, stdev, n) so
+        session_command_plus() below can grade each pitch against its
+        own pitch type (see that function's module comment for why)."""
         all_pitches = db.query(GamePitch).filter(GamePitch.intended_plate_x.isnot(None)).all()
         view_pitches = command_metrics.game_pitches_command_view(all_pitches, None)
-        return command_metrics.team_command_plus_baseline(view_pitches)
+        return command_metrics.team_command_plus_baselines(view_pitches)
 
     def _cmd_fmt(value, suffix=""):
         return f"{value}{suffix}" if value is not None else "—"
@@ -887,10 +890,11 @@ def pitcher_game_report_server(input, output, session, app_state):
             if scorecard["located_pitches"] == 0:
                 return ui.p("No pitches have an actual location recorded yet -- needs Video Review.", class_="text-muted small")
 
-            baseline_mean, baseline_stdev, baseline_n = _team_command_plus_baseline(db)
+            baselines = _team_command_plus_baselines(db)
+            _pooled_mean, _pooled_stdev, baseline_n = baselines["pooled"]
             command_plus_value = None
             if baseline_n >= command_metrics.MIN_BASELINE_PITCHES:
-                command_plus_value = command_metrics.command_plus(scorecard["avg_danger_adjusted_miss"], baseline_mean, baseline_stdev)
+                command_plus_value = command_metrics.session_command_plus(view_pitches, baselines)
 
             children = [ui_helpers.render_kpi_cards([
                 {"label": "Located / Total", "value": f'{scorecard["located_pitches"]}/{scorecard["total_pitches"]}'},
@@ -906,9 +910,11 @@ def pitcher_game_report_server(input, output, session, app_state):
             ])]
             if command_plus_value is not None:
                 children.append(ui.p(
-                    "Command+: 100 = your own team's average across every located pitch in every game so far -- "
-                    "not an MLB comparison, GBO doesn't have access to league-wide pitch data. Above 100 is better "
-                    "than your team's own average, below is worse.",
+                    "Command+: 100 = your own team's average -- graded pitch type by pitch type (a called slider "
+                    "compares to the team's own slider misses, a called fastball to fastball misses), falling back "
+                    "to the whole-team average only for a pitch type still too thin to trust on its own. Not an MLB "
+                    "comparison -- GBO doesn't have access to league-wide pitch data. Above 100 is better than your "
+                    "team's own average, below is worse.",
                     class_="text-muted small",
                 ))
             else:
