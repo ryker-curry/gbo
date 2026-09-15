@@ -312,7 +312,7 @@ def pitcher_profile_server(input, output, session, app_state):
                 ]))
                 sections.append(ui_helpers.render_kpi_cards([
                     {"label": "Strike %", "value": _fmt_pct(line["Strike %"])},
-                    {"label": "Execution %", "value": _fmt_pct(line["Execution %"])},
+                    {"label": "Zone Execution %", "value": _fmt_pct(line["Zone Execution %"])},
                     {"label": "OBA", "value": _fmt(line["OBA (opponent AVG)"], 3)},
                     {"label": "wOBA*", "value": _fmt(line["wOBA"], 3)},
                 ]))

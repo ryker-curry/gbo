@@ -587,7 +587,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                 {"label": "K %", "value": _fmt_pct(line["K %"])},
                 {"label": "ERA", "value": _fmt(line["ERA"])},
                 {"label": "FIP", "value": _fmt(line["FIP"])},
-                {"label": "Execution %", "value": _fmt_pct(line["Execution %"])},
+                {"label": "Zone Execution %", "value": _fmt_pct(line["Zone Execution %"])},
             ]))
             sections.append(ui.p(ui.strong("Count Control")))
             sections.append(ui_helpers.render_kpi_cards([
@@ -898,7 +898,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                 {"label": "Avg Miss", "value": _cmd_fmt(scorecard["avg_miss_distance"], " in")},
                 {"label": "Danger-Adj. Miss", "value": _cmd_fmt(scorecard["avg_danger_adjusted_miss"], " in")},
                 {"label": "Median Miss", "value": _cmd_fmt(scorecard["median_miss_distance"], " in")},
-                {"label": "Execution %", "value": _cmd_fmt(scorecard["execution_pct"], "%")},
+                {"label": "Command Execution %", "value": _cmd_fmt(scorecard["execution_pct"], "%")},
                 {"label": "Precision %", "value": _cmd_fmt(scorecard["precision_pct"], "%")},
                 {"label": "Command Target %", "value": _cmd_fmt(scorecard["command_target_pct"], "%")},
                 {"label": "Competitive %", "value": _cmd_fmt(scorecard["competitive_pct"], "%")},
@@ -930,7 +930,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                     "Pitches": row["Pitches"],
                     "Avg Miss (in)": row["Avg Miss"] if row["Avg Miss"] is not None else "—",
                     "Danger-Adj. Miss (in)": row["Danger-Adj. Miss"] if row["Danger-Adj. Miss"] is not None else "—",
-                    "Execution %": row["Execution %"] if row["Execution %"] is not None else "—",
+                    "Command Execution %": row["Command Execution %"] if row["Command Execution %"] is not None else "—",
                     "Precision %": row["Precision %"] if row["Precision %"] is not None else "—",
                     "Command %": row["Command Target %"] if row["Command Target %"] is not None else "—",
                     "Major Miss %": row["Major Miss %"] if row["Major Miss %"] is not None else "—",
