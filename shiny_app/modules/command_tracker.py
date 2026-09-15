@@ -94,6 +94,7 @@ def command_tracker_ui():
         ui.output_ui("cmd_pitch_log_section"),
         ui.output_ui("cmd_scorecard_section"),
         ui.output_ui("cmd_chart_section"),
+        ui.output_ui("cmd_targeting_plan_section"),
         ui_helpers.page_footer(),
     )
 
@@ -926,15 +927,17 @@ def command_tracker_server(input, output, session, app_state):
                 children.append(ui_helpers.empty_state("No pitches have an actual location recorded yet -- the scorecard fills in once at least one does."))
                 return ui.div(*children)
 
+            tier_cards = [
+                {"label": f'{label} Hit% (\u2264{radius:.0f}")', "value": _fmt(scorecard["tier_pcts"].get(label), "%")}
+                for radius, label in command_config.TARGET_RADII_IN
+            ]
             children.append(ui_helpers.render_kpi_cards([
                 {"label": "Located / Total", "value": f'{scorecard["located_pitches"]}/{scorecard["total_pitches"]}'},
                 {"label": "Avg Miss", "value": _fmt(scorecard["avg_miss_distance"], " in")},
                 {"label": "Danger-Adj. Miss", "value": _fmt(scorecard["avg_danger_adjusted_miss"], " in")},
                 {"label": "Median Miss", "value": _fmt(scorecard["median_miss_distance"], " in")},
                 {"label": "Command Execution %", "value": _fmt(scorecard["execution_pct"], "%")},
-                {"label": "Precision %", "value": _fmt(scorecard["precision_pct"], "%")},
-                {"label": "Command Target %", "value": _fmt(scorecard["command_target_pct"], "%")},
-                {"label": "Competitive %", "value": _fmt(scorecard["competitive_pct"], "%")},
+                *tier_cards,
                 {"label": "Major Miss %", "value": _fmt(scorecard["major_miss_pct"], "%")},
             ]))
 
@@ -943,19 +946,36 @@ def command_tracker_server(input, output, session, app_state):
 
             by_type = command_metrics.command_by_pitch_type(pitches, throws)
             if len(by_type) > 1:
-                rows = [{
-                    "Pitch Type": row["Pitch Type"],
-                    "Pitches": row["Pitches"],
-                    "Avg Miss (in)": row["Avg Miss"] if row["Avg Miss"] is not None else "—",
-                    "Danger-Adj. Miss (in)": row["Danger-Adj. Miss"] if row["Danger-Adj. Miss"] is not None else "—",
-                    "Command Execution %": row["Command Execution %"] if row["Command Execution %"] is not None else "—",
-                    "Precision %": row["Precision %"] if row["Precision %"] is not None else "—",
-                    "Command %": row["Command Target %"] if row["Command Target %"] is not None else "—",
-                    "Major Miss %": row["Major Miss %"] if row["Major Miss %"] is not None else "—",
-                    "Miss Bias": _bias_label(row["Miss Bias"]),
-                } for row in by_type]
+                rows = []
+                for row in by_type:
+                    tier_cols = {
+                        f'{label} % (\u2264{radius:.0f}")': (row["Tier Pcts"].get(label) if row["Tier Pcts"].get(label) is not None else "—")
+                        for radius, label in command_config.TARGET_RADII_IN
+                    }
+                    rows.append({
+                        "Pitch Type": row["Pitch Type"],
+                        "Pitches": row["Pitches"],
+                        "Avg Miss (in)": row["Avg Miss"] if row["Avg Miss"] is not None else "—",
+                        "Danger-Adj. Miss (in)": row["Danger-Adj. Miss"] if row["Danger-Adj. Miss"] is not None else "—",
+                        "Command Execution %": row["Command Execution %"] if row["Command Execution %"] is not None else "—",
+                        **tier_cols,
+                        "Major Miss %": row["Major Miss %"] if row["Major Miss %"] is not None else "—",
+                        "Miss Bias": _bias_label(row["Miss Bias"]),
+                    })
                 children.append(ui.h6("By pitch type", class_="mt-3"))
                 children.append(ui_helpers.render_dict_table(rows))
+
+                grid_rows_by_type = [(row["Pitch Type"], row["Miss Direction Grid"]) for row in by_type if row["Miss Direction Grid"] is not None]
+                if grid_rows_by_type:
+                    children.append(ui.h6("Miss direction by pitch type", class_="mt-3"))
+                    children.append(ui.p(
+                        "% of located pitches of that pitch type landing in each of the 9 zones -- rows are "
+                        "vertical miss, columns are horizontal miss (handedness-aware: Arm Side/Glove Side).",
+                        class_="text-muted small",
+                    ))
+                    for pitch_type_label_, grid in grid_rows_by_type:
+                        children.append(ui.p(pitch_type_label_, class_="fw-bold small mb-1 mt-2"))
+                        children.append(ui_helpers.render_dict_table(grid))
 
             # Per-pitch miss direction (Ryker, Sept 2026: "would like to
             # be able to see a miss bias for each individual pitch ...
@@ -1001,6 +1021,82 @@ def command_tracker_server(input, output, session, app_state):
             return ui.div(*children)
         children.append(output_widget("cmd_command_chart"))
         return ui.div(*children)
+
+    @render.ui
+    def cmd_targeting_plan_section():
+        _refresh_tick()
+        if not _access_ok():
+            return None
+        bullpen_id = _active_bullpen_id()
+        if bullpen_id is None:
+            return None
+        db = get_session()
+        try:
+            active_session = (
+                db.query(BullpenSession)
+                .options(joinedload(BullpenSession.player), joinedload(BullpenSession.command_pitches).joinedload(CommandPitch.pitch_type))
+                .filter(BullpenSession.bullpen_id == bullpen_id)
+                .first()
+            )
+            if active_session is None:
+                return None
+            pitches = active_session.command_pitches
+            if not pitches:
+                return None
+            throws = active_session.player.throws if active_session.player else None
+            plan = command_metrics.pitch_targeting_plan(pitches, throws)
+            if not plan:
+                return None
+            return ui.div(
+                ui.hr(),
+                ui.h5("Pitch targeting plan", class_="gbo-section-title"),
+                ui.p(
+                    "Recommended aim point per pitch type -- shifted opposite this pitcher's own average miss "
+                    "bias for that pitch, so if he tends to miss glove side on his slider, the recommendation "
+                    "aims a bit arm side of the true target instead.",
+                    class_="text-muted small",
+                ),
+                ui_helpers.render_dict_table([
+                    {
+                        "Pitch Type": row["Pitch Type"],
+                        "Located": row["Located"],
+                        "Bias": row["Bias"],
+                        "Recommended Aim Shift": f'{row["recommended_aim_horizontal_in"]:+.1f}" horiz / {row["recommended_aim_vertical_in"]:+.1f}" vert',
+                    } for row in plan
+                ]),
+                output_widget("cmd_targeting_plan_chart"),
+            )
+        finally:
+            db.close()
+
+    @render_plotly
+    def cmd_targeting_plan_chart():
+        _refresh_tick()
+        if not _access_ok():
+            return None
+        bullpen_id = _active_bullpen_id()
+        if bullpen_id is None:
+            return None
+        db = get_session()
+        try:
+            active_session = (
+                db.query(BullpenSession)
+                .options(joinedload(BullpenSession.player), joinedload(BullpenSession.command_pitches).joinedload(CommandPitch.pitch_type))
+                .filter(BullpenSession.bullpen_id == bullpen_id)
+                .first()
+            )
+            if active_session is None:
+                return None
+            pitches = active_session.command_pitches
+            if not pitches:
+                return None
+            throws = active_session.player.throws if active_session.player else None
+            plan = command_metrics.pitch_targeting_plan(pitches, throws)
+            if not plan:
+                return None
+            return command_charts.pitch_targeting_chart(plan)
+        finally:
+            db.close()
 
     @render_plotly
     def cmd_command_chart():

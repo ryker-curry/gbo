@@ -54,10 +54,10 @@ from visualizations.hitter_graphic import hitter_images, home_plate_shape
 # MOVEMENT_EXTENT -- every command chart shows the same boundaries
 # regardless of how tight or wide a given session's actual misses are,
 # so charts are comparable session to session rather than each one
-# auto-zooming to its own data. Twice the Competitive radius leaves
-# room to see Major Miss pitches without them sitting on the frame edge
-# in a typical bullpen.
-CHART_EXTENT_IN = 2.0 * command_config.COMPETITIVE_TARGET_RADIUS_IN
+# auto-zooming to its own data. 1.2x the outermost (5th) tier radius
+# leaves room to see Major Miss pitches without them sitting on the
+# frame edge in a typical bullpen.
+CHART_EXTENT_IN = 1.2 * command_config.OUTERMOST_TARGET_RADIUS_IN
 
 # pitch_locations_chart's own axis/placement tuning (feet) -- separate
 # from CHART_EXTENT_IN above (that one's command_chart's inches-based
@@ -308,5 +308,73 @@ def pitch_locations_chart(pitches):
         xaxis=dict(range=[-CHART_X_EXTENT_FT, CHART_X_EXTENT_FT], gridcolor=GRID_GRAY, zeroline=False, scaleanchor="y", scaleratio=1),
         yaxis=dict(range=[-0.6, HITTER_HEIGHT_FT + 0.4], gridcolor=GRID_GRAY, zeroline=False),
         legend=dict(orientation="h", y=-0.12),
+    )
+    return fig
+
+
+def pitch_targeting_chart(plan_rows):
+    """plan_rows: analytics.command_metrics.pitch_targeting_plan()'s
+    return -- one row per pitch type with a stable enough sample to
+    recommend a corrected aim point. Plots, in the SAME inches-from-
+    target coordinate system as command_chart above, one gold "x"
+    marker at the origin (the true called target / desired result,
+    shared by every pitch type) and one colored star marker per pitch
+    type at its recommended_aim_horizontal_in/vertical_in offset -- i.e.
+    where to aim instead so the pitcher's average actual result centers
+    back on the true target, given his own measured miss bias for that
+    pitch type -- connected to the origin by a dashed line. Same
+    concentric target rings as command_chart, for scale. Returns None
+    if plan_rows is empty (nothing met pitch_targeting_plan's own
+    minimum-sample floor)."""
+    if not plan_rows:
+        return None
+
+    fig = go.Figure()
+
+    for radius_in, label in reversed(command_config.TARGET_RADII_IN):
+        fig.add_shape(
+            type="circle", xref="x", yref="y",
+            x0=-radius_in, x1=radius_in, y0=-radius_in, y1=radius_in,
+            line=dict(color=GRID_GRAY, width=1.5), fillcolor="rgba(0,0,0,0)", layer="below",
+        )
+
+    shifts = [abs(r["recommended_aim_horizontal_in"]) for r in plan_rows] + \
+              [abs(r["recommended_aim_vertical_in"]) for r in plan_rows] + \
+              [command_config.OUTERMOST_TARGET_RADIUS_IN]
+    extent = max(shifts) * 1.3
+
+    fig.add_trace(go.Scatter(
+        x=[0], y=[0], mode="markers+text", text=["Target"], textposition="top center",
+        textfont=dict(color=TEXT_CREAM, size=11),
+        marker=dict(color=GOLD, size=16, symbol="x", line=dict(color="#1E1E1E", width=1)),
+        name="Desired result (called target)",
+        hovertemplate="Desired result — true target<extra></extra>",
+    ))
+
+    for row in plan_rows:
+        label = row["Pitch Type"]
+        color = get_pitch_color(label) if label != "Unspecified" else MUTED_GRAY
+        hx, vy = row["recommended_aim_horizontal_in"], row["recommended_aim_vertical_in"]
+        fig.add_shape(
+            type="line", xref="x", yref="y", x0=0, y0=0, x1=hx, y1=vy,
+            line=dict(color=color, width=1.5, dash="dash"), layer="below",
+        )
+        fig.add_trace(go.Scatter(
+            x=[hx], y=[vy], mode="markers+text", text=[label], textposition="top center",
+            textfont=dict(color=TEXT_CREAM, size=11),
+            marker=dict(color=color, size=14, symbol="star", line=dict(color="#1E1E1E", width=1)),
+            name=label,
+            hovertemplate=(
+                f"{label} — Recommended aim<br>Shift: (%{{x:.1f}}, %{{y:.1f}}) in<br>"
+                f"Bias: {row['Bias']}<extra></extra>"
+            ),
+        ))
+
+    apply_gbo_theme(
+        fig, title="Pitch Targeting Plan — Recommended Aim vs. Desired Result",
+        x_title="Horizontal shift (in)", y_title="Vertical shift (in)",
+        xaxis=dict(range=[-extent, extent], gridcolor=GRID_GRAY, zeroline=False, constrain="domain"),
+        yaxis=dict(range=[-extent, extent], gridcolor=GRID_GRAY, zeroline=False, scaleanchor="x", scaleratio=1, constrain="domain"),
+        legend=dict(orientation="h", y=-0.15),
     )
     return fig
