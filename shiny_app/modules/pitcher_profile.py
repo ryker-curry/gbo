@@ -433,12 +433,12 @@ def pitcher_profile_server(input, output, session, app_state):
             # game outcomes -- same game_pitches gate as the Line
             # section above, not rapsodo-only bullpen reps.
             if game_pitches:
-                baseline_mean, baseline_stdev, baseline_n = _team_command_plus_baseline(db)
+                baselines = _team_command_plus_baselines(db)
                 cmd_view_pitches = command_metrics.game_pitches_command_view(game_pitches, player.throws)
                 cmd_scorecard = command_metrics.session_command_scorecard(cmd_view_pitches)
                 command_plus_value = None
-                if baseline_n >= command_metrics.MIN_BASELINE_PITCHES:
-                    command_plus_value = command_metrics.command_plus(cmd_scorecard["avg_danger_adjusted_miss"], baseline_mean, baseline_stdev)
+                if baselines["pooled"][2] >= command_metrics.MIN_BASELINE_PITCHES:
+                    command_plus_value = command_metrics.session_command_plus(cmd_view_pitches, baselines)
 
                 arsenal_pitching_value = performance_score.usage_weighted_average(arsenal_rows, "Pitching+")
 
@@ -635,14 +635,19 @@ def pitcher_profile_server(input, output, session, app_state):
         finally:
             db.close()
 
-    def _team_command_plus_baseline(db):
+    def _team_command_plus_baselines(db):
         """Same all-time, all-games team population Pitcher Game Report's
         Command+ uses (see that module's docstring) -- not scoped to
-        this page's own filters, a stable roster-wide reference."""
+        this page's own filters, a stable roster-wide reference. Returns
+        command_metrics.team_command_plus_baselines()'s {"pooled": (mean,
+        stdev, n), "by_type": {...}} -- Sept 2026, widened so
+        session_command_plus() can grade each pitch against its own
+        pitch type (see that function's module comment in
+        analytics/command_metrics.py for why)."""
         from models import GamePitch
         all_pitches = db.query(GamePitch).filter(GamePitch.intended_plate_x.isnot(None)).all()
         view_pitches = command_metrics.game_pitches_command_view(all_pitches, None)
-        return command_metrics.team_command_plus_baseline(view_pitches)
+        return command_metrics.team_command_plus_baselines(view_pitches)
 
     def _cmd_bias_label(bias):
         parts = []
@@ -686,10 +691,10 @@ def pitcher_profile_server(input, output, session, app_state):
             if scorecard["located_pitches"] == 0:
                 return ui.p("No pitches have an actual location recorded yet -- needs Video Review or a Rapsodo link.", class_="text-muted small")
 
-            baseline_mean, baseline_stdev, baseline_n = _team_command_plus_baseline(db)
+            baselines = _team_command_plus_baselines(db)
             command_plus_value = None
-            if baseline_n >= command_metrics.MIN_BASELINE_PITCHES:
-                command_plus_value = command_metrics.command_plus(scorecard["avg_danger_adjusted_miss"], baseline_mean, baseline_stdev)
+            if baselines["pooled"][2] >= command_metrics.MIN_BASELINE_PITCHES:
+                command_plus_value = command_metrics.session_command_plus(view_pitches, baselines)
 
             children = [ui_helpers.render_kpi_cards([
                 {"label": "Located / Total", "value": f'{scorecard["located_pitches"]}/{scorecard["total_pitches"]}'},
