@@ -325,7 +325,23 @@ def pitch_targeting_chart(plan_rows):
     pitch type -- connected to the origin by a dashed line. Same
     concentric target rings as command_chart, for scale. Returns None
     if plan_rows is empty (nothing met pitch_targeting_plan's own
-    minimum-sample floor)."""
+    minimum-sample floor).
+
+    Sept 2026, Ryker: this chart's raw horizontal/vertical axes had no
+    visual cue for which way you're facing (unlike pitch_locations_chart,
+    which has a real strike zone + home plate to read that off of).
+    Added a dashed, muted strike-zone-sized reference box plus a home
+    plate below it, drawn view="catcher" -- same "behind the plate,
+    looking out at the pitcher" viewpoint as the click-to-place
+    intended-location widgets (strike_zone.py) and this page's own
+    _pitch_location_figure/_all_pitch_locations_figure, since that's
+    what the underlying horizontal_miss/vertical_miss values actually
+    are (raw, unflipped plate_x/z -- see compute_miss's docstring).
+    Centered on the origin/target purely for scale and orientation --
+    NOT a claim that this pitch type's real called target sits at the
+    center of the zone (see command_chart's own docstring for why this
+    whole family of chart normalizes every target to the origin
+    regardless of where it really was)."""
     if not plan_rows:
         return None
 
@@ -338,10 +354,35 @@ def pitch_targeting_chart(plan_rows):
             line=dict(color=GRID_GRAY, width=1.5), fillcolor="rgba(0,0,0,0)", layer="below",
         )
 
+    # Strike-zone-sized reference box + home plate, purely for
+    # orientation (see docstring above) -- generic average zone
+    # dimensions (strike_zone.py), converted from feet to inches to
+    # match this chart's own axes.
+    zone_half_width_in = ZONE_HALF_WIDTH * 12.0
+    zone_half_height_in = (ZONE_TOP - ZONE_BOTTOM) / 2.0 * 12.0
+    plate_depth_in = 3.0
+    plate_bottom_in = -zone_half_height_in - plate_depth_in * 1.7
+
     shifts = [abs(r["recommended_aim_horizontal_in"]) for r in plan_rows] + \
               [abs(r["recommended_aim_vertical_in"]) for r in plan_rows] + \
-              [command_config.OUTERMOST_TARGET_RADIUS_IN]
-    extent = max(shifts) * 1.3
+              [command_config.OUTERMOST_TARGET_RADIUS_IN, zone_half_width_in, abs(plate_bottom_in)]
+    extent = max(shifts) * 1.15
+
+    fig.add_shape(
+        type="rect", xref="x", yref="y",
+        x0=-zone_half_width_in, x1=zone_half_width_in,
+        y0=-zone_half_height_in, y1=zone_half_height_in,
+        line=dict(color=MUTED_GRAY, width=1.5, dash="dash"), fillcolor="rgba(0,0,0,0)", layer="below",
+    )
+    fig.add_annotation(
+        x=0, y=zone_half_height_in, yshift=12, showarrow=False,
+        text="Strike zone -- scale/orientation reference only, not this pitch type's real called spot",
+        font=dict(color=MUTED_GRAY, size=9),
+    )
+    fig.add_shape(**home_plate_shape(
+        half_width_ft=zone_half_width_in, depth_ft=plate_depth_in,
+        ground_y=-zone_half_height_in, center_x=0.0, view="catcher",
+    ))
 
     fig.add_trace(go.Scatter(
         x=[0], y=[0], mode="markers+text", text=["Target"], textposition="top center",
