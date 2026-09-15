@@ -3164,11 +3164,11 @@ def game_tracking_server(input, output, session, app_state):
                 if pitcher_id is not None:
                     pitcher = db.query(Player).filter(Player.player_id == pitcher_id).first()
 
-            children = [ui.h5("Pitch count / early end", class_="gbo-section-title")]
+            children = [ui.h5("Pitch count / early end / extra work", class_="gbo-section-title")]
 
             if not _forced_end_form_open():
                 children.append(ui.input_action_button(
-                    "open_forced_end_form_btn", "End half-inning now (pitch count)",
+                    "open_forced_end_form_btn", "End half-inning now",
                     class_="btn-outline-warning btn-sm mt-1",
                 ))
             else:
@@ -3185,18 +3185,37 @@ def game_tracking_server(input, output, session, app_state):
                         "Count runner(s) currently on base as scored",
                         value=True,
                     ))
-                if game.uses_three_squad_intrasquad:
-                    children.append(ui.input_action_button("confirm_forced_end_btn", "Confirm -- new team is up", class_="btn-warning btn-sm mt-1"))
-                    children.append(ui.p(
-                        "Use \"new team is up\" for a genuine half-inning end. Use \"same team "
-                        f"continues\" instead when {who or 'this pitcher'} is being pulled on a pitch "
-                        "count and the SAME squad keeps pitching to a fresh lineup -- that keeps "
-                        "who's-pitching/who's-batting straight for every pitch after this one.",
-                        class_="text-muted small mt-1",
-                    ))
-                    children.append(ui.input_action_button("confirm_forced_end_same_side_btn", "Confirm -- same team continues (pitch count)", class_="btn-warning btn-sm mt-1"))
-                else:
-                    children.append(ui.input_action_button("confirm_forced_end_btn", "Confirm -- end half-inning", class_="btn-warning btn-sm mt-1"))
+                # Sept 2026, Ryker: this "same team continues" override
+                # (skip flipping who's up, just reset outs/bases and
+                # advance the inning -- see models.GameForcedHalfInningEnd's
+                # same_side_continues docstring) used to be exposed only
+                # for three-squad games. Two-squad intrasquad games need
+                # it too -- e.g. a pitcher cruises to 3 quick outs and the
+                # coach wants him to keep going against the same lineup
+                # for more work/reps, rather than being forced to switch
+                # to the other squad. compute_current_state()/replay_game()
+                # already handle same_side_continues generically for any
+                # intrasquad game (never checked uses_three_squad_intrasquad
+                # themselves) -- only this panel's buttons were gated to
+                # three-squad. Same reasoning Ryker gave when this was
+                # discussed: make this call BEFORE (or right as) the 3rd
+                # out lands, same workflow as the existing pitch-count
+                # override -- not an after-the-fact undo of an already-
+                # posted 3-out rollover, which would double-count the
+                # inning (see compute_current_state's per-pitch auto-
+                # rollover already firing from outs_after >= 3 before this
+                # panel's own forced-end rollover runs on top of it).
+                children.append(ui.input_action_button("confirm_forced_end_btn", "Confirm -- new team is up", class_="btn-warning btn-sm mt-1"))
+                children.append(ui.p(
+                    "Use \"new team is up\" for a genuine half-inning end. Use \"same team "
+                    f"continues\" instead when {who or 'this pitcher'} is being kept in -- a pitch "
+                    "count, or just staying in for extra work against the same lineup -- so the SAME "
+                    "squad keeps batting/pitching. Make this call before (or right as) the 3rd out "
+                    "lands, not after it's already posted -- that keeps who's-pitching/who's-batting "
+                    "straight for every pitch after this one.",
+                    class_="text-muted small mt-1",
+                ))
+                children.append(ui.input_action_button("confirm_forced_end_same_side_btn", "Confirm -- same team continues", class_="btn-warning btn-sm mt-1"))
                 children.append(ui.input_action_link("cancel_forced_end_btn", "Cancel", class_="text-muted small d-block mt-1"))
 
             return ui.div(*children)
