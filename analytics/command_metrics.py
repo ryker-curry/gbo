@@ -541,6 +541,117 @@ def session_command_plus(pitches, baselines):
 # Layer 2: aggregate reports -- read already-stored CommandPitch fields
 # ---------------------------------------------------------------------------
 
+def _tier_hit_pcts(located):
+    """located: pitches already filtered to have a miss_distance (see
+    _located). Returns (tier_pcts, major_miss_pct) computed LIVE from
+    each pitch's stored miss_distance via command_config.tier_hit_pct --
+    Sept 2026, Ryker: switched off reading CommandPitch's stored
+    within_precision_target/within_command_target/within_competitive_target
+    booleans (populated once at save time, so they'd go stale for
+    historical bullpen pitches if the radius bands in command_config.py
+    ever change) in favor of this, the same "recompute fresh every time"
+    pattern pitch_execution_score() already used safely. Works
+    identically for a real CommandPitch row or a _GamePitchCommandView,
+    since both only need miss_distance. tier_pcts is a
+    {tier_label: pct_within} dict, one entry per command_config.TARGET_RADII_IN
+    tier (cumulative -- each tier's pct includes everything the
+    tighter tiers before it counted, plus more); major_miss_pct is the
+    % beyond the outermost tier. (({label: None}, None) if `located` is
+    empty.)"""
+    if not located:
+        return {label: None for _, label in command_config.TARGET_RADII_IN}, None
+    distances = [float(p.miss_distance) for p in located]
+    tier_pcts = dict(command_config.tier_hit_pct(distances))
+    outermost_label = command_config.TARGET_RADII_IN[-1][1]
+    major_miss_pct = round(100 - tier_pcts[outermost_label], 1)
+    return tier_pcts, major_miss_pct
+
+
+def miss_direction_grid(pitches, throws):
+    """Aggregated 3x3 miss-direction grid (vertical High/On Target/Low x
+    horizontal Arm Side/On Target/Glove Side -- Left/Right if throws is
+    unknown, same fallback as classify_miss_direction) -- % of LOCATED
+    pitches landing in each of the 9 cells, e.g. for a "Pitch Targeting
+    Plan"-style report (Pearl Player Development's per-pitch-type miss
+    grid). Returns a list of 3 row dicts, one per vertical label, each
+    shaped {"Vertical": label, <horizontal label>: pct, ...} -- ready to
+    hand straight to a table renderer. None if there are no located
+    pitches."""
+    located = _located(pitches)
+    n = len(located)
+    if n == 0:
+        return None
+    h_first, h_last = (ARM_SIDE_LABEL, GLOVE_SIDE_LABEL) if throws in ("L", "R") else (LEFT_LABEL, RIGHT_LABEL)
+    counts = defaultdict(int)
+    for p in located:
+        h, v = miss_direction_axes(p.horizontal_miss, p.vertical_miss, throws)
+        counts[(v or ON_TARGET_LABEL, h or ON_TARGET_LABEL)] += 1
+    rows = []
+    for v_label in (HIGH_LABEL, ON_TARGET_LABEL, LOW_LABEL):
+        row = {"Vertical": v_label}
+        for h_label in (h_first, ON_TARGET_LABEL, h_last):
+            row[h_label] = round(100 * counts.get((v_label, h_label), 0) / n, 1)
+        rows.append(row)
+    return rows
+
+
+# Sept 2026: a pitch-type's bias computed from just 1-2 pitches is noise,
+# not a real aim recommendation -- same "not enough of its own kind yet"
+# floor idea as MIN_BASELINE_PITCHES above, just a much lower bar since
+# this only needs a stable AVERAGE, not a full baseline distribution.
+MIN_TARGETING_PITCHES = 5
+
+
+def pitch_targeting_plan(pitches, throws, min_pitches=MIN_TARGETING_PITCHES):
+    """Pearl Player Development's forward "Pitch Targeting Plan": one row
+    per pitch type with at least `min_pitches` located pitches,
+    recommending an aim point shifted OPPOSITE this pitcher's average
+    miss bias for that pitch type (see miss_bias) -- if he tends to miss
+    glove-side on his slider, the recommendation is to aim slightly
+    arm-side of the true target so the average actual result lands back
+    on it. recommended_aim_horizontal_in/recommended_aim_vertical_in are
+    signed inches in the SAME raw plate-coordinate convention as
+    CommandPitch.horizontal_miss/vertical_miss (not handedness-flipped --
+    a chart plots the recommended point in real plate coordinates, same
+    as the intended/actual points already on it); "Bias" is the
+    handedness-aware display string (miss_bias's own label convention)
+    for a human-readable caption next to that same point."""
+    groups = {}
+    order = []
+    for p in pitches:
+        label = pitch_type_label(p)
+        if label not in groups:
+            groups[label] = []
+            order.append(label)
+        groups[label].append(p)
+
+    plan = []
+    for label in order:
+        group = groups[label]
+        located = _located(group)
+        n = len(located)
+        if n < min_pitches:
+            continue
+        h_mean = _avg([p.horizontal_miss for p in located])
+        v_mean = _avg([p.vertical_miss for p in located])
+        if h_mean is None or v_mean is None:
+            continue
+        bias = miss_bias(group, throws)
+        bias_label = (
+            f'{bias["horizontal_bias_in"]}" {bias["horizontal_bias_label"]} / '
+            f'{bias["vertical_bias_in"]}" {bias["vertical_bias_label"]}'
+            if bias["horizontal_bias_in"] is not None else "—"
+        )
+        plan.append({
+            "Pitch Type": label,
+            "Located": n,
+            "Bias": bias_label,
+            "recommended_aim_horizontal_in": round(-h_mean, 2),
+            "recommended_aim_vertical_in": round(-v_mean, 2),
+        })
+    return plan
+
+
 def session_command_scorecard(pitches):
     """Section 21's Session Command Scorecard. total_pitches counts
     every tracked pitch (including any still awaiting an actual
@@ -554,16 +665,15 @@ def session_command_scorecard(pitches):
     validated Command+ model."""
     located = _located(pitches)
     n = len(located)
+    tier_pcts, major_miss_pct = _tier_hit_pcts(located)
     return {
         "total_pitches": len(pitches),
         "located_pitches": n,
         "avg_miss_distance": _avg([p.miss_distance for p in located]) if n else None,
         "median_miss_distance": _med([p.miss_distance for p in located]) if n else None,
         "avg_danger_adjusted_miss": _avg([danger_adjusted_miss(p) for p in located]) if n else None,
-        "precision_pct": _pct_true([p.within_precision_target for p in located]) if n else None,
-        "command_target_pct": _pct_true([p.within_command_target for p in located]) if n else None,
-        "competitive_pct": _pct_true([p.within_competitive_target for p in located]) if n else None,
-        "major_miss_pct": _pct_false([p.within_competitive_target for p in located]) if n else None,
+        "tier_pcts": tier_pcts,
+        "major_miss_pct": major_miss_pct,
         "avg_execution_score": _avg([pitch_execution_score(p) for p in located]) if n else None,
         "execution_pct": _execution_pct(located),
         "horizontal_command_mean_abs": _avg([abs(p.horizontal_miss) for p in located]) if n else None,
@@ -636,6 +746,7 @@ def command_by_pitch_type(pitches, throws):
         group = groups[label]
         located = _located(group)
         n = len(located)
+        tier_pcts, major_miss_pct = _tier_hit_pcts(located)
         rows.append({
             "Pitch Type": label,
             "Pitches": len(group),
@@ -643,14 +754,13 @@ def command_by_pitch_type(pitches, throws):
             "Avg Miss": _avg([p.miss_distance for p in located]) if n else None,
             "Danger-Adj. Miss": _avg([danger_adjusted_miss(p) for p in located]) if n else None,
             "Median Miss": _med([p.miss_distance for p in located]) if n else None,
-            "Precision %": _pct_true([p.within_precision_target for p in located]) if n else None,
-            "Command Target %": _pct_true([p.within_command_target for p in located]) if n else None,
-            "Competitive %": _pct_true([p.within_competitive_target for p in located]) if n else None,
-            "Major Miss %": _pct_false([p.within_competitive_target for p in located]) if n else None,
+            "Tier Pcts": tier_pcts,
+            "Major Miss %": major_miss_pct,
             "Command Execution %": _execution_pct(located),
             "Horizontal Miss": _avg([abs(p.horizontal_miss) for p in located]) if n else None,
             "Vertical Miss": _avg([abs(p.vertical_miss) for p in located]) if n else None,
             "Miss Bias": miss_bias(group, throws),
+            "Miss Direction Grid": miss_direction_grid(group, throws),
         })
     return rows
 

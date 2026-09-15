@@ -48,6 +48,7 @@ from analytics.bullpen_metrics import (
     average_estimated_arm_angle, pitch_type_label,
     _pitch_level_vaa, _pitch_level_haa, _avg_pitch_level,
 )
+import command_config
 from visualizations import command_charts
 from visualizations.bullpen_charts import movement_chart, color_for_pitch_label
 from visualizations.pitcher_graphic import pitcher_release_svg
@@ -894,7 +895,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                 ui.hr(),
                 ui.p(ui.strong("Command Target Zones")),
                 ui.p(
-                    "Same Precision/Command/Competitive target-radius bands and concentric-ring chart Command "
+                    "Same 5-tier target-radius bands (4\"/8\"/12\"/16\"/20\") and concentric-ring chart Command "
                     "Tracker uses -- built from this game's own intended-vs-actual pitch locations, no separate "
                     "math. Only pitches with a logged intended location count (a real opponent's pitcher never has "
                     "one on file).",
@@ -902,6 +903,8 @@ def pitcher_game_report_server(input, output, session, app_state):
                 ),
                 ui.output_ui("command_target_table"),
                 output_widget("command_target_chart"),
+                ui.output_ui("pitch_targeting_plan_section"),
+                output_widget("pitch_targeting_plan_chart"),
             )
         finally:
             db.close()
@@ -926,6 +929,10 @@ def pitcher_game_report_server(input, output, session, app_state):
             if baseline_n >= command_metrics.MIN_BASELINE_PITCHES:
                 command_plus_value = command_metrics.session_command_plus(view_pitches, baselines)
 
+            tier_cards = [
+                {"label": f'{label} Hit% (\u2264{radius:.0f}")', "value": _cmd_fmt(scorecard["tier_pcts"].get(label), "%")}
+                for radius, label in command_config.TARGET_RADII_IN
+            ]
             children = [ui_helpers.render_kpi_cards([
                 {"label": "Located / Total", "value": f'{scorecard["located_pitches"]}/{scorecard["total_pitches"]}'},
                 {"label": "Command+", "value": _cmd_fmt(command_plus_value)},
@@ -933,9 +940,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                 {"label": "Danger-Adj. Miss", "value": _cmd_fmt(scorecard["avg_danger_adjusted_miss"], " in")},
                 {"label": "Median Miss", "value": _cmd_fmt(scorecard["median_miss_distance"], " in")},
                 {"label": "Command Execution %", "value": _cmd_fmt(scorecard["execution_pct"], "%")},
-                {"label": "Precision %", "value": _cmd_fmt(scorecard["precision_pct"], "%")},
-                {"label": "Command Target %", "value": _cmd_fmt(scorecard["command_target_pct"], "%")},
-                {"label": "Competitive %", "value": _cmd_fmt(scorecard["competitive_pct"], "%")},
+                *tier_cards,
                 {"label": "Major Miss %", "value": _cmd_fmt(scorecard["major_miss_pct"], "%")},
             ])]
             if command_plus_value is not None:
@@ -961,19 +966,36 @@ def pitcher_game_report_server(input, output, session, app_state):
 
             by_type = command_metrics.command_by_pitch_type(view_pitches, throws)
             if len(by_type) > 1:
-                rows = [{
-                    "Pitch Type": row["Pitch Type"],
-                    "Pitches": row["Pitches"],
-                    "Avg Miss (in)": row["Avg Miss"] if row["Avg Miss"] is not None else "—",
-                    "Danger-Adj. Miss (in)": row["Danger-Adj. Miss"] if row["Danger-Adj. Miss"] is not None else "—",
-                    "Command Execution %": row["Command Execution %"] if row["Command Execution %"] is not None else "—",
-                    "Precision %": row["Precision %"] if row["Precision %"] is not None else "—",
-                    "Command %": row["Command Target %"] if row["Command Target %"] is not None else "—",
-                    "Major Miss %": row["Major Miss %"] if row["Major Miss %"] is not None else "—",
-                    "Miss Bias": _cmd_bias_label(row["Miss Bias"]),
-                } for row in by_type]
+                rows = []
+                for row in by_type:
+                    tier_cols = {
+                        f'{label} % (\u2264{radius:.0f}")': (row["Tier Pcts"].get(label) if row["Tier Pcts"].get(label) is not None else "—")
+                        for radius, label in command_config.TARGET_RADII_IN
+                    }
+                    rows.append({
+                        "Pitch Type": row["Pitch Type"],
+                        "Pitches": row["Pitches"],
+                        "Avg Miss (in)": row["Avg Miss"] if row["Avg Miss"] is not None else "—",
+                        "Danger-Adj. Miss (in)": row["Danger-Adj. Miss"] if row["Danger-Adj. Miss"] is not None else "—",
+                        "Command Execution %": row["Command Execution %"] if row["Command Execution %"] is not None else "—",
+                        **tier_cols,
+                        "Major Miss %": row["Major Miss %"] if row["Major Miss %"] is not None else "—",
+                        "Miss Bias": _cmd_bias_label(row["Miss Bias"]),
+                    })
                 children.append(ui.h6("By pitch type", class_="mt-3"))
                 children.append(ui_helpers.render_dict_table(rows))
+
+                grid_rows_by_type = [(row["Pitch Type"], row["Miss Direction Grid"]) for row in by_type if row["Miss Direction Grid"] is not None]
+                if grid_rows_by_type:
+                    children.append(ui.h6("Miss direction by pitch type", class_="mt-3"))
+                    children.append(ui.p(
+                        "% of located pitches of that pitch type landing in each of the 9 zones -- rows are "
+                        "vertical miss, columns are horizontal miss (handedness-aware: Arm Side/Glove Side).",
+                        class_="text-muted small",
+                    ))
+                    for pitch_type_label_, grid in grid_rows_by_type:
+                        children.append(ui.p(pitch_type_label_, class_="fw-bold small mb-1 mt-2"))
+                        children.append(ui_helpers.render_dict_table(grid))
 
             # Per-pitch miss direction (Ryker, Sept 2026: "would like to
             # be able to see a miss bias for each individual pitch ...
@@ -1006,6 +1028,71 @@ def pitcher_game_report_server(input, output, session, app_state):
             if not located:
                 return None
             return command_charts.command_chart(view_pitches)
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Pitch Targeting Plan -- Sept 2026, Ryker: forward-looking companion
+    # to the Command Target Zones table/chart above (which grades what
+    # already happened). One recommended aim point per pitch type,
+    # shifted opposite this pitcher's own measured miss bias for that
+    # type (analytics.command_metrics.pitch_targeting_plan/miss_bias),
+    # so the recommendation is specific to how HE actually misses, not
+    # a generic tip. Same render.ui-text / render_plotly-chart split as
+    # command_target_section/command_target_chart above, for the same
+    # reason (a render_plotly output needs its own registered function).
+    # -------------------------------------------------------------------
+
+    @render.ui
+    def pitch_targeting_plan_section():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        db = get_session()
+        try:
+            view_pitches, throws = _selected_pitcher_view_pitches(db)
+            if not view_pitches:
+                return None
+            plan = command_metrics.pitch_targeting_plan(view_pitches, throws)
+            if not plan:
+                return ui.p(
+                    f"Pitch Targeting Plan needs at least {command_metrics.MIN_TARGETING_PITCHES} located pitches "
+                    "of a given pitch type in this game to recommend an aim point -- none qualify yet.",
+                    class_="text-muted small mt-3",
+                )
+            return ui.div(
+                ui.h6("Pitch Targeting Plan", class_="mt-3"),
+                ui.p(
+                    "Recommended aim point per pitch type -- shifted opposite this pitcher's own average miss "
+                    "bias for that pitch, so if he tends to miss glove side on his slider, the recommendation "
+                    "aims a bit arm side of the true target instead. \"Bias\" is the average miss this "
+                    "recommendation is correcting for.",
+                    class_="text-muted small",
+                ),
+                ui_helpers.render_dict_table([
+                    {
+                        "Pitch Type": row["Pitch Type"],
+                        "Located": row["Located"],
+                        "Bias": row["Bias"],
+                        "Recommended Aim Shift": f'{row["recommended_aim_horizontal_in"]:+.1f}" horiz / {row["recommended_aim_vertical_in"]:+.1f}" vert',
+                    } for row in plan
+                ]),
+            )
+        finally:
+            db.close()
+
+    @render_plotly
+    def pitch_targeting_plan_chart():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        db = get_session()
+        try:
+            view_pitches, throws = _selected_pitcher_view_pitches(db)
+            if not view_pitches:
+                return None
+            plan = command_metrics.pitch_targeting_plan(view_pitches, throws)
+            if not plan:
+                return None
+            return command_charts.pitch_targeting_chart(plan)
         finally:
             db.close()
 

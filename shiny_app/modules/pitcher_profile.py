@@ -41,6 +41,7 @@ from database import get_session
 from models import Player, User, PitchType, PlayerPitchArsenal, StaffPlayerAssignment
 from game_stats import compute_pitching_line, compute_pitch_type_breakdown
 from strike_zone import classify_attack_zone
+import command_config
 from analytics import command_metrics, performance_score, profile_queries
 from analytics.pitch_grading import (
     stuff_plus, location_plus, pitching_plus, arsenal_summary, MIN_BASELINE_PITCHES,
@@ -696,13 +697,16 @@ def pitcher_profile_server(input, output, session, app_state):
             if baselines["pooled"][2] >= command_metrics.MIN_BASELINE_PITCHES:
                 command_plus_value = command_metrics.session_command_plus(view_pitches, baselines)
 
+            tier_cards = [
+                {"label": f'{label} Hit% (\u2264{radius:.0f}")', "value": _fmt_pct(scorecard["tier_pcts"].get(label))}
+                for radius, label in command_config.TARGET_RADII_IN
+            ]
             children = [ui_helpers.render_kpi_cards([
                 {"label": "Located / Total", "value": f'{scorecard["located_pitches"]}/{scorecard["total_pitches"]}'},
                 {"label": "Command+", "value": _fmt_grade(command_plus_value)},
                 {"label": "Avg Miss", "value": f'{scorecard["avg_miss_distance"]}"' if scorecard["avg_miss_distance"] is not None else "—"},
-                {"label": "Precision %", "value": _fmt_pct(scorecard["precision_pct"])},
-                {"label": "Command Target %", "value": _fmt_pct(scorecard["command_target_pct"])},
-                {"label": "Competitive %", "value": _fmt_pct(scorecard["competitive_pct"])},
+                *tier_cards,
+                {"label": "Major Miss %", "value": _fmt_pct(scorecard["major_miss_pct"])},
             ])]
             bias = command_metrics.miss_bias(view_pitches, throws)
             children.append(ui.p(f"Average miss bias: {_cmd_bias_label(bias)}", class_="text-muted small mt-2"))
