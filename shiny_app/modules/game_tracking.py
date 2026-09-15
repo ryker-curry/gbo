@@ -965,6 +965,20 @@ def compute_current_state(pitches, runner_events=None, forced_ends=None, game=No
     fixed True (squad A bats first)."""
     runner_events = runner_events or []
     forced_ends = forced_ends or []
+    # Sept 2026, Ryker (game #17 incident): a coach clicked "same team
+    # continues" AFTER a pitcher's 3rd out had already been recorded as
+    # a normal play -- by that point the block below (and the pending-
+    # runner-event block further down) had ALREADY rolled the state
+    # over to the next half-inning on its own (outs >= 3 always does
+    # that, forced-end row or not). The forced_ends loop at the bottom
+    # then applied ANOTHER, independent rollover on top -- inning
+    # incremented twice, and "same team continues" did nothing to undo
+    # the flip that already happened, so it ended up on the OTHER side
+    # instead of staying put. already_rolled tracks whether one of
+    # those two blocks already advanced the half this pitch's anchor,
+    # so the forced_ends loop can correct for it instead of stacking a
+    # second, independent rollover on top -- see that loop below.
+    already_rolled = False
     if not pitches:
         away_is_squad_b = bool(
             game and game.is_intrasquad and not game.uses_three_squad_intrasquad
@@ -1006,6 +1020,7 @@ def compute_current_state(pitches, runner_events=None, forced_ends=None, game=No
                 is_our_batting = not is_our_batting
                 outs = 0
                 bases = "000"
+                already_rolled = True
             state = {
                 "inning": inning, "is_our_batting": is_our_batting,
                 "outs": outs, "bases": bases,
@@ -1030,20 +1045,40 @@ def compute_current_state(pitches, runner_events=None, forced_ends=None, game=No
             state["balls"], state["strikes"], state["pa_pitch_number"], state["new_pa"] = 0, 0, 1, True
             for k in ("current_our_player", "current_opp_hand", "current_opp_order", "current_opp_player", "current_opp_our_player"):
                 state.pop(k, None)
+            already_rolled = True
         state["outs"], state["bases"] = outs, bases
 
     # Loop (not `any(...)`) so two forced ends anchored at the identical
     # pitch (a real, supported case -- see the game #14 forced-end rows
     # from Sept 2026) each apply their own rollover instead of only one
     # of them counting, matching replay_game's own per-fe loop below.
+    # ONLY the first forced_end at this anchor is affected by
+    # already_rolled (see module comment above) -- a second forced_end
+    # at the same anchor is a genuinely separate, additional rollover
+    # (the already-rolled state has been "consumed" by the first one),
+    # so it gets the normal unconditional-increment treatment.
+    first_fe = True
     for fe in (e for e in forced_ends if e.pitch_sequence_after == anchor):
-        state["inning"] += 1
-        if not fe.same_side_continues:
-            state["is_our_batting"] = not state["is_our_batting"]
+        if first_fe and already_rolled:
+            # The state above already advanced to the next half-inning
+            # on its own (a real 3rd out, or a runner event supplying
+            # it) before this forced-end was ever recorded -- don't
+            # increment the inning again. same_side_continues here
+            # means "undo that automatic flip" (flip again, back to
+            # the side that was actually still up), not "don't flip"
+            # (which is what it means below, for a genuine early end
+            # that hadn't rolled over on its own yet).
+            if fe.same_side_continues:
+                state["is_our_batting"] = not state["is_our_batting"]
+        else:
+            state["inning"] += 1
+            if not fe.same_side_continues:
+                state["is_our_batting"] = not state["is_our_batting"]
         state["outs"], state["bases"] = 0, "000"
         state["balls"], state["strikes"], state["pa_pitch_number"], state["new_pa"] = 0, 0, 1, True
         for k in ("current_our_player", "current_opp_hand", "current_opp_order", "current_opp_player", "current_opp_our_player"):
             state.pop(k, None)
+        first_fe = False
 
     return state
 
@@ -1172,7 +1207,7 @@ def replay_game(pitches, runner_events, re_lookup, forced_ends=None):
         else:
             opponent_score += runs
 
-    def _fold_pending(anchor_seq):
+    def _fold_pending(anchor_seq, already_rolled=False):
         pending = sorted(
             (e for e in events if e.pitch_sequence_after == anchor_seq),
             key=lambda e: e.created_at,
@@ -1187,6 +1222,7 @@ def replay_game(pitches, runner_events, re_lookup, forced_ends=None):
                 state["is_our_batting"] = not state["is_our_batting"]
                 outs, bases = 0, "000"
                 state["balls"], state["strikes"], state["pa_pitch_number"] = 0, 0, 1
+                already_rolled = True
             state["outs"], state["bases"] = outs, bases
 
         # Forced half-inning ends (models.GameForcedHalfInningEnd) --
@@ -1194,13 +1230,33 @@ def replay_game(pitches, runner_events, re_lookup, forced_ends=None):
         # it here on purpose, regardless of the real out count) and
         # credit its own runs_scored, all-earned, to whichever score
         # column its batting_squad/is_our_team_batting resolves to.
+        #
+        # Sept 2026, Ryker (game #17 incident): mirrors the identical
+        # fix in compute_current_state above -- see its module comment.
+        # already_rolled (passed in from this pitch's own outs>=3
+        # rollover in the main loop below, or set just above from a
+        # runner event's own outs>=3 rollover) means the half-inning at
+        # this exact anchor already flipped on its own before any
+        # forced_end row existed. Only the FIRST forced_end at this
+        # anchor is affected: for it, same_side_continues=True means
+        # "undo that automatic flip" (flip back), not "don't flip" --
+        # and the inning is NOT incremented again. A second forced_end
+        # at the same anchor is a genuinely separate, additional
+        # rollover (already_rolled has been "consumed" by the first
+        # one), so it gets the normal unconditional treatment.
+        first_fe = True
         for fe in (e for e in forced if e.pitch_sequence_after == anchor_seq):
             _credit(fe.batting_squad, fe.is_our_team_batting, fe.runs_scored)
-            state["inning"] += 1
-            if not fe.same_side_continues:
-                state["is_our_batting"] = not state["is_our_batting"]
+            if first_fe and already_rolled:
+                if fe.same_side_continues:
+                    state["is_our_batting"] = not state["is_our_batting"]
+            else:
+                state["inning"] += 1
+                if not fe.same_side_continues:
+                    state["is_our_batting"] = not state["is_our_batting"]
             state["outs"], state["bases"] = 0, "000"
             state["balls"], state["strikes"], state["pa_pitch_number"] = 0, 0, 1
+            first_fe = False
 
     by_pitch = {}
     side_changed_pitch_ids = []
@@ -1251,6 +1307,7 @@ def replay_game(pitches, runner_events, re_lookup, forced_ends=None):
             # returns -- see docstring.
             _credit(p.batting_squad, state["is_our_batting"], p.runs_scored_on_play)
 
+        pitch_rolled_over = False
         if not ends_pa:
             state["balls"], state["strikes"] = new_balls, new_strikes
             state["pa_pitch_number"] = (state["pa_pitch_number"] or 1) + 1
@@ -1265,11 +1322,18 @@ def replay_game(pitches, runner_events, re_lookup, forced_ends=None):
                 inning += 1
                 is_our_batting = not is_our_batting
                 outs, bases = 0, "000"
+                pitch_rolled_over = True
             state["inning"], state["is_our_batting"] = inning, is_our_batting
             state["outs"], state["bases"] = outs, bases
             state["balls"], state["strikes"], state["pa_pitch_number"] = 0, 0, 1
 
-        _fold_pending(p.pitch_sequence)
+        # Sept 2026, Ryker (game #17 incident): tell _fold_pending whether
+        # THIS pitch's own outs>=3 already rolled the half over, so a
+        # forced_end anchored at this same pitch_sequence (the "same team
+        # continues" button clicked after a real 3rd out already posted)
+        # doesn't stack a second rollover on top -- see _fold_pending's
+        # own comment and compute_current_state's module comment above.
+        _fold_pending(p.pitch_sequence, already_rolled=pitch_rolled_over)
 
     return {
         "by_pitch": by_pitch,
