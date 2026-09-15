@@ -4,9 +4,25 @@ GBO -- Player Management module.
 Direct port of pages/players.py -- roster list with search/filter/sort +
 CSV export, add/edit form (all staff roles can add/edit, per Ryker's
 decision), pitch arsenal management for pitchers, and a guarded delete
-(blocked if the player has any real data attached -- assessments, IDP
-goals, sessions, assignments, bullpens, or a linked user account --
-same related-record check as the original).
+(blocked if the player has real data attached).
+
+Sept 2026 bug fix: the original's related-record check (assessments,
+IDP goals, sessions, assignments, bullpens, linked user account) missed
+most of the tables models.py actually has a players.player_id foreign
+key on -- staff roster assignments, AT appointments, recovery tests,
+videos, Rapsodo imports/pitches, hitter tracking sessions, pitch
+arsenal entries, game lineup slots, pitching changes, lineup
+substitutions, and tracked GamePitch rows chief among them. None of
+those foreign keys were created with ON DELETE CASCADE (checked the
+migration SQL), so a player who cleared the old check but had e.g. a
+StaffPlayerAssignment on file -- true of most real, actively-coached
+players, not just fresh duplicates -- would be shown "safe to delete"
+and then crash the app with an uncaught IntegrityError on commit.
+related_counts below now covers every NOT NULL players.player_id
+reference; _delete_player additionally wraps the commit itself in a
+try/except IntegrityError as a backstop, so a table added later that
+nobody remembers to list here fails safe (friendly message) instead of
+crashing again.
 
 Role gating: Coach sees only players assigned to them (via
 staff_player_assignments, same app_state.can_view_all_players() flag
@@ -60,12 +76,16 @@ from datetime import date
 
 from shiny import module, ui, render, reactive, req
 from sqlalchemy.orm import joinedload
+from sqlalchemy.exc import IntegrityError
 
 from database import get_session
 from models import (
     Player, Team, StaffPlayerAssignment, PlayerClass, PlayerStatus, Position,
     Assessment, IDPGoal, TrainingSession, PlayerAssignment, BullpenSession,
     User, PitchType, PlayerPitchArsenal,
+    ATAppointment, RecoveryTest, Video, RapsodoImport, RapsodoPitch,
+    HitterTrackingSession, GameLineupSlot, PitchingChange, LineupSubstitution,
+    GamePitch,
 )
 from supabase_client import get_supabase_admin_client
 
@@ -731,6 +751,10 @@ def players_server(input, output, session, app_state):
             if target_player is None:
                 return None
 
+            # Every table with a NOT NULL players.player_id foreign key --
+            # see the module docstring's Sept 2026 bug-fix note for why this
+            # needs to be this exhaustive (the original list here missed
+            # most of these, and none of these FKs cascade on delete).
             related_counts = {
                 "assessments": db.query(Assessment).filter(Assessment.player_id == delete_player_id).count(),
                 "IDP goals": db.query(IDPGoal).filter(IDPGoal.player_id == delete_player_id).count(),
@@ -738,6 +762,18 @@ def players_server(input, output, session, app_state):
                 "player assignments": db.query(PlayerAssignment).filter(PlayerAssignment.player_id == delete_player_id).count(),
                 "bullpen sessions": db.query(BullpenSession).filter(BullpenSession.player_id == delete_player_id).count(),
                 "linked user accounts": db.query(User).filter(User.player_id == delete_player_id).count(),
+                "staff roster assignments": db.query(StaffPlayerAssignment).filter(StaffPlayerAssignment.player_id == delete_player_id).count(),
+                "AT appointments": db.query(ATAppointment).filter(ATAppointment.player_id == delete_player_id).count(),
+                "recovery tests": db.query(RecoveryTest).filter(RecoveryTest.player_id == delete_player_id).count(),
+                "videos": db.query(Video).filter(Video.player_id == delete_player_id).count(),
+                "Rapsodo imports": db.query(RapsodoImport).filter(RapsodoImport.player_id == delete_player_id).count(),
+                "Rapsodo pitches": db.query(RapsodoPitch).filter(RapsodoPitch.player_id == delete_player_id).count(),
+                "hitter tracking sessions": db.query(HitterTrackingSession).filter(HitterTrackingSession.player_id == delete_player_id).count(),
+                "pitch arsenal entries": db.query(PlayerPitchArsenal).filter(PlayerPitchArsenal.player_id == delete_player_id).count(),
+                "game lineup appearances": db.query(GameLineupSlot).filter(GameLineupSlot.player_id == delete_player_id).count(),
+                "pitching changes": db.query(PitchingChange).filter(PitchingChange.player_id == delete_player_id).count(),
+                "lineup substitutions": db.query(LineupSubstitution).filter(LineupSubstitution.player_id == delete_player_id).count(),
+                "tracked game pitches": db.query(GamePitch).filter(GamePitch.our_player_id == delete_player_id).count(),
             }
             has_related_data = any(count > 0 for count in related_counts.values())
 
@@ -778,7 +814,23 @@ def players_server(input, output, session, app_state):
                 return
             name = f"{target_player.first_name} {target_player.last_name}"
             db.delete(target_player)
-            db.commit()
+            try:
+                db.commit()
+            except IntegrityError:
+                # Backstop for the related_counts check above (see module
+                # docstring's Sept 2026 bug-fix note): if this player still
+                # has a row somewhere we didn't think to list -- a table
+                # added later, or one of the rarer optional references
+                # (e.g. Game.starting_pitcher_id, GameRunnerEvent.our_
+                # player_id) -- fail safe with a clear message instead of
+                # surfacing a raw database error to the coach.
+                db.rollback()
+                ui.notification_show(
+                    f"Couldn't delete {name} -- they still have related data on file somewhere "
+                    f"(a table this check doesn't name specifically). Deactivate them instead.",
+                    type="error", duration=12,
+                )
+                return
             ui.notification_show(f"Deleted {name}.", type="message", duration=6)
             _bump_refresh()
         finally:
