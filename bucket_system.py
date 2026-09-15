@@ -283,6 +283,26 @@ POWER_SUBGROUPS = {
     ],
 }
 
+# Reference-only addition to the Med Ball Throw sub-group (Sept 2026,
+# Ryker: "add med ball shotput velocity to the rotational power
+# assessment"). Distance (POWER_SUBGROUPS["Med Ball Throw"] above)
+# stays the sole SCORED metric in this sub-group -- Ryker's explicit
+# call to keep the Bucket System's verified-exact match to the
+# professor's spreadsheet, since Velocity isn't in it. Velocity is
+# still entered on the Assessments form and shown on the player's
+# card (compute_bucket_system merges this into power_subgroup_metrics
+# AFTER power_subgroup_scores is computed from the scored-only dict --
+# see the Power loop below -- and bucket_display.py's build_full_
+# breakdown renders it via build_raw_metrics' unranked KPI-tile
+# treatment, same as Body Comp's BMR/Recommended Caloric Intake), but
+# never averaged into power_score/Total. "higher" is a placeholder to
+# satisfy compute_metric_percentiles' signature, not a real scoring
+# call -- same convention as BODY_COMP_DISPLAY_METRICS' BMR/Calories
+# entries above.
+MED_BALL_THROW_REFERENCE_METRICS = [
+    ("Medicine Ball Shot Put Velocity", "higher"),
+]
+
 STRENGTH_SUBGROUPS = {
     "Lower Body Strength": [
         ("Hex Bar Deadlift Max", "higher"),
@@ -308,11 +328,42 @@ STRENGTH_SUBGROUPS = {
     ],
 }
 
-# Shown for reference, excluded from the final Total.
+# Shown for reference, excluded from the final Total. 30-Yard Sprint
+# Time (Sept 2026 addition) gets the same treatment as the other two --
+# see seed_lookups.SPEED_TESTS' comment for why it's here despite not
+# being in the professor's spreadsheet.
 SPEED_METRICS = [
     ("Acceleration: 10-Yard Sprint Time", "lower"),
     ("Top Speed: Flying 10 Sprint Time", "lower"),
+    ("30-Yard Sprint Time", "lower"),
 ]
+
+# The exact AssessmentTestType.test_name for the Flying 10 (top speed)
+# test -- shared between compute_bucket_system/flying_10_mph below and
+# bucket_display.build_metric_bars, which appends the mph conversion
+# onto this one row's raw-value label (Sept 2026, Ryker: "I would also
+# like to have top speed from the 20/10 fly to be the time itself as
+# well as in mph").
+FLYING_10_TEST_NAME = "Top Speed: Flying 10 Sprint Time"
+
+# The timed segment of the "20/10 fly" test is 10 yards -- a 20-yard
+# running start (untimed) before the clock starts on the 10-yard "fly"
+# segment, so the runner is already at (roughly) top speed for the
+# whole timed portion. That's what "10 yard is distance" in Ryker's
+# request means -- this is not a from-a-stop sprint.
+FLYING_10_YARDS = 10
+
+
+def flying_10_mph(time_seconds):
+    """Convert a Flying 10 (top speed) sprint TIME (seconds) to mph.
+    mph = (yards / time_seconds) * (3600 sec/hr / 1760 yards/mile) --
+    yards/sec to miles/hr, the standard unit conversion (1 mile = 1760
+    yards). Returns None for a missing or non-positive time -- can't
+    divide by zero, and a zero/negative time isn't valid sprint data
+    anyway."""
+    if time_seconds is None or time_seconds <= 0:
+        return None
+    return round((FLYING_10_YARDS / float(time_seconds)) * (3600 / 1760), 1)
 
 # Feeds the new Capacity score (Physical Development extension) --
 # throwing-arm strength/stability metrics only, matching the
@@ -576,7 +627,10 @@ def get_bucket_test_names_for_category(category_name):
     if category_name == "Body Composition":
         return set(BODY_COMP_ENTRY_FIELDS)
     if category_name == "Rotational Power":
-        return {name for name, _ in POWER_SUBGROUPS["Med Ball Throw"]}
+        return (
+            {name for name, _ in POWER_SUBGROUPS["Med Ball Throw"]}
+            | {name for name, _ in MED_BALL_THROW_REFERENCE_METRICS}
+        )
     if category_name == "Explosive Power":
         names = set()
         for sub_name, metrics in POWER_SUBGROUPS.items():
@@ -687,6 +741,7 @@ def _all_bucket_test_names():
     names.update(name for name, _ in BODY_COMP_DISPLAY_METRICS)
     for metrics in POWER_SUBGROUPS.values():
         names.update(name for name, _ in metrics)
+    names.update(name for name, _ in MED_BALL_THROW_REFERENCE_METRICS)
     for metrics in STRENGTH_SUBGROUPS.values():
         names.update(name for name, _ in metrics)
     names.update(name for name, _ in SPEED_METRICS)
@@ -1902,8 +1957,17 @@ def compute_bucket_system(session, player_id, season_label=None, _cache=None, _u
     power_subgroup_metrics = {}
     for sub_name, metrics in POWER_SUBGROUPS.items():
         m = compute_metric_percentiles(session, player_id, metrics, _cache=_cache, _units=_units)
-        power_subgroup_metrics[sub_name] = m
+        # Score BEFORE merging in Med Ball Throw's reference-only
+        # Velocity (see MED_BALL_THROW_REFERENCE_METRICS above) --
+        # power_subgroup_scores must only ever average the real scored
+        # metrics in POWER_SUBGROUPS, never this reference addition.
         power_subgroup_scores[sub_name] = average_percentiles(m)
+        if sub_name == "Med Ball Throw":
+            m = {
+                **m,
+                **compute_metric_percentiles(session, player_id, MED_BALL_THROW_REFERENCE_METRICS, _cache=_cache, _units=_units),
+            }
+        power_subgroup_metrics[sub_name] = m
     power_score = round(sum(v for v in power_subgroup_scores.values() if v is not None) / len([v for v in power_subgroup_scores.values() if v is not None])) if any(v is not None for v in power_subgroup_scores.values()) else None
 
     # Strength (3 sub-groups)

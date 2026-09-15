@@ -210,18 +210,34 @@ EXPLOSIVE_POWER_TESTS = [
     ("Single-Leg Jump Height (Plant Leg)", "in"), ("Single-Leg Jump Concentric Impulse (Plant Leg)", "Ns"),
 ]
 
-# (test_name, unit) -- matches Ryker's bucket-system spreadsheet exactly
+# (test_name, unit) -- Distance matches Ryker's bucket-system spreadsheet
+# exactly and stays the sole SCORED Rotational Power metric (see
+# bucket_system.MED_BALL_THROW_REFERENCE_METRICS). Velocity (Sept 2026
+# addition, Ryker: "add med ball shotput velocity to the rotational
+# power assessment") is entered/shown as reference-only data, same
+# unranked-KPI-tile treatment as Body Composition's BMR/Recommended
+# Caloric Intake -- it's not in the professor's spreadsheet, so it
+# deliberately never touches power_score/Total.
 ROTATIONAL_POWER_TESTS = [
     ("Medicine Ball Shot Put Distance", "ft"),
+    ("Medicine Ball Shot Put Velocity", "mph"),
 ]
 
-# (test_name, unit) -- from Ryker's fully-populated Speed sheet, already
-# matches the bucket-system spreadsheet exactly (10y accel / 10y fly).
-# 20-Yard Sprint Time and Maximum Sprint Velocity aren't in the bucket
+# (test_name, unit) -- Top Speed: Flying 10 Sprint Time and Acceleration:
+# 10-Yard Sprint Time match Ryker's fully-populated Speed sheet exactly
+# (10y accel / 10y fly, from the bucket-system spreadsheet). 20-Yard
+# Sprint Time and Maximum Sprint Velocity aren't in the bucket
 # spreadsheet, so per Ryker's rule they're excluded here too.
+# 30-Yard Sprint Time (Sept 2026 addition) also isn't in that
+# spreadsheet -- added anyway per Ryker's explicit request, with the
+# same "reference only, ranked, excluded from Total" treatment the
+# other two Speed tests already get (bucket_system.SPEED_METRICS),
+# since Speed as a whole was already outside the professor's verified
+# Total composite.
 SPEED_TESTS = [
     ("Top Speed: Flying 10 Sprint Time", "s"),
     ("Acceleration: 10-Yard Sprint Time", "s"),
+    ("30-Yard Sprint Time", "s"),
 ]
 
 # (test_name, unit) -- from Ryker's fully-populated Pitch Characteristics
