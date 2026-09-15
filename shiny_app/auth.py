@@ -12,15 +12,17 @@ Uses database.py/models.py/supabase_client.py completely unchanged --
 those are part of the analytics-engine boundary this migration
 preserves, not something auth-specific to rewrite.
 
-TEMPORARY DEBUG LOGGING: do_login below prints whether SUPABASE_URL/
-SUPABASE_ANON_KEY are visible to the process, and the real exception
-if login fails, to stdout so it shows up in the hosting platform's
-server logs -- without changing what the user sees in the browser
-(still the same generic "Login failed" message). Remove this print()
-block once the live login issue is diagnosed and fixed.
+DIAGNOSED (Sept 2026): the "login succeeds but lands on account-not-
+set-up" reports traced to email casing -- Supabase Auth normalizes
+emails to lowercase, but GBO's own user_management.py account-creation
+flow only .strip()'d the typed email, so any account created with a
+capital letter never matched here. _load_gbo_role below now normalizes
+auth_email before the lookup, user_management.py normalizes on create/
+edit, and scripts/backfill_lowercase_user_emails.py fixes rows created
+before this fix. The temporary [GBO LOGIN DEBUG]/[GBO LOGIN ERROR]
+print() block that was here while this was being chased has been
+removed now that it's diagnosed and fixed.
 """
-
-import os
 
 from sqlalchemy.orm import joinedload
 
@@ -36,16 +38,10 @@ def do_login(app_state, email: str, password: str):
     script rerun; here it happens inline since Shiny has no "next
     rerun" to lean on -- reactive.Value.set() below is what actually
     triggers the UI to update)."""
-    print(
-        f"[GBO LOGIN DEBUG] SUPABASE_URL set={bool(os.environ.get('SUPABASE_URL'))} "
-        f"SUPABASE_ANON_KEY set={bool(os.environ.get('SUPABASE_ANON_KEY'))}",
-        flush=True,
-    )
     try:
         supabase = get_supabase_client()
         result = supabase.auth.sign_in_with_password({"email": email, "password": password})
-    except Exception as e:
-        print(f"[GBO LOGIN ERROR] {type(e).__name__}: {e}", flush=True)
+    except Exception:
         app_state.auth_user.set(None)
         app_state.auth_error.set("Login failed. Check your email and password and try again.")
         return
@@ -70,7 +66,13 @@ def _load_gbo_role(app_state, auth_email: str):
     loaded. Sets app_state fields on success; leaves role_name unset
     (None) if there's no matching row -- AppState.is_pending_setup()
     treats that as "account not set up yet", same as the original
-    account_not_set_up_page()."""
+    account_not_set_up_page().
+
+    auth_email is lowercased before the lookup -- Supabase Auth
+    normalizes emails to lowercase, and User.email is now written
+    lowercase too (see user_management.py), but this normalizes the
+    read side independently rather than assuming both sides agree."""
+    auth_email = (auth_email or "").strip().lower()
     session = get_session()
     try:
         current_user = (

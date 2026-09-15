@@ -190,7 +190,7 @@ def user_management_server(input, output, session, app_state):
         role_choice = input.create_user_role()
         first_name = (input.create_first_name() or "").strip()
         last_name = (input.create_last_name() or "").strip()
-        email = (input.create_email() or "").strip()
+        email = (input.create_email() or "").strip().lower()
         password = input.create_password() or ""
         linked_player_id = int(input.create_linked_player()) if role_choice == "Player" and "create_linked_player" in input and input.create_linked_player() else None
         coach_specialty_choice = input.create_specialty() if role_choice == "Coach" and "create_specialty" in input else None
@@ -346,7 +346,7 @@ def user_management_server(input, output, session, app_state):
 
             new_first_name = (input.edit_first_name() or "").strip()
             new_last_name = (input.edit_last_name() or "").strip()
-            new_email = (input.edit_email() or "").strip()
+            new_email = (input.edit_email() or "").strip().lower()
             active_choice = input.edit_active()
             remove_photo = input.edit_remove_photo() if "edit_remove_photo" in input else False
             new_player_id = int(input.edit_linked_player()) if new_role_choice == "Player" and "edit_linked_player" in input and input.edit_linked_player() else None
@@ -441,7 +441,11 @@ def user_management_server(input, output, session, app_state):
             try:
                 admin_client = get_supabase_admin_client()
                 auth_users = admin_client.auth.admin.list_users()
-                match = next((u for u in auth_users if u.email == editing_user.email), None)
+                # Case-insensitive: Supabase Auth normalizes emails to lowercase,
+                # and rows created before the .lower() normalization above may
+                # still hold mixed case (see scripts/backfill_lowercase_user_emails.py) --
+                # compare lowered on both sides rather than assuming exact match.
+                match = next((u for u in auth_users if (u.email or "").lower() == (editing_user.email or "").lower()), None)
                 if match is None:
                     ui.notification_show(f"No Supabase Auth account found for {editing_user.email}.", type="error", duration=10)
                 else:
