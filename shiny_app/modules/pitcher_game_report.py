@@ -589,36 +589,52 @@ def pitcher_game_report_server(input, output, session, app_state):
                 {"label": "FIP", "value": _fmt(line["FIP"])},
                 {"label": "Zone Execution %", "value": _fmt_pct(line["Zone Execution %"])},
             ]))
-            sections.append(ui.p(ui.strong("Count Control")))
-            sections.append(ui_helpers.render_kpi_cards([
-                {"label": "Strike %", "value": _fmt_pct(line["Strike %"])},
-                {"label": "Early", "value": str(line["Early"])},
-                {"label": "Ahead", "value": str(line["Ahead (PA)"])},
-                {"label": "E+A %", "value": _fmt_pct(line["E+A %"])},
-            ]))
-            sections.append(ui.p(f"Pitches/Inning: {_fmt(line['Pitches/Inning'], 1)} · Balls: {line['Balls']} ({_fmt_pct(line['Ball %'])})", class_="text-muted small"))
+            # Count Control/Situational/Against tucked behind one
+            # collapsed-by-default accordion panel -- Sept 2026, Ryker:
+            # "too much information ... want to track all of it but
+            # don't need to always see all of it." Line above stays
+            # always visible (the first thing anyone wants), everything
+            # still computes/renders exactly as before, just not open
+            # by default. Same ui.accordion(..., open=False, id=None)
+            # pattern already used for collapsed-by-default panels
+            # elsewhere in the app (assessments.py, bullpen_tracking.py,
+            # game_tracking.py, idp.py, opponent_teams.py).
+            more_children = [
+                ui.p(ui.strong("Count Control")),
+                ui_helpers.render_kpi_cards([
+                    {"label": "Strike %", "value": _fmt_pct(line["Strike %"])},
+                    {"label": "Early", "value": str(line["Early"])},
+                    {"label": "Ahead", "value": str(line["Ahead (PA)"])},
+                    {"label": "E+A %", "value": _fmt_pct(line["E+A %"])},
+                ]),
+                ui.p(f"Pitches/Inning: {_fmt(line['Pitches/Inning'], 1)} · Balls: {line['Balls']} ({_fmt_pct(line['Ball %'])})", class_="text-muted small"),
 
-            sections.append(ui.p(ui.strong("Situational")))
-            sections.append(ui_helpers.render_kpi_cards([
-                {"label": "Leadoff Out %", "value": _fmt_pct(line["Leadoff Out %"])},
-                {"label": "Leadoff BB", "value": str(line["Leadoff BB"])},
-                {"label": "2 Out BB", "value": str(line["2 Out BB"])},
-                {"label": "XBH Allowed", "value": str(line["XBH"])},
-            ]))
-            sections.append(ui.p(
-                f"0-2 Hits: {line['0-2 Hits']} · 0-2 Barrel: {line['0-2 Barrel']} · 1-2 Barrel: {line['1-2 Barrel']} · "
-                "\"Score\" versions (did that specific walked runner score) aren't computable yet -- "
-                "GBO tracks base occupancy, not individual runner identity.",
-                class_="text-muted small",
+                ui.p(ui.strong("Situational")),
+                ui_helpers.render_kpi_cards([
+                    {"label": "Leadoff Out %", "value": _fmt_pct(line["Leadoff Out %"])},
+                    {"label": "Leadoff BB", "value": str(line["Leadoff BB"])},
+                    {"label": "2 Out BB", "value": str(line["2 Out BB"])},
+                    {"label": "XBH Allowed", "value": str(line["XBH"])},
+                ]),
+                ui.p(
+                    f"0-2 Hits: {line['0-2 Hits']} · 0-2 Barrel: {line['0-2 Barrel']} · 1-2 Barrel: {line['1-2 Barrel']} · "
+                    "\"Score\" versions (did that specific walked runner score) aren't computable yet -- "
+                    "GBO tracks base occupancy, not individual runner identity.",
+                    class_="text-muted small",
+                ),
+
+                ui.p(ui.strong("Against")),
+                ui_helpers.render_kpi_cards([
+                    {"label": "OBA", "value": _fmt(line["OBA (opponent AVG)"], 3)},
+                    {"label": "wOBA*", "value": _fmt(line["wOBA"], 3)},
+                    {"label": "AB", "value": str(line["AB"])},
+                ]),
+                ui.p("*wOBA uses generic linear weights, not a season/league-specific set -- a relative read within your own games, not MLB-exact.", class_="text-muted small"),
+            ]
+            sections.append(ui.accordion(
+                ui.accordion_panel("More: Count Control, Situational, Against", *more_children),
+                open=False, id=None,
             ))
-
-            sections.append(ui.p(ui.strong("Against")))
-            sections.append(ui_helpers.render_kpi_cards([
-                {"label": "OBA", "value": _fmt(line["OBA (opponent AVG)"], 3)},
-                {"label": "wOBA*", "value": _fmt(line["wOBA"], 3)},
-                {"label": "AB", "value": str(line["AB"])},
-            ]))
-            sections.append(ui.p("*wOBA uses generic linear weights, not a season/league-specific set -- a relative read within your own games, not MLB-exact.", class_="text-muted small"))
 
             # Pitch Type Breakdown / Command Precision / Attack Zones /
             # Command Target Zones / Pitch Shape (Rapsodo) used to all be
