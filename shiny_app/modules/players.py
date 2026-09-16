@@ -693,6 +693,10 @@ def players_server(input, output, session, app_state):
             existing_arsenal = db.query(PlayerPitchArsenal).filter(PlayerPitchArsenal.player_id == player_id).all()
             for a in existing_arsenal:
                 db.delete(a)
+            db.flush()  # flush deletes before re-inserting -- otherwise a pitch type kept in both
+            # the old and new selection hits uq_player_pitch_arsenal (SQLAlchemy issues INSERTs
+            # before DELETEs within one flush by default), crashing on every save that doesn't
+            # clear the arsenal entirely.
             for tid in selected_type_ids:
                 db.add(PlayerPitchArsenal(player_id=player_id, pitch_type_id=tid, active=True))
             db.commit()
