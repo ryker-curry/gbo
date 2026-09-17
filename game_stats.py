@@ -24,7 +24,7 @@ function's docstring.
 from sqlalchemy.orm import joinedload
 from models import GamePitch, Game, GameForcedHalfInningEnd, GameRunnerEvent, Player, OpponentPlayer
 from plate_discipline import SWING_OUTCOMES, WHIFF_OUTCOMES
-from strike_zone import is_in_zone
+from strike_zone import is_in_zone, classify_attack_zone
 from field_location import classify_spray_direction
 
 
@@ -678,7 +678,11 @@ def compute_pitch_type_breakdown(pitches):
     of the breakdown table in Ryker's own game-tracking spreadsheet
     (Pitch Usage%, Strike%, Whiff%, SwStr%, CSW%, Chase%, Putaway%, GB/FB/LD%,
     Dominance%, Ahead%, A3P%, Sword%, contact quality allowed
-    [Weak/Jammed/Off the End/Clipped/Solid/Barreled %, Hard Hit %], RV/100
+    [Weak/Jammed/Off the End/Clipped/Solid/Barreled %, Hard Hit %],
+    attack-zone location mix [Zone%, Heart/Shadow/Chase/Waste Zone %,
+    Sept 2026 addition for the Zone view's per-pitch-type location
+    density heatmaps -- see _pitch_type_row's own comment for how
+    these differ from the existing swing-rate "Chase %"], RV/100
     etc.) -- built from the same
     GamePitch fields pages/game_tracking.py already captures (Sword
     from its own new checkbox), no other new data entry required.
@@ -866,6 +870,23 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
     zone_whiffs = [p for p in in_zone if p.pitch_outcome in WHIFF_OUTCOMES]
     chase_swings = [p for p in out_zone if p.pitch_outcome in SWING_OUTCOMES]
 
+    # Attack-zone tier mix (Heart/Shadow/Chase/Waste) for THIS pitch
+    # type -- Sept 2026, the per-pitch-type companion to the location
+    # density heatmaps on the Zone view (pitcher_profile.py), matching
+    # mlbpitchprofiler.com's own PITCH/%THROWN/HEART%/SHADOW%/CHASE%/
+    # WASTE%/ZONE% reference table. Distinct from "Zone %"'s cousin
+    # "Chase %" above (that one's a swing-rate on out-of-zone pitches,
+    # an approach stat) -- these are pure LOCATION mix, what fraction
+    # of this pitch type's located pitches landed in each tier,
+    # regardless of whether the batter swung. Percentages are of
+    # located pitches, not of Total Pitches, same denominator as
+    # "Zone %" itself (an unlocated pitch has no tier to count toward).
+    tier_counts = {"Heart": 0, "Shadow": 0, "Chase": 0, "Waste": 0}
+    for p in located:
+        tier = classify_attack_zone(float(p.actual_plate_x), float(p.actual_plate_z))
+        if tier:
+            tier_counts[tier] += 1
+
     first_pitches = [p for p in pitches if p.pa_pitch_number == 1]
     first_pitch_strikes = [p for p in first_pitches if p.pitch_outcome in STRIKE_OUTCOMES]
 
@@ -929,6 +950,11 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
         "CSW %": _rate(len(called_strikes) + len(whiffs), n),
         "Zone Whiffs": len(zone_whiffs), "Zone Whiff %": _rate(len(zone_whiffs), len(zone_swings)),
         "Pitches Out of Zone": len(out_zone), "Chase": len(chase_swings), "Chase %": _rate(len(chase_swings), len(out_zone)),
+        "Zone %": _rate(len(in_zone), len(located)),
+        "Heart Zone %": _rate(tier_counts["Heart"], len(located)),
+        "Shadow Zone %": _rate(tier_counts["Shadow"], len(located)),
+        "Chase Zone %": _rate(tier_counts["Chase"], len(located)),
+        "Waste Zone %": _rate(tier_counts["Waste"], len(located)),
         "Putaway Opportunities": len(two_strike_pitches), "Putaway Pitch": len(putaway_pitches),
         "Putaway %": _rate(len(putaway_pitches), len(two_strike_pitches)),
         "Dominant Pitches": len(dominant), "Dominance %": _rate(len(dominant), n),
