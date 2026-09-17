@@ -103,12 +103,14 @@ def _my_player(db, app_state):
 
 
 # NOTE (Aug 31 2026): _grade_ring_status/_grade_rings used to live here
-# -- moved to shiny_app/ui_helpers.py as mean100_ring_status/
-# render_percentile_bars (Savant/mlbpitchprofiler.com-style percentile
-# bars, per Ryker's own reference site, replacing the ring treatment
-# for this grade family) so hitter_profile.py's new Performance section
-# can reuse the same component. See pp_overview_section()'s Grades
-# section below and ui_helpers.render_percentile_bars' docstring.
+# -- moved to shiny_app/ui_helpers.py as render_percentile_bars
+# (Savant/mlbpitchprofiler.com-style percentile bars, per Ryker's own
+# reference site, replacing the ring treatment for this grade family)
+# so hitter_profile.py's new Performance section can reuse the same
+# component. Sept 2026: recolored to that site's own continuous
+# blue-to-red percentile scale (ui_helpers.percentile_color) -- see
+# pp_overview_section()'s Grades section below and
+# ui_helpers.render_percentile_bars' docstring.
 
 
 def _stacked_bar(segments):

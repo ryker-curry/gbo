@@ -430,27 +430,27 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-ring--green .gbo-ring-inner, .gbo-ring--yellow .gbo-ring-inner, .gbo-ring--orange .gbo-ring-inner, .gbo-ring--red .gbo-ring-inner { width: 100%; height: 100%; background: transparent; }
 .gbo-ring--green .gbo-ring-value, .gbo-ring--yellow .gbo-ring-value, .gbo-ring--orange .gbo-ring-value, .gbo-ring--red .gbo-ring-value, .gbo-ring--green .gbo-ring-sublabel, .gbo-ring--yellow .gbo-ring-sublabel, .gbo-ring--orange .gbo-ring-sublabel, .gbo-ring--red .gbo-ring-sublabel { color: #fff; }
 
-/* Percentile bars (Aug 2026) -- Savant/mlbpitchprofiler.com-style row
-   (colored bar + a circular percentile badge riding the fill edge +
-   the raw "+" stat alongside) for the mean-100/10-per-SD grade family
-   -- Ryker's own reference site for Pitcher/Hitter Profile's grade
-   display, replacing the .gbo-ring treatment for that family (Bucket
-   System / Command+ elsewhere keep their existing rings untouched).
-   Colored via the same good/flag status tiers as .gbo-ring
-   (ui_helpers.mean100_ring_status), not that site's own continuous
-   red-to-blue scale -- stays in GBO's existing traffic-light language
-   instead of a one-off palette. See ui_helpers.render_percentile_bars. */
+/* Percentile bars (Aug 2026, recolored Sept 2026) -- Savant/
+   mlbpitchprofiler.com-style row (colored bar + a circular percentile
+   badge riding the fill edge + the raw "+" stat alongside) for the
+   mean-100/10-per-SD grade family -- Ryker's own reference site for
+   Pitcher/Hitter Profile's grade display, replacing the .gbo-ring
+   treatment for that family (Bucket System / Command+ elsewhere keep
+   their existing rings untouched). Sept 2026: Ryker asked for the fill/
+   badge color to match that site's own continuous blue-to-red
+   percentile scale instead of the original 3-tier good/neutral/flag
+   treatment, so the color itself is now set inline per row
+   (ui_helpers.percentile_color) rather than by a fixed CSS class --
+   .gbo-pctbar-fill/.gbo-pctbar-badge below are just the shape/layout,
+   the background color always comes from that inline style now. See
+   ui_helpers.render_percentile_bars. */
 .gbo-pctbar-group { display: flex; flex-direction: column; }
 .gbo-pctbar-row { display: flex; align-items: center; gap: 4px; padding: 14px 2px; border-bottom: 1px solid var(--gbo-border); }
 .gbo-pctbar-row:last-child { border-bottom: 0; }
 .gbo-pctbar-label { flex: 0 0 112px; font-weight: 600; font-size: .82rem; color: var(--gbo-text); }
 .gbo-pctbar-track { position: relative; flex: 1 1 auto; height: 8px; border-radius: 4px; background: var(--gbo-bg-raised); margin: 0 18px; }
-.gbo-pctbar-fill { position: absolute; top: 0; left: 0; height: 100%; border-radius: 4px; background: var(--gbo-border-strong); transition: width .6s ease; }
-.gbo-pctbar-fill.good { background: var(--gbo-status-good); }
-.gbo-pctbar-fill.flag { background: var(--gbo-status-flag); }
-.gbo-pctbar-badge { position: absolute; top: 50%; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transform: translate(-50%, -50%); background: var(--gbo-border-strong); color: #fff; font-family: var(--gbo-display); font-weight: 700; font-size: .74rem; font-variant-numeric: tabular-nums; box-shadow: 0 0 0 3px var(--gbo-bg-card); transition: left .6s ease; }
-.gbo-pctbar-badge.good { background: var(--gbo-status-good); }
-.gbo-pctbar-badge.flag { background: var(--gbo-status-flag); }
+.gbo-pctbar-fill { position: absolute; top: 0; left: 0; height: 100%; border-radius: 4px; transition: width .6s ease, background .3s ease; }
+.gbo-pctbar-badge { position: absolute; top: 50%; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transform: translate(-50%, -50%); font-family: var(--gbo-display); font-weight: 700; font-size: .74rem; font-variant-numeric: tabular-nums; box-shadow: 0 0 0 3px var(--gbo-bg-card); transition: left .6s ease, background .3s ease; }
 .gbo-pctbar-raw { flex: 0 0 44px; text-align: right; font-family: var(--gbo-mono); font-size: .84rem; font-weight: 600; color: var(--gbo-text); font-variant-numeric: tabular-nums; }
 .gbo-pctbar-empty { flex: 1 1 auto; color: var(--gbo-text-muted); font-size: .78rem; }
 .gbo-pctbar-header { padding-top: 0; padding-bottom: 8px; }
