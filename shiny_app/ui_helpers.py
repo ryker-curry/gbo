@@ -169,37 +169,41 @@ def score_ring(value, label: str, status: str = None, sublabel: str = None, size
 def percentile_color(pct):
     """pct: 0-100 (mean100_to_percentile's output). Sept 2026, Ryker:
     "i want the colors for percentiles to match what the percentile
-    rankings on the pitcherprofiler.com does" -- replaces the earlier
-    3-tier good/neutral/flag traffic-light treatment (mean100_ring_status,
-    removed) with that site's own continuous blue-to-red diverging
-    scale: blue below the 50th percentile, red above it, pale/neutral
-    right around 50, saturation increasing with distance from the
-    middle. Colors are colorbrewer's standard 5-class RdBu diverging
-    palette (reversed so blue = low, red = high, matching their
-    orientation), linearly interpolated between the 5 stops rather than
-    just snapping to the nearest one, so two adjacent percentiles never
-    jump between colors.
+    rankings on the pitcherprofiler.com does" -- a continuous
+    blue-to-red diverging scale: blue below the 50th percentile, red
+    above it, neutral right at 50, saturation increasing with distance
+    from the middle.
+
+    Ryker's immediate follow-up ("make it be more red, right now it is
+    to light"): a plain linear ramp from a pale neutral out to red
+    meant most real grades -- which cluster in the 70-95th percentile
+    band, not right at 100 -- landed on a washed-out pastel salmon
+    instead of reading as red. Fixed by curving the ramp (an exponent
+    < 1 on the normalized distance from 50) so it saturates much
+    earlier: a 70th-percentile stat is already a clear, solid red
+    instead of pale pink, and only percentiles genuinely close to 50
+    stay near-neutral. The red/blue endpoints themselves are GBO's own
+    crimson (chart_theme.CRIMSON) and a matching saturated blue, not
+    colorbrewer's softer RdBu endpoints, so a maxed-out grade reads as
+    the same red already used everywhere else in the app.
 
     Returns (fill_hex, text_hex) -- text_hex is dark or light depending
-    on the fill color's own brightness (the palette's pale middle needs
-    dark text against it, its saturated red/blue ends need white), so
-    the percentile badge number stays readable at every stop."""
-    stops = [
-        (0, (5, 113, 176)),
-        (25, (146, 197, 222)),
-        (50, (247, 247, 247)),
-        (75, (244, 165, 130)),
-        (100, (202, 0, 32)),
-    ]
+    on the fill color's own brightness (near 50 needs dark text against
+    the pale neutral; away from it needs white against the saturated
+    fill), so the percentile badge number stays readable throughout."""
+    NEUTRAL = (232, 232, 232)
+    RED = (200, 16, 46)  # GBO crimson (chart_theme.CRIMSON, #C8102E)
+    BLUE = (30, 100, 175)
+    SATURATION_CURVE = 0.55  # <1 = saturates well before the extremes
+
     p = max(0, min(100, float(pct)))
-    r = g = b = 0
-    for (p0, c0), (p1, c1) in zip(stops, stops[1:]):
-        if p0 <= p <= p1:
-            t = (p - p0) / (p1 - p0)
-            r = round(c0[0] + (c1[0] - c0[0]) * t)
-            g = round(c0[1] + (c1[1] - c0[1]) * t)
-            b = round(c0[2] + (c1[2] - c0[2]) * t)
-            break
+    d = (p - 50) / 50  # -1 (0th percentile) .. +1 (100th percentile)
+    t = (abs(d) ** SATURATION_CURVE) if d else 0.0
+    end = RED if d >= 0 else BLUE
+
+    r = round(NEUTRAL[0] + (end[0] - NEUTRAL[0]) * t)
+    g = round(NEUTRAL[1] + (end[1] - NEUTRAL[1]) * t)
+    b = round(NEUTRAL[2] + (end[2] - NEUTRAL[2]) * t)
     fill_hex = f"#{r:02x}{g:02x}{b:02x}"
     luminance = 0.299 * r + 0.587 * g + 0.114 * b
     text_hex = "#1E1E1E" if luminance > 150 else "#FFFFFF"
