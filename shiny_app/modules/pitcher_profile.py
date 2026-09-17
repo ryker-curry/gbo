@@ -8,6 +8,23 @@ Pitches table. Sits alongside the existing Analytics page as a coach-
 facing (and player-facing, self-scoped) advanced view -- not a
 replacement for it.
 
+Sept 2026 (Ryker, looking at this page on his own Player login, and at
+mlbpitchprofiler.com's own pitcher page as a reference): everything used
+to render at once in one long scroll (pp_body). Restructured behind a
+"View" dropdown instead -- Overview / Metrics / Results / Zone /
+Arsenal, same convention pitcher_game_report.py's own "View" dropdown
+already established, so only the selected view's section actually
+queries the DB (see pp_view_picker's docstring). Results is genuinely
+new: quality-of-contact-allowed per pitch type (GBO's own
+contact_quality vocabulary, six buckets summing to 100% of that type's
+balls in play) plus Hard Hit %/Whiff %/Chase % alongside, styled after
+mlbpitchprofiler.com's own Results tab (visualizations/
+pitch_results_chart.py). Metrics is the old Physical Profile section,
+Zone is Attack Zone Distribution + Command Target Zones, Arsenal is the
+Arsenal table + Pitch Type Breakdown + Individual Pitches. Overview
+keeps the Line/Grades/Performance/Pitch Usage/Trend content pp_body
+used to open with -- still the default first thing a viewer sees.
+
 Self-scoping, same pattern as player_profile.py: a staff role sees a
 player picker (scoped to assigned players unless can_view_all_players);
 a "Player" role always sees their own linked player, no picker, and
@@ -47,6 +64,7 @@ from analytics.pitch_grading import (
     stuff_plus, location_plus, pitching_plus, arsenal_summary, MIN_BASELINE_PITCHES,
 )
 from visualizations import command_charts, profile_charts
+from visualizations.pitch_results_chart import pitch_results_chart
 from pitch_type_config import get_pitch_color
 
 import ui_helpers
@@ -85,8 +103,8 @@ def _my_player(db, app_state):
 # render_percentile_bars (Savant/mlbpitchprofiler.com-style percentile
 # bars, per Ryker's own reference site, replacing the ring treatment
 # for this grade family) so hitter_profile.py's new Performance section
-# can reuse the same component. See pp_body()'s Grades section below
-# and ui_helpers.render_percentile_bars' docstring.
+# can reuse the same component. See pp_overview_section()'s Grades
+# section below and ui_helpers.render_percentile_bars' docstring.
 
 
 def _stacked_bar(segments):
@@ -121,8 +139,20 @@ def pitcher_profile_ui():
         ui_helpers.page_header("Pitcher Profile"),
         ui.output_ui("pp_player_picker"),
         ui.output_ui("pp_filters"),
-        ui.output_ui("pp_body"),
+        # Sept 2026, Ryker: a "View" dropdown instead of every section
+        # rendering at once and scrolling forever -- same convention
+        # pitcher_game_report.py's own "View" dropdown already
+        # established. Each of these five stays statically listed here
+        # (Shiny needs a placeholder in the DOM for each output id) --
+        # the gate inside each render.ui function is what actually
+        # controls which one does anything.
+        ui.output_ui("pp_view_picker"),
+        ui.output_ui("pp_overview_section"),
+        ui.output_ui("pp_metrics_section"),
+        ui.output_ui("pp_results_section"),
+        ui.output_ui("pp_zone_section"),
         ui.output_ui("pp_command_section"),
+        ui.output_ui("pp_arsenal_section"),
         ui_helpers.page_footer(),
     )
 
@@ -213,7 +243,7 @@ def pitcher_profile_server(input, output, session, app_state):
     # -------------------------------------------------------------------
     # Physical Profile -- reused Bullpen Dashboard (register once here,
     # per bullpen_dashboard_display's own "mount once" convention; its
-    # returned fragment is embedded inside pp_body below).
+    # returned fragment is embedded inside pp_metrics_section below).
     # -------------------------------------------------------------------
 
     def _get_physical_target(input):
@@ -257,11 +287,159 @@ def pitcher_profile_server(input, output, session, app_state):
     )
 
     @render.ui
-    def pp_body():
+    def pp_view_picker():
+        """The "View" dropdown driving which of the sections below
+        actually renders -- same convention pitcher_game_report.py's
+        report_section_picker already established (Sept 2026, Ryker:
+        "have the drop down menu to where we can select what to view
+        rather than all of it showing up and having to scroll down
+        forever"). Each gated section function below checks
+        input.pp_view() itself and returns None immediately when not
+        selected, before doing any query -- switching this dropdown is
+        what stops the DB work for the other views, not CSS visibility."""
         if not app_state.is_authenticated():
             return None
         role = app_state.role_name()
         if role != "Player" and role not in STAFF_ROLES:
+            return None
+        if role in STAFF_ROLES:
+            req("pp_player_select" in input)
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            f = _current_filters()
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+            )
+            rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
+            )
+            if not game_pitches and not rapsodo_pitches:
+                return None
+            return ui.div(
+                ui.hr(),
+                ui.input_select(
+                    "pp_view", "View",
+                    choices={
+                        "overview": "Overview",
+                        "metrics": "Metrics (Physical Profile)",
+                        "results": "Results",
+                        "zone": "Zone",
+                        "arsenal": "Arsenal",
+                    },
+                ),
+            )
+        finally:
+            db.close()
+
+    def _compute_grading_bundle(db, game_pitches, rapsodo_pitches):
+        """Shared derived-data pass over one filtered pitch window --
+        Stuff+/Location+/Pitching+ per pitch, pitch usage counts,
+        attack-zone counts, the Pitching+ trend series, the Arsenal
+        rollup, and the Individual Pitches rows. Factored out of what
+        used to be one single pp_body loop so pp_overview_section/
+        pp_zone_section/pp_arsenal_section can each call it fresh (same
+        "only the selected view queries anything" principle
+        pitcher_game_report.py's own gated sections already establish)
+        without tripling this ~60-line loop three ways."""
+        stuff_baselines = profile_queries.team_stuff_plus_baselines(db)
+        location_baseline = profile_queries.team_location_plus_baseline(db)
+
+        game_pitch_ids = [p.game_pitch_id for p in game_pitches]
+        rap_by_gp = profile_queries.rapsodo_by_game_pitch_id(db, game_pitch_ids)
+
+        def _type_label(pitch_type_obj):
+            return pitch_type_obj.type_name if pitch_type_obj is not None else "Unspecified"
+
+        pitch_type_grades = {}
+        individual_rows = []
+        trend_points = []
+        zone_counts = {"Heart": 0, "Shadow": 0, "Chase": 0, "Waste": 0}
+        usage_counts = {}
+
+        for p in game_pitches:
+            label = _type_label(p.pitch_type)
+            usage_counts[label] = usage_counts.get(label, 0) + 1
+
+            rap = rap_by_gp.get(p.game_pitch_id)
+            s_val = stuff_plus(rap, stuff_baselines.get(label)) if rap is not None else None
+            l_val = location_plus(p, location_baseline)
+            pi_val = pitching_plus(s_val, l_val)
+
+            grp = pitch_type_grades.setdefault(label, {"n": 0, "stuff_plus": [], "location_plus": [], "pitching_plus": []})
+            grp["n"] += 1
+            if s_val is not None:
+                grp["stuff_plus"].append(s_val)
+            if l_val is not None:
+                grp["location_plus"].append(l_val)
+            if pi_val is not None:
+                grp["pitching_plus"].append(pi_val)
+
+            if p.actual_plate_x is not None and p.actual_plate_z is not None:
+                zone = classify_attack_zone(float(p.actual_plate_x), float(p.actual_plate_z))
+                if zone:
+                    zone_counts[zone] += 1
+
+            if pi_val is not None and p.game is not None:
+                trend_points.append((p.game.game_date, pi_val))
+
+            individual_rows.append({
+                "Date": p.game.game_date.strftime("%Y-%m-%d") if p.game else "—",
+                "#": p.pitch_sequence,
+                "Pitch Type": label,
+                "Velo": f"{float(rap.velocity):.1f}" if rap is not None and rap.velocity is not None else "—",
+                "Result": p.pitch_outcome or "—",
+                "Stuff+": _fmt_grade(s_val),
+                "Location+": _fmt_grade(l_val),
+                "Pitching+": _fmt_grade(pi_val),
+            })
+
+        # Any Rapsodo pitches with no game link at all (pure bullpen
+        # reps) still count toward Arsenal's Stuff+ rollup -- see this
+        # function's callers' original docstring note (kept from
+        # pp_body's own comment, unchanged reasoning): stuff_baselines
+        # holds fitted MODELS, trained only on real-game pitches, but a
+        # fitted model scores any pitch from just its physical readings.
+        linked_rapsodo_ids = {r.rapsodo_pitch_id for r in rap_by_gp.values()}
+        for r in rapsodo_pitches:
+            if r.rapsodo_pitch_id in linked_rapsodo_ids:
+                continue
+            label = _type_label(r.pitch_type)
+            s_val = stuff_plus(r, stuff_baselines.get(label))
+            if s_val is None:
+                continue
+            grp = pitch_type_grades.setdefault(label, {"n": 0, "stuff_plus": [], "location_plus": [], "pitching_plus": []})
+            grp["n"] += 1
+            grp["stuff_plus"].append(s_val)
+
+        arsenal_rows = arsenal_summary(pitch_type_grades) if pitch_type_grades else []
+        overview_stuff = [v for row in arsenal_rows for v in [row["Stuff+"]] if v is not None]
+        overview_loc = [v for row in arsenal_rows for v in [row["Location+"]] if v is not None]
+        overview_pitching = [v for row in arsenal_rows for v in [row["Pitching+"]] if v is not None]
+
+        return {
+            "stuff_plus_value": round(sum(overview_stuff) / len(overview_stuff), 1) if overview_stuff else None,
+            "location_plus_value": round(sum(overview_loc) / len(overview_loc), 1) if overview_loc else None,
+            "pitching_plus_value": round(sum(overview_pitching) / len(overview_pitching), 1) if overview_pitching else None,
+            "usage_counts": usage_counts,
+            "zone_counts": zone_counts,
+            "trend_points": trend_points,
+            "arsenal_rows": arsenal_rows,
+            "individual_rows": individual_rows,
+        }
+
+    @render.ui
+    def pp_overview_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "overview":
             return None
         f = _current_filters()
 
@@ -288,19 +466,7 @@ def pitcher_profile_server(input, output, session, app_state):
 
             sections = [ui.h5(f"{player.first_name} {player.last_name}", class_="gbo-section-title")]
 
-            # --- Line (condensed -- full box-score detail already lives
-            # on Pitcher Game Report, per-outing; this is the aggregate
-            # read across the filtered window) ---
             if game_pitches:
-                # NOTE: unlike Pitcher Game Report/Analytics/Dashboard/My
-                # Stats, this aggregate line does NOT fold in "End
-                # half-inning early" runs (models.GameForcedHalfInningEnd)
-                # -- this view's date_from/date_to/game_scope filtering
-                # (profile_queries.get_pitcher_profile_pitches) has no
-                # season_id/game_id equivalent to look those events up
-                # by. Rare enough in practice (only intrasquad
-                # pitch-count-limited outings) that it's flagged here
-                # rather than duplicating _apply_filters for one table.
                 line = compute_pitching_line(game_pitches)
                 sections.append(ui.p(ui.strong("Line")))
                 sections.append(ui_helpers.render_kpi_cards([
@@ -319,7 +485,6 @@ def pitcher_profile_server(input, output, session, app_state):
                 ]))
                 sections.append(ui.p("*wOBA uses generic linear weights, a relative read within your own games, not MLB-exact.", class_="text-muted small"))
 
-            # --- Grading: Stuff+/Location+/Pitching+/Arsenal ---
             sections.append(ui.hr())
             sections.append(ui.p(ui.strong("Overview")))
             sections.append(ui.p(
@@ -329,91 +494,12 @@ def pitcher_profile_server(input, output, session, app_state):
                 class_="text-muted small",
             ))
 
-            stuff_baselines = profile_queries.team_stuff_plus_baselines(db)
-            location_baseline = profile_queries.team_location_plus_baseline(db)
+            bundle = _compute_grading_bundle(db, game_pitches, rapsodo_pitches)
+            stuff_plus_value = bundle["stuff_plus_value"]
+            location_plus_value = bundle["location_plus_value"]
+            pitching_plus_value = bundle["pitching_plus_value"]
+            arsenal_rows = bundle["arsenal_rows"]
 
-            game_pitch_ids = [p.game_pitch_id for p in game_pitches]
-            rap_by_gp = profile_queries.rapsodo_by_game_pitch_id(db, game_pitch_ids)
-
-            def _type_label(pitch_type_obj):
-                return pitch_type_obj.type_name if pitch_type_obj is not None else "Unspecified"
-
-            pitch_type_grades = {}
-            individual_rows = []
-            trend_points = []
-            zone_counts = {"Heart": 0, "Shadow": 0, "Chase": 0, "Waste": 0}
-            usage_counts = {}
-
-            for p in game_pitches:
-                label = _type_label(p.pitch_type)
-                usage_counts[label] = usage_counts.get(label, 0) + 1
-
-                rap = rap_by_gp.get(p.game_pitch_id)
-                s_val = stuff_plus(rap, stuff_baselines.get(label)) if rap is not None else None
-                l_val = location_plus(p, location_baseline)
-                pi_val = pitching_plus(s_val, l_val)
-
-                grp = pitch_type_grades.setdefault(label, {"n": 0, "stuff_plus": [], "location_plus": [], "pitching_plus": []})
-                grp["n"] += 1
-                if s_val is not None:
-                    grp["stuff_plus"].append(s_val)
-                if l_val is not None:
-                    grp["location_plus"].append(l_val)
-                if pi_val is not None:
-                    grp["pitching_plus"].append(pi_val)
-
-                if p.actual_plate_x is not None and p.actual_plate_z is not None:
-                    zone = classify_attack_zone(float(p.actual_plate_x), float(p.actual_plate_z))
-                    if zone:
-                        zone_counts[zone] += 1
-
-                if pi_val is not None and p.game is not None:
-                    trend_points.append((p.game.game_date, pi_val))
-
-                individual_rows.append({
-                    "Date": p.game.game_date.strftime("%Y-%m-%d") if p.game else "—",
-                    "#": p.pitch_sequence,
-                    "Pitch Type": label,
-                    "Velo": f"{float(rap.velocity):.1f}" if rap is not None and rap.velocity is not None else "—",
-                    "Result": p.pitch_outcome or "—",
-                    "Stuff+": _fmt_grade(s_val),
-                    "Location+": _fmt_grade(l_val),
-                    "Pitching+": _fmt_grade(pi_val),
-                })
-
-            # Any Rapsodo pitches with no game link at all (pure bullpen
-            # reps) still count toward Arsenal's Stuff+ rollup -- they
-            # just can't get a Location+/Pitching+ (no game outcome to
-            # grade) or a spot in the game-pitch-driven Individual
-            # Pitches table above (that table's backbone is GamePitch,
-            # since "Result" only exists there -- see module docstring).
-            # Aug 31 2026: this is now correct by construction rather
-            # than a loose convenience -- stuff_baselines holds fitted
-            # MODELS (pitch_grading.fit_stuff_plus_model), trained only
-            # on real-game pitches, but a fitted model scores any pitch
-            # from just its physical readings. A bullpen rep here either
-            # gets a real, outcome-validated Stuff+ or (no model yet for
-            # that type) stuff_plus() itself returns None -- never a
-            # guess.
-            linked_rapsodo_ids = {r.rapsodo_pitch_id for r in rap_by_gp.values()}
-            for r in rapsodo_pitches:
-                if r.rapsodo_pitch_id in linked_rapsodo_ids:
-                    continue
-                label = _type_label(r.pitch_type)
-                s_val = stuff_plus(r, stuff_baselines.get(label))
-                if s_val is None:
-                    continue
-                grp = pitch_type_grades.setdefault(label, {"n": 0, "stuff_plus": [], "location_plus": [], "pitching_plus": []})
-                grp["n"] += 1
-                grp["stuff_plus"].append(s_val)
-
-            arsenal_rows = arsenal_summary(pitch_type_grades) if pitch_type_grades else []
-            overview_stuff = [v for row in arsenal_rows for v in [row["Stuff+"]] if v is not None]
-            overview_loc = [v for row in arsenal_rows for v in [row["Location+"]] if v is not None]
-            overview_pitching = [v for row in arsenal_rows for v in [row["Pitching+"]] if v is not None]
-            stuff_plus_value = round(sum(overview_stuff) / len(overview_stuff), 1) if overview_stuff else None
-            location_plus_value = round(sum(overview_loc) / len(overview_loc), 1) if overview_loc else None
-            pitching_plus_value = round(sum(overview_pitching) / len(overview_pitching), 1) if overview_pitching else None
             grade_bars = ui_helpers.render_percentile_bars([
                 ("Stuff+", stuff_plus_value),
                 ("Location+", location_plus_value),
@@ -424,15 +510,6 @@ def pitcher_profile_server(input, output, session, app_state):
             else:
                 sections.append(ui.p("No graded pitches yet in this range -- needs Rapsodo-linked pitches (Stuff+) or located game pitches (Location+).", class_="text-muted small"))
 
-            # --- Performance: game-production composite (Stuff+/
-            # Location+/Command+/Arsenal/Results), kept deliberately
-            # separate from the Bucket System's physical/athletic score
-            # (Aug 31 2026 design call with Ryker -- see analytics/
-            # performance_score.py's module docstring for the full
-            # reasoning and Ryker's exact weighting call). Results (and
-            # therefore Performance) only means anything against real
-            # game outcomes -- same game_pitches gate as the Line
-            # section above, not rapsodo-only bullpen reps.
             if game_pitches:
                 baselines = _team_command_plus_baselines(db)
                 cmd_view_pitches = command_metrics.game_pitches_command_view(game_pitches, player.throws)
@@ -477,34 +554,206 @@ def pitcher_profile_server(input, output, session, app_state):
                 else:
                     sections.append(ui.p("Not enough graded pitches or team baseline yet for a Performance score.", class_="text-muted small"))
 
-            # --- Pitch Usage / Attack Zone bars ---
-            total_pitches = sum(usage_counts.values())
+            total_pitches = sum(bundle["usage_counts"].values())
             if total_pitches:
                 sections.append(ui.p(ui.strong("Pitch Usage"), class_="mt-3"))
                 sections.append(_stacked_bar([
                     (label, round(100 * n / total_pitches, 1), get_pitch_color(label))
-                    for label, n in sorted(usage_counts.items(), key=lambda kv: -kv[1])
+                    for label, n in sorted(bundle["usage_counts"].items(), key=lambda kv: -kv[1])
                 ]))
-            total_located = sum(zone_counts.values())
-            if total_located:
-                sections.append(ui.p(ui.strong("Attack Zone Distribution"), class_="mt-3"))
+
+            if len(bundle["trend_points"]) >= 2:
+                sections.append(ui.p(ui.strong("Pitching+ Trend"), class_="mt-3"))
+                sections.append(output_widget("pp_trend_chart"))
+
+            return ui.div(*sections)
+        finally:
+            db.close()
+
+    @render.ui
+    def pp_metrics_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "metrics":
+            return None
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            return ui.div(
+                ui.p(ui.strong("Physical Profile")),
+                ui.p(
+                    "Same Movement/Release Point/Location/Spin Axis charts as the Bullpen Dashboard, built from every "
+                    "Rapsodo-linked pitch this pitcher has -- bullpen sessions AND intrasquad games alike -- matching "
+                    "the Pitch Type/Games filters above.",
+                    class_="text-muted small",
+                ),
+                _physical_fragment,
+            )
+        finally:
+            db.close()
+
+    @render.ui
+    def pp_results_section():
+        """Sept 2026, Ryker (reference: mlbpitchprofiler.com's own
+        Results tab) -- quality of contact ALLOWED per pitch type, plus
+        Hard Hit %/Whiff %/Chase % alongside. Built entirely from
+        game_stats.compute_pitch_type_breakdown()'s rows, which grew the
+        contact-quality columns (Weak/Jammed/Off the End/Clipped/Solid/
+        Barreled %, Hard Hit %) specifically for this section -- GBO's
+        own contact_quality vocabulary, not Statcast's Topped/Under/
+        Flare-Burner labels, same six-bucket idea."""
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "results":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+            )
+            if not game_pitches:
+                return ui.p("No game pitches in this range yet.", class_="text-muted small")
+            rows = compute_pitch_type_breakdown(game_pitches)
+            type_rows = [r for r in rows if r["Pitch Type"] != "Total" and (r["Balls in Play"] or 0) > 0]
+            if not type_rows:
+                return ui.p(
+                    "No balls in play in this range yet -- Results needs at least one ball in play per pitch type.",
+                    class_="text-muted small",
+                )
+            return ui.div(
+                ui.p(ui.strong("Results")),
+                ui.p(
+                    "Quality of contact allowed (Weak/Jammed/Off the End/Clipped/Solid/Barreled, stacked to 100% of "
+                    "that pitch type's own balls in play), plus Hard Hit %/Whiff %/Chase % shown alongside as their "
+                    "own rates -- not part of the stack, each against its own denominator (Hard Hit % of balls in "
+                    "play, Whiff % of swings, Chase % of pitches out of the zone).",
+                    class_="text-muted small",
+                ),
+                output_widget("pp_results_chart"),
+                ui_helpers.render_dict_table([
+                    {
+                        "Pitch Type": r["Pitch Type"], "% Thrown": _fmt_pct(r["Pitch Usage %"]), "BIP": r["Balls in Play"],
+                        "Weak %": _fmt_pct(r["Weak %"]), "Jammed %": _fmt_pct(r["Jammed %"]),
+                        "Off the End %": _fmt_pct(r["Off the End %"]), "Clipped %": _fmt_pct(r["Clipped %"]),
+                        "Solid %": _fmt_pct(r["Solid Contact %"]), "Barreled %": _fmt_pct(r["Barreled %"]),
+                        "Hard Hit %": _fmt_pct(r["Hard Hit %"]), "Whiff %": _fmt_pct(r["Whiff %"]),
+                        "SwStr %": _fmt_pct(r["SwStr %"]), "Chase %": _fmt_pct(r["Chase %"]),
+                        "RV/100": r["RV/100"] if r["RV/100"] is not None else "—",
+                    }
+                    for r in type_rows
+                ]),
+            )
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_results_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "results":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+            )
+            if not game_pitches:
+                return None
+            rows = compute_pitch_type_breakdown(game_pitches)
+            return pitch_results_chart(rows)
+        finally:
+            db.close()
+
+    @render.ui
+    def pp_zone_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "zone":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+            )
+            rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
+            )
+            if not game_pitches and not rapsodo_pitches:
+                return None
+            bundle = _compute_grading_bundle(db, game_pitches, rapsodo_pitches)
+            sections = [ui.p(ui.strong("Attack Zone Distribution"))]
+            total_located = sum(bundle["zone_counts"].values())
+            if not total_located:
+                sections.append(ui.p("No located pitches yet.", class_="text-muted small"))
+            else:
                 sections.append(ui.p("Heart = down the middle, Shadow = zone edge, Chase = tempting but outside, Waste = nowhere near.", class_="text-muted small"))
                 sections.append(_stacked_bar([
-                    (zone, round(100 * zone_counts[zone] / total_located, 1), ATTACK_ZONE_COLORS[zone])
+                    (zone, round(100 * bundle["zone_counts"][zone] / total_located, 1), ATTACK_ZONE_COLORS[zone])
                     for zone in ("Heart", "Shadow", "Chase", "Waste")
                 ]))
+            return ui.div(*sections)
+        finally:
+            db.close()
 
-            # --- Trend over time (Pitching+) ---
-            if len(trend_points) >= 2:
-                trend_points.sort(key=lambda t: t[0])
-                fig = profile_charts.trend_chart(trend_points, y_label="Pitching+")
-                if fig is not None:
-                    sections.append(ui.p(ui.strong("Pitching+ Trend"), class_="mt-3"))
-                    sections.append(output_widget("pp_trend_chart"))
+    @render.ui
+    def pp_arsenal_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "arsenal":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+            )
+            rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
+            )
+            if not game_pitches and not rapsodo_pitches:
+                return None
+            bundle = _compute_grading_bundle(db, game_pitches, rapsodo_pitches)
+            sections = []
 
-            # --- Arsenal ---
-            if arsenal_rows:
-                sections.append(ui.hr())
+            if bundle["arsenal_rows"]:
                 sections.append(ui.p(ui.strong("Arsenal")))
                 sections.append(ui.p(
                     f"'Reliable' needs at least {MIN_BASELINE_PITCHES} pitches of that type in this window -- "
@@ -517,11 +766,9 @@ def pitcher_profile_server(input, output, session, app_state):
                         "Stuff+": _fmt_grade(row["Stuff+"]), "Location+": _fmt_grade(row["Location+"]),
                         "Pitching+": _fmt_grade(row["Pitching+"]), "Reliable": "Yes" if row["Reliable"] else "No",
                     }
-                    for row in arsenal_rows
+                    for row in bundle["arsenal_rows"]
                 ]))
 
-            # --- Pitch Type Breakdown (existing game_stats.py logic,
-            # same vs RHH/vs LHH tab convention as Pitcher Game Report) ---
             if game_pitches:
                 sections.append(ui.hr())
                 sections.append(ui.p(ui.strong("Pitch Type Breakdown")))
@@ -533,26 +780,17 @@ def pitcher_profile_server(input, output, session, app_state):
                     ui.nav_panel("vs LHH", ui_helpers.render_dict_table(compute_pitch_type_breakdown(vs_lhh)) if vs_lhh else ui.p("No pitches vs a left-handed batter in this range.", class_="text-muted small")),
                 ))
 
-            # --- Individual Pitches ---
-            if individual_rows:
+            if bundle["individual_rows"]:
                 sections.append(ui.hr())
                 sections.append(ui.p(ui.strong("Individual Pitches")))
-                sections.append(ui_helpers.render_dict_table(list(reversed(individual_rows))))
+                sections.append(ui_helpers.render_dict_table(list(reversed(bundle["individual_rows"]))))
 
-            # --- Physical Profile (reused Bullpen Dashboard) ---
-            sections.append(ui.hr())
-            sections.append(ui.p(ui.strong("Physical Profile")))
-            sections.append(ui.p(
-                "Same Movement/Release Point/Location/Spin Axis charts as the Bullpen Dashboard, built from every "
-                "Rapsodo-linked pitch this pitcher has -- bullpen sessions AND intrasquad games alike -- matching "
-                "the Pitch Type/Games filters above.",
-                class_="text-muted small",
-            ))
-            sections.append(_physical_fragment)
-
+            if not sections:
+                return ui.p("Nothing to show for the Arsenal view yet in this range.", class_="text-muted small")
             return ui.div(*sections)
         finally:
             db.close()
+
 
     @render_plotly
     def pp_trend_chart():
@@ -560,6 +798,9 @@ def pitcher_profile_server(input, output, session, app_state):
             return None
         role = app_state.role_name()
         if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "overview":
             return None
         f = _current_filters()
         db = get_session()
@@ -662,6 +903,9 @@ def pitcher_profile_server(input, output, session, app_state):
     def pp_command_section():
         if not app_state.is_authenticated():
             return None
+        req("pp_view" in input)
+        if input.pp_view() != "zone":
+            return None
         _current_filters()
         view_pitches, _throws = _view_pitches()
         if not view_pitches:
@@ -682,6 +926,9 @@ def pitcher_profile_server(input, output, session, app_state):
     @render.ui
     def pp_command_table():
         if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "zone":
             return None
         view_pitches, throws = _view_pitches()
         if not view_pitches:
@@ -732,6 +979,9 @@ def pitcher_profile_server(input, output, session, app_state):
     @render_plotly
     def pp_command_chart():
         if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "zone":
             return None
         view_pitches, _throws = _view_pitches()
         if not view_pitches:

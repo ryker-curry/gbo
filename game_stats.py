@@ -11,7 +11,8 @@ opponent_our_player_id while the other side batted (intrasquad only)
 gap flagged when intrasquad support was built.
 
 compute_pitch_type_breakdown() below is the Whiff%/SwStr%/CSW%/Chase%/
-Putaway%/GB-FB-LD% rate-stat rollup per pitch type -- the same shape
+Putaway%/GB-FB-LD%/contact-quality-allowed rate-stat rollup per pitch
+type -- the same shape
 as the per-pitch-type breakdown table in Ryker's own game-tracking
 spreadsheet. Built entirely from GamePitch fields pages/game_tracking.py
 already captures; no new data entry required. A handful of columns from
@@ -676,7 +677,9 @@ def compute_pitch_type_breakdown(pitches):
     """Per-pitch-type rate-stat rollup for a pitcher, matching the shape
     of the breakdown table in Ryker's own game-tracking spreadsheet
     (Pitch Usage%, Strike%, Whiff%, SwStr%, CSW%, Chase%, Putaway%, GB/FB/LD%,
-    Dominance%, Ahead%, A3P%, Sword%, etc.) -- built from the same
+    Dominance%, Ahead%, A3P%, Sword%, contact quality allowed
+    [Weak/Jammed/Off the End/Clipped/Solid/Barreled %, Hard Hit %], RV/100
+    etc.) -- built from the same
     GamePitch fields pages/game_tracking.py already captures (Sword
     from its own new checkbox), no other new data entry required.
     Reuses plate_discipline.py's SWING_OUTCOMES/WHIFF_OUTCOMES and
@@ -875,6 +878,23 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
         for bb_type in BATTED_BALL_TYPES
     }
 
+    # Contact quality allowed on balls hit off this pitch type -- same
+    # 6 non-"Miss" contact_quality values game_stats.compute_batted_ball_profile
+    # already uses on the hitter side (hitter_tracking.py's
+    # CONTACT_QUALITY_OPTIONS), just counted against the PITCHER here
+    # ("what quality of contact did he allow" instead of "what quality
+    # of contact did he make"). "Miss" is excluded from the denominator
+    # on purpose -- it's not a real contact_quality outcome for a ball
+    # actually put in play, and shouldn't dilute these rates. Hard Hit %
+    # mirrors compute_batted_ball_profile's own definition (Barreled/
+    # Squared Up + Solid), not a real exit-velocity threshold (GBO has
+    # no exit velo) -- same caveat as that function's docstring.
+    contact_quality_counts = {
+        cq: sum(1 for p in balls_in_play if p.contact_quality == cq)
+        for cq in ("Weak", "Jammed", "Off the End", "Clipped", "Solid", "Barreled/Squared Up")
+    }
+    hard_hit_allowed = contact_quality_counts["Solid"] + contact_quality_counts["Barreled/Squared Up"]
+
     # Hits/BB/K/etc. attribute to whichever pitch type actually ended
     # the plate appearance -- the same convention a real box score uses
     # ("2 of his 5 Ks came on the slider").
@@ -926,4 +946,11 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
         "At Bats": ab, "BF": bf,
         "RV": round(total_rv, 3) if total_rv is not None else None,
         "RV/100": round(100 * total_rv / n, 3) if total_rv is not None and n else None,
+        "Weak %": _rate(contact_quality_counts["Weak"], len(balls_in_play)),
+        "Jammed %": _rate(contact_quality_counts["Jammed"], len(balls_in_play)),
+        "Off the End %": _rate(contact_quality_counts["Off the End"], len(balls_in_play)),
+        "Clipped %": _rate(contact_quality_counts["Clipped"], len(balls_in_play)),
+        "Solid Contact %": _rate(contact_quality_counts["Solid"], len(balls_in_play)),
+        "Barreled %": _rate(contact_quality_counts["Barreled/Squared Up"], len(balls_in_play)),
+        "Hard Hit %": _rate(hard_hit_allowed, len(balls_in_play)),
     }

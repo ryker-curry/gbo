@@ -450,6 +450,9 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-pctbar-badge.flag { background: var(--gbo-status-flag); }
 .gbo-pctbar-raw { flex: 0 0 44px; text-align: right; font-family: var(--gbo-mono); font-size: .84rem; font-weight: 600; color: var(--gbo-text); font-variant-numeric: tabular-nums; }
 .gbo-pctbar-empty { flex: 1 1 auto; color: var(--gbo-text-muted); font-size: .78rem; }
+.gbo-pctbar-header { padding-top: 0; padding-bottom: 8px; }
+.gbo-pctbar-header-pct { flex: 1 1 auto; margin: 0 18px; text-align: center; font-size: .66rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--gbo-text-muted); }
+.gbo-pctbar-header-raw { flex: 0 0 44px; text-align: right; font-size: .66rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--gbo-text-muted); }
 
 /* Bucket summary card (collapsible) */
 .gbo-bucket { display: grid; grid-template-columns: 56px 1fr auto; gap: 16px; align-items: center; padding: 14px 20px; background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); border-radius: 10px; cursor: pointer; margin-bottom: 10px; }

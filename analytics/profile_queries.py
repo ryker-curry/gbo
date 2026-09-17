@@ -258,7 +258,7 @@ def team_pitching_lines(db, date_from=None, date_to=None):
     Performance is built from box-score outcomes (FIP, WHIP, wOBA...),
     which mix fall and spring ball into a meaningless number if pooled
     together the way a release-point grade can tolerate. Callers
-    (pitcher_profile.py's pp_body) pass the page's own date filter so
+    (pitcher_profile.py's pp_overview_section) pass the page's own date filter so
     the team baseline and the one pitcher's own line it's compared
     against cover the SAME window -- a fall-only filter yields a fall
     Performance score, a spring-only filter a separate spring one."""

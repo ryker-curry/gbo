@@ -185,10 +185,25 @@ def render_percentile_bars(specs):
     rather than adopting that site's continuous red-to-blue scale --
     keeps this component inside GBO's existing traffic-light color
     language instead of a one-off palette. specs: list of (label,
-    value) tuples, value may be None ('not enough baseline yet')."""
+    value) tuples, value may be None ('not enough baseline yet').
+
+    Sept 2026 (Ryker, looking at his own live Pitcher Profile as a
+    Player login): the badge number and the raw-grade number look like
+    two unexplained mystery numbers side by side with nothing on the
+    row itself saying which is which -- mlbpitchprofiler.com's own
+    page has the same two numbers but this build never carried over
+    its column framing. Fixed with a one-time header row ("Team
+    Percentile" / "Grade") above the whole group, reusing the exact
+    same flex geometry as the data rows so the columns actually line
+    up, rather than repeating a caption on every single row."""
     if not any(v is not None for _, v in specs):
         return None
-    rows = []
+    rows = [ui.div(
+        ui.div("", class_="gbo-pctbar-label"),
+        ui.div("Team Percentile", class_="gbo-pctbar-header-pct"),
+        ui.div("Grade", class_="gbo-pctbar-header-raw"),
+        class_="gbo-pctbar-row gbo-pctbar-header",
+    )]
     for label, value in specs:
         if value is None:
             rows.append(ui.div(
