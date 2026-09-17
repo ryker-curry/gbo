@@ -9,8 +9,8 @@ duplicate game_stats.py's Zone Execution % (intended vs actual zone match)
 
 Swing/contact/whiff are all DERIVED from pitch_outcome, never entered
 as separate fields (see strike_zone.py's docstring for why):
-  - Swing = pitch_outcome in (Swinging Strike, Foul, In Play)
-  - Whiff (swing and miss) = pitch_outcome == Swinging Strike
+  - Swing = pitch_outcome in (Swing and Miss, Foul, In Play)
+  - Whiff (swing and miss) = pitch_outcome == Swing and Miss
   - Contact (on a swing) = pitch_outcome in (Foul, In Play)
 
 Zone-based metrics (Zone%, Chase%, etc.) only count pitches that
@@ -32,8 +32,8 @@ import plotly.graph_objects as go
 
 from strike_zone import is_in_zone, derive_old_zone, classify_attack_zone
 
-SWING_OUTCOMES = {"Swinging Strike", "Foul", "In Play"}
-WHIFF_OUTCOMES = {"Swinging Strike"}
+SWING_OUTCOMES = {"Swing and Miss", "Foul", "In Play"}
+WHIFF_OUTCOMES = {"Swing and Miss"}
 CONTACT_OUTCOMES = {"Foul", "In Play"}
 
 
