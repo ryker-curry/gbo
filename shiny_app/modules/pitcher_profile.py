@@ -2,11 +2,11 @@
 GBO -- Pitcher Profile (Aug 2026, Phase 0 of STUFF-LOCATION-PITCHING-
 PLUS-PLAN.md). A filterable, per-pitcher deep dive: counting stats,
 pitch-type breakdown, Stuff+/Location+/Pitching+ grades, pitch usage,
-attack-zone distribution, a grade trend over time, the reused Bullpen
-Dashboard physical charts, Command Target Zones, and a full Individual
-Pitches table. Sits alongside the existing Analytics page as a coach-
-facing (and player-facing, self-scoped) advanced view -- not a
-replacement for it.
+attack-zone distribution, a grade trend over time, physical-profile
+Movement/Release Point/Spin Axis charts, Command Target Zones, and a
+full Individual Pitches table. Sits alongside the existing Analytics
+page as a coach-facing (and player-facing, self-scoped) advanced
+view -- not a replacement for it.
 
 Sept 2026 (Ryker, looking at this page on his own Player login, and at
 mlbpitchprofiler.com's own pitcher page as a reference): everything used
@@ -19,13 +19,34 @@ new: quality-of-contact-allowed per pitch type (GBO's own
 contact_quality vocabulary, six buckets summing to 100% of that type's
 balls in play) plus Hard Hit %/Whiff %/Chase % alongside, styled after
 mlbpitchprofiler.com's own Results tab (visualizations/
-pitch_results_chart.py). Metrics is the old Physical Profile section,
+pitch_results_chart.py). Metrics is the Physical Profile section,
 Zone is Attack Zone Distribution + per-pitch-type location density
 heatmaps (Sept 2026, visualizations/pitch_location_heatmap.py) +
 Command Target Zones, Arsenal is the
 Arsenal table + Pitch Type Breakdown + Individual Pitches. Overview
 keeps the Line/Grades/Performance/Pitch Usage/Trend content pp_body
 used to open with -- still the default first thing a viewer sees.
+
+Sept 2026 (Ryker: "need to make the pitcher profile metrics (physical
+profile) better. right now have to click show charts, don't
+neccesarily want to have to do that") -- Metrics used to embed the
+reused Bullpen Dashboard fragment (bullpen_dashboard_display.
+register_bullpen_dashboard), which gates its charts behind a "Show
+Charts" button because those charts render server-side through
+kaleido (slow -- ~30s -- and prone to websocket timeouts on an
+ungated page). Rebuilt to call the underlying PURE chart-builder
+functions directly instead -- analytics/bullpen_metrics.py's
+pitch_type_summary/average_estimated_arm_angle and visualizations/
+bullpen_charts.py's movement_chart/release_point_chart, visualizations/
+spin_axis_chart.py's average_spin_axis_chart/individual_spin_axis_chart
+-- as plain @render_plotly/output_widget outputs, the same fast,
+client-side, click-free pattern this page already uses for
+pp_trend_chart/pp_results_chart/pp_location_heatmap. No gate needed
+because there's no kaleido step. Also drops the old bullpen-only
+Location heatmap from this tab -- redundant now that the Zone tab
+has its own real-game pitch-location heatmaps, and dropping it keeps
+this tab focused on release/movement/spin mechanics rather than
+location (which already has its own tab).
 
 Self-scoping, same pattern as player_profile.py: a staff role sees a
 player picker (scoped to assigned players unless can_view_all_players);
@@ -39,13 +60,13 @@ Reuses, doesn't reinvent: game_stats.py (line/pitch-type breakdown),
 plate_discipline.py, analytics/command_metrics.py + visualizations/
 command_charts.py (Command Target Zones, same code pitcher_game_report.py
 already uses, just scoped by this page's own filters instead of one
-game_id), bullpen_dashboard_display.register_bullpen_dashboard
-(Physical Profile -- the exact same Bullpen Dashboard charts, pointed at
-this pitcher's WHOLE Rapsodo history in the selected date range --
-bullpen sessions and intrasquad games alike as of Sept 2026, via the
-"player_pitches" target kind added to bullpen_dashboard_display.py
-specifically for this page, rather than the bullpen-only "combined"
-kind My Bullpens/the standalone Bullpen Dashboard use), and
+game_id), analytics/bullpen_metrics.py + visualizations/bullpen_charts.py
++ visualizations/spin_axis_chart.py (Physical Profile -- the same
+Movement/Release Point/Spin Axis figure builders the Bullpen Dashboard
+uses, called directly here against this pitcher's WHOLE Rapsodo history
+in the selected date range -- bullpen sessions and intrasquad games
+alike, via profile_queries.get_pitcher_rapsodo_pitches, the same
+unified query this page's Zone tab already uses), and
 analytics/pitch_grading.py (Stuff+/Location+/Pitching+/Arsenal).
 analytics/profile_queries.py is the one new piece: the date-range/
 pitch-type/game-scope filtered queries this page needs that
@@ -72,8 +93,10 @@ import glossary_content
 from pitch_type_config import get_pitch_color
 
 import ui_helpers
-import bullpen_dashboard_display
 import format_helpers
+from analytics.bullpen_metrics import pitch_type_summary, average_estimated_arm_angle, pitch_type_label
+from visualizations.bullpen_charts import movement_chart, release_point_chart, color_for_pitch_label
+from visualizations.spin_axis_chart import average_spin_axis_chart, individual_spin_axis_chart
 from format_helpers import (
     format_pct as _fmt_pct,
     format_num as _fmt,
@@ -93,6 +116,20 @@ ATTACK_ZONE_COLORS = {"Heart": "#BF1E2D", "Shadow": "#F2B529", "Chase": "#7A8594
 
 def _fmt_grade(value):
     return f"{value:.1f}" if value is not None else "—"
+
+
+def _avg_or_none(values):
+    """Plain mean of the non-None values, rounded to 1 decimal, or
+    None if every value is missing -- used for the Metrics tab's
+    Spin Efficiency/Gyro Degree columns, which analytics/bullpen_
+    metrics.pitch_type_summary() doesn't already compute (kept local
+    to this page rather than added to that shared function, since
+    pitch_type_summary's column set matches a documented spec table
+    reused by several other pages -- My Bullpens, the standalone
+    Bullpen Dashboard, Player Profile -- that this change shouldn't
+    silently widen)."""
+    vals = [float(v) for v in values if v is not None]
+    return round(sum(vals) / len(vals), 1) if vals else None
 
 
 def _my_player(db, app_state):
@@ -247,50 +284,28 @@ def pitcher_profile_server(input, output, session, app_state):
         }
 
     # -------------------------------------------------------------------
-    # Physical Profile -- reused Bullpen Dashboard (register once here,
-    # per bullpen_dashboard_display's own "mount once" convention; its
-    # returned fragment is embedded inside pp_metrics_section below).
+    # Physical Profile -- pure chart builders called directly (Sept
+    # 2026 rebuild, see module docstring). _physical_target(db) is the
+    # one shared query pp_metrics_section and the three chart outputs
+    # below all call -- same "player_pitches" scope (this pitcher's
+    # WHOLE Rapsodo history, bullpen AND game alike, filtered by date
+    # range/pitch type/game scope) the old bullpen-dashboard fragment
+    # used, just without that fragment's kaleido/click-gate machinery.
     # -------------------------------------------------------------------
 
-    def _get_physical_target(input):
-        """Sept 2026: was bullpen-only (bullpen_ids_for_player, ignoring
-        the Pitch Type/Games filters entirely) -- now pulls this
-        player's RapsodoPitch history bullpen AND game alike
-        (profile_queries.get_pitcher_rapsodo_pitches, the same unified
-        query already backing this page's "no pitches in this range"
-        gate above), respecting all three filters (date range, pitch
-        type, game scope) the way every other section on this page
-        already does. Ryker's call: the Physical Profile dashboard
-        (Movement/Release/Location/Spin, arm angle) is the coach-and-
-        player "dig deeper" place for a pitcher's whole Rapsodo history,
-        not just bullpen reps -- an intrasquad outing's ball flight data
-        matters just as much here. Feeds bullpen_dashboard_display's new
-        "player_pitches" target kind (a plain id list, not bullpen_ids)
-        added specifically for this -- "session"/"combined" (My
-        Bullpens, this page's own earlier version) are untouched."""
-        req("pp_date_from" in input)
-        db = get_session()
-        try:
-            pid = _current_player_id(db)
-            if pid is None:
-                return None
-            player = db.query(Player).filter(Player.player_id == pid).first()
-            if player is None:
-                return None
-            f = _current_filters()
-            rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
-                db, pid, date_from=f["date_from"], date_to=f["date_to"],
-                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
-            )
-            if not rapsodo_pitches:
-                return None
-            return {"kind": "player_pitches", "player": player, "rapsodo_pitch_ids": [p.rapsodo_pitch_id for p in rapsodo_pitches]}
-        finally:
-            db.close()
-
-    _physical_fragment = bullpen_dashboard_display.register_bullpen_dashboard(
-        input, output, session, "pp_phys", _get_physical_target,
-    )
+    def _physical_target(db):
+        pid = _current_player_id(db)
+        if pid is None:
+            return None, []
+        player = db.query(Player).filter(Player.player_id == pid).first()
+        if player is None:
+            return None, []
+        f = _current_filters()
+        rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
+            db, pid, date_from=f["date_from"], date_to=f["date_to"],
+            pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+        )
+        return player, rapsodo_pitches
 
     @render.ui
     def pp_view_picker():
@@ -628,6 +643,12 @@ def pitcher_profile_server(input, output, session, app_state):
 
     @render.ui
     def pp_metrics_section():
+        """Sept 2026 rebuild -- see module docstring. Header + per-
+        pitch-type physical table render immediately (a plain DB query,
+        same cost as any other tab's table); the three charts below are
+        output_widget placeholders filled in by the @render_plotly
+        functions right after this one, same split pp_zone_section uses
+        for its own pp_location_heatmap widget."""
         if not app_state.is_authenticated():
             return None
         role = app_state.role_name()
@@ -638,23 +659,141 @@ def pitcher_profile_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            pid = _current_player_id(db)
-            if pid is None:
-                return None
+            header = ui.div(
+                ui.p(ui.strong("Physical Profile"), style="margin-bottom:0;"),
+                ui_helpers.glossary_link("pp_glossary_metrics", "Metrics Glossary"),
+                style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+            )
+            player, rapsodo_pitches = _physical_target(db)
+            if player is None or not rapsodo_pitches:
+                return ui.div(
+                    header,
+                    ui.p("No Rapsodo-linked pitches (bullpen or game) in this range yet.", class_="text-muted small"),
+                )
+
+            # pitch_type_summary already covers Velo/Max Velo/Spin/IVB/
+            # HB/Release Height/Release Side/Est. Arm Angle (passing
+            # player=player); Spin Efficiency and Gyro Degree are added
+            # locally below rather than widening that shared function
+            # (see _avg_or_none's docstring).
+            summary_rows = pitch_type_summary(rapsodo_pitches, player=player)
+            groups_by_label = {}
+            for p in rapsodo_pitches:
+                groups_by_label.setdefault(pitch_type_label(p), []).append(p)
+            table_rows = []
+            for row in summary_rows:
+                group = groups_by_label.get(row["Pitch Type"], [])
+                table_rows.append({
+                    "Pitch Type": row["Pitch Type"], "#": row["#"],
+                    "Velo": row["Avg Velo"], "Max Velo": row["Max Velo"],
+                    "Spin Rate": row["Avg Spin"],
+                    "Spin Eff %": _avg_or_none([p.spin_efficiency for p in group]),
+                    "Gyro °": _avg_or_none([p.gyro_degree for p in group]),
+                    "IVB": row["IVB"], "HB": row["HB"],
+                    "Release Ht": row["Release Height"], "Release Side": row["Release Side"],
+                    "Arm Angle": row.get("Est. Arm Angle", "N/A"),
+                })
+
             return ui.div(
-                ui.div(
-                    ui.p(ui.strong("Physical Profile"), style="margin-bottom:0;"),
-                    ui_helpers.glossary_link("pp_glossary_metrics", "Metrics Glossary"),
-                    style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
-                ),
+                header,
                 ui.p(
-                    "Same Movement/Release Point/Location/Spin Axis charts as the Bullpen Dashboard, built from every "
-                    "Rapsodo-linked pitch this pitcher has -- bullpen sessions AND intrasquad games alike -- matching "
-                    "the Pitch Type/Games filters above.",
+                    "Every Rapsodo-linked pitch this pitcher has thrown in this window -- bullpen sessions and "
+                    "intrasquad games alike -- broken out by pitch type.",
                     class_="text-muted small",
                 ),
-                _physical_fragment,
+                ui_helpers.render_dict_table(table_rows),
+                ui.hr(),
+                ui.input_slider(
+                    "pp_phys_shading", "Minimum pitches to shade a pitch type's cluster",
+                    min=1, max=10, value=2,
+                ),
+                output_widget("pp_movement_chart"),
+                ui.p(
+                    "IVB vs. HB, one point per pitch -- shaded regions show each pitch type's own cluster; dashed "
+                    "rays show that type's estimated arm angle.",
+                    class_="text-muted small",
+                ),
+                ui.input_radio_buttons(
+                    "pp_phys_release_mode", "Release point view",
+                    ["Individual Pitches", "Average by Pitch Type"], inline=True,
+                ),
+                output_widget("pp_release_chart"),
+                ui.input_radio_buttons(
+                    "pp_phys_spin_mode", "Spin axis view",
+                    ["Average by Pitch Type", "Individual Pitches"], inline=True,
+                ),
+                output_widget("pp_spin_axis_chart"),
             )
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_movement_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "metrics":
+            return None
+        db = get_session()
+        try:
+            player, pitches = _physical_target(db)
+            if not pitches:
+                return None
+            min_shading = input.pp_phys_shading() if "pp_phys_shading" in input else 2
+            throws = player.throws if player is not None else None
+            order, groups = [], {}
+            for p in pitches:
+                label = pitch_type_label(p)
+                if label not in groups:
+                    groups[label] = []
+                    order.append(label)
+                groups[label].append(p)
+            arm_angles_by_type = []
+            for label in order:
+                angle, n = average_estimated_arm_angle(groups[label], player)
+                if angle is not None:
+                    arm_angles_by_type.append((label, color_for_pitch_label(label), angle))
+            return movement_chart(
+                pitches, min_pitches_for_shading=min_shading,
+                arm_angles_by_type=arm_angles_by_type, throws=throws,
+            )
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_release_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "metrics":
+            return None
+        db = get_session()
+        try:
+            _, pitches = _physical_target(db)
+            if not pitches:
+                return None
+            mode_label = input.pp_phys_release_mode() if "pp_phys_release_mode" in input else "Individual Pitches"
+            mode = "average" if mode_label == "Average by Pitch Type" else "individual"
+            return release_point_chart(pitches, mode=mode)
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_spin_axis_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "metrics":
+            return None
+        db = get_session()
+        try:
+            _, pitches = _physical_target(db)
+            if not pitches:
+                return None
+            mode_label = input.pp_phys_spin_mode() if "pp_phys_spin_mode" in input else "Average by Pitch Type"
+            if mode_label == "Individual Pitches":
+                return individual_spin_axis_chart(pitches)
+            return average_spin_axis_chart(pitches)
         finally:
             db.close()
 
