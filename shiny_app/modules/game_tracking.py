@@ -4766,6 +4766,7 @@ def game_tracking_server(input, output, session, app_state):
         PITCH_OUTCOMES, CONTACT_QUALITY_OPTIONS, AB_OUTCOMES,
         RUNNER_EVENT_TYPES, RUNNER_EVENT_OUT_TYPES,
         build_re_lookup, replay_game, _insert_missed_pitch_at,
+        compute_current_state, _ends_plate_appearance, suggest_after_state, get_arsenal_pitch_type_names,
     )
 
     # -------------------------------------------------------------------
