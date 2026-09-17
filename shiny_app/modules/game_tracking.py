@@ -1344,6 +1344,90 @@ def replay_game(pitches, runner_events, re_lookup, forced_ends=None):
     }
 
 
+def _insert_missed_pitch_at(db, game_id, anchor_seq, field_values):
+    """Insert a brand-new GamePitch immediately after the pitch at
+    pitch_sequence == anchor_seq, shifting every later pitch (and every
+    other table that anchors to a specific pitch_sequence) up by one to
+    make room. Ryker, Sept 2026: "if i missed a pitch in game tracking
+    how can we go in and add it to where it should be so i don't have
+    to undo all of the pitches."
+
+    pitch_sequence has no DB uniqueness constraint (see GamePitch's
+    docstring in models.py, and the Pitch Log delete handler's comment
+    about a deleted pitch leaving a harmless gap) -- it's purely an
+    ordering column -- so this is safe the same way _insert_lineup_
+    slot_at's batting_order shift is: every row with pitch_sequence >
+    anchor_seq shifts +1, highest-first with a db.flush() after each so
+    no two pitches are ever briefly equal, then the new pitch is
+    inserted at the now-empty anchor_seq + 1.
+
+    Four OTHER tables anchor to a specific pitch_sequence value instead
+    of owning a row in the pitch sequence themselves --
+    GameRunnerEvent.pitch_sequence_after, GameForcedHalfInningEnd.
+    pitch_sequence_after, PitchingChange.pitch_sequence_at_entry,
+    LineupSubstitution.pitch_sequence_at_entry -- each meaning "this
+    happened right after the pitch with THIS pitch_sequence." Shifting
+    the pitches without also shifting these would leave them silently
+    pointing at the wrong pitch once numbers move, so every anchor
+    STRICTLY GREATER than anchor_seq shifts +1 too, for the same reason
+    and by the same amount.
+
+    An anchor sitting at EXACTLY anchor_seq is genuinely ambiguous -- it
+    means "right after the anchor pitch," which could mean before OR
+    after the newly inserted pitch, and only the coach knows which.
+    Left unshifted here (at worst off by one pitch, never corrupted),
+    but every such anchor found is returned so the caller can warn the
+    coach instead of silently guessing -- same "flag it for human
+    judgment" posture as replay_game's side_changed_pitch_ids.
+
+    field_values must supply every NOT NULL GamePitch column other than
+    game_id/pitch_sequence (set here) -- including a placeholder
+    inning/is_our_team_batting; replay_game recomputes and overwrites
+    both immediately afterward, same as it does for every other pitch,
+    so the caller's guess for those two only needs to be valid, not
+    correct.
+
+    Deliberately NOT extended to three-squad intrasquad games in this
+    first version -- batting_squad rotation is a rabbit hole of its own
+    (see the three-squad helpers above) and no three-squad game has hit
+    this need yet. Caller is responsible for guarding that.
+
+    Returns (new_pitch, coincident_anchor_labels) -- new_pitch is
+    flushed (has a real game_pitch_id) but never committed here; caller
+    decides whether to commit (confirm) or just close the session
+    without committing (preview -- discarded on close, same as every
+    other Pitch Log preview)."""
+    shifting_pitches = (
+        db.query(GamePitch)
+        .filter(GamePitch.game_id == game_id, GamePitch.pitch_sequence > anchor_seq)
+        .order_by(GamePitch.pitch_sequence.desc())
+        .all()
+    )
+    for p in shifting_pitches:
+        p.pitch_sequence += 1
+        db.flush()
+
+    coincident_anchor_labels = []
+
+    def _shift_anchors(model, column, label):
+        greater = db.query(model).filter(model.game_id == game_id, column > anchor_seq).all()
+        for row in greater:
+            setattr(row, column.key, getattr(row, column.key) + 1)
+        if db.query(model).filter(model.game_id == game_id, column == anchor_seq).count():
+            coincident_anchor_labels.append(label)
+
+    _shift_anchors(GameRunnerEvent, GameRunnerEvent.pitch_sequence_after, "a runner event")
+    _shift_anchors(GameForcedHalfInningEnd, GameForcedHalfInningEnd.pitch_sequence_after, "a forced half-inning end")
+    _shift_anchors(PitchingChange, PitchingChange.pitch_sequence_at_entry, "a pitching change")
+    _shift_anchors(LineupSubstitution, LineupSubstitution.pitch_sequence_at_entry, "a lineup substitution")
+    db.flush()
+
+    new_pitch = GamePitch(game_id=game_id, pitch_sequence=anchor_seq + 1, **field_values)
+    db.add(new_pitch)
+    db.flush()
+    return new_pitch, coincident_anchor_labels
+
+
 def _current_pa_pitches(pitches):
     """Trailing pitches of the still-open plate appearance -- everything
     after the last pitch that ended a PA (sorted ascending, same order
@@ -1527,6 +1611,19 @@ def game_tracking_server(input, output, session, app_state):
     # submitted (see game_tracking_pitch_log_display.py).
     _gt_pl_adding_runner_event_pitch_id = reactive.Value(None)
     _gt_pl_pending_runner_add = reactive.Value(None)
+    # Retroactive "Insert a missed pitch" (Pitch Log -- Ryker, Sept
+    # 2026: "if i missed a pitch in game tracking how can we go in and
+    # add it to where it should be so i don't have to undo all of the
+    # pitches"). Same two-Values shape as the runner-add pair above:
+    # _gt_pl_inserting_pitch_id is which pitch's row has the "insert
+    # missed pitch after this" form open (None otherwise);
+    # _gt_pl_pending_insert is the built-but-not-yet-saved preview once
+    # that form is submitted -- see _insert_missed_pitch_at below and
+    # game_tracking_pitch_log_display.py. Scoped to ordinary (non-
+    # three-squad) games for now -- see _insert_missed_pitch_at's
+    # docstring.
+    _gt_pl_inserting_pitch_id = reactive.Value(None)
+    _gt_pl_pending_insert = reactive.Value(None)
     _runner_event_form_open = reactive.Value(False)  # collapsed by default -- see runner_events_panel (Ryker, 2026-08-26)
     _forced_end_form_open = reactive.Value(False)  # collapsed by default -- see forced_half_inning_end_panel (Ryker, Sept 2026)
 
@@ -1726,6 +1823,8 @@ def game_tracking_server(input, output, session, app_state):
         _gt_pl_pending_forced_end.set(None)
         _gt_pl_adding_runner_event_pitch_id.set(None)
         _gt_pl_pending_runner_add.set(None)
+        _gt_pl_inserting_pitch_id.set(None)
+        _gt_pl_pending_insert.set(None)
         _gt_re_editing_event_id.set(None)
         _gt_re_pending_preview.set(None)
 
@@ -4663,9 +4762,10 @@ def game_tracking_server(input, output, session, app_state):
         _registered_pitch_row_ids, _gt_editing_pitch_id, _gt_pending_delete_pitch_id, _pitch_log_limit,
         _gt_pl_pending_preview, _gt_pl_pending_forced_end,
         _gt_pl_adding_runner_event_pitch_id, _gt_pl_pending_runner_add,
+        _gt_pl_inserting_pitch_id, _gt_pl_pending_insert,
         PITCH_OUTCOMES, CONTACT_QUALITY_OPTIONS, AB_OUTCOMES,
         RUNNER_EVENT_TYPES, RUNNER_EVENT_OUT_TYPES,
-        build_re_lookup, replay_game,
+        build_re_lookup, replay_game, _insert_missed_pitch_at,
     )
 
     # -------------------------------------------------------------------
