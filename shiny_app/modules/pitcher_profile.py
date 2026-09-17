@@ -20,7 +20,9 @@ contact_quality vocabulary, six buckets summing to 100% of that type's
 balls in play) plus Hard Hit %/Whiff %/Chase % alongside, styled after
 mlbpitchprofiler.com's own Results tab (visualizations/
 pitch_results_chart.py). Metrics is the old Physical Profile section,
-Zone is Attack Zone Distribution + Command Target Zones, Arsenal is the
+Zone is Attack Zone Distribution + per-pitch-type location density
+heatmaps (Sept 2026, visualizations/pitch_location_heatmap.py) +
+Command Target Zones, Arsenal is the
 Arsenal table + Pitch Type Breakdown + Individual Pitches. Overview
 keeps the Line/Grades/Performance/Pitch Usage/Trend content pp_body
 used to open with -- still the default first thing a viewer sees.
@@ -65,6 +67,7 @@ from analytics.pitch_grading import (
 )
 from visualizations import command_charts, profile_charts
 from visualizations.pitch_results_chart import pitch_results_chart
+from visualizations.pitch_location_heatmap import pitch_location_heatmaps, MIN_FOR_CONTOUR
 from pitch_type_config import get_pitch_color
 
 import ui_helpers
@@ -721,7 +724,66 @@ def pitcher_profile_server(input, output, session, app_state):
                     (zone, round(100 * bundle["zone_counts"][zone] / total_located, 1), ATTACK_ZONE_COLORS[zone])
                     for zone in ("Heart", "Shadow", "Chase", "Waste")
                 ]))
+
+            # Sept 2026, Ryker (reference: mlbpitchprofiler.com's own
+            # "2026 PITCH LOCATIONS" section) -- per-pitch-type density
+            # heatmaps below the aggregate Attack Zone bar above, plus
+            # the matching per-type Heart/Shadow/Chase/Waste/Zone %
+            # mix table (game_stats.compute_pitch_type_breakdown's new
+            # "Zone %"/"Heart Zone %"/etc. columns -- see that
+            # function's docstring for how these differ from the
+            # existing swing-rate "Chase %").
+            if game_pitches:
+                sections.append(ui.hr())
+                sections.append(ui.p(ui.strong("Pitch Locations")))
+                sections.append(ui.p(
+                    "Density of where each pitch type actually landed, real-game charted locations only "
+                    f"(n={len(game_pitches)} charted pitches in this window; bullpen-only reps aren't located "
+                    "so they can't appear here). Fewer than "
+                    f"{MIN_FOR_CONTOUR} located pitches of a type shows plain dots instead of a density "
+                    "surface -- not enough to smooth reliably.",
+                    class_="text-muted small",
+                ))
+                sections.append(output_widget("pp_location_heatmap"))
+                type_rows = [
+                    r for r in compute_pitch_type_breakdown(game_pitches)
+                    if r["Pitch Type"] != "Total" and r.get("Zone %") is not None
+                ]
+                if type_rows:
+                    sections.append(ui_helpers.render_dict_table([
+                        {
+                            "Pitch Type": r["Pitch Type"], "% Thrown": _fmt_pct(r["Pitch Usage %"]),
+                            "Zone %": _fmt_pct(r["Zone %"]), "Heart %": _fmt_pct(r["Heart Zone %"]),
+                            "Shadow %": _fmt_pct(r["Shadow Zone %"]), "Chase %": _fmt_pct(r["Chase Zone %"]),
+                            "Waste %": _fmt_pct(r["Waste Zone %"]),
+                        }
+                        for r in type_rows
+                    ]))
+
             return ui.div(*sections)
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_location_heatmap():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "zone":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+            )
+            if not game_pitches:
+                return None
+            return pitch_location_heatmaps(game_pitches)
         finally:
             db.close()
 
