@@ -536,6 +536,12 @@ def pitcher_profile_server(input, output, session, app_state):
                 "against a real MLB Stuff+ number.",
                 class_="text-muted small",
             ))
+            sections.append(ui.p(
+                "Blended across every pitch type thrown in this window (each pitch type counted once, not weighted "
+                "by how often it's thrown) -- not a single pitch's grade. See the Arsenal tab for the breakdown by "
+                "pitch type.",
+                class_="text-muted small fst-italic",
+            ))
 
             bundle = _compute_grading_bundle(db, game_pitches, rapsodo_pitches)
             stuff_plus_value = bundle["stuff_plus_value"]
@@ -583,6 +589,11 @@ def pitcher_profile_server(input, output, session, app_state):
                     "creates between Arsenal and Stuff+/Location+ (Arsenal is itself built from them) -- a V1 "
                     "formula, same treatment as every other composite in this build.",
                     class_="text-muted small",
+                ))
+                sections.append(ui.p(
+                    "Stuff+/Location+ here are the same blended-across-pitch-types numbers as the Grades section "
+                    "above (Arsenal below them IS usage-weighted, per pitch type -- see the Arsenal tab).",
+                    class_="text-muted small fst-italic",
                 ))
                 performance_bars = ui_helpers.render_percentile_bars([
                     ("Stuff+", stuff_plus_value),
