@@ -41,6 +41,16 @@ plain dots instead of a contour.
 
 Skips any pitch type with zero located pitches (actual_plate_x/
 actual_plate_z both set) in this window -- nothing to draw.
+
+Sept 2026, Ryker: "add a plate so we know which direction we are
+oriented to" -- each panel draws a home plate at the ground line
+(visualizations.hitter_graphic.home_plate_shape, the same shared plate
+shape strike_zone.py's click widgets and bullpen_charts.py's own
+location heatmap already use), view="catcher" since actual_plate_x/
+actual_plate_z is the same Statcast/catcher-behind-the-plate coordinate
+convention bullpen_charts.location_chart's plate already assumes for
+that field (Command Tracking's pitch_locations_chart uses the opposite
+view="pitcher" because it's drawn from the mound's-eye side instead).
 """
 
 import plotly.graph_objects as go
@@ -48,6 +58,7 @@ from plotly.subplots import make_subplots
 
 from strike_zone import X_MIN, X_MAX, Z_MIN, Z_MAX, ZONE_HALF_WIDTH, ZONE_BOTTOM, ZONE_TOP
 from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, TEXT_CREAM
+from visualizations.hitter_graphic import home_plate_shape
 
 MIN_FOR_CONTOUR = 5
 MAX_COLS = 3
@@ -136,9 +147,15 @@ def pitch_location_heatmaps(game_pitches):
             type="line", x0=X_MIN, x1=X_MAX, y0=0, y1=0,
             line=dict(color=GRID_GRAY, width=1), row=r, col=c,
         )
+        plate = {k: v for k, v in home_plate_shape(half_width_ft=ZONE_HALF_WIDTH, ground_y=Z_MIN, view="catcher").items()
+                 if k not in ("xref", "yref")}
+        fig.add_shape(row=r, col=c, **plate)
 
     fig.update_xaxes(range=[X_MIN, X_MAX], showticklabels=False, showgrid=False, zeroline=False)
-    fig.update_yaxes(range=[Z_MIN, Z_MAX], showticklabels=False, showgrid=False, zeroline=False,
+    # -0.4 rather than Z_MIN (0.0) -- same margin bullpen_charts.location_chart
+    # gives its own home plate, so the plate's point (which sits below the
+    # ground line by design, see home_plate_shape) doesn't get clipped.
+    fig.update_yaxes(range=[-0.4, Z_MAX], showticklabels=False, showgrid=False, zeroline=False,
                       scaleanchor="x", scaleratio=1)
     for annotation in fig.layout.annotations:
         annotation.font = dict(color=TEXT_CREAM, size=12)
