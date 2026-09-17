@@ -21,11 +21,19 @@ different pitch scope (real games only vs. bullpens too), different
 "all at once" layout -- sharing the function would mean threading two
 unrelated call shapes through one signature for no real reuse.
 
-One shared Blues density colorscale across every subplot (not a
-colorscale per pitch type) -- consistent with location_chart's own
-"blue = low density, red = high" reasoning, and it keeps the panels
-visually comparable to each other rather than each subplot fighting for
-attention with its own hue. Low-sample pitch types (fewer than
+One shared blue-to-red diverging colorscale across every subplot (not
+a colorscale per pitch type) -- Sept 2026, Ryker: wanted this to match
+mlbpitchprofiler.com's own banded blue-white-red contour look (their
+Zone tab's "2026 PITCH LOCATIONS" cards) rather than the single-hue
+Blues scale this shipped with originally, which read as flat/washed
+out next to their reference. Reversed Plotly "RdBu" (reversescale=True
+maps low density to blue, high density to red, same as theirs) with
+discrete filled contour bands (autocontour, ~8 bands) and thin band
+outlines rather than one smooth heatmap gradient -- that banded-contour
+look, not the coloring itself, is most of what made their version read
+as a real topographic density map instead of a blur. Keeps the panels
+visually comparable to each other rather than each subplot fighting
+for attention with its own hue. Low-sample pitch types (fewer than
 MIN_FOR_CONTOUR located pitches -- a smoothed density surface over a
 handful of points reads as more confident than the data supports, the
 same caveat location_chart's own docstring already notes) fall back to
@@ -97,17 +105,11 @@ def pitch_location_heatmaps(game_pitches):
         if len(located) >= MIN_FOR_CONTOUR:
             fig.add_trace(
                 go.Histogram2dContour(
-                    x=xs, y=zs, colorscale="Blues", reversescale=False,
-                    contours=dict(coloring="heatmap"), line=dict(width=0),
+                    x=xs, y=zs, colorscale="RdBu", reversescale=True,
+                    ncontours=8,
+                    contours=dict(coloring="fill", showlines=True),
+                    line=dict(width=0.75, color="rgba(23,27,33,0.55)", smoothing=1.3),
                     showscale=False, hoverinfo="skip",
-                ),
-                row=r, col=c,
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=xs, y=zs, mode="markers",
-                    marker=dict(color=TEXT_CREAM, size=3, opacity=0.35),
-                    showlegend=False, hoverinfo="skip",
                 ),
                 row=r, col=c,
             )
