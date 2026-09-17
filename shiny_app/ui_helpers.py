@@ -101,6 +101,40 @@ def section_title(title: str, right=None):
     return ui.div(ui.div(title, class_="gbo-section-title"), ui.div(right, class_="right") if right is not None else None, class_="gbo-section-title-row")
 
 
+def glossary_link(link_id: str, label: str = "Glossary"):
+    """Sept 2026, Pitcher Profile's per-tab "Glossary" links (Ryker's
+    reference: mlbpitchprofiler.com's own per-page "Zone Glossary"/
+    "Results Glossary" links). A plain input_action_link -- the caller
+    wires a matching @reactive.effect + @reactive.event(input[link_id])
+    that calls ui.modal_show(glossary_modal(...)) below. Kept as its
+    own tiny helper (rather than every caller writing
+    ui.input_action_link(...) inline) so every glossary trigger looks
+    identical app-wide."""
+    return ui.input_action_link(link_id, f"\U0001F4D6 {label}", class_="small text-muted")
+
+
+def glossary_modal(title: str, terms):
+    """terms: list of (term, definition) string tuples -- see
+    glossary_content.py for GBO's own per-tab term lists. Returns a
+    ui.modal(...) ready for ui.modal_show(); one shared layout so every
+    page's glossary looks the same, not a bespoke modal per caller."""
+    return ui.modal(
+        ui.div(
+            *[
+                ui.div(
+                    ui.p(term, style="font-weight:700; margin-bottom:2px;"),
+                    ui.p(definition, class_="text-muted small", style="margin-bottom:16px;"),
+                )
+                for term, definition in terms
+            ],
+        ),
+        title=title,
+        easy_close=True,
+        size="l",
+        footer=ui.modal_button("Close"),
+    )
+
+
 def metric_bar(name: str, value_text: str, pct, status: str = None, percentile_text: str = None, unit: str = None):
     """One metric row: name left, value right, status-colored 6px
     track, optional caption. pct is the fill 0-100 (None -> 0)."""

@@ -68,6 +68,7 @@ from analytics.pitch_grading import (
 from visualizations import command_charts, profile_charts
 from visualizations.pitch_results_chart import pitch_results_chart
 from visualizations.pitch_location_heatmap import pitch_location_heatmaps, MIN_FOR_CONTOUR
+import glossary_content
 from pitch_type_config import get_pitch_color
 
 import ui_helpers
@@ -338,6 +339,41 @@ def pitcher_profile_server(input, output, session, app_state):
         finally:
             db.close()
 
+    # -------------------------------------------------------------------
+    # Per-tab "Glossary" links (Sept 2026, Ryker: reference is
+    # mlbpitchprofiler.com's own per-page "Zone Glossary"/"Results
+    # Glossary" links) -- one input_action_link wired up in each view
+    # section above (ui_helpers.glossary_link), one reactive.effect
+    # here per link that pops the matching glossary_content.py list as
+    # a modal. Content lives in glossary_content.py, not inline here,
+    # so it can be reused if another page ever wants the same terms.
+    # -------------------------------------------------------------------
+
+    @reactive.effect
+    @reactive.event(input.pp_glossary_overview)
+    def _pp_show_overview_glossary():
+        ui.modal_show(ui_helpers.glossary_modal("Overview Glossary", glossary_content.OVERVIEW))
+
+    @reactive.effect
+    @reactive.event(input.pp_glossary_metrics)
+    def _pp_show_metrics_glossary():
+        ui.modal_show(ui_helpers.glossary_modal("Metrics Glossary", glossary_content.METRICS))
+
+    @reactive.effect
+    @reactive.event(input.pp_glossary_results)
+    def _pp_show_results_glossary():
+        ui.modal_show(ui_helpers.glossary_modal("Results Glossary", glossary_content.RESULTS))
+
+    @reactive.effect
+    @reactive.event(input.pp_glossary_zone)
+    def _pp_show_zone_glossary():
+        ui.modal_show(ui_helpers.glossary_modal("Zone Glossary", glossary_content.ZONE))
+
+    @reactive.effect
+    @reactive.event(input.pp_glossary_arsenal)
+    def _pp_show_arsenal_glossary():
+        ui.modal_show(ui_helpers.glossary_modal("Arsenal Glossary", glossary_content.ARSENAL))
+
     def _compute_grading_bundle(db, game_pitches, rapsodo_pitches):
         """Shared derived-data pass over one filtered pitch window --
         Stuff+/Location+/Pitching+ per pitch, pitch usage counts,
@@ -467,7 +503,11 @@ def pitcher_profile_server(input, output, session, app_state):
                     "No pitches in this date range yet. Widen the filters, or check back once games/bullpens are tracked."
                 ))
 
-            sections = [ui.h5(f"{player.first_name} {player.last_name}", class_="gbo-section-title")]
+            sections = [ui.div(
+                ui.h5(f"{player.first_name} {player.last_name}", class_="gbo-section-title", style="margin-bottom:0;"),
+                ui_helpers.glossary_link("pp_glossary_overview", "Overview Glossary"),
+                style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+            )]
 
             if game_pitches:
                 line = compute_pitching_line(game_pitches)
@@ -589,7 +629,11 @@ def pitcher_profile_server(input, output, session, app_state):
             if pid is None:
                 return None
             return ui.div(
-                ui.p(ui.strong("Physical Profile")),
+                ui.div(
+                    ui.p(ui.strong("Physical Profile"), style="margin-bottom:0;"),
+                    ui_helpers.glossary_link("pp_glossary_metrics", "Metrics Glossary"),
+                    style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+                ),
                 ui.p(
                     "Same Movement/Release Point/Location/Spin Axis charts as the Bullpen Dashboard, built from every "
                     "Rapsodo-linked pitch this pitcher has -- bullpen sessions AND intrasquad games alike -- matching "
@@ -639,7 +683,11 @@ def pitcher_profile_server(input, output, session, app_state):
                     class_="text-muted small",
                 )
             return ui.div(
-                ui.p(ui.strong("Results")),
+                ui.div(
+                    ui.p(ui.strong("Results"), style="margin-bottom:0;"),
+                    ui_helpers.glossary_link("pp_glossary_results", "Results Glossary"),
+                    style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+                ),
                 ui.p(
                     "Quality of contact allowed (Weak/Jammed/Off the End/Clipped/Solid/Barreled, stacked to 100% of "
                     "that pitch type's own balls in play), plus Hard Hit %/Whiff %/Chase % shown alongside as their "
@@ -714,7 +762,11 @@ def pitcher_profile_server(input, output, session, app_state):
             if not game_pitches and not rapsodo_pitches:
                 return None
             bundle = _compute_grading_bundle(db, game_pitches, rapsodo_pitches)
-            sections = [ui.p(ui.strong("Attack Zone Distribution"))]
+            sections = [ui.div(
+                ui.p(ui.strong("Attack Zone Distribution"), style="margin-bottom:0;"),
+                ui_helpers.glossary_link("pp_glossary_zone", "Zone Glossary"),
+                style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+            )]
             total_located = sum(bundle["zone_counts"].values())
             if not total_located:
                 sections.append(ui.p("No located pitches yet.", class_="text-muted small"))
@@ -813,7 +865,10 @@ def pitcher_profile_server(input, output, session, app_state):
             if not game_pitches and not rapsodo_pitches:
                 return None
             bundle = _compute_grading_bundle(db, game_pitches, rapsodo_pitches)
-            sections = []
+            sections = [ui.div(
+                ui_helpers.glossary_link("pp_glossary_arsenal", "Arsenal Glossary"),
+                style="text-align:right;",
+            )]
 
             if bundle["arsenal_rows"]:
                 sections.append(ui.p(ui.strong("Arsenal")))

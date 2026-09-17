@@ -230,6 +230,9 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .accordion-button:not(.collapsed) { background-color: var(--gbo-bg-card); color: var(--gbo-text); box-shadow: inset 0 -1px 0 var(--gbo-border); }
 .accordion-button::after { filter: grayscale(1) opacity(.6); }
 .modal-content { background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); box-shadow: var(--gbo-shadow); }
+.modal-header, .modal-footer { border-color: var(--gbo-border); }
+.modal-title { color: var(--gbo-text); }
+.btn-close { filter: invert(1) grayscale(1) brightness(1.8); }  /* Sept 2026: visible on the dark modal body -- default Bootstrap close button is a dark X, invisible-ish here */
 .dropdown-menu { background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); box-shadow: var(--gbo-shadow); }
 .dropdown-item { color: var(--gbo-text-2); } .dropdown-item:hover { background: var(--gbo-bg-raised); color: var(--gbo-text); }
 .alert { border-radius: 8px; }
