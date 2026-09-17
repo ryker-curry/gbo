@@ -166,25 +166,44 @@ def score_ring(value, label: str, status: str = None, sublabel: str = None, size
     )
 
 
-def mean100_ring_status(label, value):
-    """V1 color cut points for the mean-100/10-per-SD grade scale
-    (Stuff+/Location+/Pitching+/Command+/Performance) -- NOT
-    score_ring's/bucket_display.py's 0-100 percentile cut points.
-    >=110 (roughly 1+ SD above the team) reads good, <90 (1+ SD below)
-    flags, in between stays the neutral default look. Unvalidated V1
-    guess, same as every other new cut point in this build -- revisit
-    once real scores exist to check against Ryker's own read of the
-    staff. Shared by pitcher_profile.py and hitter_profile.py (moved
-    here from pitcher_profile.py's original _grade_ring_status so
-    hitter_profile.py's new Performance ring can reuse it without a
-    cross-module import)."""
-    if value is None:
-        return None
-    if value >= 110:
-        return "good"
-    if value < 90:
-        return "flag"
-    return None
+def percentile_color(pct):
+    """pct: 0-100 (mean100_to_percentile's output). Sept 2026, Ryker:
+    "i want the colors for percentiles to match what the percentile
+    rankings on the pitcherprofiler.com does" -- replaces the earlier
+    3-tier good/neutral/flag traffic-light treatment (mean100_ring_status,
+    removed) with that site's own continuous blue-to-red diverging
+    scale: blue below the 50th percentile, red above it, pale/neutral
+    right around 50, saturation increasing with distance from the
+    middle. Colors are colorbrewer's standard 5-class RdBu diverging
+    palette (reversed so blue = low, red = high, matching their
+    orientation), linearly interpolated between the 5 stops rather than
+    just snapping to the nearest one, so two adjacent percentiles never
+    jump between colors.
+
+    Returns (fill_hex, text_hex) -- text_hex is dark or light depending
+    on the fill color's own brightness (the palette's pale middle needs
+    dark text against it, its saturated red/blue ends need white), so
+    the percentile badge number stays readable at every stop."""
+    stops = [
+        (0, (5, 113, 176)),
+        (25, (146, 197, 222)),
+        (50, (247, 247, 247)),
+        (75, (244, 165, 130)),
+        (100, (202, 0, 32)),
+    ]
+    p = max(0, min(100, float(pct)))
+    r = g = b = 0
+    for (p0, c0), (p1, c1) in zip(stops, stops[1:]):
+        if p0 <= p <= p1:
+            t = (p - p0) / (p1 - p0)
+            r = round(c0[0] + (c1[0] - c0[0]) * t)
+            g = round(c0[1] + (c1[1] - c0[1]) * t)
+            b = round(c0[2] + (c1[2] - c0[2]) * t)
+            break
+    fill_hex = f"#{r:02x}{g:02x}{b:02x}"
+    luminance = 0.299 * r + 0.587 * g + 0.114 * b
+    text_hex = "#1E1E1E" if luminance > 150 else "#FFFFFF"
+    return fill_hex, text_hex
 
 
 def mean100_to_percentile(value):
@@ -214,12 +233,13 @@ def render_percentile_bars(specs):
     same position, and the raw grade itself -- not the percentile --
     prints in the right-hand column, mirroring that site's own layout
     (its percentile badge sits beside the player's actual "+" stat,
-    not a second percentile). Colored via the same good/flag status
-    tiers mean100_ring_status already defines for the ring family,
-    rather than adopting that site's continuous red-to-blue scale --
-    keeps this component inside GBO's existing traffic-light color
-    language instead of a one-off palette. specs: list of (label,
-    value) tuples, value may be None ('not enough baseline yet').
+    not a second percentile). Sept 2026: colored via that site's own
+    continuous blue-to-red percentile scale (percentile_color above),
+    not the earlier 3-tier good/neutral/flag treatment -- Ryker asked
+    for the bar/badge color itself to move smoothly with the
+    percentile instead of only flagging the two extremes. specs: list
+    of (label, value) tuples, value may be None ('not enough baseline
+    yet').
 
     Sept 2026 (Ryker, looking at his own live Pitcher Profile as a
     Player login): the badge number and the raw-grade number look like
@@ -247,13 +267,12 @@ def render_percentile_bars(specs):
             ))
             continue
         pct = mean100_to_percentile(value)
-        status = mean100_ring_status(label, value)
-        cls = f" {status}" if status else ""
+        fill_hex, text_hex = percentile_color(pct)
         rows.append(ui.div(
             ui.div(label, class_="gbo-pctbar-label"),
             ui.div(
-                ui.div(class_=f"gbo-pctbar-fill{cls}", style=f"width:{pct}%"),
-                ui.div(str(pct), class_=f"gbo-pctbar-badge{cls}", style=f"left:{pct}%"),
+                ui.div(class_="gbo-pctbar-fill", style=f"width:{pct}%; background:{fill_hex};"),
+                ui.div(str(pct), class_="gbo-pctbar-badge", style=f"left:{pct}%; background:{fill_hex}; color:{text_hex};"),
                 class_="gbo-pctbar-track",
             ),
             ui.div(f"{value:.0f}", class_="gbo-pctbar-raw"),
