@@ -45,12 +45,12 @@ METRICS = [
     ("IVB (Induced Vertical Break)", "Vertical movement caused by spin alone, with gravity's own drop already factored out -- a positive number means the pitch drops less than a spinless pitch would, not that it actually rises (except for a true rise ball)."),
     ("HB (Horizontal Break)", "Side-to-side movement from the pitcher's own release line, in inches."),
     ("Release Height / Release Side", "Where the ball leaves the hand: Release Height is measured straight up from the ground, Release Side is measured left/right from the center of the rubber."),
-    ("Spin Axis (Measured / Inferred / Diff)", "The tilt of the ball's spin on a clock face. Measured is Rapsodo's direct read off the ball; Inferred is the axis the pitch's ACTUAL movement implies; Diff is the gap between the two -- a rough signal for gyro spin or seam-shifted wake (movement the raw spin axis alone doesn't explain)."),
+    ("Spin Axis", "The tilt of the ball's spin on a clock face, as read directly off the ball by Rapsodo -- e.g. \"12:18\" means the axis is tilted just past straight-up-and-down. GBO shows this single measured value only; it doesn't currently compute a separate \"inferred from movement\" axis to compare it against."),
     ("Spin Efficiency", "The share of total spin that's actually contributing to the ball's movement, versus spin wasted on the bullet-like (gyroscopic) axis that doesn't move the ball at all."),
     ("Gyro Degree", "How much of a pitch's spin is pure bullet-spin (gyro) rather than transverse spin that creates movement -- higher gyro means less of that total spin translates into break."),
     ("Movement chart", "IVB vs. HB, one point per pitch, colored by pitch type -- shows the shape of each pitch's break relative to the others in the arsenal."),
     ("Release Point graphic", "Where each pitch type actually left the hand, viewed from behind or in front of the rubber -- consistency here (a tight cluster) is generally a good sign; different release points for different pitch types can tip a hitter off."),
-    ("Location heatmap (bullpen)", "Density of where pitches landed relative to the strike zone, built from bullpen and intrasquad Rapsodo sessions only -- a separate view from the Zone tab's real-game-only heatmaps below."),
+    ("Spin Axis chart", "Each pitch type's spin axis plotted on a clock face -- \"Average by Pitch Type\" shows one arrow per type at its circular average (the right way to average clock-face angles); \"Individual Pitches\" shows every pitch's own arrow."),
 ]
 
 RESULTS = [
