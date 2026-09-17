@@ -19,15 +19,28 @@ Canonical pitch types (PitchType.type_name rows):
     4-Seam Fastball, 2-Seam Fastball, Cutter, Slider, Changeup,
     Curveball, Splitter, Fastball
 
-"Fastball" (generic/undifferentiated) is its own canonical type, distinct
-from "4-Seam Fastball" -- NOT an alias for it. Rapsodo's real export
-reviewed (Saben Seager's bullpen) classifies fastballs as plain
-"Fastball" with no 2-seam/4-seam distinction. Forcing that into
-"4-Seam Fastball" would assert a grip/pitch-design detail the device
-never actually reported. If a export or manual entry DOES distinguish
-4-seam from 2-seam, those map to their own existing types as before.
-This is a judgment call, not a settled convention -- flag to Ryker if a
-different mapping is preferred once more real exports are seen.
+Sept 2026, Ryker's call ("treat fastball as 4sfb"): generic "Fastball"
+now maps onto "4-Seam Fastball", reversing the original judgment call
+below. Originally kept as its own separate type because Rapsodo's real
+export reviewed (Saben Seager's bullpen) classifies fastballs as plain
+"Fastball" with no 2-seam/4-seam distinction, and forcing that into
+"4-Seam Fastball" asserts a grip/pitch-design detail the device never
+actually reported -- but with generic "Fastball" import readings vastly
+outnumbering "4-Seam Fastball" readings team-wide (298 vs. 0 in
+rapsodo_pitches, all from imports -- no manual entry anywhere in the app
+had ever actually picked "Fastball" over "4-Seam Fastball"), the split
+was mainly starving "4-Seam Fastball" of enough real-game training data
+for pitch_grading.fit_stuff_plus_model to ever fit it (see
+MIN_STUFF_TRAINING_PITCHES there), while every straight fastball the
+team actually throws was correctly assumed elsewhere in the app (Game
+Tracking's arsenal picker, etc.) to BE 4-seam unless picked otherwise.
+migrations/migrate_fastball_to_4seam.py backfilled every existing
+rapsodo_pitches row already tagged "Fastball" onto "4-Seam Fastball" to
+match -- the "Fastball" PitchType row itself is left in the catalog
+(unused going forward, not deleted) in case this ever needs reverting.
+If a export or manual entry DOES distinguish 4-seam from 2-seam, those
+still map to their own existing types as before -- only generic,
+undifferentiated "Fastball"/"FB" changed.
 """
 
 import re
@@ -45,9 +58,11 @@ def _normalize(raw: str) -> str:
 # Keys are pre-normalized (see _normalize) so lookups don't need to
 # special-case punctuation at call sites.
 _RAW_ALIASES = {
-    # Fastballs
-    "fastball": "Fastball",
-    "fb": "Fastball",
+    # Fastballs -- generic "fastball"/"fb" now maps to 4-Seam Fastball
+    # (Ryker, Sept 2026: "treat fastball as 4sfb"), not its own
+    # "Fastball" type -- see module docstring for the full reasoning.
+    "fastball": "4-Seam Fastball",
+    "fb": "4-Seam Fastball",
     "4seamfastball": "4-Seam Fastball",
     "4seam": "4-Seam Fastball",
     "fourseam": "4-Seam Fastball",
