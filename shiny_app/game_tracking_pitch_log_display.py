@@ -86,11 +86,15 @@ as a possible future follow-up.)
 import re
 
 from shiny import ui, render, reactive, req
+from shinywidgets import output_widget, render_plotly
 from sqlalchemy.orm import joinedload
 
 from database import get_session
 from models import Game, GamePitch, GameRunnerEvent, GameForcedHalfInningEnd, GameLineupSlot, LineupSubstitution, PitchType
 import strike_zone
+import field_location
+import click_widgets
+from click_widgets import build_clickable_widget as _build_clickable_widget
 import ui_helpers
 
 # Touching ANY of these routes a Pitch Log save through the preview-then-
@@ -463,7 +467,65 @@ def register_game_tracking_pitch_log(
     PITCH_OUTCOMES, CONTACT_QUALITY_OPTIONS, AB_OUTCOMES,
     RUNNER_EVENT_TYPES, RUNNER_EVENT_OUT_TYPES,
     build_re_lookup, replay_game, _insert_missed_pitch_at,
+    compute_current_state, _ends_plate_appearance, suggest_after_state, get_arsenal_pitch_type_names,
 ):
+
+    def _load_insert_anchor(db, anchor_id):
+        """Loads the anchor pitch an "Insert a missed pitch" form is
+        attached to, its game, the next already-recorded pitch (if
+        any -- offered as the alternate "same batter/pitcher as"
+        identity choice), and the state a brand-new pitch inserted
+        right after the anchor would enter with. That last part is
+        computed the exact same way compute_current_state derives the
+        NEXT live pitch's starting balls/strikes/outs/bases (see
+        pitch_type_and_outcome_picker/result_fields_body,
+        game_tracking.py) -- just anchored at a historical point in
+        an already-tracked game instead of the end of it, by handing
+        compute_current_state only the pitches up through the anchor.
+        This is what lets the insert form's Result section decide
+        whether to show itself (_ends_plate_appearance) and what to
+        suggest (suggest_after_state) exactly like live entry does,
+        instead of always showing every field the way the very first
+        version of this form did.
+
+        Returns None if the anchor pitch (or its game) no longer
+        exists -- e.g. deleted out from under an open insert form --
+        same staleness posture every other render function in this
+        module already takes toward a vanished pitch_id."""
+        anchor = db.query(GamePitch).filter(GamePitch.game_pitch_id == anchor_id).first()
+        if anchor is None:
+            return None
+        game = db.query(Game).filter(Game.game_id == anchor.game_id).first()
+        if game is None:
+            return None
+        pitches_upto = (
+            db.query(GamePitch)
+            .filter(GamePitch.game_id == anchor.game_id, GamePitch.pitch_sequence <= anchor.pitch_sequence)
+            .order_by(GamePitch.pitch_sequence.asc())
+            .all()
+        )
+        runner_events = db.query(GameRunnerEvent).filter(GameRunnerEvent.game_id == anchor.game_id).all()
+        forced_ends = db.query(GameForcedHalfInningEnd).filter(GameForcedHalfInningEnd.game_id == anchor.game_id).all()
+        state = compute_current_state(pitches_upto, runner_events, forced_ends, game)
+        next_pitch = (
+            db.query(GamePitch)
+            .filter(GamePitch.game_id == anchor.game_id, GamePitch.pitch_sequence > anchor.pitch_sequence)
+            .order_by(GamePitch.pitch_sequence.asc())
+            .first()
+        )
+        return game, anchor, next_pitch, state
+
+    def _resolve_insert_pitcher_id(identity_pitch, game):
+        """Mirrors _resolve_actual_pitcher_id's (game_tracking.py)
+        arsenal-scoping logic, just resolved from an already-recorded
+        pitch's stored identity fields instead of live "who's up"
+        state -- an insert's pitcher is always someone already on one
+        side or the other of a real, past pitch, never a fresh pick."""
+        if not identity_pitch.is_our_team_batting:
+            return identity_pitch.our_player_id
+        if game.is_intrasquad:
+            return identity_pitch.opponent_our_player_id
+        return None
 
     @render.ui
     def pitch_log_body():
@@ -503,7 +565,11 @@ def register_game_tracking_pitch_log(
             can_insert_here = bool(can_edit and game is not None and not game.uses_three_squad_intrasquad)
             pitch_type_choices = {}
             ab_outcome_choices = {}
-            if editing_id is not None or inserting_id is not None:
+            if editing_id is not None:
+                # Insert no longer needs these here -- gt_pl_insert_details/
+                # gt_pl_insert_ab_picker below compute their own (the
+                # pitch type list is arsenal-filtered per the resolved
+                # pitcher, same as live entry -- see _resolve_insert_pitcher_id).
                 pitch_type_choices = {pt.type_name: pt.type_name for pt in db.query(PitchType).order_by(PitchType.pitch_type_id).all()}
                 ab_outcome_choices = {name: name for name in AB_OUTCOMES}
 
@@ -613,64 +679,45 @@ def register_game_tracking_pitch_log(
                     continue
 
                 if can_edit and p.game_pitch_id == inserting_id:
-                    next_pitch = (
-                        db.query(GamePitch)
-                        .filter(GamePitch.game_id == game.game_id, GamePitch.pitch_sequence > p.pitch_sequence)
-                        .order_by(GamePitch.pitch_sequence.asc())
-                        .first()
-                    )
-                    insert_children = [
-                        ui.h6(f"Insert a missed pitch after #{p.pitch_sequence}", class_="mt-2"),
-                        ui.p(
-                            "Fill in the pitch that got missed -- it'll be inserted right after this one and "
-                            "every later pitch's count/outs/bases/inning will be recomputed automatically.",
-                            class_="text-muted small",
+                    # Sept 2026 (Ryker: "i want it to look exactly how
+                    # the pitch tracking for each pitch looks... i also
+                    # need to be able to put in the pitch code") --
+                    # this used to be one flat, always-fully-visible
+                    # block built here directly (same "always show,
+                    # save only what's relevant" convention the Edit
+                    # form above uses). That's fine for Edit (its
+                    # fields don't depend on each other), but Insert's
+                    # Result section is fundamentally conditional on
+                    # the pitch outcome + count, same as live pitch
+                    # entry -- so it's now a thin wrapper of
+                    # output_ui(...) placeholders, each backed by its
+                    # own sibling @render.ui/@render_plotly function
+                    # below that mirrors live entry's exact reactive
+                    # chain: pitch_type_and_outcome_picker ->
+                    # pitch_outcome_dependent_fields ->
+                    # result_ab_outcome_picker -> result_fields_body
+                    # (game_tracking.py). Same nested-output_ui-inside-
+                    # a-dynamically-built-render.ui pattern
+                    # pitch_log_runner_add_fields below already proves
+                    # safe in this exact file.
+                    rows.append(ui.div(
+                        ui.output_ui("gt_pl_insert_identity_picker"),
+                        ui.output_ui("gt_pl_insert_details"),
+                        click_widgets.click_target(output_widget("gt_pl_insert_location_widget"), "gt_pl_insert_ix", "gt_pl_insert_iz"),
+                        ui.output_ui("gt_pl_insert_location_caption"),
+                        ui.output_ui("gt_pl_insert_dependent_fields"),
+                        click_widgets.click_target(output_widget("gt_pl_insert_batted_ball_widget"), "gt_pl_insert_bbx", "gt_pl_insert_bby", round_ndigits=1),
+                        ui.output_ui("gt_pl_insert_batted_ball_caption"),
+                        ui.output_ui("gt_pl_insert_ab_picker"),
+                        ui.output_ui("gt_pl_insert_result_fields"),
+                        ui.input_text("gt_pl_insert_notes", "Notes (optional)", value=""),
+                        ui.layout_columns(
+                            ui.input_action_button("gt_pl_save_insert_btn", "Insert pitch", class_="btn-primary btn-sm"),
+                            ui.input_action_button("gt_pl_cancel_insert_btn", "Cancel", class_="btn-outline-secondary btn-sm"),
+                            col_widths=[6, 6],
                         ),
-                    ]
-                    if next_pitch is not None:
-                        insert_children.append(ui.input_radio_buttons(
-                            "gt_pl_insert_identity_source", "Same batter/pitcher as",
-                            choices={
-                                "before": f"Pitch #{p.pitch_sequence} (before)",
-                                "after": f"Pitch #{next_pitch.pitch_sequence} (after)",
-                            },
-                            selected="before",
-                        ))
-                    insert_children.append(ui.input_select("gt_pl_insert_pitch_type", "Pitch type", choices=pitch_type_choices))
-                    insert_children.append(ui.input_select("gt_pl_insert_outcome", "Pitch outcome", choices=PITCH_OUTCOMES))
-                    if not p.is_our_team_batting:
-                        insert_children.append(ui.layout_columns(
-                            ui.input_numeric("gt_pl_insert_ix", "Intended plate side (ft, 0 = center)", value=0.0, min=strike_zone.X_MIN, max=strike_zone.X_MAX, step=0.1),
-                            ui.input_numeric("gt_pl_insert_iz", "Intended plate height (ft)", value=2.5, min=strike_zone.Z_MIN, max=strike_zone.Z_MAX, step=0.1),
-                        ))
-                        insert_children.append(ui.input_checkbox("gt_pl_insert_has_actual", "Actual location recorded", value=False))
-                        insert_children.append(ui.layout_columns(
-                            ui.input_numeric("gt_pl_insert_ax", "Actual plate side (ft)", value=0.0, min=strike_zone.X_MIN, max=strike_zone.X_MAX, step=0.1),
-                            ui.input_numeric("gt_pl_insert_az", "Actual plate height (ft)", value=2.5, min=strike_zone.Z_MIN, max=strike_zone.Z_MAX, step=0.1),
-                        ))
-                    insert_children.append(ui.input_select("gt_pl_insert_cq", "Contact quality (optional -- only meaningful if swung at)", choices=["-- N/A --"] + CONTACT_QUALITY_OPTIONS, selected="-- N/A --"))
-                    insert_children.append(ui.input_checkbox("gt_pl_insert_sword", "Sword (ugly, off-balance swing)", value=False))
-                    insert_children.append(ui.input_select("gt_pl_insert_bbt", "Batted ball type (optional -- only meaningful if In Play)", choices=["-- N/A --", "Ground Ball", "Line Drive", "Fly Ball", "Pop Up"], selected="-- N/A --"))
-                    insert_children.append(ui.layout_columns(
-                        ui.input_numeric("gt_pl_insert_bbx", "Feet right of CF line", value=0.0, step=5.0),
-                        ui.input_numeric("gt_pl_insert_bby", "Feet from home toward OF", value=150.0, step=5.0),
+                        class_="border rounded p-2 mb-2",
                     ))
-                    insert_children.append(ui.input_text("gt_pl_insert_notes", "Notes (optional)", value=""))
-                    insert_children.append(ui.hr())
-                    insert_children.append(ui.input_checkbox("gt_pl_insert_ends_pa", "This pitch ends the plate appearance", value=False))
-                    insert_children.append(ui.input_select("gt_pl_insert_ab_outcome", "AB outcome", choices=ab_outcome_choices))
-                    insert_children.append(ui.layout_columns(
-                        ui.input_numeric("gt_pl_insert_outs_after", "Outs after", value=0, min=0, max=3, step=1),
-                        ui.input_text("gt_pl_insert_bases_after", "Bases after (1st,2nd,3rd = 1/0)", value="000"),
-                        ui.input_numeric("gt_pl_insert_runs", "Runs scored on play", value=0, min=0, max=4, step=1),
-                    ))
-                    insert_children.append(ui.input_numeric("gt_pl_insert_unearned", "Of those, unearned (error-caused)", value=0, min=0, max=4, step=1))
-                    insert_children.append(ui.layout_columns(
-                        ui.input_action_button("gt_pl_save_insert_btn", "Insert pitch", class_="btn-primary btn-sm"),
-                        ui.input_action_button("gt_pl_cancel_insert_btn", "Cancel", class_="btn-outline-secondary btn-sm"),
-                        col_widths=[6, 6],
-                    ))
-                    rows.append(ui.div(*insert_children, class_="border rounded p-2 mb-2"))
                     continue
 
                 if can_edit and p.game_pitch_id == adding_runner_event_id:
@@ -1223,6 +1270,342 @@ def register_game_tracking_pitch_log(
         _bump_pa()
         _bump_refresh()
 
+    @render.ui
+    def gt_pl_insert_identity_picker():
+        """First piece of the Insert form -- static header + the
+        "same batter/pitcher as" radio (only offered when there's a
+        later pitch to borrow identity from). Deliberately doesn't
+        react to gt_pl_insert_identity_source itself (that would blow
+        the radio's own selection away on every change) -- only to
+        _gt_pl_inserting_pitch_id, so it renders once per row opened."""
+        if not _access_ok() or not _can_edit():
+            return None
+        anchor_id = _gt_pl_inserting_pitch_id()
+        if anchor_id is None:
+            return None
+        db = get_session()
+        try:
+            loaded = _load_insert_anchor(db, anchor_id)
+            if loaded is None:
+                return None
+            game, anchor, next_pitch, state = loaded
+            children = [
+                ui.h6(f"Insert a missed pitch after #{anchor.pitch_sequence}", class_="mt-2"),
+                ui.p(
+                    "Fill in the pitch that got missed -- it'll be inserted right after this one and "
+                    "every later pitch's count/outs/bases/inning will be recomputed automatically.",
+                    class_="text-muted small",
+                ),
+            ]
+            if next_pitch is not None:
+                children.append(ui.input_radio_buttons(
+                    "gt_pl_insert_identity_source", "Same batter/pitcher as",
+                    choices={
+                        "before": f"Pitch #{anchor.pitch_sequence} (before)",
+                        "after": f"Pitch #{next_pitch.pitch_sequence} (after)",
+                    },
+                    selected="before",
+                ))
+            return ui.div(*children)
+        finally:
+            db.close()
+
+    @render.ui
+    def gt_pl_insert_details():
+        """Pitch type (arsenal-filtered to whoever's actually pitching
+        this inserted pitch, per the identity choice above) + intended
+        location section, mirroring pitch_type_and_outcome_picker
+        (game_tracking.py) field-for-field -- including the pitch-code
+        shorthand decoder (Ryker: "i also need to be able to put in
+        the pitch code for the intended location"), which live entry
+        already has and this form was missing entirely."""
+        if not _access_ok() or not _can_edit():
+            return None
+        anchor_id = _gt_pl_inserting_pitch_id()
+        if anchor_id is None:
+            return None
+        db = get_session()
+        try:
+            loaded = _load_insert_anchor(db, anchor_id)
+            if loaded is None:
+                return None
+            game, anchor, next_pitch, state = loaded
+            identity_source = input.gt_pl_insert_identity_source() if "gt_pl_insert_identity_source" in input else "before"
+            identity_pitch = next_pitch if (identity_source == "after" and next_pitch is not None) else anchor
+
+            pitch_types = db.query(PitchType).order_by(PitchType.pitch_type_id).all()
+            pitcher_id = _resolve_insert_pitcher_id(identity_pitch, game)
+            arsenal_names = get_arsenal_pitch_type_names(db, pitcher_id, pitch_types) if pitcher_id else [pt.type_name for pt in pitch_types]
+            pitch_type_choices = {name: name for name in arsenal_names}
+
+            children = [ui.input_select("gt_pl_insert_pitch_type", "Pitch type", choices=pitch_type_choices)]
+
+            # Same show_intended rule as pitch_type_and_outcome_picker --
+            # intended location is only ever known for a pitch WE threw
+            # (any of our own roster pitchers), whether we're pitching
+            # against a real opponent or, in an intrasquad game, the
+            # "opposing" pitcher is also one of ours.
+            show_intended = (not identity_pitch.is_our_team_batting) or game.is_intrasquad
+            if show_intended:
+                children.append(ui.p(
+                    'Pitch code (Level-Zone, e.g. "14") -- or click the zone / type coordinates below.',
+                    class_="text-muted small",
+                ))
+                children.append(ui.layout_columns(
+                    ui.input_text("gt_pl_insert_code_input", None, placeholder="e.g. 14"),
+                    ui.input_action_button("gt_pl_apply_insert_code_btn", "Apply code", class_="btn-outline-light btn-sm"),
+                    col_widths=[8, 4],
+                ))
+                children.append(ui.p(
+                    "Level: 1=dirt/below zone, 2=knees/bottom, 3=middle, 4=top & above. "
+                    "Zone: 1=chalk/off the plate (in to a righty, off to a lefty), 2=inner, 3=middle, "
+                    "4=inner (away to a righty, in to a lefty), 5=chalk/off the plate (away to a righty, in to a lefty). "
+                    "Sets location only -- pick the pitch type above yourself.",
+                    class_="text-muted small",
+                ))
+                children.append(ui.p(
+                    "Intended location -- click the zone below to place where the pitch was supposed to go, "
+                    "or type coordinates directly.",
+                    class_="text-muted small",
+                ))
+                children.append(ui.layout_columns(
+                    ui.input_numeric("gt_pl_insert_ix", "Intended plate side (ft, 0 = center, negative = 3B side)", value=0.0, min=strike_zone.X_MIN, max=strike_zone.X_MAX, step=0.1),
+                    ui.input_numeric("gt_pl_insert_iz", "Intended plate height (ft off the ground)", value=2.5, min=strike_zone.Z_MIN, max=strike_zone.Z_MAX, step=0.1),
+                ))
+
+            children.append(ui.input_select("gt_pl_insert_outcome", "Pitch outcome", choices=PITCH_OUTCOMES))
+            return ui.div(*children)
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.gt_pl_apply_insert_code_btn)
+    def _apply_gt_pl_insert_pitch_code():
+        """Insert-form twin of _apply_pitch_code (game_tracking.py) --
+        decodes gt_pl_insert_code_input the same way and pushes the
+        result into gt_pl_insert_ix/gt_pl_insert_iz via ui.update_*,
+        the same two fields the click widget and manual entry below
+        already drive."""
+        if _gt_pl_inserting_pitch_id() is None:
+            return
+        raw = (input.gt_pl_insert_code_input() or "").strip() if "gt_pl_insert_code_input" in input else ""
+        try:
+            level, zone = strike_zone.parse_pitch_code(raw)
+            x, z = strike_zone.decode_pitch_code(level, zone)
+        except ValueError as e:
+            ui.notification_show(str(e), type="error", duration=8)
+            return
+        ui.update_numeric("gt_pl_insert_ix", value=round(x, 3))
+        ui.update_numeric("gt_pl_insert_iz", value=round(z, 3))
+        ui.notification_show(f'Applied "{raw}": location set. Pick the pitch type above.', type="message", duration=5)
+
+    @render_plotly
+    def gt_pl_insert_location_widget():
+        """Click-to-place intended location for the insert form --
+        same click_widgets wrapper as intended_location_widget
+        (game_tracking.py), just reading gt_pl_insert_ix/iz instead."""
+        if not _access_ok() or not _can_edit():
+            return None
+        anchor_id = _gt_pl_inserting_pitch_id()
+        if anchor_id is None:
+            return None
+        db = get_session()
+        try:
+            loaded = _load_insert_anchor(db, anchor_id)
+            if loaded is None:
+                return None
+            game, anchor, next_pitch, state = loaded
+            identity_source = input.gt_pl_insert_identity_source() if "gt_pl_insert_identity_source" in input else "before"
+            identity_pitch = next_pitch if (identity_source == "after" and next_pitch is not None) else anchor
+            if not ((not identity_pitch.is_our_team_batting) or game.is_intrasquad):
+                return None
+        finally:
+            db.close()
+        req("gt_pl_insert_ix" in input)
+        x, z = input.gt_pl_insert_ix(), input.gt_pl_insert_iz()
+        return _build_clickable_widget(strike_zone.build_zone_selector_figure(marker_x=x, marker_z=z))
+
+    @render.ui
+    def gt_pl_insert_location_caption():
+        if not _access_ok() or not _can_edit():
+            return None
+        anchor_id = _gt_pl_inserting_pitch_id()
+        if anchor_id is None:
+            return None
+        db = get_session()
+        try:
+            loaded = _load_insert_anchor(db, anchor_id)
+            if loaded is None:
+                return None
+            game, anchor, next_pitch, state = loaded
+            identity_source = input.gt_pl_insert_identity_source() if "gt_pl_insert_identity_source" in input else "before"
+            identity_pitch = next_pitch if (identity_source == "after" and next_pitch is not None) else anchor
+            if not ((not identity_pitch.is_our_team_batting) or game.is_intrasquad):
+                return None
+        finally:
+            db.close()
+        req("gt_pl_insert_ix" in input)
+        x, z = input.gt_pl_insert_ix(), input.gt_pl_insert_iz()
+        return ui.p(
+            f"Intended: {x:+.2f} ft, {z:.2f} ft high — click the zone above, or type coordinates directly.",
+            class_="text-muted small text-center",
+        )
+
+    @render.ui
+    def gt_pl_insert_dependent_fields():
+        """Contact quality/sword/batted-ball fields, conditional on
+        the chosen outcome -- mirrors pitch_outcome_dependent_fields
+        (game_tracking.py) exactly, including the "force end PA"
+        override checkbox for outcomes that don't already always end
+        the at-bat. This replaces the old form's always-visible
+        contact-quality/batted-ball fields and always-visible "This
+        pitch ends the plate appearance" checkbox."""
+        if not _access_ok() or not _can_edit():
+            return None
+        if _gt_pl_inserting_pitch_id() is None:
+            return None
+        req("gt_pl_insert_outcome" in input)
+        outcome = input.gt_pl_insert_outcome()
+        children = []
+        if outcome not in ("In Play", "HBP"):
+            children.append(ui.input_checkbox("gt_pl_insert_force_end_pa", "This pitch ends the at-bat (e.g. walk, hit-by-pitch)"))
+        if outcome in ("In Play", "Foul", "Swing and Miss"):
+            children.append(ui.input_select("gt_pl_insert_cq", "Contact quality (optional)", choices=["-- N/A --"] + CONTACT_QUALITY_OPTIONS))
+            children.append(ui.input_checkbox("gt_pl_insert_sword", "Sword (ugly, off-balance swing)"))
+        if outcome == "In Play":
+            children.append(ui.input_select("gt_pl_insert_bbt", "Batted ball type (optional)", choices=["-- N/A --", "Ground Ball", "Line Drive", "Fly Ball", "Pop Up"]))
+            children.append(ui.p(
+                "Where did it land? Click the field below, or type coordinates directly.",
+                class_="text-muted small",
+            ))
+            children.append(ui.layout_columns(
+                ui.input_numeric("gt_pl_insert_bbx", "Feet right of the CF line (negative = left field side)", value=0.0, min=field_location.X_MIN, max=field_location.X_MAX, step=5.0),
+                ui.input_numeric("gt_pl_insert_bby", "Feet from home plate toward the outfield", value=150.0, min=field_location.Y_MIN, max=field_location.Y_MAX, step=5.0),
+            ))
+        if not children:
+            return None
+        return ui.div(*children)
+
+    @render_plotly
+    def gt_pl_insert_batted_ball_widget():
+        if not _access_ok() or not _can_edit():
+            return None
+        if _gt_pl_inserting_pitch_id() is None:
+            return None
+        req("gt_pl_insert_outcome" in input)
+        if input.gt_pl_insert_outcome() != "In Play":
+            return None
+        req("gt_pl_insert_bbx" in input)
+        x, y = input.gt_pl_insert_bbx(), input.gt_pl_insert_bby()
+        return _build_clickable_widget(field_location.build_field_selector_figure(marker_x=x, marker_y=y))
+
+    @render.ui
+    def gt_pl_insert_batted_ball_caption():
+        if not _access_ok() or not _can_edit():
+            return None
+        if _gt_pl_inserting_pitch_id() is None:
+            return None
+        req("gt_pl_insert_outcome" in input)
+        if input.gt_pl_insert_outcome() != "In Play":
+            return None
+        req("gt_pl_insert_bbx" in input)
+        x, y = input.gt_pl_insert_bbx(), input.gt_pl_insert_bby()
+        dist = field_location.distance_from_plate(x, y)
+        return ui.p(
+            f"Landed: {x:+.0f} ft, {y:.0f} ft deep ({dist:.0f} ft from home) — click the field above, or type coordinates directly.",
+            class_="text-muted small text-center",
+        )
+
+    @render.ui
+    def gt_pl_insert_ab_picker():
+        """Mirrors result_ab_outcome_picker (game_tracking.py) -- only
+        appears once the outcome (+ optional force-end-PA override)
+        would actually end the plate appearance, computed at the
+        historical point right after the anchor pitch via
+        _load_insert_anchor's state, the same way live entry computes
+        it for the next pitch about to be recorded."""
+        if not _access_ok() or not _can_edit():
+            return None
+        anchor_id = _gt_pl_inserting_pitch_id()
+        if anchor_id is None:
+            return None
+        req("gt_pl_insert_outcome" in input)
+        db = get_session()
+        try:
+            loaded = _load_insert_anchor(db, anchor_id)
+            if loaded is None:
+                return None
+            game, anchor, next_pitch, state = loaded
+            outcome = input.gt_pl_insert_outcome()
+            force_end_pa = input.gt_pl_insert_force_end_pa() if "gt_pl_insert_force_end_pa" in input else False
+            ends_pa, new_balls, new_strikes = _ends_plate_appearance(state, outcome, force=force_end_pa)
+            if not ends_pa:
+                return None
+            strikeout_default = "K (Looking)" if outcome == "Called Strike" else "K"
+            if new_balls >= 4:
+                default_ab = "BB"
+            elif new_strikes >= 3:
+                default_ab = strikeout_default
+            elif outcome == "HBP":
+                default_ab = "HBP"
+            elif outcome == "In Play":
+                default_ab = "1B"
+            else:
+                default_ab = None
+            choices = {name: name for name in AB_OUTCOMES}
+            return ui.div(
+                ui.hr(),
+                ui.p(
+                    "Plate appearance / count state (advanced) -- changing "
+                    "any of these can shift every later pitch's stored count, "
+                    "inning, and score; you'll see a preview of exactly what "
+                    "would change before anything is inserted.",
+                    class_="text-muted small mb-1",
+                ),
+                ui.h5("Result", class_="gbo-section-title"),
+                ui.input_select("gt_pl_insert_ab_outcome", "AB outcome", choices=choices, selected=default_ab if default_ab in AB_OUTCOMES else None),
+                ui.p("Confirm or adjust the result -- suggested from the AB outcome, but real plays vary.", class_="text-muted small"),
+            )
+        finally:
+            db.close()
+
+    @render.ui
+    def gt_pl_insert_result_fields():
+        """Mirrors result_fields_body (game_tracking.py) -- outs/bases/
+        runs/unearned, suggested from suggest_after_state off the same
+        historical state _load_insert_anchor derives, shown only once
+        gt_pl_insert_ab_picker itself is showing (same ends_pa gate)."""
+        if not _access_ok() or not _can_edit():
+            return None
+        anchor_id = _gt_pl_inserting_pitch_id()
+        if anchor_id is None:
+            return None
+        req("gt_pl_insert_outcome" in input)
+        db = get_session()
+        try:
+            loaded = _load_insert_anchor(db, anchor_id)
+            if loaded is None:
+                return None
+            game, anchor, next_pitch, state = loaded
+            outcome = input.gt_pl_insert_outcome()
+            force_end_pa = input.gt_pl_insert_force_end_pa() if "gt_pl_insert_force_end_pa" in input else False
+            ends_pa, new_balls, new_strikes = _ends_plate_appearance(state, outcome, force=force_end_pa)
+            if not ends_pa:
+                return None
+            req("gt_pl_insert_ab_outcome" in input)
+            ab_outcome = input.gt_pl_insert_ab_outcome()
+            suggested_outs, suggested_bases, suggested_runs = suggest_after_state(ab_outcome, state["bases"], state["outs"])
+            return ui.div(
+                ui.layout_columns(
+                    ui.input_numeric("gt_pl_insert_outs_after", "Outs after", value=min(suggested_outs, 3), min=0, max=3, step=1),
+                    ui.input_text("gt_pl_insert_bases_after", "Bases after (1st,2nd,3rd = 1/0)", value=suggested_bases),
+                    ui.input_numeric("gt_pl_insert_runs", "Runs scored on play", value=suggested_runs, min=0, max=4, step=1),
+                ),
+                ui.input_numeric("gt_pl_insert_unearned", "Of those, unearned (error-caused)", value=0, min=0, max=4, step=1),
+            )
+        finally:
+            db.close()
+
     @reactive.effect
     @reactive.event(input.gt_pl_cancel_insert_btn)
     def _cancel_pitch_log_insert():
@@ -1230,14 +1613,24 @@ def register_game_tracking_pitch_log(
         _gt_pl_pending_insert.set(None)
         _bump_refresh()
 
-    def _collect_insert_values(db, identity_pitch, pitch_type_name, outcome, notes):
+    def _collect_insert_values(db, game, identity_pitch, state, pitch_type_name, outcome, notes):
         """Shared field-collection for the insert form -- called from
-        both _save_pitch_log_insert (build the preview) and
-        _confirm_pitch_log_insert (re-derive fresh at commit time,
-        same staleness guard _confirm_pitch_log_preview uses for
-        edits). Returns (values, error_message) -- error_message is set
-        (and values incomplete) if validation fails, so the caller can
-        show it and bail without saving anything."""
+        _save_pitch_log_insert (build the preview); _confirm_pitch_log_insert
+        re-derives the shift+insert fresh from the DB but reuses the
+        already-collected values dict from the preview rather than
+        re-reading form inputs (see its own docstring). Returns
+        (values, error_message) -- error_message is set (and values
+        incomplete) if validation fails, so the caller can show it and
+        bail without saving anything.
+
+        state is the historical balls/strikes/outs/bases this new
+        pitch would enter with -- computed by _load_insert_anchor the
+        same way compute_current_state derives it for the next LIVE
+        pitch, just anchored at this insertion point instead of the
+        end of the game. It's what lets ends_pa below be computed via
+        _ends_plate_appearance exactly like live entry, instead of
+        trusting a raw "this pitch ends the PA" checkbox the way the
+        very first version of this form did."""
         values = {
             "inning": identity_pitch.inning,
             "is_our_team_batting": identity_pitch.is_our_team_batting,
@@ -1255,21 +1648,24 @@ def register_game_tracking_pitch_log(
         values["pitch_outcome"] = outcome
         values["notes"] = notes
 
-        if not identity_pitch.is_our_team_batting and "gt_pl_insert_ix" in input:
+        # Intended location only -- same show_intended rule
+        # gt_pl_insert_details/pitch_type_and_outcome_picker use.
+        # Actual location is never captured here either, live or
+        # inserted -- it's always a later Video Review step (see
+        # _do_record_pitch's own actual_x = actual_z = None,
+        # game_tracking.py) -- so this form no longer offers an
+        # "actual location recorded" checkbox at all.
+        show_intended = (not identity_pitch.is_our_team_batting) or game.is_intrasquad
+        if show_intended and "gt_pl_insert_ix" in input:
             intended_x, intended_z = input.gt_pl_insert_ix(), input.gt_pl_insert_iz()
-            has_actual = bool(input.gt_pl_insert_has_actual()) if "gt_pl_insert_has_actual" in input else False
-            actual_x = input.gt_pl_insert_ax() if has_actual else None
-            actual_z = input.gt_pl_insert_az() if has_actual else None
             values["intended_plate_x"] = intended_x
             values["intended_plate_z"] = intended_z
-            values["actual_plate_x"] = actual_x
-            values["actual_plate_z"] = actual_z
             values["intended_zone"] = strike_zone.derive_old_zone(intended_x, intended_z)
-            values["pitch_zone"] = strike_zone.derive_old_zone(actual_x, actual_z)
         else:
             values["intended_plate_x"] = values["intended_plate_z"] = None
-            values["actual_plate_x"] = values["actual_plate_z"] = None
-            values["intended_zone"] = values["pitch_zone"] = None
+            values["intended_zone"] = None
+        values["actual_plate_x"] = values["actual_plate_z"] = None
+        values["pitch_zone"] = None
 
         if outcome in ("In Play", "Foul", "Swing and Miss") and "gt_pl_insert_cq" in input:
             raw_cq = input.gt_pl_insert_cq()
@@ -1289,8 +1685,14 @@ def register_game_tracking_pitch_log(
             values["batted_ball_x"] = None
             values["batted_ball_y"] = None
 
-        ends_pa_checked = bool(input.gt_pl_insert_ends_pa()) if "gt_pl_insert_ends_pa" in input else False
-        if ends_pa_checked:
+        # ends_pa is now computed exactly like live entry
+        # (_ends_plate_appearance off the historical state + the
+        # optional force-end-PA override), not read off a raw
+        # always-shown checkbox -- see gt_pl_insert_dependent_fields/
+        # gt_pl_insert_ab_picker/gt_pl_insert_result_fields above.
+        force_end_pa = bool(input.gt_pl_insert_force_end_pa()) if "gt_pl_insert_force_end_pa" in input else False
+        ends_pa, _new_balls, _new_strikes = _ends_plate_appearance(state, outcome, force=force_end_pa)
+        if ends_pa:
             if "gt_pl_insert_ab_outcome" not in input:
                 return None, "Confirm the AB outcome before inserting -- not saved."
             ab_outcome_val = input.gt_pl_insert_ab_outcome()
@@ -1309,7 +1711,7 @@ def register_game_tracking_pitch_log(
             runs_val = 0
             unearned_val = 0
 
-        values["ends_plate_appearance"] = ends_pa_checked
+        values["ends_plate_appearance"] = ends_pa
         values["ab_outcome"] = ab_outcome_val
         values["outs_after"] = outs_after_val
         values["bases_after"] = bases_after_val
@@ -1350,6 +1752,21 @@ def register_game_tracking_pitch_log(
                 ui.notification_show("Inserting a missed pitch isn't supported yet for three-squad games.", type="error", duration=8)
                 return
 
+            # Same historical-state derivation _load_insert_anchor uses
+            # (compute_current_state over the pitches up through this
+            # anchor) -- needed here too so _collect_insert_values can
+            # decide ends_pa exactly like the render functions above
+            # already decided which fields to even show.
+            pitches_upto = (
+                db.query(GamePitch)
+                .filter(GamePitch.game_id == game_id, GamePitch.pitch_sequence <= anchor.pitch_sequence)
+                .order_by(GamePitch.pitch_sequence.asc())
+                .all()
+            )
+            events_now = db.query(GameRunnerEvent).filter(GameRunnerEvent.game_id == game_id).all()
+            forced_ends_now = db.query(GameForcedHalfInningEnd).filter(GameForcedHalfInningEnd.game_id == game_id).all()
+            state = compute_current_state(pitches_upto, events_now, forced_ends_now, game)
+
             next_pitch = (
                 db.query(GamePitch)
                 .filter(GamePitch.game_id == game_id, GamePitch.pitch_sequence > anchor.pitch_sequence)
@@ -1359,7 +1776,7 @@ def register_game_tracking_pitch_log(
             identity_source = input.gt_pl_insert_identity_source() if "gt_pl_insert_identity_source" in input else "before"
             identity_pitch = next_pitch if (identity_source == "after" and next_pitch is not None) else anchor
 
-            values, error = _collect_insert_values(db, identity_pitch, pitch_type_name, outcome, notes)
+            values, error = _collect_insert_values(db, game, identity_pitch, state, pitch_type_name, outcome, notes)
             if error:
                 ui.notification_show(error, type="error", duration=10)
                 return
