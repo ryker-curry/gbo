@@ -85,38 +85,128 @@ from strike_zone import classify_attack_zone
 MIN_BASELINE_PITCHES = 20
 
 # Fitting Stuff+'s regression needs enough RUN-VALUE-BEARING (real-game)
-# pitches to trust 5 fitted parameters (4 features + intercept) --
-# roughly 8-10 observations per parameter is a standard rule of thumb
-# for a linear fit, rounded up to a clean number here. This is a team-
-# wide, PER PITCH TYPE floor (see fit_stuff_plus_model) -- distinct from
-# MIN_BASELINE_PITCHES above, which just gates a plain mean/stdev.
-MIN_STUFF_TRAINING_PITCHES = 40
+# pitches to trust 10 fitted parameters (9 features + intercept -- see
+# STUFF_PLUS_FEATURE_NAMES below, expanded Sept 2026 per Ryker's review
+# of the aStuff+/Driveline/Rockland sources against what GBO's own
+# Rapsodo import already captures but Stuff+ wasn't using) -- roughly
+# 8-10 observations per parameter is a standard rule of thumb for a
+# linear fit, rounded up to a clean number here (was 40 for the
+# original 5 parameters/4 features -- raised in lockstep with the
+# feature count, not left at the old floor, since an under-powered fit
+# isn't a more "valid" model just because it still runs). This is a
+# team-wide, PER PITCH TYPE floor (see fit_stuff_plus_model) -- distinct
+# from MIN_BASELINE_PITCHES above, which just gates a plain mean/stdev.
+# release_extension was DROPPED from the feature list (see
+# STUFF_PLUS_FEATURE_NAMES comment) after a live-data check found it's
+# not just missing sometimes, it's systematically wrong -- so this is
+# 9 features, not the 10 briefly considered, and the floor is 80, not
+# 90. Real consequence, checked against live data: 4-Seam Fastball
+# (135 complete training pitches) clears it comfortably, but 2-Seam
+# Fastball (47), Slider (43), Changeup (29), Curveball (14), Splitter
+# (8), and Cutter (5) all fall short and will show no Stuff+ until
+# more real-game Rapsodo data accumulates for those types. That's the
+# honest tradeoff of fitting more parameters, not a bug.
+MIN_STUFF_TRAINING_PITCHES = 80
 
 
 # ---------------------------------------------------------------------------
 # Stuff+ -- physical characteristics only (no location, no count -- matches
 # the real Stuff+ definition). See module docstring for the Aug 31 2026
 # methodology fix: weights are fit from real run value, not assumed equal.
+#
+# Sept 2026 feature-set expansion (Ryker, after reviewing Salorio's
+# aStuff+ writeup, Driveline's "What Is Stuff" primer, and Rockland Peak
+# Performance's Stuff+ explainer against GBO's own model): all three
+# sources single out release point/extension as real signal (Salorio's
+# aStuff+ found adjusted horizontal release point to be its 2nd most
+# important feature), and modern pitch-quality work generally treats
+# spin efficiency/gyro degree as necessary to interpret total_spin at
+# all (two pitches with identical total_spin can move very differently
+# depending on how much of that spin is "useful" transverse spin vs.
+# "wasted" gyro/bullet spin) -- none of which the original 4-feature
+# version used, even though GBO's own Rapsodo import already captures
+# release_height/release_side/spin_axis_degrees/spin_efficiency/
+# gyro_degree on RapsodoPitch.
+#
+# release_extension was tried too and pulled back out: checking it
+# against live data (not just for nulls -- it has none) found 56% of
+# 4-Seam Fastball's real-game training rows sitting at a literal 0.000,
+# clustered across nearly every "_Live" (in-game) Rapsodo export from
+# many different pitchers/dates, while genuine readings run a plausible
+# 4.9-7.0 ft -- i.e. Rapsodo's own Live-tracking mode can't always
+# resolve release point and appears to export 0 rather than leave the
+# column blank when it can't, and every OTHER pitch type shows the same
+# pattern (14% zero on Curveball up to 100% on Splitter's n=8). Since
+# real-game run_value linkage only ever comes from Live-mode capture,
+# this isn't a fixable import bug or a case for imputing -- it's a
+# hardware/capture limitation that makes release_extension specifically
+# unusable as a training feature here, so it's left out even though
+# release_height/release_side (also release-point metrics, from the
+# same RapsodoPitch rows) show no such problem and are kept. Also
+# switched vb_spin/hb_spin (pure spin-induced break) to vb_trajectory/
+# hb_trajectory (the actual measured break, including seam-shifted-wake
+# effects) -- every source describes the headline feature as "vertical/horizontal
+# break," not spin-only break, and SSW-heavy pitch types (sinkers,
+# splitters) can move meaningfully more than their spin alone predicts.
 # ---------------------------------------------------------------------------
 
-STUFF_PLUS_FEATURE_NAMES = ("velocity", "vb_spin", "hb_spin", "total_spin")
+STUFF_PLUS_FEATURE_NAMES = (
+    "velocity", "vb_trajectory", "hb_trajectory", "total_spin",
+    "spin_axis_offset", "spin_efficiency", "gyro_degree",
+    "release_height", "release_side",
+)
+
+
+def _spin_axis_offset(spin_axis_degrees):
+    """spin_axis_degrees (rapsodo_conventions.spin_clock_to_degrees's
+    0-360 clock-face convention, 0 = 12:00 = pure backspin) can't be fed
+    into a linear regression as-is -- it's circular, so 359 and 1 are
+    nearly the same spin orientation but numerically nearly maximally
+    far apart, which would badly confuse an OLS fit. Folds it onto a
+    single 0-180 "how far this pitch's spin axis sits from pure
+    backspin" value instead -- well-behaved and monotonic, at the cost
+    of not distinguishing which SIDE it's off-axis toward.
+    Deliberately does NOT attempt a pitcher-handedness mirror correction
+    the way release_side/horizontal break already get (see
+    rapsodo_conventions.py) -- whether spin axis needs one is still an
+    open question per that module's own documented caveat about
+    confirming Rapsodo's clock-direction convention; revisit once
+    that's settled rather than guessing a correction now."""
+    if spin_axis_degrees is None:
+        return None
+    degrees = float(spin_axis_degrees) % 360.0
+    return min(degrees, 360.0 - degrees)
 
 
 def _stuff_plus_features(rapsodo_pitch):
     """Extract Stuff+'s physical inputs from one RapsodoPitch, in the form
-    used consistently for BOTH fitting and scoring. vb_spin/hb_spin
-    (induced vertical/horizontal break) are taken as magnitude (abs) --
-    raw sign encodes break DIRECTION (arm-side vs. glove-side, rise vs.
-    drop), which varies by pitch type and pitcher handedness and isn't
-    itself a quality signal on its own. More break in a pitch's own
-    characteristic direction is what's actually valued; using magnitude
-    here is a documented V1 simplification versus a direction-aware
-    weighting (see module docstring)."""
+    used consistently for BOTH fitting and scoring. vb_trajectory/
+    hb_trajectory (actual measured vertical/horizontal break) are taken
+    as magnitude (abs) -- raw sign encodes break DIRECTION (arm-side vs.
+    glove-side, rise vs. drop), which varies by pitch type and isn't
+    itself a quality signal on its own (a slider breaking hard glove-side
+    and a sinker breaking hard arm-side are both "good break," just in
+    opposite raw directions). More break in a pitch's own characteristic
+    direction is what's actually valued; using magnitude here is a
+    documented V1 simplification versus a direction-aware weighting (see
+    module docstring). spin_axis_offset is derived, see that function.
+    Every other feature (velocity, total_spin, spin_efficiency,
+    gyro_degree, release_height/side) is used as reported -- none of
+    them have the same sign-ambiguity problem break does.
+    release_extension was deliberately left out here -- see
+    STUFF_PLUS_FEATURE_NAMES's comment for the live-data finding that
+    ruled it out (a widespread literal-0.000 sentinel in real-game
+    Rapsodo Live captures, not a real reading)."""
     return {
         "velocity": float(rapsodo_pitch.velocity) if rapsodo_pitch.velocity is not None else None,
-        "vb_spin": abs(float(rapsodo_pitch.vb_spin)) if rapsodo_pitch.vb_spin is not None else None,
-        "hb_spin": abs(float(rapsodo_pitch.hb_spin)) if rapsodo_pitch.hb_spin is not None else None,
+        "vb_trajectory": abs(float(rapsodo_pitch.vb_trajectory)) if rapsodo_pitch.vb_trajectory is not None else None,
+        "hb_trajectory": abs(float(rapsodo_pitch.hb_trajectory)) if rapsodo_pitch.hb_trajectory is not None else None,
         "total_spin": float(rapsodo_pitch.total_spin) if rapsodo_pitch.total_spin is not None else None,
+        "spin_axis_offset": _spin_axis_offset(rapsodo_pitch.spin_axis_degrees),
+        "spin_efficiency": float(rapsodo_pitch.spin_efficiency) if rapsodo_pitch.spin_efficiency is not None else None,
+        "gyro_degree": float(rapsodo_pitch.gyro_degree) if rapsodo_pitch.gyro_degree is not None else None,
+        "release_height": float(rapsodo_pitch.release_height) if rapsodo_pitch.release_height is not None else None,
+        "release_side": float(rapsodo_pitch.release_side) if rapsodo_pitch.release_side is not None else None,
     }
 
 
@@ -131,7 +221,7 @@ def fit_stuff_plus_model(training_pairs):
     that's what makes this "trained to RV" rather than the old fixed
     equal-weighted guess.
 
-    Fits a linear regression of run_value on this type's 4 standardized
+    Fits a linear regression of run_value on this type's 9 standardized
     physical features via ordinary least squares (numpy.linalg.lstsq).
     A full decision-tree model (what real FanGraphs Stuff+ uses) needs
     far more distinct pitchers than GBO has without just memorizing this
@@ -149,7 +239,7 @@ def fit_stuff_plus_model(training_pairs):
     module uses.
 
     Returns None if fewer than MIN_STUFF_TRAINING_PITCHES complete rows
-    are available -- not enough to trust 5 fitted parameters yet.
+    are available -- not enough to trust 10 fitted parameters yet.
     Otherwise a model dict:
         {"feature_baseline": {feature: (mean, stdev)},
          "quality_weights": {feature: float},
