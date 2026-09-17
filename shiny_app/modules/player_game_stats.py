@@ -165,6 +165,7 @@ def player_game_stats_server(input, output, session, app_state):
                             {"label": "Swing %", "value": _fmt_pct(discipline["Swing %"])},
                             {"label": "Chase %", "value": _fmt_pct(discipline["Chase %"])},
                             {"label": "Whiff %", "value": _fmt_pct(discipline["Whiff %"])},
+                            {"label": "SwStr %", "value": _fmt_pct(discipline["SwStr %"])},
                             {"label": "1st-Pitch Swing %", "value": _fmt_pct(discipline["First-Pitch Swing %"])},
                         ]))
                         sections.append(ui.p(
@@ -278,6 +279,7 @@ def player_game_stats_server(input, output, session, app_state):
                         sections.append(ui_helpers.render_kpi_cards([
                             {"label": "Zone %", "value": _fmt_pct(command["Zone %"])},
                             {"label": "Whiff % Induced", "value": _fmt_pct(command["Whiff % Induced"])},
+                            {"label": "SwStr % Induced", "value": _fmt_pct(command["SwStr % Induced"])},
                             {"label": "Chase % Induced", "value": _fmt_pct(command["Chase % Induced"])},
                         ]))
                         sections.append(ui.p(f"Pitches Thrown: {command['Pitches Thrown']} ({command['Located Pitches']} with a recorded location)", class_="text-muted small"))

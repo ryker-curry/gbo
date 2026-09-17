@@ -10,7 +10,7 @@ opponent_our_player_id while the other side batted (intrasquad only)
 -- easy to miss if only querying our_player_id, which is exactly the
 gap flagged when intrasquad support was built.
 
-compute_pitch_type_breakdown() below is the Whiff%/CSW%/Chase%/
+compute_pitch_type_breakdown() below is the Whiff%/SwStr%/CSW%/Chase%/
 Putaway%/GB-FB-LD% rate-stat rollup per pitch type -- the same shape
 as the per-pitch-type breakdown table in Ryker's own game-tracking
 spreadsheet. Built entirely from GamePitch fields pages/game_tracking.py
@@ -675,7 +675,7 @@ def _rate(numerator, denominator):
 def compute_pitch_type_breakdown(pitches):
     """Per-pitch-type rate-stat rollup for a pitcher, matching the shape
     of the breakdown table in Ryker's own game-tracking spreadsheet
-    (Pitch Usage%, Strike%, Whiff%, CSW%, Chase%, Putaway%, GB/FB/LD%,
+    (Pitch Usage%, Strike%, Whiff%, SwStr%, CSW%, Chase%, Putaway%, GB/FB/LD%,
     Dominance%, Ahead%, A3P%, Sword%, etc.) -- built from the same
     GamePitch fields pages/game_tracking.py already captures (Sword
     from its own new checkbox), no other new data entry required.
@@ -905,6 +905,7 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
         "FPS %": _rate(len(first_pitch_strikes), len(first_pitches)),
         "Swing %": _rate(len(swings), n), "Total Swings": len(swings), "Zone Swings": len(zone_swings),
         "Whiffs": len(whiffs), "Whiff %": _rate(len(whiffs), len(swings)),
+        "SwStr %": _rate(len(whiffs), n),
         "CSW %": _rate(len(called_strikes) + len(whiffs), n),
         "Zone Whiffs": len(zone_whiffs), "Zone Whiff %": _rate(len(zone_whiffs), len(zone_swings)),
         "Pitches Out of Zone": len(out_zone), "Chase": len(chase_swings), "Chase %": _rate(len(chase_swings), len(out_zone)),

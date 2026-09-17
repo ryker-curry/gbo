@@ -300,7 +300,7 @@ def _compute_woba(completed_pas, ab, bb, hbp):
 
 def _compute_pitch_type_breakdown(pitches, completed_pas, pitch_types):
     """Per-pitch-type rows (Total Pitches, Usage%, Dominance%/CSW%,
-    Whiff%, Chase%, Putaway%, GB%/FB%/LD%, FPS%, Execution%, ...),
+    Whiff%, SwStr%, Chase%, Putaway%, GB%/FB%/LD%, FPS%, Execution%, ...),
     attributed by pitch_type_id, plus a Total row summing across all
     types. Zone-dependent columns (Zone Swings/Whiffs, Chase%, Zone
     Whiff%, Execution%) are None for any pitch type with no reviewed
@@ -371,6 +371,7 @@ def _pitch_type_row(type_pitches, completed_pas, type_id, total_pitches_all_type
         "fps": fps, "first_pitch_thrown": len(first_pitches), "fps_pct": round(fps / len(first_pitches) * 100, 1) if first_pitches else None,
         "early": early, "ahead": ahead,
         "total_swings": len(swings), "whiffs": whiffs, "whiff_pct": round(whiffs / len(swings) * 100, 1) if swings else None,
+        "swstr_pct": round(whiffs / n * 100, 1) if n else None,
         "zone_swings": zone_swings, "zone_whiffs": zone_whiffs,
         "zone_whiff_pct": round(zone_whiffs / zone_swings * 100, 1) if zone_swings else None,
         "chases": chases, "out_of_zone_reviewed": len(out_of_zone_reviewed) if out_of_zone_reviewed is not None else None,
