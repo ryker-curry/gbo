@@ -205,6 +205,7 @@ def _pitch_shape_rows(pitches, rap_by_gp, stuff_baselines, pitcher):
             "Arm°": _d(round(arm_angle) if arm_angle is not None else None, "°"),
             "Stuff+": _d(stuff_by_label.get(label)),
             "Whiff %": _d(base.get("Whiff %"), "%"),
+            "SwStr %": _d(base.get("SwStr %"), "%"),
         })
     return rows
 

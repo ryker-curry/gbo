@@ -3787,6 +3787,7 @@ def game_tracking_server(input, output, session, app_state):
                         "Usage %": row["Pitch Usage %"],
                         "Strike %": row["Strike %"],
                         "Whiff %": row["Whiff %"],
+                        "SwStr %": row["SwStr %"],
                         "CSW %": row["CSW %"],
                         "Chase %": row["Chase %"],
                     }

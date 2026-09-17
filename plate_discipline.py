@@ -13,6 +13,13 @@ as separate fields (see strike_zone.py's docstring for why):
   - Whiff (swing and miss) = pitch_outcome == Swing and Miss
   - Contact (on a swing) = pitch_outcome in (Foul, In Play)
 
+Whiff % vs. SwStr % -- two different denominators, per Ryker, not the
+same stat under two names: Whiff % = whiffs / SWINGS (how often a
+swing misses); SwStr % = whiffs / ALL PITCHES seen or thrown (how
+often any given pitch results in a swinging strike, unconditional on
+whether it was swung at). Both are reported everywhere this module
+tracks whiffs.
+
 Zone-based metrics (Zone%, Chase%, etc.) only count pitches that
 actually have a recorded location (actual_plate_x/z not null) --
 pitches logged without a location click are excluded from those
@@ -64,6 +71,7 @@ def compute_hitter_discipline(pitches):
         "Located Pitches": len(located),
         "Swing %": _pct(len(swings), total),
         "Whiff %": _pct(len(whiffs), len(swings)),
+        "SwStr %": _pct(len(whiffs), total),
         "Zone %": _pct(len(in_zone_located), len(located)),
         "Zone Swing %": _pct(len(zone_swings), len(in_zone_located)),
         "Chase %": _pct(len(chase_swings), len(out_zone_located)),
@@ -101,6 +109,7 @@ def compute_zone_tier_discipline(pitches):
             "Zone Tier": tier, "Pitches Seen": n,
             "Swing %": _pct(len(swings), n), "Swings": len(swings),
             "Whiff %": _pct(len(whiffs), len(swings)),
+            "SwStr %": _pct(len(whiffs), n),
             "Contact %": _pct(len(contacts), len(swings)),
         })
     return rows
@@ -132,6 +141,7 @@ def compute_pitcher_command(pitches):
         "Located Pitches": len(located),
         "Zone %": _pct(len(in_zone_located), len(located)),
         "Whiff % Induced": _pct(len(whiffs), len(swings)),
+        "SwStr % Induced": _pct(len(whiffs), total),
         "Chase % Induced": _pct(len(chase_swings_induced), len(out_zone_located)),
         "Usage %": usage_pct,
     }
