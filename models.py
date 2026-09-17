@@ -989,7 +989,7 @@ class HitterSwing(Base):
     pitch_zone = Column(Integer, nullable=True)  # 0 = Bury, 1-9 = in-zone grid -- where it ACTUALLY ended up, same convention as BullpenPitch
     pitcher_hand = Column(String(1), nullable=True)  # 'R' or 'L' -- always capturable even if the pitcher isn't a roster player (BP arm, machine, opponent)
     pitcher_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)  # optional: only set if it's one of our own roster pitchers
-    contact_quality = Column(String(20), nullable=True)  # "Barreled/Squared Up" / "Solid" / "Jammed" / "Off the End" / "Clipped" / "Miss"
+    contact_quality = Column(String(20), nullable=True)  # "Barreled/Squared Up" / "Solid" / "Weak" / "Jammed" / "Off the End" / "Clipped" / "Miss"
     hit_location = Column(String(20), nullable=True)  # field spray direction -- not applicable for Miss
     notes = Column(Text, nullable=True)
     video_url = Column(String(500), nullable=True)  # optional clip for this specific swing -- one per swing, no multi-angle, same as BullpenPitch
@@ -1434,7 +1434,7 @@ class GamePitch(Base):
     intended_plate_x = Column(Numeric(5, 3), nullable=True)
     intended_plate_z = Column(Numeric(5, 3), nullable=True)
     pitch_outcome = Column(String(20), nullable=True)  # "Ball" / "Called Strike" / "Swing and Miss" / "Foul" / "In Play" / "HBP"
-    contact_quality = Column(String(20), nullable=True)  # "Barreled/Squared Up" / "Solid" / "Jammed" / "Off the End" / "Clipped" / "Miss" -- same categories as Hitter Tracking
+    contact_quality = Column(String(20), nullable=True)  # "Barreled/Squared Up" / "Solid" / "Weak" / "Jammed" / "Off the End" / "Clipped" / "Miss" -- same categories as Hitter Tracking
     # Only meaningful when pitch_outcome == "In Play". Swing/take itself
     # isn't a separate field -- it's already fully derivable from
     # pitch_outcome (Swing and Miss/Foul/In Play = swung; Ball/Called

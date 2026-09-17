@@ -393,7 +393,7 @@ K_OUTCOMES = ("K", "K (Looking)")
 # a separate 6th value (swung and made literally no contact -- not a
 # contact-quality tier at all) -- same categories shared with Hitter
 # Tracking (see hitter_tracking.py's own copy of this list).
-CONTACT_QUALITY_OPTIONS = ["Barreled/Squared Up", "Solid", "Jammed", "Off the End", "Clipped", "Miss"]
+CONTACT_QUALITY_OPTIONS = ["Barreled/Squared Up", "Solid", "Weak", "Jammed", "Off the End", "Clipped", "Miss"]
 
 # Mid-plate-appearance base-running events -- see GameRunnerEvent's
 # docstring in models.py for the full "why" (bases_before/outs_before

@@ -81,8 +81,8 @@ ZONE_LABELS = {
 # contact) scored 0, same as before; the three new "mishit" labels
 # replace "Weak" at the same score (1) it had -- no existing baseline
 # to justify ranking Jammed/Off the End/Clipped against each other.
-CONTACT_QUALITY_OPTIONS = ["Barreled/Squared Up", "Solid", "Jammed", "Off the End", "Clipped", "Miss"]
-CONTACT_QUALITY_SCORE = {"Barreled/Squared Up": 3, "Solid": 2, "Jammed": 1, "Off the End": 1, "Clipped": 1, "Miss": 0}
+CONTACT_QUALITY_OPTIONS = ["Barreled/Squared Up", "Solid", "Weak", "Jammed", "Off the End", "Clipped", "Miss"]
+CONTACT_QUALITY_SCORE = {"Barreled/Squared Up": 3, "Solid": 2, "Weak": 1, "Jammed": 1, "Off the End": 1, "Clipped": 1, "Miss": 0}
 HIT_LOCATION_OPTIONS = ["Left Field", "Left-Center", "Center Field", "Right-Center", "Right Field", "Infield"]
 ZONE_GRID_LAYOUT = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
 
