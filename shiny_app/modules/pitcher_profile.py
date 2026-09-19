@@ -1134,6 +1134,13 @@ def pitcher_profile_server(input, output, session, app_state):
     # render.ui-wrapper / render_plotly split every other chart-bearing
     # view on this page uses (a render_plotly output needs its own
     # registered function, not one nested inside a render.ui's return).
+    #
+    # vs RHH/vs LHH tabs added Sept 2026 (Ryker: "tabs like pitch type
+    # breakdown with one tree visible at a time") -- same get_batter_hands
+    # split as the Pitch Type Breakdown tabs above, in pp_arsenal_section.
+    # Each tab needs its own registered render_plotly function for the
+    # same nesting reason noted above, so there are three chart functions
+    # below (_all / _rhh / _lhh) instead of one.
     # -------------------------------------------------------------------
 
     @render.ui
@@ -1164,6 +1171,15 @@ def pitcher_profile_server(input, output, session, app_state):
                     "No pitches with a recorded count in this range yet.",
                     class_="text-muted small",
                 )
+
+            _hands = get_batter_hands(db, game_pitches)
+            vs_rhh = [p for p in game_pitches if _hands.get(p.game_pitch_id) == "R"]
+            vs_lhh = [p for p in game_pitches if _hands.get(p.game_pitch_id) == "L"]
+            rhh_counts = compute_pitch_mix_by_count(vs_rhh)
+            lhh_counts = compute_pitch_mix_by_count(vs_lhh)
+            rhh_has_counts = any(rhh_counts[c]["Total"] for c in rhh_counts)
+            lhh_has_counts = any(lhh_counts[c]["Total"] for c in lhh_counts)
+
             return ui.div(
                 ui.p(ui.strong("Count Leverage")),
                 ui.p(
@@ -1180,13 +1196,25 @@ def pitcher_profile_server(input, output, session, app_state):
                     "how often he throws it.",
                     class_="text-muted small",
                 ),
-                output_widget("pp_count_leverage_chart"),
+                ui.navset_tab(
+                    ui.nav_panel("All Batters", output_widget("pp_count_leverage_chart_all")),
+                    ui.nav_panel(
+                        "vs RHH",
+                        output_widget("pp_count_leverage_chart_rhh") if rhh_has_counts
+                        else ui.p("No pitches with a recorded count vs a right-handed batter in this range.", class_="text-muted small"),
+                    ),
+                    ui.nav_panel(
+                        "vs LHH",
+                        output_widget("pp_count_leverage_chart_lhh") if lhh_has_counts
+                        else ui.p("No pitches with a recorded count vs a left-handed batter in this range.", class_="text-muted small"),
+                    ),
+                ),
             )
         finally:
             db.close()
 
     @render_plotly
-    def pp_count_leverage_chart():
+    def pp_count_leverage_chart_all():
         if not app_state.is_authenticated():
             return None
         req("pp_view" in input)
@@ -1205,6 +1233,62 @@ def pitcher_profile_server(input, output, session, app_state):
             if not game_pitches:
                 return None
             counts = compute_pitch_mix_by_count(game_pitches)
+            return count_leverage_chart(counts)
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_count_leverage_chart_rhh():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "count_leverage":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+            )
+            if not game_pitches:
+                return None
+            _hands = get_batter_hands(db, game_pitches)
+            vs_rhh = [p for p in game_pitches if _hands.get(p.game_pitch_id) == "R"]
+            if not vs_rhh:
+                return None
+            counts = compute_pitch_mix_by_count(vs_rhh)
+            return count_leverage_chart(counts)
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_count_leverage_chart_lhh():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "count_leverage":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+            )
+            if not game_pitches:
+                return None
+            _hands = get_batter_hands(db, game_pitches)
+            vs_lhh = [p for p in game_pitches if _hands.get(p.game_pitch_id) == "L"]
+            if not vs_lhh:
+                return None
+            counts = compute_pitch_mix_by_count(vs_lhh)
             return count_leverage_chart(counts)
         finally:
             db.close()
