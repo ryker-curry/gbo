@@ -251,8 +251,11 @@ def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color, ba
     batter on the LEFT/negative-x side of the plate -- the box closer
     to 3B -- and a LEFT-handed batter on the RIGHT/positive-x side --
     closer to 1B -- same side Statcast's own pitch-location graphics
-    draw them on. None (hand couldn't be resolved) skips the silhouette
-    entirely rather than guessing a side. This is why the card grew
+    draw them on. (The SIDE was right from the start; the POSE
+    initially wasn't -- see the facing= comment where this is called,
+    a couple lines below, for that fix.) None (hand couldn't be
+    resolved) skips the silhouette entirely rather than guessing a
+    side. This is why the card grew
     from a fixed 280x280 to 450x450 (see pitch_detail_card) -- this
     function originally stayed silhouette-free specifically because a
     batter "wouldn't read" at the old smaller size; superseded now that
@@ -289,8 +292,20 @@ def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color, ba
     # rather than a second set of magic numbers, so a batter drawn here
     # matches the one on Command Tracking's chart in scale.
     if batter_hand in ("R", "L"):
+        # Side (3B/1B) stays as derived below; the POSE was the actual
+        # bug (Sept 2026, Ryker: "the view for where we had the graphic
+        # before was from the pitcher view. now we are looking at it as
+        # the catcher so the hitters are flipped") -- command_charts.py
+        # pairs facing="right" with +x because ITS chart is drawn from
+        # the pitcher's own viewpoint, the same viewpoint the source
+        # photo was shot from. This chart is drawn from the catcher's
+        # viewpoint instead (view="catcher" below) -- the mirror image
+        # of the pitcher's -- so reusing that same facing-to-side
+        # pairing here put the pitcher-view pose on screen backwards.
+        # Swapped here (facing, not center_x) so the correct side still
+        # gets the correct-looking pose.
         center_x = -command_charts.HITTER_CENTER_X if batter_hand == "R" else command_charts.HITTER_CENTER_X
-        facing = "left" if batter_hand == "R" else "right"
+        facing = "right" if batter_hand == "R" else "left"
         for img in hitter_images(center_x=center_x, facing=facing, height_ft=command_charts.HITTER_HEIGHT_FT):
             fig.add_layout_image(**img)
 
