@@ -914,6 +914,10 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
         cq: sum(1 for p in balls_in_play if p.contact_quality == cq)
         for cq in ("Weak", "Jammed", "Off the End", "Clipped", "Solid", "Barreled/Squared Up")
     }
+    # "Bunt" (Sept 2026, Game Tracking only -- see CONTACT_QUALITY_OPTIONS in
+    # shiny_app/modules/game_tracking.py) isn't its own bucket here; scored as
+    # weak contact per Ryker's call, same as "Weak" itself.
+    contact_quality_counts["Weak"] += sum(1 for p in balls_in_play if p.contact_quality == "Bunt")
     hard_hit_allowed = contact_quality_counts["Solid"] + contact_quality_counts["Barreled/Squared Up"]
 
     # Hits/BB/K/etc. attribute to whichever pitch type actually ended

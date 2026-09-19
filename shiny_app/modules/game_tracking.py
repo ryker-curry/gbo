@@ -391,9 +391,16 @@ K_OUTCOMES = ("K", "K (Looking)")
 # Sept 2026, Ryker: renamed/expanded from Barrel/Solid/Weak/Miss so
 # "weak contact" splits into how it was actually mishit. "Miss" stays
 # a separate 6th value (swung and made literally no contact -- not a
-# contact-quality tier at all) -- same categories shared with Hitter
-# Tracking (see hitter_tracking.py's own copy of this list).
-CONTACT_QUALITY_OPTIONS = ["Barreled/Squared Up", "Solid", "Weak", "Jammed", "Off the End", "Clipped", "Miss"]
+# contact-quality tier at all) -- shared with Hitter Tracking (see
+# hitter_tracking.py's own copy of this list) EXCEPT for "Bunt" below,
+# which is Game-Tracking-only.
+# "Bunt" (Sept 2026, Ryker) -- Game Tracking only, not added to Hitter
+# Tracking's practice-session options. Scored as weak contact wherever
+# contact_quality feeds a rate stat or a quality score (game_stats.py's
+# per-pitch-type Weak %, and hitter_tracking.py's CONTACT_QUALITY_SCORE
+# used by the Hitter Game Report/Profile zone-quality heatmaps on game
+# data), per Ryker's call -- not its own 8th bucket.
+CONTACT_QUALITY_OPTIONS = ["Barreled/Squared Up", "Solid", "Weak", "Jammed", "Off the End", "Clipped", "Miss", "Bunt"]
 
 # Mid-plate-appearance base-running events -- see GameRunnerEvent's
 # docstring in models.py for the full "why" (bases_before/outs_before

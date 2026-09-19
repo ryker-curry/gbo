@@ -26,7 +26,9 @@ import ui_helpers
 import chart_helpers
 
 # Kept in sync with hitter_tracking.py's canonical copy of this dict.
-CONTACT_QUALITY_SCORE = {"Barreled/Squared Up": 3, "Solid": 2, "Weak": 1, "Jammed": 1, "Off the End": 1, "Clipped": 1, "Miss": 0}
+# ("Bunt" is inert here -- HitterSwing/practice data never has it -- but
+# kept for parity since it's never a Hitter Tracking option to begin with.)
+CONTACT_QUALITY_SCORE = {"Barreled/Squared Up": 3, "Solid": 2, "Weak": 1, "Jammed": 1, "Off the End": 1, "Clipped": 1, "Miss": 0, "Bunt": 1}
 
 
 def _compute_zone_scores(swings):
