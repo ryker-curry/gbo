@@ -79,7 +79,7 @@ from statistics import mean
 from shiny import module, ui, render, req, reactive
 from shinywidgets import output_widget, render_plotly
 from database import get_session
-from models import Player, User, PitchType, PlayerPitchArsenal, StaffPlayerAssignment
+from models import Player, User, PitchType, PlayerPitchArsenal, StaffPlayerAssignment, Game, GamePitch
 from game_stats import compute_pitching_line, compute_pitch_type_breakdown, get_batter_hands, compute_pitch_mix_by_count
 from strike_zone import classify_attack_zone
 import command_config
@@ -99,10 +99,13 @@ import format_helpers
 from analytics.bullpen_metrics import pitch_type_summary, average_estimated_arm_angle, pitch_type_label
 from visualizations.bullpen_charts import movement_chart, release_point_chart, color_for_pitch_label
 from visualizations.pitcher_graphic import pitcher_release_svg
+from visualizations.attack_zones_chart import attack_zones_figure
+from pitch_location_stats import compute_attack_zones
 from visualizations.spin_axis_chart import average_spin_axis_chart, individual_spin_axis_chart
 from format_helpers import (
     format_pct as _fmt_pct,
     format_num as _fmt,
+    game_label as _game_label,
 )
 
 STAFF_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
@@ -292,15 +295,43 @@ def pitcher_profile_server(input, output, session, app_state):
             type_choices = {"__all__": "All Pitches"}
             for t in arsenal:
                 type_choices[t.type_name] = t.type_name
+
+            # Game selector (Sept 2026, Ryker: "for everything in
+            # pitcher profile be able to select a specific game as
+            # well as the entire season view") -- same own_player_id/
+            # opponent_our_player_id dual lookup pitcher_game_report.py's
+            # own game_picker uses (an intrasquad game records "the
+            # other squad's" pitcher under opponent_our_player_id, not
+            # our_player_id), scoped to this one pitcher. "Season" is
+            # the default and behaves exactly as before this feature --
+            # From/To/Games below still apply. Picking one game
+            # overrides From/To/Games entirely (see _current_filters).
+            own_game_ids = {
+                gid for (gid,) in db.query(GamePitch.game_id)
+                .filter(GamePitch.our_player_id == pid, GamePitch.is_our_team_batting.is_(False))
+                .distinct().all()
+            } | {
+                gid for (gid,) in db.query(GamePitch.game_id)
+                .filter(GamePitch.opponent_our_player_id == pid, GamePitch.is_our_team_batting.is_(True))
+                .distinct().all()
+            }
+            games = (
+                db.query(Game).filter(Game.game_id.in_(own_game_ids)).order_by(Game.game_date.desc()).all()
+                if own_game_ids else []
+            )
+            game_choices = {"__season__": "Season (All Games)"}
+            for g in games:
+                game_choices[str(g.game_id)] = _game_label(g)
         finally:
             db.close()
 
         return ui.layout_columns(
+            ui.input_select("pp_game_select", "Game", choices=game_choices),
             ui.input_date("pp_date_from", "From", value=date.today() - timedelta(days=365)),
             ui.input_date("pp_date_to", "To", value=date.today()),
             ui.input_select("pp_pitch_type", "Pitch Type", choices=type_choices),
             ui.input_select("pp_game_scope", "Games", choices={"all": "All Games", "intrasquad": "Intrasquad Only", "external": "External Only"}),
-            col_widths=[3, 3, 3, 3],
+            col_widths=[2, 3, 3, 2, 2],
         )
 
     def _current_filters():
@@ -309,11 +340,22 @@ def pitcher_profile_server(input, output, session, app_state):
         req("pp_pitch_type" in input)
         req("pp_game_scope" in input)
         pitch_type = input.pp_pitch_type()
+        game_id = None
+        if "pp_game_select" in input and input.pp_game_select() and input.pp_game_select() != "__season__":
+            game_id = int(input.pp_game_select())
         return {
-            "date_from": input.pp_date_from(),
-            "date_to": input.pp_date_to(),
+            # A specific game overrides the date range entirely rather
+            # than narrowing within it -- picking a game and having
+            # From/To silently also exclude it (e.g. From/To left at
+            # last season while switching games) would be a confusing
+            # way to fail. game_scope is moot too once one exact game
+            # is picked, so it's left as-is and simply unused downstream
+            # (see analytics.profile_queries._apply_filters).
+            "date_from": None if game_id is not None else input.pp_date_from(),
+            "date_to": None if game_id is not None else input.pp_date_to(),
             "pitch_type": None if pitch_type == "__all__" else pitch_type,
             "game_scope": input.pp_game_scope(),
+            "game_id": game_id,
         }
 
     # -------------------------------------------------------------------
@@ -337,6 +379,7 @@ def pitcher_profile_server(input, output, session, app_state):
         rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
             db, pid, date_from=f["date_from"], date_to=f["date_to"],
             pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+            game_id=f["game_id"],
         )
         return player, rapsodo_pitches
 
@@ -367,9 +410,11 @@ def pitcher_profile_server(input, output, session, app_state):
             game_pitches = profile_queries.get_pitcher_profile_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"],
                 pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
             )
             rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
+                game_id=f["game_id"],
             )
             if not game_pitches and not rapsodo_pitches:
                 return None
@@ -547,9 +592,11 @@ def pitcher_profile_server(input, output, session, app_state):
             game_pitches = profile_queries.get_pitcher_profile_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"],
                 pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
             )
             rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
+                game_id=f["game_id"],
             )
             if not game_pitches and not rapsodo_pitches:
                 return ui_helpers.card(ui_helpers.empty_state(
@@ -919,6 +966,7 @@ def pitcher_profile_server(input, output, session, app_state):
             game_pitches = profile_queries.get_pitcher_profile_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"],
                 pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
             )
             if not game_pitches:
                 return ui.p("No game pitches in this range yet.", class_="text-muted small")
@@ -979,6 +1027,7 @@ def pitcher_profile_server(input, output, session, app_state):
             game_pitches = profile_queries.get_pitcher_profile_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"],
                 pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
             )
             if not game_pitches:
                 return None
@@ -1006,9 +1055,11 @@ def pitcher_profile_server(input, output, session, app_state):
             game_pitches = profile_queries.get_pitcher_profile_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"],
                 pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
             )
             rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
+                game_id=f["game_id"],
             )
             if not game_pitches and not rapsodo_pitches:
                 return None
@@ -1083,6 +1134,7 @@ def pitcher_profile_server(input, output, session, app_state):
             game_pitches = profile_queries.get_pitcher_profile_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"],
                 pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
             )
             if not game_pitches:
                 return None
@@ -1109,9 +1161,11 @@ def pitcher_profile_server(input, output, session, app_state):
             game_pitches = profile_queries.get_pitcher_profile_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"],
                 pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
             )
             rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
+                game_id=f["game_id"],
             )
             if not game_pitches and not rapsodo_pitches:
                 return None
@@ -1205,6 +1259,7 @@ def pitcher_profile_server(input, output, session, app_state):
             game_pitches = profile_queries.get_pitcher_profile_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"],
                 pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
             )
             if not game_pitches:
                 return ui.p("No game pitches in this range yet.", class_="text-muted small")
@@ -1272,6 +1327,7 @@ def pitcher_profile_server(input, output, session, app_state):
             game_pitches = profile_queries.get_pitcher_profile_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"],
                 pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
             )
             if not game_pitches:
                 return None
@@ -1296,6 +1352,7 @@ def pitcher_profile_server(input, output, session, app_state):
             game_pitches = profile_queries.get_pitcher_profile_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"],
                 pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
             )
             if not game_pitches:
                 return None
@@ -1324,6 +1381,7 @@ def pitcher_profile_server(input, output, session, app_state):
             game_pitches = profile_queries.get_pitcher_profile_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"],
                 pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
             )
             if not game_pitches:
                 return None
@@ -1355,6 +1413,7 @@ def pitcher_profile_server(input, output, session, app_state):
             game_pitches = profile_queries.get_pitcher_profile_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"],
                 pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
             )
             game_pitch_ids = [p.game_pitch_id for p in game_pitches]
             rap_by_gp = profile_queries.rapsodo_by_game_pitch_id(db, game_pitch_ids)
@@ -1416,6 +1475,7 @@ def pitcher_profile_server(input, output, session, app_state):
             game_pitches = profile_queries.get_pitcher_profile_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"],
                 pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
             )
             if not game_pitches:
                 return None, None
@@ -1466,6 +1526,36 @@ def pitcher_profile_server(input, output, session, app_state):
             ),
             ui.output_ui("pp_command_table"),
             output_widget("pp_command_chart"),
+
+            ui.hr(),
+            ui.p(ui.strong("Attack Zones")),
+            ui.p(
+                "Heart = down the middle, Shadow = straddles the zone edge, Chase = tempting but outside, Waste "
+                "= nowhere near. GBO approximation of Statcast's own tiers.",
+                class_="text-muted small",
+            ),
+            ui.output_ui("pp_attack_zones_table"),
+            output_widget("pp_attack_zones_chart"),
+
+            ui.hr(),
+            ui.p(ui.strong("Miss by Call")),
+            ui.p(
+                "For pitches called to each location, by pitch type, how they actually missed on average -- scan "
+                "for a pitch/call combo that consistently misses the same way.",
+                class_="text-muted small",
+            ),
+            ui.output_ui("pp_miss_by_call_table"),
+
+            ui.hr(),
+            ui.p(ui.strong("Pitch Targeting Plan")),
+            ui.p(
+                "Recommended aim point per pitch type -- shifted opposite this pitcher's own average miss bias "
+                "for that pitch, so if he tends to miss glove side on his slider, the recommendation aims a bit "
+                "arm side of the true target instead.",
+                class_="text-muted small",
+            ),
+            ui.output_ui("pp_targeting_plan_table"),
+            output_widget("pp_targeting_plan_chart"),
         )
 
     @render.ui
@@ -1535,3 +1625,147 @@ def pitcher_profile_server(input, output, session, app_state):
         if not located:
             return None
         return command_charts.command_chart(view_pitches)
+
+    # -------------------------------------------------------------------
+    # Attack Zones / Miss by Call / Pitch Targeting Plan -- Sept 2026,
+    # Ryker: "for pitcher profile command and execution tab add: attack
+    # zones with attack zone chart ... miss by call, pitch targeting
+    # plan, and command+." Command+ is the pre-existing Command Target
+    # Zones block above. Attack Zones needs RAW GamePitch rows (all
+    # located pitches, intended location irrelevant) so it queries
+    # profile_queries directly rather than reusing _view_pitches()'s
+    # command-view wrapper, which excludes any pitch with no intended
+    # location on file -- same reasoning pitcher_game_report.py's
+    # command_execution_section/attack_zones_chart already established;
+    # chart itself now lives in visualizations/attack_zones_chart.py so
+    # both pages share one implementation. Miss by Call and Pitch
+    # Targeting Plan are both intent-vs-actual comparisons, so they
+    # reuse _view_pitches() like Command Target Zones does, and mirror
+    # pitcher_game_report.py's command_target_section/
+    # pitch_targeting_plan_section table layouts exactly.
+    # -------------------------------------------------------------------
+
+    @render.ui
+    def pp_attack_zones_table():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            if not game_pitches:
+                return None
+            az_overall, az_by_type = compute_attack_zones(game_pitches)
+            if az_overall["Located"] == 0:
+                return ui.p("No located pitches yet.", class_="text-muted small")
+            return ui.div(
+                ui_helpers.render_kpi_cards([
+                    {"label": "Heart %", "value": _fmt_pct(az_overall["Heart %"])},
+                    {"label": "Shadow %", "value": _fmt_pct(az_overall["Shadow %"])},
+                    {"label": "Chase Zone %", "value": _fmt_pct(az_overall["Chase Zone %"])},
+                    {"label": "Waste %", "value": _fmt_pct(az_overall["Waste %"])},
+                ]),
+                ui_helpers.render_dict_table(az_by_type),
+            )
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_attack_zones_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            located = [p for p in game_pitches if p.actual_plate_x is not None and p.actual_plate_z is not None]
+            if not located:
+                return None
+            return attack_zones_figure(located)
+        finally:
+            db.close()
+
+    @render.ui
+    def pp_miss_by_call_table():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        view_pitches, throws = _view_pitches()
+        if not view_pitches:
+            return None
+        call_rows = command_metrics.miss_by_call(view_pitches, throws)
+        if not call_rows:
+            return ui.p("No called pitches with a logged location yet.", class_="text-muted small")
+        return ui_helpers.render_dict_table([
+            {
+                "Pitch Type": row["Pitch Type"],
+                "Called": row["Called"],
+                "Pitches": row["Pitches"],
+                "Typical Miss": _cmd_bias_label(row["Miss Bias"]),
+            }
+            for row in call_rows
+        ])
+
+    @render.ui
+    def pp_targeting_plan_table():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        view_pitches, throws = _view_pitches()
+        if not view_pitches:
+            return None
+        plan = command_metrics.pitch_targeting_plan(view_pitches, throws)
+        if not plan:
+            return ui.p(
+                f"Pitch Targeting Plan needs at least {command_metrics.MIN_TARGETING_PITCHES} located pitches "
+                "of a given pitch type in this window to recommend an aim point -- none qualify yet.",
+                class_="text-muted small",
+            )
+        return ui_helpers.render_dict_table([
+            {
+                "Pitch Type": row["Pitch Type"],
+                "Located": row["Located"],
+                "Bias": row["Bias"],
+                "Recommended Aim Shift": f'{row["recommended_aim_horizontal_in"]:+.1f}" horiz / {row["recommended_aim_vertical_in"]:+.1f}" vert',
+            }
+            for row in plan
+        ])
+
+    @render_plotly
+    def pp_targeting_plan_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        view_pitches, throws = _view_pitches()
+        if not view_pitches:
+            return None
+        plan = command_metrics.pitch_targeting_plan(view_pitches, throws)
+        if not plan:
+            return None
+        return command_charts.pitch_targeting_chart(plan)
