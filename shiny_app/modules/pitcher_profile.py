@@ -80,7 +80,7 @@ from shiny import module, ui, render, req, reactive
 from shinywidgets import output_widget, render_plotly
 from database import get_session
 from models import Player, User, PitchType, PlayerPitchArsenal, StaffPlayerAssignment
-from game_stats import compute_pitching_line, compute_pitch_type_breakdown, get_batter_hands
+from game_stats import compute_pitching_line, compute_pitch_type_breakdown, get_batter_hands, compute_pitch_mix_by_count
 from strike_zone import classify_attack_zone
 import command_config
 from analytics import command_metrics, performance_score, profile_queries
@@ -89,6 +89,7 @@ from analytics.pitch_grading import (
 )
 from visualizations import command_charts, profile_charts
 from visualizations.pitch_results_chart import pitch_results_chart
+from visualizations.count_leverage_chart import count_leverage_chart
 from visualizations.pitch_location_heatmap import pitch_location_heatmaps, MIN_FOR_CONTOUR
 import glossary_content
 from pitch_type_config import get_pitch_color
@@ -226,6 +227,7 @@ def pitcher_profile_ui():
         ui.output_ui("pp_zone_section"),
         ui.output_ui("pp_command_section"),
         ui.output_ui("pp_arsenal_section"),
+        ui.output_ui("pp_count_leverage_section"),
         ui_helpers.page_footer(),
     )
 
@@ -380,6 +382,7 @@ def pitcher_profile_server(input, output, session, app_state):
                         "results": "Results",
                         "zone": "Zone",
                         "arsenal": "Arsenal",
+                        "count_leverage": "Count Leverage",
                     },
                 ),
             )
@@ -1121,6 +1124,90 @@ def pitcher_profile_server(input, output, session, app_state):
         finally:
             db.close()
 
+    # -------------------------------------------------------------------
+    # Count Leverage (Sept 2026, Ryker: "create a count leverage chart in
+    # pitcher stats looking at what pitches thrown in certain counts
+    # using pie charts" -- reference is Lance Brozdowski's "count
+    # leverage" framing and the Marlins' own pitch-calling system, both
+    # of which treat pitch selection as something that should shift with
+    # the count rather than stay fixed across an at-bat). Same
+    # render.ui-wrapper / render_plotly split every other chart-bearing
+    # view on this page uses (a render_plotly output needs its own
+    # registered function, not one nested inside a render.ui's return).
+    # -------------------------------------------------------------------
+
+    @render.ui
+    def pp_count_leverage_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "count_leverage":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+            )
+            if not game_pitches:
+                return ui.p("No game pitches in this range yet.", class_="text-muted small")
+            counts = compute_pitch_mix_by_count(game_pitches)
+            if not any(counts[c]["Total"] for c in counts):
+                return ui.p(
+                    "No pitches with a recorded count in this range yet.",
+                    class_="text-muted small",
+                )
+            return ui.div(
+                ui.p(ui.strong("Count Leverage")),
+                ui.p(
+                    "Pitch mix by ball-strike count, laid out as a count tree -- 0-0 at the top, then every count "
+                    "reachable by that many total pitches into the at-bat below it, pitcher-favorable (more "
+                    "strikes) toward the left, hitter-favorable (more balls) toward the right, narrowing back "
+                    "down to 3-2 alone at the bottom. Pitch selection isn't supposed to stay fixed across an "
+                    "at-bat: the idea (Lance Brozdowski's framing, and the same split behind the Marlins' own "
+                    "dugout pitch-calling system) is best stuff middle-middle in non-two-strike counts, leaning "
+                    "on breaking stuff once there are two strikes to chase the whiff. Each pie's own count total "
+                    "is in its title; percentages are of THAT count, not his overall mix. Hover a slice for that "
+                    "pitch/count combo's own RV/100 (run value -- same currency Location+/Pitching+/Command+ use "
+                    "elsewhere on this page) to see whether what he leans on there is actually working, not just "
+                    "how often he throws it.",
+                    class_="text-muted small",
+                ),
+                output_widget("pp_count_leverage_chart"),
+            )
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_count_leverage_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "count_leverage":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+            )
+            if not game_pitches:
+                return None
+            counts = compute_pitch_mix_by_count(game_pitches)
+            return count_leverage_chart(counts)
+        finally:
+            db.close()
 
     @render_plotly
     def pp_trend_chart():
