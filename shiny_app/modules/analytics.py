@@ -33,7 +33,7 @@ from models import Player, Season
 from game_stats import (
     get_batting_pitches, get_pitching_pitches, compute_batting_line, compute_pitching_line,
     compute_pitch_type_breakdown, compute_batted_ball_profile, get_forced_half_inning_end_runs,
-    get_runner_event_outs,
+    get_runner_event_outs, get_batter_hands,
 )
 from plate_discipline import (
     compute_hitter_discipline, compute_pitcher_command, compute_zone_performance,
@@ -327,8 +327,15 @@ def analytics_server(input, output, session, app_state):
                         "formulas, generated here from the same pitches already logged in Game Tracking.",
                         class_="text-muted small",
                     ))
-                    vs_rhh = [p for p in pitching_pitches if p.opponent_hand == "R"]
-                    vs_lhh = [p for p in pitching_pitches if p.opponent_hand == "L"]
+                    # Derived via get_batter_hands (Sept 2026), not the raw
+                    # opponent_hand column -- see game_stats.get_batter_hands'
+                    # own docstring: that column can hold 'S' for a switch
+                    # hitter (silently dropping them from both buckets here)
+                    # and is the PITCHER's hand, not the batter's, on
+                    # our-team-batting rows.
+                    _hands = get_batter_hands(db, pitching_pitches)
+                    vs_rhh = [p for p in pitching_pitches if _hands.get(p.game_pitch_id) == "R"]
+                    vs_lhh = [p for p in pitching_pitches if _hands.get(p.game_pitch_id) == "L"]
                     sections.append(ui.navset_tab(
                         ui.nav_panel("All Batters", ui_helpers.render_dict_table(compute_pitch_type_breakdown(pitching_pitches))),
                         ui.nav_panel("vs RHH", ui_helpers.render_dict_table(compute_pitch_type_breakdown(vs_rhh)) if vs_rhh else ui.p("No pitches recorded against a right-handed batter yet.", class_="text-muted small")),

@@ -79,7 +79,7 @@ from shiny import module, ui, render, req, reactive
 from shinywidgets import output_widget, render_plotly
 from database import get_session
 from models import Player, User, PitchType, PlayerPitchArsenal, StaffPlayerAssignment
-from game_stats import compute_pitching_line, compute_pitch_type_breakdown
+from game_stats import compute_pitching_line, compute_pitch_type_breakdown, get_batter_hands
 from strike_zone import classify_attack_zone
 import command_config
 from analytics import command_metrics, performance_score, profile_queries
@@ -1041,8 +1041,16 @@ def pitcher_profile_server(input, output, session, app_state):
             if game_pitches:
                 sections.append(ui.hr())
                 sections.append(ui.p(ui.strong("Pitch Type Breakdown")))
-                vs_rhh = [p for p in game_pitches if p.opponent_hand == "R"]
-                vs_lhh = [p for p in game_pitches if p.opponent_hand == "L"]
+                # Derived via get_batter_hands (Sept 2026), not the raw
+                # opponent_hand column -- that column can hold 'S' for a
+                # switch hitter and is the PITCHER's hand, not the
+                # batter's, on our-team-batting rows (see that column's
+                # comment on models.GamePitch), so comparing it directly
+                # here silently dropped/miscounted switch hitters from
+                # both buckets.
+                _hands = get_batter_hands(db, game_pitches)
+                vs_rhh = [p for p in game_pitches if _hands.get(p.game_pitch_id) == "R"]
+                vs_lhh = [p for p in game_pitches if _hands.get(p.game_pitch_id) == "L"]
                 sections.append(ui.navset_tab(
                     ui.nav_panel("All Batters", ui_helpers.render_dict_table(compute_pitch_type_breakdown(game_pitches))),
                     ui.nav_panel("vs RHH", ui_helpers.render_dict_table(compute_pitch_type_breakdown(vs_rhh)) if vs_rhh else ui.p("No pitches vs a right-handed batter in this range.", class_="text-muted small")),
