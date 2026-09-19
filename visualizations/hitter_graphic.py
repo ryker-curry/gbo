@@ -46,7 +46,24 @@ Usage:
     for img in hitter_images(center_x=1.7, facing="right"):
         fig.add_layout_image(**img)
     fig.add_shape(**home_plate_shape(view="pitcher"))
-"""
+
+Image source (Sept 2026 fix, Ryker: "theres no graphic" -- the batter
+silhouette was invisible on Pitcher Game Report's Pitch-by-Pitch card):
+hitter_images() embeds each PNG as a base64 data: URI rather than
+pointing at the "/assets/..." static route. That relative URL only
+resolves when Plotly renders live in a browser (command_charts.py's
+usage, via shinywidgets render_plotly, where the page's own origin
+supplies the base for the fetch) -- it means nothing to kaleido's
+headless-Chrome fig.to_image() export (chart_helpers.fig_to_img,
+which pitcher_game_report.py's per-pitch Location card uses), which
+isn't running inside the app's page at all, so the layout image
+silently failed to load there while everything else in the same
+figure rendered fine. A data: URI needs no fetch in either context, so
+it's used for every caller now, not just the kaleido ones -- one image
+path instead of two silently-diverging ones."""
+
+import base64
+from pathlib import Path
 
 PLATE_COLOR = "#AEB6C2"
 PLATE_OUTLINE = "#1E1E1E"
@@ -60,11 +77,30 @@ PLATE_OUTLINE = "#1E1E1E"
 # photo is ever swapped again -- it must match the new file's actual
 # pixel dimensions or "contain" sizing will letterbox instead of fill.
 _IMAGE_ASPECT = 260 / 818  # width / height
-_SOURCE_BY_FACING = {
-    "right": "/assets/hitter_silhouette.png",
-    "left": "/assets/hitter_silhouette_flipped.png",
+# Repo-root assets/ dir -- same file theme.ASSETS_DIR points the
+# "/assets" static route at, just read directly here instead of served,
+# since these need to work outside a browser too (see module docstring's
+# "Image source" section above).
+_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+_SOURCE_FILE_BY_FACING = {
+    "right": "hitter_silhouette.png",
+    "left": "hitter_silhouette_flipped.png",
 }
 IMAGE_OPACITY = 0.55
+
+# {filename: "data:image/png;base64,..."} -- populated lazily by
+# _image_data_uri, once per filename per process, so the PNG is read
+# and re-encoded at most twice total (right/left) no matter how many
+# charts call hitter_images().
+_DATA_URI_CACHE = {}
+
+
+def _image_data_uri(filename):
+    if filename not in _DATA_URI_CACHE:
+        png_bytes = (_ASSETS_DIR / filename).read_bytes()
+        encoded = base64.b64encode(png_bytes).decode("ascii")
+        _DATA_URI_CACHE[filename] = f"data:image/png;base64,{encoded}"
+    return _DATA_URI_CACHE[filename]
 
 
 def hitter_images(center_x, facing="right", height_ft=4.2, ground_y=0.0):
@@ -76,7 +112,7 @@ def hitter_images(center_x, facing="right", height_ft=4.2, ground_y=0.0):
     single-item list of a dict for fig.add_layout_image(**d)."""
     width_ft = height_ft * _IMAGE_ASPECT
     return [dict(
-        source=_SOURCE_BY_FACING[facing],
+        source=_image_data_uri(_SOURCE_FILE_BY_FACING[facing]),
         xref="x", yref="y",
         x=center_x, y=ground_y,
         xanchor="center", yanchor="bottom",
