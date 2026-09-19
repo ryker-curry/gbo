@@ -904,18 +904,23 @@ def call_location_label(level, zone, throws):
 
 
 def miss_by_call(pitches, throws):
-    """Grouped by the pitcher's own call (call_location_label above),
-    each group's actual miss tendency via miss_bias -- e.g. "pitches
-    called Low + Glove Side missed 1.8\" Arm Side / 0.6\" High on
+    """Grouped by pitch type AND the pitcher's own call (call_location_label
+    above), each group's actual miss tendency via miss_bias -- e.g. "his
+    Slider called Low + Glove Side missed 1.8\" Arm Side / 0.6\" High on
     average". Replaces scanning a raw per-pitch list or a by-pitch-type
     grid for a pattern by hand: this IS the pattern, aggregated (Ryker,
-    Sept 2026, see call_location_label's docstring for the exact ask).
+    Sept 2026, see call_location_label's docstring for the original ask;
+    Ryker again the same day: "for miss by call i need to know pitch
+    type, not just location" -- the same call can miss differently pitch
+    to pitch, so Pitch Type is its own column/group key here, not folded
+    away).
 
     Only pitches with both a located actual position (see _located) AND
     an intended position (needed to know what was called) count. Returns
-    a list of {"Called": label, "Pitches": n, "Miss Bias": miss_bias(...)
-    dict} rows, sorted by Pitches descending (the call thrown most often
-    leads) -- empty list if nothing qualifies."""
+    a list of {"Pitch Type": label, "Called": label, "Pitches": n,
+    "Miss Bias": miss_bias(...) dict} rows, sorted by Pitches descending
+    (the pitch-type/call combo thrown most often leads) -- empty list if
+    nothing qualifies."""
     groups = defaultdict(list)
     for p in _located(pitches):
         if p.intended_x is None or p.intended_z is None:
@@ -923,10 +928,10 @@ def miss_by_call(pitches, throws):
         level, zone = strike_zone.call_cell(float(p.intended_x), float(p.intended_z))
         if level is None or zone is None:
             continue
-        groups[call_location_label(level, zone, throws)].append(p)
+        groups[(pitch_type_label(p), call_location_label(level, zone, throws))].append(p)
     rows = [
-        {"Called": label, "Pitches": len(group), "Miss Bias": miss_bias(group, throws)}
-        for label, group in groups.items()
+        {"Pitch Type": pitch_type, "Called": called, "Pitches": len(group), "Miss Bias": miss_bias(group, throws)}
+        for (pitch_type, called), group in groups.items()
     ]
     rows.sort(key=lambda r: -r["Pitches"])
     return rows
