@@ -1204,26 +1204,35 @@ def pitcher_game_report_server(input, output, session, app_state):
             # by-pitch-type-only "Miss direction by pitch type" grid --
             # "I just want to see where they typically missed based on
             # pitch call. like if the pitch call is low and glove side
-            # where do they tend to miss") -- one row per call (e.g.
-            # "Low + Glove Side"), the ACTUAL pattern being asked for,
-            # aggregated instead of scanned by eye across every pitch or
-            # sliced by pitch type only. See command_metrics.miss_by_call/
-            # call_location_label for the call->label collapsing and
-            # miss_bias for the tendency math (same function "Average
-            # miss bias" above already uses, just scoped per call here).
-            # Command Target Zones' own chart (command_target_chart,
-            # registered separately below) is untouched -- Ryker: "keep
-            # the command chart miss from target".
+            # where do they tend to miss") -- one row per pitch type +
+            # call combo (e.g. "Slider" / "Low + Glove Side"), the
+            # ACTUAL pattern being asked for, aggregated instead of
+            # scanned by eye across every pitch. Pitch Type is its own
+            # column because the same call can miss differently by pitch
+            # (Ryker, same day, follow-up: "for miss by call i need to
+            # know pitc type, not just locaiton"). See
+            # command_metrics.miss_by_call/call_location_label for the
+            # call->label collapsing and miss_bias for the tendency math
+            # (same function "Average miss bias" above already uses,
+            # just scoped per pitch-type/call here). Command Target
+            # Zones' own chart (command_target_chart, registered
+            # separately below) is untouched -- Ryker: "keep the command
+            # chart miss from target".
             call_rows = command_metrics.miss_by_call(view_pitches, throws)
             if call_rows:
                 children.append(ui.h6("Miss by call", class_="mt-3"))
                 children.append(ui.p(
-                    "For pitches called to each location, how they actually missed on average -- scan for a call "
-                    "that consistently misses the same way.",
+                    "For pitches called to each location, by pitch type, how they actually missed on average -- "
+                    "scan for a pitch/call combo that consistently misses the same way.",
                     class_="text-muted small",
                 ))
                 children.append(ui_helpers.render_dict_table([
-                    {"Called": row["Called"], "Pitches": row["Pitches"], "Typical Miss": _cmd_bias_label(row["Miss Bias"])}
+                    {
+                        "Pitch Type": row["Pitch Type"],
+                        "Called": row["Called"],
+                        "Pitches": row["Pitches"],
+                        "Typical Miss": _cmd_bias_label(row["Miss Bias"]),
+                    }
                     for row in call_rows
                 ]))
 
