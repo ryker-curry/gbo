@@ -74,6 +74,7 @@ game_stats.py's season/single-game queries don't cover.
 """
 
 from datetime import date, timedelta
+from statistics import mean
 
 from shiny import module, ui, render, req, reactive
 from shinywidgets import output_widget, render_plotly
@@ -130,6 +131,35 @@ def _avg_or_none(values):
     silently widen)."""
     vals = [float(v) for v in values if v is not None]
     return round(sum(vals) / len(vals), 1) if vals else None
+
+
+def _aggregate_trend_by_game(pitch_points):
+    """pitch_points: list of (game_id, game_date, value) for individual
+    graded pitches (value already non-None) -- one entry per pitch, as
+    _compute_grading_bundle/pp_trend_chart build them. Groups by
+    game_id, not date alone, so two games on the same date (a
+    doubleheader) stay separate points instead of silently averaging
+    together. Returns one point per OUTING -- (date, mean, lo, hi) --
+    sorted by date: mean is that outing's average pitch-level grade,
+    lo/hi its min/max, so profile_charts.trend_chart can show each
+    outing's spread (an error bar) around its average instead of one
+    dot per pitch.
+
+    Sept 2026, Ryker: raw pitch-by-pitch dots were too noisy to read as
+    an actual trend across outings ("how is this useful?" -- fair
+    question, given it took a whole page of pitches per outing to find
+    the shape). An outing-level average is what "trend over time"
+    actually means to a coach looking for whether a guy's pitching
+    better or worse lately, not a per-pitch scatter."""
+    groups = {}
+    for game_id, game_date, value in pitch_points:
+        groups.setdefault(game_id, {"date": game_date, "values": []})["values"].append(value)
+    rows = [
+        (g["date"], round(mean(g["values"]), 1), round(min(g["values"]), 1), round(max(g["values"]), 1))
+        for g in groups.values()
+    ]
+    rows.sort(key=lambda r: r[0])
+    return rows
 
 
 def _my_player(db, app_state):
@@ -394,13 +424,14 @@ def pitcher_profile_server(input, output, session, app_state):
     def _compute_grading_bundle(db, game_pitches, rapsodo_pitches):
         """Shared derived-data pass over one filtered pitch window --
         Stuff+/Location+/Pitching+ per pitch, pitch usage counts,
-        attack-zone counts, the Pitching+ trend series, the Arsenal
-        rollup, and the Individual Pitches rows. Factored out of what
-        used to be one single pp_body loop so pp_overview_section/
-        pp_zone_section/pp_arsenal_section can each call it fresh (same
-        "only the selected view queries anything" principle
-        pitcher_game_report.py's own gated sections already establish)
-        without tripling this ~60-line loop three ways."""
+        attack-zone counts, the Pitching+ trend series (one point per
+        OUTING, not per pitch -- see _aggregate_trend_by_game), the
+        Arsenal rollup, and the Individual Pitches rows. Factored out
+        of what used to be one single pp_body loop so pp_overview_
+        section/pp_zone_section/pp_arsenal_section can each call it
+        fresh (same "only the selected view queries anything"
+        principle pitcher_game_report.py's own gated sections already
+        establish) without tripling this ~60-line loop three ways."""
         stuff_baselines = profile_queries.team_stuff_plus_baselines(db)
         location_baseline = profile_queries.team_location_plus_baseline(db)
 
@@ -412,7 +443,7 @@ def pitcher_profile_server(input, output, session, app_state):
 
         pitch_type_grades = {}
         individual_rows = []
-        trend_points = []
+        trend_pitch_points = []
         zone_counts = {"Heart": 0, "Shadow": 0, "Chase": 0, "Waste": 0}
         usage_counts = {}
 
@@ -440,7 +471,7 @@ def pitcher_profile_server(input, output, session, app_state):
                     zone_counts[zone] += 1
 
             if pi_val is not None and p.game is not None:
-                trend_points.append((p.game.game_date, pi_val))
+                trend_pitch_points.append((p.game.game_id, p.game.game_date, pi_val))
 
             individual_rows.append({
                 "Date": p.game.game_date.strftime("%Y-%m-%d") if p.game else "—",
@@ -482,7 +513,7 @@ def pitcher_profile_server(input, output, session, app_state):
             "pitching_plus_value": round(sum(overview_pitching) / len(overview_pitching), 1) if overview_pitching else None,
             "usage_counts": usage_counts,
             "zone_counts": zone_counts,
-            "trend_points": trend_points,
+            "trend_points": _aggregate_trend_by_game(trend_pitch_points),
             "arsenal_rows": arsenal_rows,
             "individual_rows": individual_rows,
         }
@@ -635,6 +666,11 @@ def pitcher_profile_server(input, output, session, app_state):
 
             if len(bundle["trend_points"]) >= 2:
                 sections.append(ui.p(ui.strong("Pitching+ Trend"), class_="mt-3"))
+                sections.append(ui.p(
+                    "One point per outing (that appearance's average Pitching+), with an error bar showing the "
+                    "spread from its lowest- to highest-graded pitch.",
+                    class_="text-muted small",
+                ))
                 sections.append(output_widget("pp_trend_chart"))
 
             return ui.div(*sections)
@@ -1110,7 +1146,7 @@ def pitcher_profile_server(input, output, session, app_state):
             rap_by_gp = profile_queries.rapsodo_by_game_pitch_id(db, game_pitch_ids)
             stuff_baselines = profile_queries.team_stuff_plus_baselines(db)
             location_baseline = profile_queries.team_location_plus_baseline(db)
-            points = []
+            pitch_points = []
             for p in game_pitches:
                 label = p.pitch_type.type_name if p.pitch_type else "Unspecified"
                 rap = rap_by_gp.get(p.game_pitch_id)
@@ -1118,8 +1154,10 @@ def pitcher_profile_server(input, output, session, app_state):
                 l_val = location_plus(p, location_baseline)
                 pi_val = pitching_plus(s_val, l_val)
                 if pi_val is not None and p.game is not None:
-                    points.append((p.game.game_date, pi_val))
-            points.sort(key=lambda t: t[0])
+                    pitch_points.append((p.game.game_id, p.game.game_date, pi_val))
+            # One point per OUTING (mean/lo/hi), not per pitch -- see
+            # _aggregate_trend_by_game's docstring.
+            points = _aggregate_trend_by_game(pitch_points)
             return profile_charts.trend_chart(points, y_label="Pitching+")
         finally:
             db.close()
