@@ -1199,31 +1199,33 @@ def pitcher_game_report_server(input, output, session, app_state):
                 children.append(ui.h6("By pitch type", class_="mt-3"))
                 children.append(ui_helpers.render_dict_table(rows))
 
-                grid_rows_by_type = [(row["Pitch Type"], row["Miss Direction Grid"]) for row in by_type if row["Miss Direction Grid"] is not None]
-                if grid_rows_by_type:
-                    children.append(ui.h6("Miss direction by pitch type", class_="mt-3"))
-                    children.append(ui.p(
-                        "% of located pitches of that pitch type landing in each of the 9 zones -- rows are "
-                        "vertical miss, columns are horizontal miss (handedness-aware: Arm Side/Glove Side).",
-                        class_="text-muted small",
-                    ))
-                    for pitch_type_label_, grid in grid_rows_by_type:
-                        children.append(ui.p(pitch_type_label_, class_="fw-bold small mb-1 mt-2"))
-                        children.append(ui_helpers.render_dict_table(grid))
-
-            # Per-pitch miss direction (Ryker, Sept 2026: "would like to
-            # be able to see a miss bias for each individual pitch ...
-            # figure out why they miss where they miss ... if i am
-            # trying to go down and away do i always miss arm side") --
-            # no inches, just which way each pitch missed and what it
-            # was called, so a pattern by call is scannable at a glance.
-            children.append(ui.h6("Miss direction by pitch", class_="mt-3"))
-            children.append(ui.p(
-                "Called is the pitcher's own Level+Zone code (e.g. \"25\") for that pitch's target -- scan for a "
-                "repeated code to see whether that call tends to miss the same way.",
-                class_="text-muted small",
-            ))
-            children.append(ui_helpers.render_dict_table(command_metrics.miss_direction_rows(view_pitches, throws)))
+            # Miss by call (Ryker, Sept 2026: replaced the old raw
+            # per-pitch "Miss direction by pitch" list and the
+            # by-pitch-type-only "Miss direction by pitch type" grid --
+            # "I just want to see where they typically missed based on
+            # pitch call. like if the pitch call is low and glove side
+            # where do they tend to miss") -- one row per call (e.g.
+            # "Low + Glove Side"), the ACTUAL pattern being asked for,
+            # aggregated instead of scanned by eye across every pitch or
+            # sliced by pitch type only. See command_metrics.miss_by_call/
+            # call_location_label for the call->label collapsing and
+            # miss_bias for the tendency math (same function "Average
+            # miss bias" above already uses, just scoped per call here).
+            # Command Target Zones' own chart (command_target_chart,
+            # registered separately below) is untouched -- Ryker: "keep
+            # the command chart miss from target".
+            call_rows = command_metrics.miss_by_call(view_pitches, throws)
+            if call_rows:
+                children.append(ui.h6("Miss by call", class_="mt-3"))
+                children.append(ui.p(
+                    "For pitches called to each location, how they actually missed on average -- scan for a call "
+                    "that consistently misses the same way.",
+                    class_="text-muted small",
+                ))
+                children.append(ui_helpers.render_dict_table([
+                    {"Called": row["Called"], "Pitches": row["Pitches"], "Typical Miss": _cmd_bias_label(row["Miss Bias"])}
+                    for row in call_rows
+                ]))
 
             return ui.div(*children)
         finally:

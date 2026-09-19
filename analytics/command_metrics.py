@@ -866,3 +866,67 @@ def miss_direction_rows(pitches, throws):
             "Vertical": vertical or "Even",
         })
     return rows
+
+
+def call_location_label(level, zone, throws):
+    """Level (1-4) / Zone (1-5) call-grid cell (strike_zone.py's own
+    coach's-call shorthand -- see that module's comment for what each
+    value means) -> a combined High/Low + Arm Side/Glove Side label
+    (e.g. "Low + Glove Side", "Middle", "High + Arm Side"), collapsed
+    to the SAME 3-bucket-per-axis vocabulary miss_bias/miss_direction_
+    grid already use (not all 20 raw Level-Zone cells) -- so a single
+    game's worth of calls groups into a handful of meaningful buckets
+    instead of one row per exact code. Level 1 (dirt/below) and 2
+    (knees) both collapse to Low; level 3 is the vertical middle
+    (no label); level 4 is High. Zone 1/2 are always the physical
+    3B-side columns and 4/5 the 1B-side ones (see strike_zone.py's own
+    Zone comment) -- which one reads as Arm Side vs. Glove Side is
+    what flips with the pitcher's throwing hand, same convention
+    classify_miss_direction/normalize_horizontal_to_arm_side use; zone
+    3 is the horizontal middle (no label). throws unknown falls back to
+    plain Left/Right, same fallback classify_miss_direction uses.
+
+    Sept 2026, Ryker: "I just want to see where they typically missed
+    based on pitch call. like if the pitch call is low and glove side
+    where do they tend to miss" -- this is the "low and glove side"
+    half of that ask; miss_by_call below pairs it with the actual
+    miss tendency."""
+    vertical = HIGH_LABEL if level == 4 else (LOW_LABEL if level in (1, 2) else None)
+    if zone in (1, 2):
+        horizontal = ARM_SIDE_LABEL if throws == "R" else (GLOVE_SIDE_LABEL if throws == "L" else LEFT_LABEL)
+    elif zone in (4, 5):
+        horizontal = GLOVE_SIDE_LABEL if throws == "R" else (ARM_SIDE_LABEL if throws == "L" else RIGHT_LABEL)
+    else:
+        horizontal = None
+    if vertical and horizontal:
+        return f"{vertical} + {horizontal}"
+    return vertical or horizontal or "Middle"
+
+
+def miss_by_call(pitches, throws):
+    """Grouped by the pitcher's own call (call_location_label above),
+    each group's actual miss tendency via miss_bias -- e.g. "pitches
+    called Low + Glove Side missed 1.8\" Arm Side / 0.6\" High on
+    average". Replaces scanning a raw per-pitch list or a by-pitch-type
+    grid for a pattern by hand: this IS the pattern, aggregated (Ryker,
+    Sept 2026, see call_location_label's docstring for the exact ask).
+
+    Only pitches with both a located actual position (see _located) AND
+    an intended position (needed to know what was called) count. Returns
+    a list of {"Called": label, "Pitches": n, "Miss Bias": miss_bias(...)
+    dict} rows, sorted by Pitches descending (the call thrown most often
+    leads) -- empty list if nothing qualifies."""
+    groups = defaultdict(list)
+    for p in _located(pitches):
+        if p.intended_x is None or p.intended_z is None:
+            continue
+        level, zone = strike_zone.call_cell(float(p.intended_x), float(p.intended_z))
+        if level is None or zone is None:
+            continue
+        groups[call_location_label(level, zone, throws)].append(p)
+    rows = [
+        {"Called": label, "Pitches": len(group), "Miss Bias": miss_bias(group, throws)}
+        for label, group in groups.items()
+    ]
+    rows.sort(key=lambda r: -r["Pitches"])
+    return rows
