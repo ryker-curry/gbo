@@ -71,6 +71,67 @@ def get_pitching_pitches(session, player_id, season_id=None, game_id=None):
     return query.all()
 
 
+def get_pitcher_hands(session, pitches):
+    """{game_pitch_id: 'R'/'L'/None} for every pitch in `pitches' --
+    the real PITCHER's hand, looked up fresh from the pitcher's own
+    roster Player.throws (or OpponentPlayer.throws for a real,
+    identified external-opponent pitcher) -- same "derive fresh from
+    the roster, don't trust the stored column blindly" approach
+    get_batter_hands below already uses for the batter side, and for
+    the same reason: GamePitch.opponent_hand's meaning flips with
+    is_our_team_batting (it's the batter's hand when we're pitching,
+    the pitcher's hand when we're batting -- see that column's own
+    comment on models.GamePitch), so a raw, un-derived read is only
+    ever right for half the rows.
+
+    pitcher_id resolution: our_player_id is the pitcher whenever
+    is_our_team_batting is False (our own guy pitching); when it's
+    True, the pitcher is the "other side", which for an intrasquad
+    game is really one of our own roster players too, held in
+    opponent_our_player_id (same convention get_batter_hands uses for
+    the batter side, just the opposite is_our_team_batting branch).
+    Falls back to opponent_player_id -> OpponentPlayer.throws for a
+    real external-opponent pitcher with a roster entry, and finally to
+    the pitch's own recorded opponent_hand -- valid as a pitcher-hand
+    fallback ONLY when is_our_team_batting is True, per that column's
+    context-dependent meaning above; a hand-only opponent pitcher (no
+    roster row at all) has nothing else to go on.
+
+    Added Sept 2026 alongside get_batter_hands' switch-hitter fix
+    (Ryker: "make sure switch hitters are hitting left handed against
+    right handed pitchers and right handed against left handed
+    pitchers") -- this is what resolves the OPPOSING pitcher's hand a
+    switch-hitting batter needs to pick a side against."""
+    our_ids = {p.our_player_id for p in pitches if p.our_player_id is not None}
+    our_ids |= {p.opponent_our_player_id for p in pitches if p.opponent_our_player_id is not None}
+    opp_ids = {p.opponent_player_id for p in pitches if p.opponent_player_id is not None}
+    our_players = (
+        {pl.player_id: pl for pl in session.query(Player).filter(Player.player_id.in_(our_ids)).all()}
+        if our_ids else {}
+    )
+    opp_players = (
+        {pl.opponent_player_id: pl for pl in session.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id.in_(opp_ids)).all()}
+        if opp_ids else {}
+    )
+
+    hands = {}
+    for p in pitches:
+        pitcher_id = p.opponent_our_player_id if p.is_our_team_batting else p.our_player_id
+        hand = None
+        if pitcher_id is not None:
+            player = our_players.get(pitcher_id)
+            if player is not None and player.throws in ("R", "L"):
+                hand = player.throws
+        if hand is None and p.opponent_player_id is not None:
+            opp = opp_players.get(p.opponent_player_id)
+            if opp is not None and opp.throws in ("R", "L"):
+                hand = opp.throws
+        if hand is None and p.is_our_team_batting and p.opponent_hand in ("R", "L"):
+            hand = p.opponent_hand
+        hands[p.game_pitch_id] = hand
+    return hands
+
+
 def get_batter_hands(session, pitches):
     """{game_pitch_id: 'R'/'L'/None} for every pitch in `pitches` --
     the real BATTER's hand for hand-based splits (vs LHH/vs RHH),
@@ -106,10 +167,23 @@ def get_batter_hands(session, pitches):
     None there, so batter_id resolution lands on opponent_player_id
     below instead).
 
-    Switch hitters (bats == 'S') and any batter with no roster/opponent
-    row on file fall back to the pitch's own recorded opponent_hand --
-    same "can't know which side without more game context" reasoning
-    backfill_opponent_hand.py already uses for switch hitters."""
+    Switch hitters (bats == 'S', Sept 2026, Ryker: "make sure switch
+    hitters are hitting left handed against right handed pitchers and
+    right handed against left handed pitchers") resolve to the
+    opposite of the OPPOSING PITCHER's hand for this specific pitch
+    (get_pitcher_hands above) -- not a fixed side, since which way a
+    switch hitter actually bats depends entirely on who's on the
+    mound, pitch by pitch, and can differ start to start or even
+    outing to outing against different arms. This self-corrects every
+    already-recorded pitch the same way the three-squad fix above
+    does -- no backfill needed, since nothing about a switch hitter's
+    hand was ever stored as ground truth to begin with (Player.bats
+    has always just said 'S'; only the opposing pitcher's hand, looked
+    up fresh here, decides the side). A switch hitter facing a pitcher
+    whose hand can't be resolved either, or any batter with no
+    roster/opponent row on file at all, falls back to the pitch's own
+    recorded opponent_hand -- same "can't know which side without more
+    game context" reasoning backfill_opponent_hand.py already uses."""
     our_ids = {p.our_player_id for p in pitches if p.is_our_team_batting and p.our_player_id is not None}
     our_ids |= {p.opponent_our_player_id for p in pitches if not p.is_our_team_batting and p.opponent_our_player_id is not None}
     opp_ids = {p.opponent_player_id for p in pitches if p.opponent_player_id is not None}
@@ -122,21 +196,42 @@ def get_batter_hands(session, pitches):
         if opp_ids else {}
     )
 
+    switch_pitches = []
+    raw_bats_by_id = {}
     hands = {}
     for p in pitches:
         batter_id = p.our_player_id if p.is_our_team_batting else p.opponent_our_player_id
-        hand = None
+        raw_bats = None
         if batter_id is not None:
             player = our_players.get(batter_id)
-            if player is not None and player.bats in ("R", "L"):
-                hand = player.bats
-        if hand is None and p.opponent_player_id is not None:
+            if player is not None:
+                raw_bats = player.bats
+        if raw_bats is None and p.opponent_player_id is not None:
             opp = opp_players.get(p.opponent_player_id)
-            if opp is not None and opp.bats in ("R", "L"):
-                hand = opp.bats
-        if hand is None:
-            hand = p.opponent_hand
-        hands[p.game_pitch_id] = hand
+            if opp is not None:
+                raw_bats = opp.bats
+        raw_bats_by_id[p.game_pitch_id] = raw_bats
+        if raw_bats in ("R", "L"):
+            hands[p.game_pitch_id] = raw_bats
+        elif raw_bats == "S":
+            switch_pitches.append(p)
+        else:
+            hands[p.game_pitch_id] = None
+
+    if switch_pitches:
+        pitcher_hands = get_pitcher_hands(session, switch_pitches)
+        for p in switch_pitches:
+            pitcher_hand = pitcher_hands.get(p.game_pitch_id)
+            if pitcher_hand == "R":
+                hands[p.game_pitch_id] = "L"
+            elif pitcher_hand == "L":
+                hands[p.game_pitch_id] = "R"
+            else:
+                hands[p.game_pitch_id] = None
+
+    for p in pitches:
+        if hands[p.game_pitch_id] is None and p.opponent_hand in ("R", "L"):
+            hands[p.game_pitch_id] = p.opponent_hand
     return hands
 
 
