@@ -262,28 +262,41 @@ def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color, ba
     Ryker's asked for one and confirmed the larger size."""
     fig = go.Figure()
 
+    # Zone box + intended/actual markers all shifted down by the same
+    # -0.5ft as the batter silhouette below (Sept 2026, Ryker: "the
+    # strike zone needs to be adjusted, moved down to match the batter
+    # moving down"). Shifting this whole group together keeps the zone
+    # box and the markers positioned correctly relative to EACH OTHER
+    # -- it's still the same real pitch data, just rendered 0.5ft lower
+    # -- while re-aligning them visually against the batter, whose feet
+    # were moved down (ground_y=-0.5) to sit at the plate instead of
+    # floating above it. Home plate stays at ground_y=0.0 below -- it's
+    # the one true anchor everything else here is positioned relative
+    # to, so it does NOT get this shift.
+    ZONE_Y_SHIFT = -0.5
+
     if actual_x is not None and actual_z is not None:
         fig.add_shape(
             type="line", xref="x", yref="y",
-            x0=intended_x, y0=intended_z, x1=actual_x, y1=actual_z,
+            x0=intended_x, y0=intended_z + ZONE_Y_SHIFT, x1=actual_x, y1=actual_z + ZONE_Y_SHIFT,
             line=dict(color=MUTED_GRAY, width=1, dash="dot"), layer="below",
         )
 
     fig.add_trace(go.Scatter(
-        x=[intended_x], y=[intended_z], mode="markers",
+        x=[intended_x], y=[intended_z + ZONE_Y_SHIFT], mode="markers",
         marker=dict(symbol="circle-open", color=color, size=22, line=dict(color=color, width=3)),
         name="Intended", showlegend=True, hoverinfo="skip",
     ))
     if actual_x is not None and actual_z is not None:
         fig.add_trace(go.Scatter(
-            x=[actual_x], y=[actual_z], mode="markers",
+            x=[actual_x], y=[actual_z + ZONE_Y_SHIFT], mode="markers",
             marker=dict(symbol="circle", color=color, size=22, opacity=0.9, line=dict(color="#1E1E1E", width=1)),
             name="Actual", showlegend=True, hoverinfo="skip",
         ))
 
     fig.add_shape(
         type="rect", x0=-strike_zone.ZONE_HALF_WIDTH, x1=strike_zone.ZONE_HALF_WIDTH,
-        y0=strike_zone.ZONE_BOTTOM, y1=strike_zone.ZONE_TOP,
+        y0=strike_zone.ZONE_BOTTOM + ZONE_Y_SHIFT, y1=strike_zone.ZONE_TOP + ZONE_Y_SHIFT,
         line=dict(color=TEXT_CREAM, width=2), fillcolor="rgba(0,0,0,0)",
     )
     # Batter silhouette -- see this function's own docstring for the
@@ -292,21 +305,35 @@ def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color, ba
     # rather than a second set of magic numbers, so a batter drawn here
     # matches the one on Command Tracking's chart in scale.
     if batter_hand in ("R", "L"):
-        # Side (3B/1B) stays as derived below; the POSE was the actual
-        # bug (Sept 2026, Ryker: "the view for where we had the graphic
-        # before was from the pitcher view. now we are looking at it as
-        # the catcher so the hitters are flipped") -- command_charts.py
-        # pairs facing="right" with +x because ITS chart is drawn from
-        # the pitcher's own viewpoint, the same viewpoint the source
-        # photo was shot from. This chart is drawn from the catcher's
-        # viewpoint instead (view="catcher" below) -- the mirror image
-        # of the pitcher's -- so reusing that same facing-to-side
-        # pairing here put the pitcher-view pose on screen backwards.
-        # Swapped here (facing, not center_x) so the correct side still
-        # gets the correct-looking pose.
+        # Sept 2026 -- settled by actually rendering all four
+        # combinations (center_x sign x facing) and looking at the
+        # pixels, after two rounds of guessing wrong from the docstring
+        # alone. The one thing that has to be true regardless of hand:
+        # the batter faces the strike zone (front foot/shoulder toward
+        # it, bat cocked back over the AWAY-from-zone shoulder) rather
+        # than facing out of the picture -- anything else reads as
+        # backwards ("looks like the catcher is throwing the pitch").
+        # That happens exactly when facing is paired with center_x's
+        # sign the same way command_charts.py already pairs them
+        # (facing="right" with +x, facing="left" with -x) -- i.e. no
+        # hand-specific override needed at all; center_x alone (from
+        # the R/L-to-side mapping below) determines facing. The earlier
+        # "swap facing per hand" fix was wrong -- it made both hands
+        # face outward, away from the zone.
         center_x = -command_charts.HITTER_CENTER_X if batter_hand == "R" else command_charts.HITTER_CENTER_X
-        facing = "right" if batter_hand == "R" else "left"
-        for img in hitter_images(center_x=center_x, facing=facing, height_ft=command_charts.HITTER_HEIGHT_FT):
+        facing = "right" if center_x > 0 else "left"
+        # ground_y=-0.5 (Sept 2026, Ryker: "it looks like the hitter is
+        # standing way in front of the plate") -- the plate's own ground
+        # line already sits exactly at the batter's un-shifted feet
+        # (both nominally ground_y=0), so there's no real math mismatch;
+        # the plate is just a small, thin shape (its own depth_ft=0.22
+        # exaggerated to *1.7 for the point) sitting well off to the
+        # side under the zone, so a batter whose feet only just touch
+        # its topmost edge reads as standing forward of it rather than
+        # at it. Confirmed by rendering a few offsets and having Ryker
+        # pick -- shifting the batter down (not raising the plate,
+        # which barely moved the needle at this scale) closes the gap.
+        for img in hitter_images(center_x=center_x, facing=facing, height_ft=command_charts.HITTER_HEIGHT_FT, ground_y=-0.5):
             fig.add_layout_image(**img)
 
     fig.add_shape(**home_plate_shape(half_width_ft=strike_zone.ZONE_HALF_WIDTH, ground_y=0.0, view="catcher"))
@@ -320,7 +347,10 @@ def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color, ba
         # range works out to nearly the same ft-per-pixel density as
         # 280px over the old, narrower one).
         xaxis=dict(range=[-command_charts.CHART_X_EXTENT_FT, command_charts.CHART_X_EXTENT_FT], visible=False, fixedrange=True),
-        yaxis=dict(range=[-0.4, command_charts.HITTER_HEIGHT_FT + 0.4], visible=False, fixedrange=True, scaleanchor="x", scaleratio=1),
+        # Lower bound dropped to -0.9 (was -0.4) so the batter's feet
+        # -- now anchored at ground_y=-0.5, not 0 (see the ground_y=-0.5
+        # comment above) -- have room below them instead of clipping.
+        yaxis=dict(range=[-0.9, command_charts.HITTER_HEIGHT_FT + 0.4], visible=False, fixedrange=True, scaleanchor="x", scaleratio=1),
         legend=dict(orientation="h", y=-0.05, font=dict(size=10)),
     )
     return fig
