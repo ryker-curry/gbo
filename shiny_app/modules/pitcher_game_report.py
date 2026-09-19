@@ -26,7 +26,7 @@ from sqlalchemy.orm import joinedload
 import plotly.graph_objects as go
 
 from database import get_session
-from models import Player, Game, GamePitch, RapsodoPitch, User
+from models import Player, Game, GamePitch, RapsodoPitch, User, OpponentPlayer
 from game_stats import (
     get_pitching_pitches, compute_pitching_line, compute_pitch_type_breakdown,
     get_forced_half_inning_end_runs, get_runner_event_outs, get_batter_hands,
@@ -53,7 +53,7 @@ from visualizations import command_charts
 from visualizations.bullpen_charts import movement_chart, color_for_pitch_label
 from visualizations.pitcher_graphic import pitcher_release_svg
 from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, MUTED_GRAY, TEXT_CREAM
-from visualizations.hitter_graphic import home_plate_shape
+from visualizations.hitter_graphic import home_plate_shape, hitter_images
 
 import strike_zone
 import chart_helpers
@@ -210,7 +210,7 @@ def _pitch_shape_rows(pitches, rap_by_gp, stuff_baselines, pitcher):
     return rows
 
 
-def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color):
+def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color, batter_hand=None):
     """Compact single-pitch intended-vs-actual location figure for the
     Pitch-by-Pitch detail card (Ryker, Sept 2026: "add like how we
     have in [Command Tracking] where we can see intended location and
@@ -237,7 +237,26 @@ def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color):
     caught as backwards for this particular chart). Note this diverges
     from pitch_locations_chart's own view="pitcher" convention on
     Command Tracking's dashboard -- the two charts share styling
-    (markers, connecting line, colors) but not viewpoint."""
+    (markers, connecting line, colors) but not viewpoint.
+
+    batter_hand ('R'/'L'/None, Sept 2026, Ryker: "have a batter graphic
+    based on the hitter that was up... visually see a batter in the
+    box") -- draws ONE hitter_graphic.hitter_images() silhouette (not
+    the decorative pair command_charts.py draws on both sides), on the
+    side matching this pitch's actual batter, resolved by the caller
+    via game_stats.get_batter_hands() rather than trusted from the raw
+    GamePitch.opponent_hand column (see that function's own docstring
+    for why -- three-squad intrasquad games in particular). Catcher-view
+    convention (this card's view="catcher" above) puts a RIGHT-handed
+    batter on the LEFT/negative-x side of the plate -- the box closer
+    to 3B -- and a LEFT-handed batter on the RIGHT/positive-x side --
+    closer to 1B -- same side Statcast's own pitch-location graphics
+    draw them on. None (hand couldn't be resolved) skips the silhouette
+    entirely rather than guessing a side. This is why the card grew
+    from a fixed 280x280 to 450x450 (see pitch_detail_card) -- this
+    function originally stayed silhouette-free specifically because a
+    batter "wouldn't read" at the old smaller size; superseded now that
+    Ryker's asked for one and confirmed the larger size."""
     fig = go.Figure()
 
     if actual_x is not None and actual_z is not None:
@@ -264,14 +283,29 @@ def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color):
         y0=strike_zone.ZONE_BOTTOM, y1=strike_zone.ZONE_TOP,
         line=dict(color=TEXT_CREAM, width=2), fillcolor="rgba(0,0,0,0)",
     )
+    # Batter silhouette -- see this function's own docstring for the
+    # hand-to-side convention. Reuses command_charts.py's own tuned
+    # HITTER_HEIGHT_FT/HITTER_CENTER_X/CHART_X_EXTENT_FT constants below
+    # rather than a second set of magic numbers, so a batter drawn here
+    # matches the one on Command Tracking's chart in scale.
+    if batter_hand in ("R", "L"):
+        center_x = -command_charts.HITTER_CENTER_X if batter_hand == "R" else command_charts.HITTER_CENTER_X
+        facing = "left" if batter_hand == "R" else "right"
+        for img in hitter_images(center_x=center_x, facing=facing, height_ft=command_charts.HITTER_HEIGHT_FT):
+            fig.add_layout_image(**img)
+
     fig.add_shape(**home_plate_shape(half_width_ft=strike_zone.ZONE_HALF_WIDTH, ground_y=0.0, view="catcher"))
 
     apply_gbo_theme(
-        fig, height=280, margin=dict(l=0, r=0, t=0, b=0),
-        xaxis=dict(range=[-2.0, 2.0], visible=False, fixedrange=True),
-        # Lower bound extended past 0.5 down to -0.4 so the plate (on the
-        # ground line, partly below it) isn't clipped.
-        yaxis=dict(range=[-0.4, 4.5], visible=False, fixedrange=True, scaleanchor="x", scaleratio=1),
+        fig, height=450, margin=dict(l=0, r=0, t=0, b=0),
+        # Widened from the original +/-2.0/4.5 (see docstring) to fit the
+        # batter silhouette -- same extents as command_charts.py's own
+        # chart so the zone/markers end up at roughly the same on-screen
+        # scale as before despite the bigger canvas (450px over a wider
+        # range works out to nearly the same ft-per-pixel density as
+        # 280px over the old, narrower one).
+        xaxis=dict(range=[-command_charts.CHART_X_EXTENT_FT, command_charts.CHART_X_EXTENT_FT], visible=False, fixedrange=True),
+        yaxis=dict(range=[-0.4, command_charts.HITTER_HEIGHT_FT + 0.4], visible=False, fixedrange=True, scaleanchor="x", scaleratio=1),
         legend=dict(orientation="h", y=-0.05, font=dict(size=10)),
     )
     return fig
@@ -1639,21 +1673,61 @@ def pitcher_game_report_server(input, output, session, app_state):
 
             has_intended = p.intended_plate_x is not None and p.intended_plate_z is not None
             has_actual = p.actual_plate_x is not None and p.actual_plate_z is not None
+
+            # Batter for this specific pitch (Sept 2026, Ryker: "have a
+            # batter graphic based on the hitter that was up"). Hand comes
+            # from game_stats.get_batter_hands() -- the same canonical
+            # resolution the vs-RHH/vs-LHH splits elsewhere on this page
+            # already use, NOT the raw GamePitch.opponent_hand column
+            # (wrong for three-squad intrasquad pitches, see that
+            # function's own docstring). Name resolution mirrors its
+            # same batter_id convention (our_player_id is the batter when
+            # is_our_team_batting is True -- reachable here for a
+            # two-squad intrasquad game where THIS pitcher is tracked as
+            # the "opponent" side while our own roster batted;
+            # opponent_our_player_id otherwise, else a named
+            # external-opponent OpponentPlayer row) so the name and hand
+            # always describe the same person; falls back to hand-only
+            # when no name is on file (a real opponent tracked by hand
+            # alone, per OpponentPlayer's own docstring).
+            batter_hand = get_batter_hands(db, [p]).get(p.game_pitch_id)
+            batter_id = p.our_player_id if p.is_our_team_batting else p.opponent_our_player_id
+            batter_name = None
+            if batter_id is not None:
+                batter_player = db.query(Player).filter(Player.player_id == batter_id).first()
+                if batter_player is not None:
+                    batter_name = f"{batter_player.first_name} {batter_player.last_name}"
+            elif p.opponent_player_id is not None:
+                opp_player = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == p.opponent_player_id).first()
+                if opp_player is not None:
+                    batter_name = opp_player.player_name
+            if batter_name and batter_hand:
+                batter_caption = f"vs. {batter_name} ({batter_hand})"
+            elif batter_name:
+                batter_caption = f"vs. {batter_name}"
+            elif batter_hand:
+                batter_caption = f"vs. {batter_hand}HH"
+            else:
+                batter_caption = None
+
             if has_intended:
                 location_fig = _pitch_location_figure(
                     intended_x=float(p.intended_plate_x), intended_z=float(p.intended_plate_z),
                     actual_x=float(p.actual_plate_x) if has_actual else None,
                     actual_z=float(p.actual_plate_z) if has_actual else None,
                     color=color_for_pitch_label(label),
+                    batter_hand=batter_hand,
                 )
                 location_block = ui.div(
                     ui.p("Location", style="font-weight:700; text-align:center;"),
-                    chart_helpers.fig_to_img(location_fig, width=280, height=280),
+                    chart_helpers.fig_to_img(location_fig, width=450, height=450),
+                    ui.p(batter_caption, class_="text-muted small", style="text-align:center;") if batter_caption else None,
                 )
             else:
                 location_block = ui.div(
                     ui.p("Location", style="font-weight:700; text-align:center;"),
                     ui.p("Not located yet.", class_="text-muted small", style="text-align:center;"),
+                    ui.p(batter_caption, class_="text-muted small", style="text-align:center;") if batter_caption else None,
                 )
 
             # Trimmed from the full Rapsodo readout down to Velocity plus
@@ -1724,7 +1798,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                         summary_block,
                         ui.p(" · ".join(result_bits), class_="text-muted small", style="margin-top:12px;"),
                     ),
-                    col_widths=[4, 8],
+                    col_widths=[5, 7],
                 ),
             )
         finally:
