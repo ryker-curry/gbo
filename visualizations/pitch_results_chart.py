@@ -24,7 +24,13 @@ grouping does the rest (no subplot trickery needed).
 
 Skips the "Total" row compute_pitch_type_breakdown always appends
 (this is a per-pitch-type comparison chart, a "Total" bar isn't a real
-pitch) and any pitch type with zero balls in play (nothing to show).
+pitch). A pitch type still shows here with zero balls in play as long
+as it has any swings -- a whiff-only pitch type has nothing for the
+contact-quality stack (those segments render as 0-height/blank, same
+as any other None value here) but its Whiff bar is real and shouldn't
+disappear just because nothing was ever put in play (Ryker, Sept 2026:
+"it should show whiffs based on swing and miss. Don't need to click
+swing and miss for contact quality because there was no contact").
 """
 
 import plotly.graph_objects as go
@@ -58,10 +64,10 @@ def pitch_results_chart(rows):
     """rows: compute_pitch_type_breakdown()'s per-pitch-type list
     (Total row included is fine -- filtered out here). Returns a
     plotly Figure, or None if no pitch type here has any balls in
-    play yet (nothing meaningful to chart)."""
+    play OR any swings yet (nothing meaningful to chart)."""
     type_rows = [
         r for r in rows
-        if r.get("Pitch Type") != "Total" and (r.get("Balls in Play") or 0) > 0
+        if r.get("Pitch Type") != "Total" and ((r.get("Balls in Play") or 0) > 0 or (r.get("Total Swings") or 0) > 0)
     ]
     if not type_rows:
         return None

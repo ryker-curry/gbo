@@ -806,7 +806,20 @@ def pitcher_profile_server(input, output, session, app_state):
         contact-quality columns (Weak/Jammed/Off the End/Clipped/Solid/
         Barreled %, Hard Hit %) specifically for this section -- GBO's
         own contact_quality vocabulary, not Statcast's Topped/Under/
-        Flare-Burner labels, same six-bucket idea."""
+        Flare-Burner labels, same six-bucket idea.
+
+        A pitch type qualifies for a row here with EITHER a ball in play
+        OR a swing (so whiffs/fouls-only pitch types still show up, not
+        just BIP > 0) -- Whiff %/SwStr % are computed straight off
+        pitch_outcome == "Swing and Miss" (game_stats.WHIFF_OUTCOMES),
+        never off contact_quality, and a whiff by definition has no
+        contact_quality to record (Ryker, Sept 2026: "it should show
+        whiffs based on swing and miss. Don't need to click swing and
+        miss for contact quality because there was no contact"). The
+        contact-quality stack columns (Weak/Jammed/etc.) still correctly
+        show "--" for a 0-BIP pitch type -- format_pct(None) -- so a
+        whiff-only row never claims a contact-quality rate it has no
+        balls in play to support."""
         if not app_state.is_authenticated():
             return None
         role = app_state.role_name()
@@ -828,10 +841,14 @@ def pitcher_profile_server(input, output, session, app_state):
             if not game_pitches:
                 return ui.p("No game pitches in this range yet.", class_="text-muted small")
             rows = compute_pitch_type_breakdown(game_pitches)
-            type_rows = [r for r in rows if r["Pitch Type"] != "Total" and (r["Balls in Play"] or 0) > 0]
+            type_rows = [
+                r for r in rows
+                if r["Pitch Type"] != "Total" and ((r["Balls in Play"] or 0) > 0 or (r["Total Swings"] or 0) > 0)
+            ]
             if not type_rows:
                 return ui.p(
-                    "No balls in play in this range yet -- Results needs at least one ball in play per pitch type.",
+                    "No swings recorded in this range yet -- Results needs at least one swing (in play, foul, or a "
+                    "miss) per pitch type.",
                     class_="text-muted small",
                 )
             return ui.div(
