@@ -82,7 +82,11 @@ ZONE_LABELS = {
 # replace "Weak" at the same score (1) it had -- no existing baseline
 # to justify ranking Jammed/Off the End/Clipped against each other.
 CONTACT_QUALITY_OPTIONS = ["Barreled/Squared Up", "Solid", "Weak", "Jammed", "Off the End", "Clipped", "Miss"]
-CONTACT_QUALITY_SCORE = {"Barreled/Squared Up": 3, "Solid": 2, "Weak": 1, "Jammed": 1, "Off the End": 1, "Clipped": 1, "Miss": 0}
+# "Bunt": 1 covers GamePitch rows only (Game Tracking's own CONTACT_QUALITY_OPTIONS
+# includes "Bunt", scored as weak contact -- this dict is reused by
+# hitter_game_report.py/hitter_profile.py for GAME data too, even though "Bunt"
+# is never a HitterSwing/practice value).
+CONTACT_QUALITY_SCORE = {"Barreled/Squared Up": 3, "Solid": 2, "Weak": 1, "Jammed": 1, "Off the End": 1, "Clipped": 1, "Miss": 0, "Bunt": 1}
 HIT_LOCATION_OPTIONS = ["Left Field", "Left-Center", "Center Field", "Right-Center", "Right Field", "Infield"]
 ZONE_GRID_LAYOUT = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
 
