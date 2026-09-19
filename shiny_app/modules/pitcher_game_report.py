@@ -565,7 +565,7 @@ def _attack_zones_figure(pitches):
             y=[float(p.actual_plate_z) for p in group],
             mode="markers", name=label,
             marker=dict(color=color, size=12, opacity=0.9, line=dict(color="#1E1E1E", width=1)),
-            hovertemplate=f"{label}<br>Attack Zone: {{customdata}}<extra></extra>",
+            hovertemplate=f"{label}<br>Attack Zone: %{{customdata}}<extra></extra>",
             customdata=[strike_zone.classify_attack_zone(float(p.actual_plate_x), float(p.actual_plate_z)) for p in group],
             legend="legend2",
         ))
