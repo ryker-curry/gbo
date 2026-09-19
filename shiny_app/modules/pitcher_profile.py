@@ -98,6 +98,7 @@ import ui_helpers
 import format_helpers
 from analytics.bullpen_metrics import pitch_type_summary, average_estimated_arm_angle, pitch_type_label
 from visualizations.bullpen_charts import movement_chart, release_point_chart, color_for_pitch_label
+from visualizations.pitcher_graphic import pitcher_release_svg
 from visualizations.spin_axis_chart import average_spin_axis_chart, individual_spin_axis_chart
 from format_helpers import (
     format_pct as _fmt_pct,
@@ -381,6 +382,7 @@ def pitcher_profile_server(input, output, session, app_state):
                         "metrics": "Metrics (Physical Profile)",
                         "results": "Results",
                         "zone": "Zone",
+                        "command": "Command & Execution",
                         "arsenal": "Arsenal",
                         "count_leverage": "Count Leverage",
                     },
@@ -733,6 +735,45 @@ def pitcher_profile_server(input, output, session, app_state):
                     "Arm Angle": row.get("Est. Arm Angle", "N/A"),
                 })
 
+            # Release-point pitcher graphic (Sept 2026, Ryker: "want to
+            # be able to see the graphic of pitcher outline with the
+            # estimated arm angle") -- same visualizations.pitcher_
+            # graphic.pitcher_release_svg already live on Pitcher Game
+            # Report and Bullpen Dashboard (the web-designer graphic
+            # that replaced the older release_silhouette.py illustration),
+            # reused here rather than a second, differently-styled
+            # graphic, so this pitcher looks the same across every page
+            # that shows their release point. One averaged release
+            # point per pitch type -- same groups_by_label already
+            # built above for the table.
+            releases = []
+            for label, group in groups_by_label.items():
+                heights = [float(p.release_height) for p in group if p.release_height is not None]
+                sides = [float(p.release_side) for p in group if p.release_side is not None]
+                if not heights or not sides:
+                    continue
+                releases.append({
+                    "label": label,
+                    "color": color_for_pitch_label(label),
+                    "side_ft": sum(sides) / len(sides),
+                    "height_ft": sum(heights) / len(heights),
+                    "count": len(group),
+                })
+            player_height_in = float(player.height_in) if player.height_in is not None else None
+            graphic_children = [ui.p(ui.strong("Release Point & Arm Angle"), class_="mt-3")]
+            if releases:
+                graphic_children.append(ui.div(
+                    ui.HTML(pitcher_release_svg(releases, throws=player.throws or "R", height_in=player_height_in or 73)),
+                ))
+                if player_height_in is None:
+                    graphic_children.append(ui.p(
+                        "Using an average height -- add this pitcher's real height on the Players page for a "
+                        "more accurate figure.",
+                        class_="text-muted small", style="text-align:center;",
+                    ))
+            else:
+                graphic_children.append(ui.p("No release point data yet.", class_="text-muted small"))
+
             return ui.div(
                 header,
                 ui.p(
@@ -741,6 +782,8 @@ def pitcher_profile_server(input, output, session, app_state):
                     class_="text-muted small",
                 ),
                 ui_helpers.render_dict_table(table_rows),
+                ui.hr(),
+                *graphic_children,
                 ui.hr(),
                 ui.input_slider(
                     "pp_phys_shading", "Minimum pitches to shade a pitch type's cluster",
@@ -1407,14 +1450,13 @@ def pitcher_profile_server(input, output, session, app_state):
         if not app_state.is_authenticated():
             return None
         req("pp_view" in input)
-        if input.pp_view() != "zone":
+        if input.pp_view() != "command":
             return None
         _current_filters()
         view_pitches, _throws = _view_pitches()
         if not view_pitches:
             return None
         return ui.div(
-            ui.hr(),
             ui.p(ui.strong("Command Target Zones")),
             ui.p(
                 "Same Precision/Command/Competitive target-radius bands and concentric-ring chart Command "
@@ -1431,7 +1473,7 @@ def pitcher_profile_server(input, output, session, app_state):
         if not app_state.is_authenticated():
             return None
         req("pp_view" in input)
-        if input.pp_view() != "zone":
+        if input.pp_view() != "command":
             return None
         view_pitches, throws = _view_pitches()
         if not view_pitches:
@@ -1484,7 +1526,7 @@ def pitcher_profile_server(input, output, session, app_state):
         if not app_state.is_authenticated():
             return None
         req("pp_view" in input)
-        if input.pp_view() != "zone":
+        if input.pp_view() != "command":
             return None
         view_pitches, _throws = _view_pitches()
         if not view_pitches:
