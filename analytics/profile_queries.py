@@ -23,7 +23,7 @@ the default), "intrasquad", or "external".
 from sqlalchemy.orm import joinedload
 from sqlalchemy import or_
 
-from models import GamePitch, Game, RapsodoPitch, BullpenSession, PitchType
+from models import GamePitch, Game, RapsodoPitch, RapsodoImport, BullpenSession, PitchType
 
 
 def _base_pitching_query(db, player_id):
@@ -50,7 +50,22 @@ def _base_batting_query(db, player_id):
     )
 
 
-def _apply_filters(query, date_from=None, date_to=None, pitch_type=None, game_scope="all", hand=None):
+def _apply_filters(query, date_from=None, date_to=None, pitch_type=None, game_scope="all", hand=None, game_id=None):
+    if game_id is not None:
+        # A specific game overrides date_from/date_to/game_scope entirely
+        # (Sept 2026, Ryker: "for everything in pitcher profile be able to
+        # select a specific game as well as the entire season view") --
+        # callers pass date_from/date_to=None alongside a set game_id (see
+        # pitcher_profile.py's _current_filters), so this is normally the
+        # only date-ish filter in play, but it's still unconditional here
+        # too as a second guarantee against ever mixing a stale date range
+        # with a picked game.
+        query = query.filter(GamePitch.game_id == game_id)
+        if pitch_type:
+            query = query.join(PitchType, GamePitch.pitch_type_id == PitchType.pitch_type_id).filter(PitchType.type_name == pitch_type)
+        if hand:
+            query = query.filter(GamePitch.opponent_hand == hand)
+        return query
     if date_from is not None:
         query = query.filter(Game.game_date >= date_from)
     if date_to is not None:
@@ -66,14 +81,17 @@ def _apply_filters(query, date_from=None, date_to=None, pitch_type=None, game_sc
     return query
 
 
-def get_pitcher_profile_pitches(db, player_id, date_from=None, date_to=None, pitch_type=None, game_scope="all", opponent_hand=None):
+def get_pitcher_profile_pitches(db, player_id, date_from=None, date_to=None, pitch_type=None, game_scope="all", opponent_hand=None, game_id=None):
     """Every GamePitch this player threw (our side, or the intrasquad
     'other squad' side -- same union get_pitching_pitches uses),
     matching every filter above. opponent_hand here is the actual
     OPPOSING BATTER's hand (GamePitch.opponent_hand) -- the same
-    'vs RHH/vs LHH' split pitcher_game_report.py already offers."""
+    'vs RHH/vs LHH' split pitcher_game_report.py already offers.
+    game_id (Sept 2026 addition): narrows to exactly one game, see
+    _apply_filters' own docstring note for how it interacts with the
+    other filters."""
     query = _base_pitching_query(db, player_id)
-    query = _apply_filters(query, date_from, date_to, pitch_type, game_scope, opponent_hand)
+    query = _apply_filters(query, date_from, date_to, pitch_type, game_scope, opponent_hand, game_id)
     return query.order_by(Game.game_date, GamePitch.pitch_sequence).all()
 
 
@@ -89,7 +107,7 @@ def get_hitter_profile_pitches(db, player_id, date_from=None, date_to=None, pitc
     return query.order_by(Game.game_date, GamePitch.pitch_sequence).all()
 
 
-def get_pitcher_rapsodo_pitches(db, player_id, date_from=None, date_to=None, pitch_type=None, game_scope="all"):
+def get_pitcher_rapsodo_pitches(db, player_id, date_from=None, date_to=None, pitch_type=None, game_scope="all", game_id=None):
     """Every RapsodoPitch for this player -- bullpen-sourced AND
     game-linked alike (Stuff+ is physical-characteristics-only, see
     pitch_grading.py's module docstring -- it doesn't care whether the
@@ -107,12 +125,31 @@ def get_pitcher_rapsodo_pitches(db, player_id, date_from=None, date_to=None, pit
     row -- see that column's own comment on models.RapsodoPitch).
     opponent_hand still isn't supported here -- that context lives on
     GamePitch, not RapsodoPitch; see rapsodo_by_game_pitch_id below for
-    how the two get joined per-pitch."""
+    how the two get joined per-pitch.
+
+    game_id (Sept 2026 addition, same "pick one game" feature as
+    get_pitcher_profile_pitches): unlike game_scope, this DOES exclude
+    every bullpen-only reading, on purpose -- picking one specific game
+    means "just that outing's pitches," and a bullpen rep with no tie
+    to that game isn't part of it. Matches via RapsodoImport.game_id
+    (set on an import made against an Intrasquad Game rather than a
+    Bullpen Session -- see that column's own comment on
+    models.RapsodoImport) rather than RapsodoPitch.game_pitch_id, since
+    the latter is only set once a reading has been individually matched
+    to a charted pitch (services/rapsodo_import.py's matching step) --
+    using it here would silently drop this game's still-unmatched
+    readings. Takes priority over game_scope, same as
+    get_pitcher_profile_pitches/_apply_filters."""
     query = (
         db.query(RapsodoPitch)
         .options(joinedload(RapsodoPitch.pitch_type))
         .filter(RapsodoPitch.player_id == player_id)
     )
+    if game_id is not None:
+        query = query.join(RapsodoImport, RapsodoPitch.import_id == RapsodoImport.import_id).filter(RapsodoImport.game_id == game_id)
+        if pitch_type:
+            query = query.join(PitchType, RapsodoPitch.pitch_type_id == PitchType.pitch_type_id).filter(PitchType.type_name == pitch_type)
+        return query.order_by(RapsodoPitch.pitch_date).all()
     if date_from is not None:
         query = query.filter(RapsodoPitch.pitch_date >= date_from)
     if date_to is not None:
