@@ -1079,3 +1079,86 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
         "Barreled %": _rate(contact_quality_counts["Barreled/Squared Up"], len(balls_in_play)),
         "Hard Hit %": _rate(hard_hit_allowed, len(balls_in_play)),
     }
+
+# ---------------------------------------------------------------------------
+# Count Leverage -- pitch mix by ball-strike count (Sept 2026, Ryker,
+# citing Lance Brozdowski's "count leverage" framing -- pitch selection
+# should shift with the count, not stay static across an at-bat -- and
+# the Marlins' own dugout pitch-calling system, which leans on a similar
+# split: best stuff middle-middle in non-two-strike counts, maximum
+# breaking-ball usage once he's got two strikes, chasing the whiff).
+# ---------------------------------------------------------------------------
+
+# The 12 counts a pitch can actually be thrown INTO (a count reaching
+# 4 balls or 3 strikes ends the PA before another pitch is thrown, so
+# those never appear as a balls_before/strikes_before pair). Fixed
+# order -- balls ascending within each strikes total -- so every caller
+# lays out the same 12-cell grid regardless of which counts a given
+# pitcher actually saw pitches in during the filtered window.
+COUNT_STATES = [
+    (0, 0), (1, 0), (2, 0), (3, 0),
+    (0, 1), (1, 1), (2, 1), (3, 1),
+    (0, 2), (1, 2), (2, 2), (3, 2),
+]
+
+
+def compute_pitch_mix_by_count(pitches):
+    """Pitch-type mix for each of the 12 ball-strike counts (COUNT_STATES
+    above), from GamePitch.balls_before/strikes_before -- the count
+    BEFORE this particular pitch, i.e. what was actually in play when
+    the pitch was picked (not the count it left behind) -- plus each
+    (count, pitch type) combo's own RV/100, so "what he throws most in
+    this count" can be read alongside "is it actually working" (Ryker,
+    Sept 2026: "is there a way we can see if what he throws the
+    majority of the time in those counts is successful?"). RV/100 is
+    run value -- the same ground-truth currency Location+/Pitching+/
+    Command+ and the Results tab's own RV/100 column already use here,
+    and literally the metric the FanGraphs Stuff+/Location+/Pitching+
+    primer this page's grading system is built on treats as the
+    standard measure of pitch success, INCLUDING by count specifically
+    ("A breaking ball should go to different parts of the strike zone
+    in 2-0 and 1-2 counts, and Location+ captures that phenomenon" --
+    same idea, just RV/100 grouped by count instead of by zone tier).
+    Same convention _pitch_type_row's own RV/100 uses: negative is
+    good for the pitcher (the pitch hurt the batter's expected run
+    value), and pitches with no run_value yet count toward the
+    denominator but contribute nothing to the sum, rather than being
+    excluded outright -- a type entirely missing run_value gets RV/100
+    None instead of a misleadingly confident 0.0.
+
+    Returns {(balls, strikes): {"Total": n, "Types": [{"Pitch Type":
+    label, "N": n, "Pct": pct, "RV/100": rv_per_100_or_None}, ...]}}
+    for all 12 counts, always present (Total 0 / Types [] for a count
+    nothing was thrown in this window) so a caller building a fixed
+    12-cell grid never has to special-case a missing key. Types are
+    sorted by usage descending, with Pct against that COUNT's own
+    total -- not the pitcher's overall pitch count -- since the whole
+    point is "what does he throw once he's here," not a slice of his
+    season-long mix."""
+    buckets = {c: {} for c in COUNT_STATES}
+    for p in pitches:
+        c = (p.balls_before, p.strikes_before)
+        if c not in buckets:
+            continue
+        label = p.pitch_type.type_name if p.pitch_type is not None else "Unspecified"
+        entry = buckets[c].setdefault(label, {"n": 0, "rv_sum": 0.0, "rv_n": 0})
+        entry["n"] += 1
+        if p.run_value is not None:
+            entry["rv_sum"] += float(p.run_value)
+            entry["rv_n"] += 1
+
+    result = {}
+    for c in COUNT_STATES:
+        type_data = buckets[c]
+        total = sum(e["n"] for e in type_data.values())
+        types = [
+            {
+                "Pitch Type": label,
+                "N": e["n"],
+                "Pct": round(100 * e["n"] / total, 1),
+                "RV/100": round(100 * e["rv_sum"] / e["n"], 3) if e["rv_n"] else None,
+            }
+            for label, e in sorted(type_data.items(), key=lambda kv: -kv[1]["n"])
+        ] if total else []
+        result[c] = {"Total": total, "Types": types}
+    return result
