@@ -635,16 +635,16 @@ def pitcher_game_report_server(input, output, session, app_state):
 
             by_inning_rows = [
                 {
-                    "Inning": r["inning"], "FPS %": _fmt_pct(r["fps_pct"]), "AB≤4 %": _fmt_pct(r["ab4_pct"]),
-                    "Leadoff Out %": _fmt_pct(r["leadoff_out_pct"]), "Secondary %": _fmt_pct(r["secondary_strike_pct"]),
+                    "Inning": r["inning"], "FPS %": _fmt_pct(r["fps_pct"]), "AB≤4 Pitches %": _fmt_pct(r["ab4_pct"]),
+                    "Leadoff Out %": _fmt_pct(r["leadoff_out_pct"]), "Secondary Strike %": _fmt_pct(r["secondary_strike_pct"]),
                     "Shutdown": ("Yes" if r["shutdown"] else "No") if r["shutdown_opportunity"] else "—",
                 }
                 for r in totals["by_inning"]
             ]
             by_pitcher_rows = [
                 {
-                    "Pitcher": r["player_name"], "FPS %": _fmt_pct(r["fps_pct"]), "AB≤4 %": _fmt_pct(r["ab4_pct"]),
-                    "Leadoff Out %": _fmt_pct(r["leadoff_out_pct"]), "Secondary %": _fmt_pct(r["secondary_strike_pct"]),
+                    "Pitcher": r["player_name"], "FPS %": _fmt_pct(r["fps_pct"]), "AB≤4 Pitches %": _fmt_pct(r["ab4_pct"]),
+                    "Leadoff Out %": _fmt_pct(r["leadoff_out_pct"]), "Secondary Strike %": _fmt_pct(r["secondary_strike_pct"]),
                     "Shutdown": f"{r['shutdown_converted']}/{r['shutdown_opportunities']}" if r["shutdown_opportunities"] else "—",
                 }
                 for r in totals["by_pitcher"]
