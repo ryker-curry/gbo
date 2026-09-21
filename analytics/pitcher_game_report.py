@@ -41,8 +41,9 @@ numbers as unavailable (None), not zero -- zero would incorrectly
 imply "reviewed and found bad," when the truth is "not reviewed yet."
 """
 
-from models import GamePitch, PitchType
+from models import GamePitch, PitchType, Player
 import strike_zone
+from pitch_type_config import FASTBALL_TYPES
 
 # Pitch outcomes that reach the batter and get a swing/take decision --
 # used throughout to distinguish "a pitch was thrown" (all rows) from
@@ -67,6 +68,12 @@ NON_AB_OUTCOMES = {"BB", "HBP", "Sac Bunt", "Sac Fly"}  # excluded from the stan
 # real season-specific set from a source he trusts more.
 WOBA_WEIGHTS = {"uBB": 0.69, "HBP": 0.72, "1B": 0.89, "2B": 1.27, "3B": 1.62, "HR": 2.10}
 FIP_CONSTANT = 3.10  # commonly-cited recent-MLB-average value -- swap for your league's real constant once known
+
+# Staff-totals goal thresholds (Ryker, Sept 2026) -- see
+# compute_staff_game_totals below. Only these two of the five staff-
+# totals stats have a goal at all right now.
+FPS_GOAL_PCT = 62.0
+SECONDARY_STRIKE_GOAL_PCT = 58.0
 
 
 def _outs_from_string(bases_str):
@@ -387,4 +394,239 @@ def _pitch_type_row(type_pitches, completed_pas, type_id, total_pitches_all_type
         "execution_hits": execution_hits, "execution_reviewed": execution_total,
         "execution_pct": round(execution_hits / execution_total * 100, 1) if execution_total else None,
         "rv_total": rv_total, "rv_per_100": rv_per_100,
+    }
+
+
+# ---------------------------------------------------------------------
+# Staff totals (Sept 2026, Ryker: "for pitcher game report add a staff
+# totals portion... first pitch strike percentage, percentage of at
+# bats ending in 4 pitches or less, lead off out percentage, secondary
+# strike percentage (any pitch other than a fastball), shutdown inning
+# (zero after we score). we will set goals for these... track these
+# for each inning/pitcher as well as for the entire game.")
+#
+# Four of these five are ordinary pitching-side stats -- just computed
+# across the WHOLE staff's pitches in this game instead of one
+# pitcher's (compute_pitcher_game_report above already computes
+# leadoff_out_pct and fps_pct the same way for one pitcher; these
+# helpers are the shared, pitcher-agnostic versions so staff/inning/
+# pitcher breakdowns all use identical math). "At bats" here means
+# every COMPLETED PLATE APPEARANCE, including one that ends in a walk
+# or HBP (Ryker's call) -- this is an efficiency stat about pitch
+# economy, not the strict scorebook AB count OBA/wOBA use elsewhere in
+# this module.
+#
+# Shutdown Inning is the odd one out: it's a half-inning-level stat
+# that depends on BOTH sides' pitches (you need to see our own batting
+# half-innings to know when we scored), not just our pitching pitches,
+# so it's computed separately by _compute_shutdown_innings and merged
+# in afterward.
+# ---------------------------------------------------------------------
+
+def _group_into_pas(pitches):
+    """Same pa_pitch_number-reset grouping compute_pitcher_game_report
+    uses above, pulled out standalone so staff/inning/pitcher subsets
+    can each be grouped into PAs the same way without re-querying."""
+    pas, current = [], []
+    for p in pitches:
+        if p.pa_pitch_number == 1 and current:
+            pas.append(current)
+            current = []
+        current.append(p)
+    if current:
+        pas.append(current)
+    return pas
+
+
+def _fps_stat(completed_pas):
+    first_pitches = [pa[0] for pa in completed_pas if pa[0].pa_pitch_number == 1]
+    fps = sum(1 for p in first_pitches if p.pitch_outcome in STRIKE_OUTCOMES)
+    return {
+        "fps": fps, "fps_opportunities": len(first_pitches),
+        "fps_pct": round(fps / len(first_pitches) * 100, 1) if first_pitches else None,
+    }
+
+
+def _ab4_stat(completed_pas):
+    """"At bats" (really: completed PAs, see module note above) that
+    ended in 4 pitches or less. pa[-1].pa_pitch_number on the PA's own
+    ENDING pitch already equals that PA's total pitch count (it counts
+    up from 1 within the PA), so no separate len(pa) needed."""
+    short = sum(1 for pa in completed_pas if pa[-1].pa_pitch_number is not None and pa[-1].pa_pitch_number <= 4)
+    return {
+        "ab4": short, "ab4_opportunities": len(completed_pas),
+        "ab4_pct": round(short / len(completed_pas) * 100, 1) if completed_pas else None,
+    }
+
+
+def _leadoff_out_stat(completed_pas):
+    leadoff_pas = [pa for pa in completed_pas if _is_leadoff_pitch(pa[0])]
+    outs = sum(1 for pa in leadoff_pas if pa[-1].ab_outcome in OUT_AB_OUTCOMES)
+    return {
+        "leadoff_outs": outs, "leadoff_opportunities": len(leadoff_pas),
+        "leadoff_out_pct": round(outs / len(leadoff_pas) * 100, 1) if leadoff_pas else None,
+    }
+
+
+def _secondary_strike_stat(pitches, pitch_types):
+    """Strike% on every pitch that ISN'T a fastball (Ryker's own
+    definition: "any pitch other than a fastball"). A pitch with no
+    pitch_type_id set (never charted) is excluded from both the
+    numerator and denominator entirely -- rather than silently folding
+    an unknown type into "secondary" -- since we genuinely don't know
+    whether it was a fastball."""
+    secondary = [p for p in pitches if pitch_types.get(p.pitch_type_id) is not None and pitch_types[p.pitch_type_id] not in FASTBALL_TYPES]
+    strikes = sum(1 for p in secondary if p.pitch_outcome in STRIKE_OUTCOMES)
+    return {
+        "secondary_strikes": strikes, "secondary_pitches": len(secondary),
+        "secondary_strike_pct": round(strikes / len(secondary) * 100, 1) if secondary else None,
+    }
+
+
+def _compute_shutdown_innings(session, game_id):
+    """Every half-inning in this game in TRUE chronological order --
+    grouped by (inning, is_our_team_batting), ordered by each group's
+    own first pitch_sequence, not by inning number then a hardcoded
+    top/bottom order (which side bats first flips depending on whether
+    we're the home or away team that game). Needs every pitch in the
+    game, both sides, not just our pitching pitches.
+
+    A "shutdown opportunity" is a defensive half-inning (we're
+    pitching) immediately following an offensive half-inning where we
+    scored >=1 run; "converted" means we allowed 0 runs in it -- the
+    standard "shutdown inning" definition, matching Ryker's own "zero
+    after we score." credited_pitcher_id is whoever threw that
+    half-inning's FIRST pitch (a judgment call for a half with a
+    mid-inning pitching change -- credits/debits whoever inherited the
+    chance, same convention as how a "hold" is scored, not whoever
+    happened to get the last out)."""
+    all_pitches = (
+        session.query(GamePitch)
+        .filter(GamePitch.game_id == game_id)
+        .order_by(GamePitch.pitch_sequence)
+        .all()
+    )
+    if not all_pitches:
+        return []
+
+    halves = {}
+    order = []
+    for p in all_pitches:
+        key = (p.inning, p.is_our_team_batting)
+        if key not in halves:
+            halves[key] = []
+            order.append(key)
+        halves[key].append(p)
+
+    opportunities = []
+    for i, key in enumerate(order):
+        inning, is_our_batting = key
+        if not is_our_batting:
+            continue
+        runs_we_scored = sum((p.runs_scored_on_play or 0) for p in halves[key])
+        if runs_we_scored < 1:
+            continue
+        if i + 1 >= len(order):
+            continue  # we scored in the game's last half-inning -- no next half to shut down
+        next_key = order[i + 1]
+        if next_key[1] is not False:
+            continue  # defensive guard -- should always alternate batting -> pitching
+        next_pitches = halves[next_key]
+        runs_allowed = sum((p.runs_scored_on_play or 0) for p in next_pitches)
+        opportunities.append({
+            "inning": next_key[0],
+            "runs_we_scored_before": runs_we_scored,
+            "runs_allowed": runs_allowed,
+            "shutdown": runs_allowed == 0,
+            "credited_pitcher_id": next_pitches[0].our_player_id,
+        })
+    return opportunities
+
+
+def _staff_stat_bundle(pitches, completed_pas, pitch_types):
+    bundle = {}
+    bundle.update(_fps_stat(completed_pas))
+    bundle.update(_ab4_stat(completed_pas))
+    bundle.update(_leadoff_out_stat(completed_pas))
+    bundle.update(_secondary_strike_stat(pitches, pitch_types))
+    return bundle
+
+
+def compute_staff_game_totals(session, game_id):
+    """Whole-game, whole-staff totals for the five "team pitching
+    goals" stats (see module note above), computed three ways: one
+    staff-wide total for the game, one row per inning (combining
+    whichever of our pitchers threw that inning), and one row per
+    pitcher (their whole game). Returns None if the staff threw no
+    pitches in this game yet.
+
+    "Our pitching pitches" = GamePitch rows in this game with
+    is_our_team_batting False -- true regardless of whether the batting
+    side is a real external opponent or (intrasquad) our own Squad B,
+    same convention used throughout this module and game_stats.py."""
+    our_pitches = (
+        session.query(GamePitch)
+        .filter(GamePitch.game_id == game_id, GamePitch.is_our_team_batting.is_(False))
+        .order_by(GamePitch.pitch_sequence)
+        .all()
+    )
+    if not our_pitches:
+        return None
+
+    pitch_types = {pt.pitch_type_id: pt.type_name for pt in session.query(PitchType).all()}
+    all_pas = _group_into_pas(our_pitches)
+    completed_pas = [pa for pa in all_pas if pa[-1].ends_plate_appearance]
+
+    staff_total = _staff_stat_bundle(our_pitches, completed_pas, pitch_types)
+
+    shutdown_opps = _compute_shutdown_innings(session, game_id)
+    staff_total["shutdown_opportunities"] = len(shutdown_opps)
+    staff_total["shutdown_converted"] = sum(1 for o in shutdown_opps if o["shutdown"])
+    staff_total["shutdown_pct"] = round(staff_total["shutdown_converted"] / len(shutdown_opps) * 100, 1) if shutdown_opps else None
+
+    # -- by inning --
+    innings = sorted({p.inning for p in our_pitches})
+    by_inning = []
+    for inning in innings:
+        inn_pitches = [p for p in our_pitches if p.inning == inning]
+        inn_pas = [pa for pa in all_pas if pa[0].inning == inning]
+        inn_completed = [pa for pa in inn_pas if pa[-1].ends_plate_appearance]
+        row = {"inning": inning}
+        row.update(_staff_stat_bundle(inn_pitches, inn_completed, pitch_types))
+        inn_shutdown_opps = [o for o in shutdown_opps if o["inning"] == inning]
+        row["shutdown_opportunity"] = len(inn_shutdown_opps) > 0
+        row["shutdown"] = inn_shutdown_opps[0]["shutdown"] if inn_shutdown_opps else None
+        by_inning.append(row)
+
+    # -- by pitcher, in the order each first took the mound --
+    pitcher_ids_in_order = []
+    seen = set()
+    for p in our_pitches:
+        if p.our_player_id not in seen:
+            seen.add(p.our_player_id)
+            pitcher_ids_in_order.append(p.our_player_id)
+    players = {pl.player_id: pl for pl in session.query(Player).filter(Player.player_id.in_(pitcher_ids_in_order)).all()}
+
+    by_pitcher = []
+    for pid in pitcher_ids_in_order:
+        p_pitches = [p for p in our_pitches if p.our_player_id == pid]
+        p_pas = [pa for pa in all_pas if pa[0].our_player_id == pid]
+        p_completed = [pa for pa in p_pas if pa[-1].ends_plate_appearance]
+        player = players.get(pid)
+        row = {
+            "player_id": pid,
+            "player_name": f"{player.first_name} {player.last_name}" if player else f"Player {pid}",
+        }
+        row.update(_staff_stat_bundle(p_pitches, p_completed, pitch_types))
+        p_shutdown_opps = [o for o in shutdown_opps if o["credited_pitcher_id"] == pid]
+        row["shutdown_opportunities"] = len(p_shutdown_opps)
+        row["shutdown_converted"] = sum(1 for o in p_shutdown_opps if o["shutdown"])
+        row["shutdown_pct"] = round(row["shutdown_converted"] / len(p_shutdown_opps) * 100, 1) if p_shutdown_opps else None
+        by_pitcher.append(row)
+
+    return {
+        "staff_total": staff_total,
+        "by_inning": by_inning,
+        "by_pitcher": by_pitcher,
+        "shutdown_opportunities_detail": shutdown_opps,
     }

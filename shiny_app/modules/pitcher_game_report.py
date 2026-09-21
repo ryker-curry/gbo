@@ -43,6 +43,7 @@ from pitch_location_stats import compute_command_precision, compute_attack_zones
 # they always have been -- this is a new, additional section, not a
 # replacement.
 from analytics import command_metrics, profile_queries
+from analytics.pitcher_game_report import compute_staff_game_totals, FPS_GOAL_PCT, SECONDARY_STRIKE_GOAL_PCT
 from analytics.pitch_grading import stuff_plus, arsenal_summary, location_plus, MIN_BASELINE_PITCHES
 from analytics.bullpen_metrics import (
     average_estimated_arm_angle, pitch_type_label,
@@ -493,6 +494,7 @@ def pitcher_game_report_ui():
     return ui.div(
         ui_helpers.page_header("Pitcher Game Report"),
         ui.output_ui("game_picker"),
+        ui.output_ui("staff_totals_section"),
         ui.output_ui("pitcher_picker"),
         ui.output_ui("report_body"),
         # Everything below is one of the "View" dropdown's sections --
@@ -577,6 +579,86 @@ def pitcher_game_report_server(input, output, session, app_state):
                 return ui_helpers.empty_state("No games tracked yet. Start one on Game Tracking first.")
             choices = {str(g.game_id): _game_label(g) for g in games}
             return ui.input_select("game_select", "Game", choices=choices)
+        finally:
+            db.close()
+
+    @render.ui
+    def staff_totals_section():
+        """Whole-game, whole-staff totals for the five "team pitching
+        goals" stats (Ryker, Sept 2026 -- see compute_staff_game_totals's
+        own docstring for the full request and each stat's definition).
+        Independent of the Pitcher picker below -- shows as soon as a
+        game is selected, since it's a staff-wide view, not one
+        pitcher's. Two goal-tracked stats (First Pitch Strike %,
+        Secondary Strike %) get a green/red tile against Ryker's own
+        targets; the other three (AB<=4-pitches %, Leadoff Out %,
+        Shutdown Inning %) show plainly with no goal yet, per his call."""
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        selected_game_id = int(input.game_select())
+
+        db = get_session()
+        try:
+            game = db.query(Game).options(joinedload(Game.opponent_team)).filter(Game.game_id == selected_game_id).first()
+            if game is None:
+                return None
+            totals = compute_staff_game_totals(db, selected_game_id)
+            if totals is None:
+                return ui_helpers.card(ui_helpers.empty_state("No pitches recorded for our staff in this game yet."), title="Staff Totals", right=_game_label(game))
+            staff = totals["staff_total"]
+
+            def _goal_tile(label, pct, goal):
+                if pct is None:
+                    return ui_helpers.kpi_tile(label, "—", delta="No pitches yet")
+                met = pct >= goal
+                return ui_helpers.kpi_tile(
+                    label, _fmt_pct(pct),
+                    delta=f"Goal {goal:.0f}%+", delta_positive=met,
+                    status="good" if met else "flag",
+                )
+
+            goal_tiles = ui.div(
+                _goal_tile("First Pitch Strike %", staff["fps_pct"], FPS_GOAL_PCT),
+                _goal_tile("Secondary Strike %", staff["secondary_strike_pct"], SECONDARY_STRIKE_GOAL_PCT),
+                class_="gbo-kpi-row",
+            )
+            plain_tiles = ui.div(
+                ui_helpers.kpi_tile("AB ≤ 4 Pitches %", _fmt_pct(staff["ab4_pct"])),
+                ui_helpers.kpi_tile("Leadoff Out %", _fmt_pct(staff["leadoff_out_pct"])),
+                ui_helpers.kpi_tile(
+                    "Shutdown Inning %", _fmt_pct(staff["shutdown_pct"]),
+                    delta=f"{staff['shutdown_converted']}/{staff['shutdown_opportunities']} opportunities" if staff["shutdown_opportunities"] else "No opportunities yet",
+                ),
+                class_="gbo-kpi-row", style="margin-top:8px;",
+            )
+
+            by_inning_rows = [
+                {
+                    "Inning": r["inning"], "FPS %": _fmt_pct(r["fps_pct"]), "AB≤4 %": _fmt_pct(r["ab4_pct"]),
+                    "Leadoff Out %": _fmt_pct(r["leadoff_out_pct"]), "Secondary %": _fmt_pct(r["secondary_strike_pct"]),
+                    "Shutdown": ("Yes" if r["shutdown"] else "No") if r["shutdown_opportunity"] else "—",
+                }
+                for r in totals["by_inning"]
+            ]
+            by_pitcher_rows = [
+                {
+                    "Pitcher": r["player_name"], "FPS %": _fmt_pct(r["fps_pct"]), "AB≤4 %": _fmt_pct(r["ab4_pct"]),
+                    "Leadoff Out %": _fmt_pct(r["leadoff_out_pct"]), "Secondary %": _fmt_pct(r["secondary_strike_pct"]),
+                    "Shutdown": f"{r['shutdown_converted']}/{r['shutdown_opportunities']}" if r["shutdown_opportunities"] else "—",
+                }
+                for r in totals["by_pitcher"]
+            ]
+
+            return ui_helpers.card(
+                goal_tiles,
+                plain_tiles,
+                ui.h6("By inning", class_="mt-3"),
+                ui_helpers.render_dict_table(by_inning_rows, empty_message="No innings pitched yet."),
+                ui.h6("By pitcher", class_="mt-3"),
+                ui_helpers.render_dict_table(by_pitcher_rows, empty_message="No pitchers recorded yet."),
+                title="Staff Totals", right=_game_label(game),
+            )
         finally:
             db.close()
 
