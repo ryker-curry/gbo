@@ -696,3 +696,39 @@ def team_hitting_lines(db, date_from=None, date_to=None):
         line["Zone Swing %"] = discipline["Zone Swing %"]
         lines.append(line)
     return lines
+
+
+def team_batting_line_for_seasons(db, season_ids):
+    """Sept 2026 addition (Ryker: "add ops+ ... for hitters", OPS+
+    baseline confirmed as "Team average, same season"). Pools EVERY
+    batting pitch across the given season_id(s) into ONE
+    game_stats.compute_batting_line() call (unlike team_hitting_lines
+    above, which returns one line PER hitter) -- this is the single
+    team-wide OBP/SLG an individual hitter's OPS+ is measured against,
+    same union-of-our-batters/intrasquad-opponent-batters population
+    team_hitting_lines uses, just not split out by player_id.
+
+    season_ids: an iterable of Season.season_id values (a hitter's
+    OPS+ baseline is pooled across every season their own filtered
+    pitches touch -- see hitter_profile.py/hitter_game_report.py
+    callers for how that set is built). Returns None if season_ids is
+    empty/None or no pitches are found (no baseline available), so
+    callers can skip showing OPS+ rather than dividing by a None SLG/
+    OBP."""
+    from game_stats import compute_batting_line
+    if not season_ids:
+        return None
+    query = (
+        db.query(GamePitch)
+        .join(Game, GamePitch.game_id == Game.game_id)
+        .options(joinedload(GamePitch.pitch_type), joinedload(GamePitch.game))
+        .filter(Game.season_id.in_(list(season_ids)))
+        .filter(
+            (GamePitch.is_our_team_batting.is_(True))
+            | ((GamePitch.is_our_team_batting.is_(False)) & (GamePitch.opponent_our_player_id.isnot(None)))
+        )
+    )
+    pitches = query.all()
+    if not pitches:
+        return None
+    return compute_batting_line(pitches)

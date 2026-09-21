@@ -23,18 +23,19 @@ simplification the rest of the app already makes.
 
 from datetime import date, timedelta
 
-from shiny import module, ui, render, req
+from shiny import module, ui, render, reactive, req
 from shinywidgets import output_widget, render_plotly
 
 from database import get_session
 from models import Player, User, PitchType, StaffPlayerAssignment
-from game_stats import compute_batting_line, compute_batted_ball_profile
+from game_stats import compute_batting_line, compute_batted_ball_profile, ops_plus
 from plate_discipline import compute_hitter_discipline, compute_zone_tier_discipline
 from analytics import performance_score, profile_queries
 from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_figure, CONTACT_QUALITY_SCORE
 
 import ui_helpers
 import format_helpers
+import glossary_content
 from format_helpers import format_pct as _fmt_pct
 
 STAFF_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
@@ -54,7 +55,7 @@ def _my_player(db, app_state):
 @module.ui
 def hitter_profile_ui():
     return ui.div(
-        ui_helpers.page_header("Hitter Profile"),
+        ui_helpers.page_header("Hitter Profile", actions=ui_helpers.glossary_link("hp_glossary", "Stats Glossary")),
         ui.output_ui("hp_player_picker"),
         ui.output_ui("hp_filters"),
         ui.output_ui("hp_body"),
@@ -174,6 +175,13 @@ def hitter_profile_server(input, output, session, app_state):
             f = _current_filters()
 
             line = compute_batting_line(pitches)
+            season_ids = {p.game.season_id for p in pitches if p.game is not None and p.game.season_id is not None}
+            season_baseline = profile_queries.team_batting_line_for_seasons(db, season_ids)
+            player_ops_plus = ops_plus(
+                line["OBP"], line["SLG"],
+                season_baseline["OBP"] if season_baseline else None,
+                season_baseline["SLG"] if season_baseline else None,
+            )
             sections = [ui.h5(f"{player.first_name} {player.last_name}", class_="gbo-section-title")]
 
             sections.append(ui.p(ui.strong("Line")))
@@ -196,10 +204,17 @@ def hitter_profile_server(input, output, session, app_state):
                 {"label": "OBP", "value": _fmt(line["OBP"])},
                 {"label": "SLG", "value": _fmt(line["SLG"])},
                 {"label": "OPS", "value": _fmt(line["OPS"])},
+                {"label": "OPS+", "value": str(player_ops_plus) if player_ops_plus is not None else "—"},
                 {"label": "ISO", "value": _fmt(line["ISO"])},
                 {"label": "wOBA*", "value": _fmt(line["wOBA"])},
             ]))
-            sections.append(ui.p("*wOBA uses generic linear weights, a relative read within your own games, not MLB-exact.", class_="text-muted small"))
+            sections.append(ui.p(
+                "*wOBA uses generic linear weights, a relative read within your own games, not MLB-exact. "
+                "OPS+ is against this team's own season average (100 = team average) -- see the glossary." if season_baseline else
+                "*wOBA uses generic linear weights, a relative read within your own games, not MLB-exact. "
+                "OPS+ isn't shown -- no team baseline yet for this window's season(s).",
+                class_="text-muted small",
+            ))
 
             sections.append(ui.p(ui.strong("Plate Discipline")))
             sections.append(ui_helpers.render_kpi_cards([
@@ -213,7 +228,20 @@ def hitter_profile_server(input, output, session, app_state):
                 {"label": "RISP AVG", "value": _fmt(line["RISP AVG"])},
                 {"label": "2-Strike AVG", "value": _fmt(line["2-Strike AVG"])},
                 {"label": "Leadoff AVG", "value": _fmt(line["Leadoff AVG"])},
+                {"label": "QAB %", "value": _fmt_pct(line["QAB %"])},
             ]))
+            sections.append(ui.p(f"QAB: {line['QAB']} of {line['PA']} PA", class_="text-muted small"))
+
+            sections.append(ui.p(ui.strong("Count Leverage (Ahead / Even / Behind)")))
+            sections.append(ui_helpers.render_dict_table([
+                {"Count State": "Ahead", "PA": line["Ahead PA"], "AVG": _fmt(line["Ahead AVG"]), "OBP": _fmt(line["Ahead OBP"]), "SLG": _fmt(line["Ahead SLG"]), "wOBA*": _fmt(line["Ahead wOBA"])},
+                {"Count State": "Even", "PA": line["Even PA"], "AVG": _fmt(line["Even AVG"]), "OBP": _fmt(line["Even OBP"]), "SLG": _fmt(line["Even SLG"]), "wOBA*": _fmt(line["Even wOBA"])},
+                {"Count State": "Behind", "PA": line["Behind PA"], "AVG": _fmt(line["Behind AVG"]), "OBP": _fmt(line["Behind OBP"]), "SLG": _fmt(line["Behind SLG"]), "wOBA*": _fmt(line["Behind wOBA"])},
+            ]))
+            sections.append(ui.p(
+                "Split by the count when the at-bat ended -- Ahead = more balls than strikes, Behind = more strikes than balls, Even = equal.",
+                class_="text-muted small",
+            ))
 
             sections.append(ui.hr())
             sections.append(ui.p(ui.strong("Plate Discipline (Zone)")))
@@ -319,6 +347,11 @@ def hitter_profile_server(input, output, session, app_state):
     # as hitter_game_report.py: a render_plotly output needs its own
     # registered function.
     # -------------------------------------------------------------------
+
+    @reactive.effect
+    @reactive.event(input.hp_glossary)
+    def _hp_show_glossary():
+        ui.modal_show(ui_helpers.glossary_modal("Hitting Stats Glossary", glossary_content.HITTING))
 
     @render.ui
     def hp_contact_section():
