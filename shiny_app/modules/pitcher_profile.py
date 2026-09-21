@@ -74,7 +74,6 @@ game_stats.py's season/single-game queries don't cover.
 """
 
 from datetime import date, timedelta
-from statistics import mean
 
 from shiny import module, ui, render, req, reactive
 from shinywidgets import output_widget, render_plotly
@@ -85,7 +84,7 @@ from strike_zone import classify_attack_zone
 import command_config
 from analytics import command_metrics, performance_score, profile_queries
 from analytics.pitch_grading import (
-    stuff_plus, location_plus, pitching_plus, arsenal_summary, MIN_BASELINE_PITCHES,
+    stuff_plus, location_plus, pitching_plus, MIN_BASELINE_PITCHES,
 )
 from visualizations import command_charts, profile_charts
 from visualizations.pitch_results_chart import pitch_results_chart
@@ -136,35 +135,6 @@ def _avg_or_none(values):
     silently widen)."""
     vals = [float(v) for v in values if v is not None]
     return round(sum(vals) / len(vals), 1) if vals else None
-
-
-def _aggregate_trend_by_game(pitch_points):
-    """pitch_points: list of (game_id, game_date, value) for individual
-    graded pitches (value already non-None) -- one entry per pitch, as
-    _compute_grading_bundle/pp_trend_chart build them. Groups by
-    game_id, not date alone, so two games on the same date (a
-    doubleheader) stay separate points instead of silently averaging
-    together. Returns one point per OUTING -- (date, mean, lo, hi) --
-    sorted by date: mean is that outing's average pitch-level grade,
-    lo/hi its min/max, so profile_charts.trend_chart can show each
-    outing's spread (an error bar) around its average instead of one
-    dot per pitch.
-
-    Sept 2026, Ryker: raw pitch-by-pitch dots were too noisy to read as
-    an actual trend across outings ("how is this useful?" -- fair
-    question, given it took a whole page of pitches per outing to find
-    the shape). An outing-level average is what "trend over time"
-    actually means to a coach looking for whether a guy's pitching
-    better or worse lately, not a per-pitch scatter."""
-    groups = {}
-    for game_id, game_date, value in pitch_points:
-        groups.setdefault(game_id, {"date": game_date, "values": []})["values"].append(value)
-    rows = [
-        (g["date"], round(mean(g["values"]), 1), round(min(g["values"]), 1), round(max(g["values"]), 1))
-        for g in groups.values()
-    ]
-    rows.sort(key=lambda r: r[0])
-    return rows
 
 
 def _my_player(db, app_state):
@@ -471,103 +441,6 @@ def pitcher_profile_server(input, output, session, app_state):
     def _pp_show_arsenal_glossary():
         ui.modal_show(ui_helpers.glossary_modal("Arsenal Glossary", glossary_content.ARSENAL))
 
-    def _compute_grading_bundle(db, game_pitches, rapsodo_pitches):
-        """Shared derived-data pass over one filtered pitch window --
-        Stuff+/Location+/Pitching+ per pitch, pitch usage counts,
-        attack-zone counts, the Pitching+ trend series (one point per
-        OUTING, not per pitch -- see _aggregate_trend_by_game), the
-        Arsenal rollup, and the Individual Pitches rows. Factored out
-        of what used to be one single pp_body loop so pp_overview_
-        section/pp_zone_section/pp_arsenal_section can each call it
-        fresh (same "only the selected view queries anything"
-        principle pitcher_game_report.py's own gated sections already
-        establish) without tripling this ~60-line loop three ways."""
-        stuff_baselines = profile_queries.team_stuff_plus_baselines(db)
-        location_baseline = profile_queries.team_location_plus_baseline(db)
-
-        game_pitch_ids = [p.game_pitch_id for p in game_pitches]
-        rap_by_gp = profile_queries.rapsodo_by_game_pitch_id(db, game_pitch_ids)
-
-        def _type_label(pitch_type_obj):
-            return pitch_type_obj.type_name if pitch_type_obj is not None else "Unspecified"
-
-        pitch_type_grades = {}
-        individual_rows = []
-        trend_pitch_points = []
-        zone_counts = {"Heart": 0, "Shadow": 0, "Chase": 0, "Waste": 0}
-        usage_counts = {}
-
-        for p in game_pitches:
-            label = _type_label(p.pitch_type)
-            usage_counts[label] = usage_counts.get(label, 0) + 1
-
-            rap = rap_by_gp.get(p.game_pitch_id)
-            s_val = stuff_plus(rap, stuff_baselines.get(label)) if rap is not None else None
-            l_val = location_plus(p, location_baseline)
-            pi_val = pitching_plus(s_val, l_val)
-
-            grp = pitch_type_grades.setdefault(label, {"n": 0, "stuff_plus": [], "location_plus": [], "pitching_plus": []})
-            grp["n"] += 1
-            if s_val is not None:
-                grp["stuff_plus"].append(s_val)
-            if l_val is not None:
-                grp["location_plus"].append(l_val)
-            if pi_val is not None:
-                grp["pitching_plus"].append(pi_val)
-
-            if p.actual_plate_x is not None and p.actual_plate_z is not None:
-                zone = classify_attack_zone(float(p.actual_plate_x), float(p.actual_plate_z))
-                if zone:
-                    zone_counts[zone] += 1
-
-            if pi_val is not None and p.game is not None:
-                trend_pitch_points.append((p.game.game_id, p.game.game_date, pi_val))
-
-            individual_rows.append({
-                "Date": p.game.game_date.strftime("%Y-%m-%d") if p.game else "—",
-                "#": p.pitch_sequence,
-                "Pitch Type": label,
-                "Velo": f"{float(rap.velocity):.1f}" if rap is not None and rap.velocity is not None else "—",
-                "Result": p.pitch_outcome or "—",
-                "Stuff+": _fmt_grade(s_val),
-                "Location+": _fmt_grade(l_val),
-                "Pitching+": _fmt_grade(pi_val),
-            })
-
-        # Any Rapsodo pitches with no game link at all (pure bullpen
-        # reps) still count toward Arsenal's Stuff+ rollup -- see this
-        # function's callers' original docstring note (kept from
-        # pp_body's own comment, unchanged reasoning): stuff_baselines
-        # holds fitted MODELS, trained only on real-game pitches, but a
-        # fitted model scores any pitch from just its physical readings.
-        linked_rapsodo_ids = {r.rapsodo_pitch_id for r in rap_by_gp.values()}
-        for r in rapsodo_pitches:
-            if r.rapsodo_pitch_id in linked_rapsodo_ids:
-                continue
-            label = _type_label(r.pitch_type)
-            s_val = stuff_plus(r, stuff_baselines.get(label))
-            if s_val is None:
-                continue
-            grp = pitch_type_grades.setdefault(label, {"n": 0, "stuff_plus": [], "location_plus": [], "pitching_plus": []})
-            grp["n"] += 1
-            grp["stuff_plus"].append(s_val)
-
-        arsenal_rows = arsenal_summary(pitch_type_grades) if pitch_type_grades else []
-        overview_stuff = [v for row in arsenal_rows for v in [row["Stuff+"]] if v is not None]
-        overview_loc = [v for row in arsenal_rows for v in [row["Location+"]] if v is not None]
-        overview_pitching = [v for row in arsenal_rows for v in [row["Pitching+"]] if v is not None]
-
-        return {
-            "stuff_plus_value": round(sum(overview_stuff) / len(overview_stuff), 1) if overview_stuff else None,
-            "location_plus_value": round(sum(overview_loc) / len(overview_loc), 1) if overview_loc else None,
-            "pitching_plus_value": round(sum(overview_pitching) / len(overview_pitching), 1) if overview_pitching else None,
-            "usage_counts": usage_counts,
-            "zone_counts": zone_counts,
-            "trend_points": _aggregate_trend_by_game(trend_pitch_points),
-            "arsenal_rows": arsenal_rows,
-            "individual_rows": individual_rows,
-        }
-
     @render.ui
     def pp_overview_section():
         if not app_state.is_authenticated():
@@ -643,7 +516,7 @@ def pitcher_profile_server(input, output, session, app_state):
                 class_="text-muted small fst-italic",
             ))
 
-            bundle = _compute_grading_bundle(db, game_pitches, rapsodo_pitches)
+            bundle = profile_queries.compute_grading_bundle(db, game_pitches, rapsodo_pitches)
             stuff_plus_value = bundle["stuff_plus_value"]
             location_plus_value = bundle["location_plus_value"]
             pitching_plus_value = bundle["pitching_plus_value"]
@@ -1063,7 +936,7 @@ def pitcher_profile_server(input, output, session, app_state):
             )
             if not game_pitches and not rapsodo_pitches:
                 return None
-            bundle = _compute_grading_bundle(db, game_pitches, rapsodo_pitches)
+            bundle = profile_queries.compute_grading_bundle(db, game_pitches, rapsodo_pitches)
             sections = [ui.div(
                 ui.p(ui.strong("Attack Zone Distribution"), style="margin-bottom:0;"),
                 ui_helpers.glossary_link("pp_glossary_zone", "Zone Glossary"),
@@ -1169,7 +1042,7 @@ def pitcher_profile_server(input, output, session, app_state):
             )
             if not game_pitches and not rapsodo_pitches:
                 return None
-            bundle = _compute_grading_bundle(db, game_pitches, rapsodo_pitches)
+            bundle = profile_queries.compute_grading_bundle(db, game_pitches, rapsodo_pitches)
             sections = [ui.div(
                 ui_helpers.glossary_link("pp_glossary_arsenal", "Arsenal Glossary"),
                 style="text-align:right;",
@@ -1429,8 +1302,8 @@ def pitcher_profile_server(input, output, session, app_state):
                 if pi_val is not None and p.game is not None:
                     pitch_points.append((p.game.game_id, p.game.game_date, pi_val))
             # One point per OUTING (mean/lo/hi), not per pitch -- see
-            # _aggregate_trend_by_game's docstring.
-            points = _aggregate_trend_by_game(pitch_points)
+            # profile_queries.aggregate_trend_by_game's docstring.
+            points = profile_queries.aggregate_trend_by_game(pitch_points)
             return profile_charts.trend_chart(points, y_label="Pitching+")
         finally:
             db.close()

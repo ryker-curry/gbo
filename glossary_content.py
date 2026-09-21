@@ -90,3 +90,41 @@ ARSENAL = [
     ("Weak / Jammed / ... / Barreled %, Hard Hit %", "Same contact-quality definitions as the Results glossary, per pitch type."),
     ("Zone %, Heart / Shadow / Chase / Waste Zone %", "Same location-mix definitions as the Zone glossary, per pitch type."),
 ]
+
+
+# Pitching Staff Leaderboard (Sept 2026, Ryker: "have a glossary
+# explaining each stat. pull definitions for stats from trustworthy
+# sources, fangraphs, mlb.com, pitchprofiler."). Traditional-stat
+# entries below are written from real definitions pulled from MLB.com's
+# own glossary (mlb.com/glossary -- ERA, WHIP, FIP, K/BB) and
+# FanGraphs' Sabermetrics Library (library.fangraphs.com/pitching/
+# rate-stats -- K%, BB%, K-BB%, K/9, BB/9), not copied verbatim (GBO's
+# own words, same house style as every other entry in this file), each
+# noting which direction is better since that's what the leaderboard's
+# own sort uses. The team-relative grade entries (Stuff+ through
+# Performance) are GBO's own invented stats -- no external source
+# defines them -- so those five are reused word-for-word from the
+# Overview glossary above rather than re-written, same numbers/scale, so
+# a coach or player doesn't hit two different explanations of "Command+"
+# depending on which tab they read it from.
+LEADERBOARD = [
+    ("IP", "Innings Pitched, standard fractional notation -- X.1 means one out into the next inning, X.2 means two outs in (thirds of an inning, not tenths)."),
+    ("ERA", "Earned Run Average: earned runs allowed per 9 innings pitched -- runs that scored without the help of a fielding error or passed ball. MLB.com calls it \"the most commonly accepted statistical tool for evaluating pitchers,\" though team defense and park factors can move it independent of how a pitcher actually threw. Lower is better."),
+    ("WHIP", "Walks and Hits per Inning Pitched -- how well a pitcher keeps runners off the bases (MLB.com). Doesn't distinguish how a runner reached (a walk and a home run count the same), and HBP/errors/fielder's-choice reaches aren't counted at all. Lower is better."),
+    ("FIP", "Fielding Independent Pitching: an ERA-shaped estimate built only from strikeouts, walks, hit-by-pitches, and home runs -- \"the events a pitcher has the most control over,\" per MLB.com, entirely removing what happens to a ball once it's put in play. GBO's own FIP_CONSTANT is calibrated against real earned-run figures rather than MLB's league-wide one -- see game_stats.py. Lower is better."),
+    ("K/9, BB/9, HR/9", "Strikeouts, walks, and home runs allowed, scaled to a 9-inning rate (FanGraphs' own formula: count x 9 / IP) so pitchers with different workloads compare on equal footing. K/9: higher is better. BB/9 and HR/9: lower is better."),
+    ("K %, BB %", "Strikeouts (or walks) as a share of batters faced, not innings. FanGraphs prefers this over K/9 or BB/9 for comparing pitchers head to head, since \"worse pitchers will often face more batters per inning than better pitchers\" -- a stat scaled to innings can flatter a pitcher who's just working through more traffic. K%: higher is better. BB%: lower is better."),
+    ("K-BB %", "K% minus BB% -- FanGraphs' single-number read on overall command, the gap between how often a pitcher misses bats and how often he loses the zone entirely. Higher is better."),
+    ("K/BB", "Strikeout-to-walk ratio: strikeouts divided by walks -- \"how many strikeouts a pitcher records for each walk he allows\" (MLB.com). Higher is better."),
+    ("OBA (opponent AVG)", "Opponent batting average against this pitcher -- hits allowed divided by at-bats, the pitching side's version of a hitter's own AVG. Lower is better."),
+    ("Strike %", "Same definition as the Overview glossary: strikes (called, swinging, foul, or in play) as a share of all pitches thrown. Higher is better."),
+    ("FPS % (First Pitch Strike %)", "Of all completed plate appearances, how many opened with pitch #1 going for a strike (called, swinging, foul, or in play -- a ball or hit-by-pitch on pitch 1 doesn't count). Higher is better."),
+    ("CSW %", "Called Strikes + Whiffs, as a share of every pitch thrown -- one number for how often a pitcher either froze the hitter or fooled him into missing entirely. Higher is better."),
+    ("Zone Execution %", "Same definition as the Overview glossary: how often a pitch's actual location landed in the same called cell (the Level-Zone code the dugout signaled in) as the intended one -- a hit-your-spot rate, not just a ball/strike count. Higher is better."),
+    ("BF, K, BB", "Batters Faced, Strikeouts, and Walks -- the raw counting stats the rate stats above are built from, useful here mainly as a workload/sample-size check next to them."),
+    ("Stuff+ / Location+ / Pitching+", "GBO's own pitch-quality grades, each on a 100-point scale where 100 = this TEAM's own average across every graded pitch this season and each 10 points = one standard deviation. Team-relative only -- GBO has no access to league-wide pitch data to compare against a real MLB Stuff+ number. Stuff+ grades a pitch's physical characteristics alone (velocity, movement, spin, release); Location+ grades where it was thrown; Pitching+ combines both into one grade for what the pitch actually did. Higher is better."),
+    ("Command+", "Same 100-point team-relative scale, built from how far a pitcher's located pitches land from their own CALLED target, compared pitch-type by pitch-type against the team's own average miss distance -- not how far from the plate's center, how far from where the dugout asked for it. Higher is better."),
+    ("Arsenal", "Usage-weighted average of Pitching+ across a pitcher's own pitch mix -- a pitch type thrown more often counts for more toward this number. Higher is better."),
+    ("Results", "How this pitcher's FIP/WHIP/K-BB%/CSW%/Zone Execution% compare to the rest of the team, blended into one team-relative score. Higher is better."),
+    ("Performance", "Equal-weighted blend of Stuff+, Location+, Command+, Arsenal, and Results -- one overall \"how did he pitch\" number, kept separate from the Bucket System's physical/athletic score. A V1 formula; it isn't adjusted for the overlap between Arsenal and Stuff+/Location+ (Arsenal is itself built from them). Higher is better."),
+]
