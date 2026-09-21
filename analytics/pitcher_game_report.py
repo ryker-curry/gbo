@@ -41,7 +41,7 @@ numbers as unavailable (None), not zero -- zero would incorrectly
 imply "reviewed and found bad," when the truth is "not reviewed yet."
 """
 
-from models import GamePitch, PitchType, Player
+from models import GamePitch, PitchType, Player, Game
 import strike_zone
 from pitch_type_config import FASTBALL_TYPES
 
@@ -89,28 +89,79 @@ def _is_leadoff_pitch(p):
     return p.pa_pitch_number == 1 and p.outs_before == 0 and (p.bases_before or "000") == "000"
 
 
+def _pitcher_id(p):
+    """The real pitcher on this pitch, regardless of which side of the
+    is_our_team_batting split recorded it. our_player_id IS the pitcher
+    on an ordinary (is_our_team_batting False) row -- but for an
+    intrasquad game's OTHER squad's pitching (is_our_team_batting True
+    -- one of our own players batting against another of our own
+    roster pitching), the real pitcher is opponent_our_player_id
+    instead (see models.GamePitch's docstring). Needed anywhere a
+    report has to find "who pitched this" without knowing in advance
+    which side of an intrasquad game recorded the row (Ryker, Sept
+    2026: reports were silently missing whichever squad's pitching got
+    recorded as the "opponent" side -- see compute_pitcher_game_report
+    and compute_staff_game_totals below, both fixed to use this)."""
+    return p.opponent_our_player_id if p.is_our_team_batting else p.our_player_id
+
+
+def _batter_hand(p, players_by_id):
+    """The batter's handedness on this pitch, regardless of which side
+    recorded it. On an ordinary (is_our_team_batting False) row,
+    opponent_hand already holds the batter's hand directly. On an
+    intrasquad game's OTHER squad's pitching (is_our_team_batting
+    True), our_player_id is the real batter (one of our own roster)
+    and opponent_hand instead holds the PITCHER's hand -- so the
+    batter's hand has to come from their own Player.bats instead.
+    players_by_id: {player_id: Player}, pre-loaded by the caller."""
+    if p.is_our_team_batting:
+        batter = players_by_id.get(p.our_player_id)
+        return batter.bats if batter else None
+    return p.opponent_hand
+
+
 def compute_pitcher_game_report(session, game_id, pitcher_player_id):
     """The full report for one pitcher, one game: header stats + a
     pitch-type breakdown split three ways (Overall / vs RHH / vs LHH).
     Returns None if this pitcher has no recorded pitches in this game.
 
     All pitches attributed to this pitcher = GamePitch rows in this
-    game where is_our_team_batting is False and our_player_id matches
+    game where this pitcher was the one actually throwing -- normally
+    that means is_our_team_batting is False and our_player_id matches
     (our_player_id IS the pitcher, not the batter, on those rows --
-    see models.py's GamePitch docstring). This is exact, not a
-    heuristic -- Game Tracking already records who was actually
-    pitching on every single pitch (including mid-game pitching
-    changes), not just who started."""
-    all_pitches = (
-        session.query(GamePitch)
-        .filter(GamePitch.game_id == game_id, GamePitch.is_our_team_batting.is_(False), GamePitch.our_player_id == pitcher_player_id)
-        .order_by(GamePitch.pitch_sequence)
-        .all()
-    )
+    see models.py's GamePitch docstring). For an INTRASQUAD game,
+    though, this pitcher might instead have faced our own lineup as
+    the "other squad" on some pitches (is_our_team_batting True,
+    opponent_our_player_id is the real pitcher there -- see
+    _pitcher_id) -- every intrasquad pitcher's real outing can include
+    both directions, so both get checked (Ryker, Sept 2026: "for
+    intrasquads coach needs to be able to see both teams" -- this was
+    silently dropping whichever squad's pitching landed on the
+    "batting" side of the split). This is exact, not a heuristic --
+    Game Tracking already records who was actually pitching on every
+    single pitch (including mid-game pitching changes and, for
+    intrasquad games, the free-picked opposing pitcher), not just who
+    started."""
+    game = session.query(Game).filter(Game.game_id == game_id).first()
+    if game is not None and game.is_intrasquad:
+        all_pitches = [
+            p for p in session.query(GamePitch).filter(GamePitch.game_id == game_id).order_by(GamePitch.pitch_sequence).all()
+            if _pitcher_id(p) == pitcher_player_id
+        ]
+    else:
+        all_pitches = (
+            session.query(GamePitch)
+            .filter(GamePitch.game_id == game_id, GamePitch.is_our_team_batting.is_(False), GamePitch.our_player_id == pitcher_player_id)
+            .order_by(GamePitch.pitch_sequence)
+            .all()
+        )
     if not all_pitches:
         return None
 
     pitch_types = {pt.pitch_type_id: pt.type_name for pt in session.query(PitchType).all()}
+    # Only needed for _batter_hand's intrasquad-batting-side lookup --
+    # harmless (and just as cheap) to build unconditionally.
+    players_by_id = {pl.player_id: pl for pl in session.query(Player).filter(Player.player_id.in_({p.our_player_id for p in all_pitches})).all()}
 
     # Group into PAs (pa_pitch_number resets to 1 at the start of each
     # PA) so PA-level stats (Early/Ahead/A3P/Leadoff/AB-outcome-based
@@ -131,13 +182,13 @@ def compute_pitcher_game_report(session, game_id, pitcher_player_id):
     header = _compute_header_stats(all_pitches, completed_pas)
     breakdown_overall = _compute_pitch_type_breakdown(all_pitches, completed_pas, pitch_types)
     breakdown_rhh = _compute_pitch_type_breakdown(
-        [p for p in all_pitches if p.opponent_hand == "R"],
-        [pa for pa in completed_pas if pa[0].opponent_hand == "R"],
+        [p for p in all_pitches if _batter_hand(p, players_by_id) == "R"],
+        [pa for pa in completed_pas if _batter_hand(pa[0], players_by_id) == "R"],
         pitch_types,
     )
     breakdown_lhh = _compute_pitch_type_breakdown(
-        [p for p in all_pitches if p.opponent_hand == "L"],
-        [pa for pa in completed_pas if pa[0].opponent_hand == "L"],
+        [p for p in all_pitches if _batter_hand(p, players_by_id) == "L"],
+        [pa for pa in completed_pas if _batter_hand(pa[0], players_by_id) == "L"],
         pitch_types,
     )
 
@@ -552,6 +603,54 @@ def _staff_stat_bundle(pitches, completed_pas, pitch_types):
     return bundle
 
 
+def _group_into_frames(our_pitches, is_intrasquad):
+    """One group of pitches per REAL half-inning, for the Staff Totals
+    "by inning" breakdown. our_pitches must already be sorted by
+    pitch_sequence (compute_staff_game_totals guarantees this).
+
+    For an ordinary (non-intrasquad) game, that's just the raw stored
+    `inning` column, unchanged -- a real spring game's innings behave
+    the way the schema assumes (Ryker, Sept 2026: "for real games in
+    the spring it will not be this way").
+
+    For an INTRASQUAD game, though, the raw `inning` column
+    over-counts: the live tracker sometimes bumps the inning number
+    (or even skips one) mid-frame while the exact same pitcher keeps
+    throwing to the exact same batting squad -- confirmed against
+    Ryker's own play-by-play account of the Sept 8 game (game_id 14):
+    four of that game's ten real half-innings were each split across
+    two different stored `inning` values with no actual pitching
+    change in between (e.g. Shane Holman's 4-out top of the 2nd was
+    stored as innings 3 AND 4), and two stored inning numbers (6, 13)
+    were never used by anything at all. So for intrasquad games, group
+    by CONTIGUOUS same-pitcher stretches instead (via _pitcher_id) --
+    every one of those ten real half-innings collapses back to exactly
+    one group this way, with no need to touch the stored data. This
+    doesn't explain WHY the live tracker double-bumps in the first
+    place (still open -- see compute_current_state in
+    game_tracking.py) -- it only fixes how this one report displays
+    what's already there.
+
+    Returns a list of pitch-lists, one per real half-inning, in
+    chronological order."""
+    if not is_intrasquad:
+        return [[p for p in our_pitches if p.inning == inning] for inning in sorted({p.inning for p in our_pitches})]
+
+    frames = []
+    current = []
+    current_pid = None
+    for p in our_pitches:
+        pid = _pitcher_id(p)
+        if current and pid != current_pid:
+            frames.append(current)
+            current = []
+        current_pid = pid
+        current.append(p)
+    if current:
+        frames.append(current)
+    return frames
+
+
 def compute_staff_game_totals(session, game_id):
     """Whole-game, whole-staff totals for the five "team pitching
     goals" stats (see module note above), computed three ways: one
@@ -560,16 +659,27 @@ def compute_staff_game_totals(session, game_id):
     pitcher (their whole game). Returns None if the staff threw no
     pitches in this game yet.
 
-    "Our pitching pitches" = GamePitch rows in this game with
-    is_our_team_batting False -- true regardless of whether the batting
-    side is a real external opponent or (intrasquad) our own Squad B,
-    same convention used throughout this module and game_stats.py."""
-    our_pitches = (
+    "Our pitching pitches" -- for an ordinary game, GamePitch rows
+    with is_our_team_batting False (our_player_id is the pitcher on
+    those). For an INTRASQUAD game (two squads OR three), every single
+    pitch in the game is thrown by one of our own roster, whichever
+    side of the split it landed on -- so ALL of the game's pitches
+    count, with _pitcher_id (not raw our_player_id) picking out who
+    actually threw each one. Without this, a whole squad's pitching
+    was silently invisible here (Ryker, Sept 2026: "for intrasquads
+    coach needs to be able to see both teams") -- confirmed against
+    real data: every intrasquad game on record had roughly half its
+    pitches on the "wrong" side of the old is_our_team_batting filter."""
+    game = session.query(Game).filter(Game.game_id == game_id).first()
+    if game is None:
+        return None
+    all_game_pitches = (
         session.query(GamePitch)
-        .filter(GamePitch.game_id == game_id, GamePitch.is_our_team_batting.is_(False))
+        .filter(GamePitch.game_id == game_id)
         .order_by(GamePitch.pitch_sequence)
         .all()
     )
+    our_pitches = all_game_pitches if game.is_intrasquad else [p for p in all_game_pitches if not p.is_our_team_batting]
     if not our_pitches:
         return None
 
@@ -584,33 +694,40 @@ def compute_staff_game_totals(session, game_id):
     staff_total["shutdown_converted"] = sum(1 for o in shutdown_opps if o["shutdown"])
     staff_total["shutdown_pct"] = round(staff_total["shutdown_converted"] / len(shutdown_opps) * 100, 1) if shutdown_opps else None
 
-    # -- by inning --
-    innings = sorted({p.inning for p in our_pitches})
+    # -- by inning -- see _group_into_frames's docstring for how "one
+    # row per real half-inning" is determined (intrasquad games use
+    # contiguous same-pitcher stretches instead of the raw, inflated
+    # `inning` column; ordinary games are unaffected).
+    frames = _group_into_frames(our_pitches, game.is_intrasquad)
     by_inning = []
-    for inning in innings:
-        inn_pitches = [p for p in our_pitches if p.inning == inning]
-        inn_pas = [pa for pa in all_pas if pa[0].inning == inning]
+    for i, inn_pitches in enumerate(frames, start=1):
+        inn_pas = [pa for pa in all_pas if pa[0] in inn_pitches]
         inn_completed = [pa for pa in inn_pas if pa[-1].ends_plate_appearance]
-        row = {"inning": inning}
+        raw_innings_covered = {p.inning for p in inn_pitches}
+        row = {"inning": i if game.is_intrasquad else inn_pitches[0].inning}
         row.update(_staff_stat_bundle(inn_pitches, inn_completed, pitch_types))
-        inn_shutdown_opps = [o for o in shutdown_opps if o["inning"] == inning]
+        inn_shutdown_opps = [o for o in shutdown_opps if o["inning"] in raw_innings_covered]
         row["shutdown_opportunity"] = len(inn_shutdown_opps) > 0
         row["shutdown"] = inn_shutdown_opps[0]["shutdown"] if inn_shutdown_opps else None
         by_inning.append(row)
 
-    # -- by pitcher, in the order each first took the mound --
+    # -- by pitcher, in the order each first took the mound -- keyed by
+    # _pitcher_id, not raw our_player_id, so an intrasquad game's
+    # "other squad" pitchers (recorded via opponent_our_player_id) get
+    # their own row too, same as everyone else.
     pitcher_ids_in_order = []
     seen = set()
     for p in our_pitches:
-        if p.our_player_id not in seen:
-            seen.add(p.our_player_id)
-            pitcher_ids_in_order.append(p.our_player_id)
+        pid = _pitcher_id(p)
+        if pid is not None and pid not in seen:
+            seen.add(pid)
+            pitcher_ids_in_order.append(pid)
     players = {pl.player_id: pl for pl in session.query(Player).filter(Player.player_id.in_(pitcher_ids_in_order)).all()}
 
     by_pitcher = []
     for pid in pitcher_ids_in_order:
-        p_pitches = [p for p in our_pitches if p.our_player_id == pid]
-        p_pas = [pa for pa in all_pas if pa[0].our_player_id == pid]
+        p_pitches = [p for p in our_pitches if _pitcher_id(p) == pid]
+        p_pas = [pa for pa in all_pas if _pitcher_id(pa[0]) == pid]
         p_completed = [pa for pa in p_pas if pa[-1].ends_plate_appearance]
         player = players.get(pid)
         row = {
