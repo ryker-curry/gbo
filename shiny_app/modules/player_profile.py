@@ -47,6 +47,7 @@ from models import (Player, StaffPlayerAssignment, Assessment, AssessmentCategor
 from bucket_system import compute_bucket_system, list_seasons, current_season_label, season_date_range
 from analytics.bullpen_metrics import session_summary, pitch_type_summary
 from analytics.profile_queries import get_pitcher_profile_pitches, rapsodo_by_game_pitch_id
+from game_stats import compute_pitching_line
 from assessment_history import assessment_history_query, assessment_history_rows
 from pitch_type_config import FASTBALL_TYPES
 import bucket_display
@@ -270,11 +271,11 @@ def player_profile_server(input, output, session, app_state):
                 rows = assessment_history_rows(assessment_history_query(db, pid, cat.category_id).all())
                 if rows:
                     history_panels.append(ui.accordion_panel(f"{cat.category_name} ({len(rows)})", ui_helpers.render_dict_table(rows)))
-            return _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ)
+            return _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, season_label)
         finally:
             db.close()
 
-    def _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ):
+    def _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, game_season_label):
         pos = p.player_position.position_name if p.player_position else None
         cls = p.player_class.class_name if p.player_class else None
         meta = " · ".join(x for x in [f"#{p.jersey_number}" if p.jersey_number else None, pos, cls, f"{p.bats or '-'}/{p.throws or '-'}",
@@ -337,7 +338,7 @@ def player_profile_server(input, output, session, app_state):
             ui.div(bucket_display.build_movement_flag_ring(mf, rom, key_prefix="profile", mode=mode) if mf else None, style="margin-bottom:16px;"),
             ui_helpers.card(bucket_display.build_mobility_rom_report(rom) if rom else ui_helpers.empty_state("No Mobility & ROM assessment yet."), title="Mobility & ROM", right="threshold-based, not percentile"),
         )
-        pitching_tab = _pitching_tab(p, bullpen, pitches, summ, n_bullpens)
+        pitching_tab = _pitching_tab(p, bullpen, pitches, summ, n_bullpens, game_pitches, game_season_label)
         dev_tab = _dev_tab(goals)
         video_tab = ui_helpers.card(*( [ui.div(ui.div(v.recorded_date.strftime("%b %d, %Y") if v.recorded_date else "—", class_="gbo-li-dt"), ui.div(ui.a(v.description or "Video", href=v.video_url, target="_blank") if v.video_url else (v.description or "Video")), class_="gbo-li") for v in videos] or [ui_helpers.empty_state("No video linked to this player yet. Pitch and swing clips upload from Bullpen Tracking, Hitter Tracking, and Video Import.")]), title="Video")
 
@@ -412,19 +413,58 @@ def player_profile_server(input, output, session, app_state):
         right = ui.div(rings, latest_pen, goals_card, class_="gbo-stack")
         return ui.div(left, right, class_="gbo-grid gbo-grid-2", style="align-items:start;")
 
-    def _pitching_tab(p, bullpen, pitches, summ, n_bullpens):
-        if not p.is_pitcher and not pitches:
-            return ui_helpers.card(ui_helpers.empty_state("Not flagged as a pitcher. Mark the player as a pitcher in Player setup to track bullpens here."))
-        if not pitches:
-            return ui_helpers.card(ui_helpers.empty_state("No Rapsodo bullpen imported yet. Import a session from Import Rapsodo and it will show here."))
-        rows = pitch_type_summary(pitches)
-        cols = list(rows[0].keys()) if rows else []
-        table = ui.tags.table(ui.tags.thead(ui.tags.tr(*[ui.tags.th(c, class_="text-end" if i else "") for i, c in enumerate(cols)])),
-                              ui.tags.tbody(*[ui.tags.tr(*[ui.tags.td(_fmt(r.get(c)), class_=("text-end gbo-num" if i else ""), style=("font-family:var(--gbo-mono);" if i else "")) for i, c in enumerate(cols)]) for r in rows]), class_="table")
-        return ui.div(
-            ui.div(ui_helpers.kpi_tile("Sessions", n_bullpens), ui_helpers.kpi_tile("Pitches (latest)", summ["total_pitches"]), ui_helpers.kpi_tile("Avg velo", f"{summ['avg_velocity']:.1f}" if summ["avg_velocity"] else "—", unit="mph"), ui_helpers.kpi_tile("Max velo", f"{summ['max_velocity']:.1f}" if summ["max_velocity"] else "—", unit="mph"), ui_helpers.kpi_tile("Avg spin", f"{summ['avg_spin_rate']:,.0f}" if summ["avg_spin_rate"] else "—", unit="rpm"), class_="gbo-kpi-row"),
-            ui_helpers.card(ui.div(table, class_="table-responsive"), ui.div(ui.input_action_button("go_bullpen2", "Open bullpen dashboard for charts", class_="btn-outline-light btn-sm"), style="margin-top:12px;"), title="Latest session by pitch type", right=bullpen.session_date.strftime("%b %d, %Y")),
-        )
+    def _pitching_tab(p, bullpen, pitches, summ, n_bullpens, game_pitches, game_season_label):
+        if not p.is_pitcher and not pitches and not game_pitches:
+            return ui_helpers.card(ui_helpers.empty_state("Not flagged as a pitcher. Mark the player as a pitcher in Player setup to track pitching here."))
+
+        sections = []
+
+        # -- Results (Sept 2026, Ryker: "ERA, FIP, some rapsodo data,
+        # number of total pitches, more results stats for now ... then
+        # maybe add in stuff+, location+, command+ etc" -- traditional
+        # game-outcome stats headline this tab; team-relative grades
+        # are deferred to a later pass, same call as the Pitching Staff
+        # Leaderboard's glossary makes for those). Scoped to
+        # game_season_label (the page's season_picker selection, or
+        # current season by default) -- same game_pitches already
+        # computed in body() for the hero card's game-outings VELO/SPIN,
+        # so this is season-accurate for free and never double-queries.
+        if game_pitches:
+            line = compute_pitching_line(game_pitches)
+            results_kpis = ui.div(
+                ui_helpers.kpi_tile("IP", line["IP"]),
+                ui_helpers.kpi_tile("Pitches", line["Pitches"]),
+                ui_helpers.kpi_tile("K", line["K"]),
+                ui_helpers.kpi_tile("BB", line["BB"]),
+                ui_helpers.kpi_tile("ERA", f"{line['ERA']:.2f}" if line["ERA"] is not None else "—"),
+                ui_helpers.kpi_tile("WHIP", f"{line['WHIP']:.2f}" if line["WHIP"] is not None else "—"),
+                ui_helpers.kpi_tile("FIP", f"{line['FIP']:.2f}" if line["FIP"] is not None else "—"),
+                ui_helpers.kpi_tile("Strike %", f"{line['Strike %']:.1f}%" if line["Strike %"] is not None else "—"),
+                class_="gbo-kpi-row",
+            )
+            sections.append(ui_helpers.card(results_kpis, title="Results", right=game_season_label))
+        else:
+            sections.append(ui_helpers.card(ui_helpers.empty_state(f"No game pitches logged for {game_season_label} yet.")))
+
+        # -- Latest bullpen session (Rapsodo, unchanged from before --
+        # kept as a secondary section per Ryker's "some rapsodo data",
+        # not replaced) --
+        if pitches:
+            rows = pitch_type_summary(pitches)
+            cols = list(rows[0].keys()) if rows else []
+            table = ui.tags.table(ui.tags.thead(ui.tags.tr(*[ui.tags.th(c, class_="text-end" if i else "") for i, c in enumerate(cols)])),
+                                  ui.tags.tbody(*[ui.tags.tr(*[ui.tags.td(_fmt(r.get(c)), class_=("text-end gbo-num" if i else ""), style=("font-family:var(--gbo-mono);" if i else "")) for i, c in enumerate(cols)]) for r in rows]), class_="table")
+            sections.append(ui.div(
+                ui.div(ui_helpers.kpi_tile("Sessions", n_bullpens), ui_helpers.kpi_tile("Pitches (latest)", summ["total_pitches"]), ui_helpers.kpi_tile("Avg velo", f"{summ['avg_velocity']:.1f}" if summ["avg_velocity"] else "—", unit="mph"), ui_helpers.kpi_tile("Max velo", f"{summ['max_velocity']:.1f}" if summ["max_velocity"] else "—", unit="mph"), ui_helpers.kpi_tile("Avg spin", f"{summ['avg_spin_rate']:,.0f}" if summ["avg_spin_rate"] else "—", unit="rpm"), class_="gbo-kpi-row", style="margin-top:16px;"),
+                ui_helpers.card(ui.div(table, class_="table-responsive"), ui.div(ui.input_action_button("go_bullpen2", "Open bullpen dashboard for charts", class_="btn-outline-light btn-sm"), style="margin-top:12px;"), title="Latest bullpen session by pitch type", right=bullpen.session_date.strftime("%b %d, %Y")),
+            ))
+        elif not game_pitches:
+            # Neither game nor bullpen pitching data at all -- covered by
+            # the is_pitcher guard above for non-pitchers, but a flagged
+            # pitcher with zero of both still needs a plain explanation.
+            sections.append(ui_helpers.card(ui_helpers.empty_state("No Rapsodo bullpen imported yet. Import a session from Import Rapsodo and it will show here.")))
+
+        return ui.div(*sections)
 
     def _dev_tab(goals):
         if not goals:
