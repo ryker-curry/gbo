@@ -534,13 +534,10 @@ def _secondary_strike_stat(pitches, pitch_types):
     }
 
 
-def _compute_shutdown_innings(session, game_id):
-    """Every half-inning in this game in TRUE chronological order --
-    grouped by (inning, is_our_team_batting), ordered by each group's
-    own first pitch_sequence, not by inning number then a hardcoded
-    top/bottom order (which side bats first flips depending on whether
-    we're the home or away team that game). Needs every pitch in the
-    game, both sides, not just our pitching pitches.
+def _compute_shutdown_innings(session, game_id, game=None):
+    """Every half-inning in this game in TRUE chronological order.
+    Needs every pitch in the game, both sides, not just our pitching
+    pitches.
 
     A "shutdown opportunity" is a defensive half-inning (we're
     pitching) immediately following an offensive half-inning where we
@@ -550,7 +547,33 @@ def _compute_shutdown_innings(session, game_id):
     half-inning's FIRST pitch (a judgment call for a half with a
     mid-inning pitching change -- credits/debits whoever inherited the
     chance, same convention as how a "hold" is scored, not whoever
-    happened to get the last out)."""
+    happened to get the last out).
+
+    For a TWO-SQUAD intrasquad game, "half-inning" here means a real
+    half-inning as _group_into_frames determines it (contiguous
+    same-pitcher stretches), not the raw stored `inning` column --
+    confirmed against real data (games 14 and 17, Sept 2026) that the
+    same inning-numbering inflation that breaks the "by inning"
+    breakdown ALSO breaks this function's adjacency check, silently
+    dropping real shutdown opportunities (e.g. game 17 showed only 2 of
+    4 real opportunities under the raw column). A two-squad game's
+    frames always alternate which squad is pitching, so no
+    is_our_team_batting check is needed the way the raw-inning path
+    needs one.
+
+    For a THREE-squad intrasquad game, or an ordinary (non-intrasquad)
+    game, this keeps the original raw-(inning, is_our_team_batting)
+    algorithm, unchanged. A three-squad game's raw column is also
+    inflated the same way, but frame-grouping can't safely stand in for
+    it here: a third squad can rotate onto the mound in between, so
+    "the very next half" isn't necessarily "the same opposing pitcher's
+    defensive response" the way a shutdown is defined (Ryker, Sept
+    2026: "I know this may not work for games that have three different
+    lineups") -- so three-squad games are left as-is rather than given
+    a definition Ryker hasn't specified yet."""
+    if game is None:
+        game = session.query(Game).filter(Game.game_id == game_id).first()
+
     all_pitches = (
         session.query(GamePitch)
         .filter(GamePitch.game_id == game_id)
@@ -559,6 +582,9 @@ def _compute_shutdown_innings(session, game_id):
     )
     if not all_pitches:
         return []
+
+    if game is not None and game.is_intrasquad and not game.uses_three_squad_intrasquad:
+        return _compute_shutdown_innings_two_squad_frames(all_pitches)
 
     halves = {}
     order = []
@@ -590,6 +616,31 @@ def _compute_shutdown_innings(session, game_id):
             "runs_allowed": runs_allowed,
             "shutdown": runs_allowed == 0,
             "credited_pitcher_id": next_pitches[0].our_player_id,
+        })
+    return opportunities
+
+
+def _compute_shutdown_innings_two_squad_frames(all_pitches):
+    """The two-squad-intrasquad path of _compute_shutdown_innings --
+    same definition, keyed off _group_into_frames's real half-innings
+    instead of the raw `inning` column. "inning" in each returned dict
+    is a FRAME NUMBER (1-based, matching compute_staff_game_totals's
+    by_inning numbering for intrasquad games), not a raw stored inning
+    value -- see that function's shutdown-matching branch."""
+    frames = _group_into_frames(all_pitches, True)
+    opportunities = []
+    for i in range(len(frames) - 1):
+        runs_scored = sum((p.runs_scored_on_play or 0) for p in frames[i])
+        if runs_scored < 1:
+            continue
+        next_pitches = frames[i + 1]
+        runs_allowed = sum((p.runs_scored_on_play or 0) for p in next_pitches)
+        opportunities.append({
+            "inning": i + 2,
+            "runs_we_scored_before": runs_scored,
+            "runs_allowed": runs_allowed,
+            "shutdown": runs_allowed == 0,
+            "credited_pitcher_id": _pitcher_id(next_pitches[0]),
         })
     return opportunities
 
@@ -689,7 +740,8 @@ def compute_staff_game_totals(session, game_id):
 
     staff_total = _staff_stat_bundle(our_pitches, completed_pas, pitch_types)
 
-    shutdown_opps = _compute_shutdown_innings(session, game_id)
+    shutdown_opps = _compute_shutdown_innings(session, game_id, game=game)
+    two_squad_intrasquad = game.is_intrasquad and not game.uses_three_squad_intrasquad
     staff_total["shutdown_opportunities"] = len(shutdown_opps)
     staff_total["shutdown_converted"] = sum(1 for o in shutdown_opps if o["shutdown"])
     staff_total["shutdown_pct"] = round(staff_total["shutdown_converted"] / len(shutdown_opps) * 100, 1) if shutdown_opps else None
@@ -706,7 +758,10 @@ def compute_staff_game_totals(session, game_id):
         raw_innings_covered = {p.inning for p in inn_pitches}
         row = {"inning": i if game.is_intrasquad else inn_pitches[0].inning}
         row.update(_staff_stat_bundle(inn_pitches, inn_completed, pitch_types))
-        inn_shutdown_opps = [o for o in shutdown_opps if o["inning"] in raw_innings_covered]
+        if two_squad_intrasquad:
+            inn_shutdown_opps = [o for o in shutdown_opps if o["inning"] == i]
+        else:
+            inn_shutdown_opps = [o for o in shutdown_opps if o["inning"] in raw_innings_covered]
         row["shutdown_opportunity"] = len(inn_shutdown_opps) > 0
         row["shutdown"] = inn_shutdown_opps[0]["shutdown"] if inn_shutdown_opps else None
         by_inning.append(row)
