@@ -28,8 +28,13 @@ from sqlalchemy.orm import joinedload
 
 from database import get_session
 from models import Player, Game, GamePitch, User
-from game_stats import get_batting_pitches, compute_batting_line, compute_batted_ball_profile
+from game_stats import (
+    get_batting_pitches, compute_batting_line, compute_batted_ball_profile,
+    _group_into_plate_appearances, ops_plus,
+)
 from plate_discipline import compute_hitter_discipline, compute_zone_tier_discipline
+from analytics import profile_queries
+from visualizations.hitter_pitch_chart import at_bat_pitch_locations_chart
 # Reusing Hitter Tracking's own zone-score math/heatmap builder and its
 # CONTACT_QUALITY_SCORE/ZONE_LABELS constants -- rather than a second,
 # parallel implementation -- so a batter's "how well do I make contact
@@ -41,6 +46,8 @@ from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_fi
 
 import ui_helpers
 import format_helpers
+import chart_helpers
+import glossary_content
 from format_helpers import (
     format_pct as _fmt_pct,
     opponent_display_name as _opponent_display_name,
@@ -55,7 +62,7 @@ def _fmt(value, decimals=3):
 @module.ui
 def hitter_game_report_ui():
     return ui.div(
-        ui_helpers.page_header("Hitter Game Report"),
+        ui_helpers.page_header("Hitter Game Report", actions=ui_helpers.glossary_link("hgr_glossary", "Stats Glossary")),
         ui.output_ui("game_picker"),
         ui.output_ui("batter_picker"),
         ui.output_ui("report_body"),
@@ -196,6 +203,12 @@ def hitter_game_report_server(input, output, session, app_state):
                 return ui_helpers.empty_state("No pitches for this batter in this game.")
 
             line = compute_batting_line(pitches)
+            season_baseline = profile_queries.team_batting_line_for_seasons(db, [game.season_id] if game.season_id else [])
+            player_ops_plus = ops_plus(
+                line["OBP"], line["SLG"],
+                season_baseline["OBP"] if season_baseline else None,
+                season_baseline["SLG"] if season_baseline else None,
+            )
             sections = [ui.h5(f"{batter.first_name} {batter.last_name} — {_game_label(game)}", class_="gbo-section-title")]
 
             sections.append(ui.p(ui.strong("Line")))
@@ -218,10 +231,17 @@ def hitter_game_report_server(input, output, session, app_state):
                 {"label": "OBP", "value": _fmt(line["OBP"])},
                 {"label": "SLG", "value": _fmt(line["SLG"])},
                 {"label": "OPS", "value": _fmt(line["OPS"])},
+                {"label": "OPS+", "value": str(player_ops_plus) if player_ops_plus is not None else "—"},
                 {"label": "ISO", "value": _fmt(line["ISO"])},
                 {"label": "wOBA*", "value": _fmt(line["wOBA"])},
             ]))
-            sections.append(ui.p("*wOBA uses generic linear weights, not a season/league-specific set -- a relative read within your own games, not MLB-exact.", class_="text-muted small"))
+            sections.append(ui.p(
+                "*wOBA uses generic linear weights, not a season/league-specific set -- a relative read within your own games, not MLB-exact. "
+                "OPS+ is against this team's own season average (100 = team average) -- see the glossary." if season_baseline else
+                "*wOBA uses generic linear weights, not a season/league-specific set -- a relative read within your own games, not MLB-exact. "
+                "OPS+ isn't shown -- no team baseline yet for this game's season.",
+                class_="text-muted small",
+            ))
 
             sections.append(ui.p(ui.strong("Plate Discipline")))
             sections.append(ui_helpers.render_kpi_cards([
@@ -235,10 +255,23 @@ def hitter_game_report_server(input, output, session, app_state):
                 {"label": "RISP AVG", "value": _fmt(line["RISP AVG"])},
                 {"label": "2-Strike AVG", "value": _fmt(line["2-Strike AVG"])},
                 {"label": "Leadoff AVG", "value": _fmt(line["Leadoff AVG"])},
+                {"label": "QAB %", "value": _fmt_pct(line["QAB %"])},
             ]))
             sections.append(ui.p(
                 f"RISP: {line['RISP PA']} PA ({line['RISP AB']} AB) · 2-Strike: {line['2-Strike PA']} PA "
-                f"({_fmt_pct(line['2-Strike K %'])} ended in a K) · Leadoff: {line['Leadoff PA']} PA",
+                f"({_fmt_pct(line['2-Strike K %'])} ended in a K) · Leadoff: {line['Leadoff PA']} PA · "
+                f"QAB: {line['QAB']} of {line['PA']} PA",
+                class_="text-muted small",
+            ))
+
+            sections.append(ui.p(ui.strong("Count Leverage (Ahead / Even / Behind)")))
+            sections.append(ui_helpers.render_dict_table([
+                {"Count State": "Ahead", "PA": line["Ahead PA"], "AVG": _fmt(line["Ahead AVG"]), "OBP": _fmt(line["Ahead OBP"]), "SLG": _fmt(line["Ahead SLG"]), "wOBA*": _fmt(line["Ahead wOBA"])},
+                {"Count State": "Even", "PA": line["Even PA"], "AVG": _fmt(line["Even AVG"]), "OBP": _fmt(line["Even OBP"]), "SLG": _fmt(line["Even SLG"]), "wOBA*": _fmt(line["Even wOBA"])},
+                {"Count State": "Behind", "PA": line["Behind PA"], "AVG": _fmt(line["Behind AVG"]), "OBP": _fmt(line["Behind OBP"]), "SLG": _fmt(line["Behind SLG"]), "wOBA*": _fmt(line["Behind wOBA"])},
+            ]))
+            sections.append(ui.p(
+                "Split by the count when the at-bat ended -- Ahead = more balls than strikes, Behind = more strikes than balls, Even = equal.",
                 class_="text-muted small",
             ))
 
@@ -301,9 +334,36 @@ def hitter_game_report_server(input, output, session, app_state):
                 ]))
                 sections.append(ui.p(f"Balls in Play: {profile['Balls in Play']} ({profile['Located']} with a recorded field location).", class_="text-muted small"))
 
+            sections.append(ui.hr())
+            sections.append(ui.p(ui.strong("Pitch Locations by At-Bat")))
+            sections.append(ui.p(
+                "Every pitch of each at-bat, numbered in order and colored by pitch type, plotted at its actual location on the strike zone.",
+                class_="text-muted small",
+            ))
+            ab_charts = []
+            for i, pa in enumerate(_group_into_plate_appearances(pitches), start=1):
+                located = [p for p in pa if p.actual_plate_x is not None and p.actual_plate_z is not None]
+                if not located:
+                    continue
+                result = pa[-1].ab_outcome if pa[-1].ends_plate_appearance else "In Progress"
+                fig = at_bat_pitch_locations_chart(pa, batter_hand=batter.bats, title=f"At-Bat {i} — {result or '—'}")
+                ab_charts.append(ui.div(
+                    chart_helpers.fig_to_img(fig, width=380, height=380),
+                    style="display:inline-block; margin:6px; vertical-align:top;",
+                ))
+            if ab_charts:
+                sections.append(ui.div(*ab_charts, style="display:flex; flex-wrap:wrap; justify-content:center;"))
+            else:
+                sections.append(ui.p("No located pitches yet for this batter's at-bats in this game.", class_="text-muted small"))
+
             return ui.div(*sections)
         finally:
             db.close()
+
+    @reactive.effect
+    @reactive.event(input.hgr_glossary)
+    def _hgr_show_glossary():
+        ui.modal_show(ui_helpers.glossary_modal("Hitting Stats Glossary", glossary_content.HITTING))
 
     # -------------------------------------------------------------------
     # Contact Quality by Zone / Pitch Type -- simple first version (see

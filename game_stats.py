@@ -353,6 +353,18 @@ NON_AB_OUTCOMES = {"BB", "HBP", "Sac Bunt", "Sac Fly"}
 # every aggregate (K count, AB count, leadoff-out, putaway pitch, etc.).
 K_OUTCOMES = ("K", "K (Looking)")
 
+# Quality At-Bat (QAB) -- Ryker, Sept 2026: pointed at Brian Cain's
+# published QAB definition (briancain.com/blog/quality-at-bats-
+# defined.html) as the standard to use. Of Cain's nine criteria, seven
+# are derivable from GBO's own tracked fields (see _is_quality_at_bat's
+# docstring for exactly which, and which two GBO has no data for and
+# why). HARD_HIT_CONTACT_QUALITIES reuses compute_batted_ball_profile's
+# own "Hard Contact %" definition (Barreled/Squared Up + Solid) rather
+# than a second, independently-tuned set.
+HARD_HIT_CONTACT_QUALITIES = {"Barreled/Squared Up", "Solid"}
+QAB_MIN_PITCHES = 8  # Cain criterion 8: "working an at-bat of 8+ pitches"
+QAB_PITCHES_FROM_0_2 = 4  # Cain criterion 9: "seeing 4+ pitches after falling behind 0-2"
+
 
 def _has_risp(first_pitch_of_pa):
     """Runner in scoring position (2nd or 3rd) at the START of this PA
@@ -366,6 +378,98 @@ def _has_risp(first_pitch_of_pa):
 
 def _reached_two_strikes(pa):
     return any(p.strikes_before == 2 for p in pa)
+
+
+def _count_state(balls, strikes):
+    """Hitter-Ahead / Even / Pitcher-Ahead, from a single (balls,
+    strikes) snapshot -- used on the count AT THE END OF THE PA (the
+    last pitch's balls_before/strikes_before, i.e. the count the PA's
+    outcome actually happened at), same "read off one snapshot, not
+    re-checked pitch by pitch" convention _has_risp/_reached_two_strikes
+    above already use. None if either half of the count isn't on
+    file."""
+    if balls is None or strikes is None:
+        return None
+    if balls > strikes:
+        return "Ahead"
+    if balls < strikes:
+        return "Behind"
+    return "Even"
+
+
+def _is_quality_at_bat(pa):
+    """Automatic Quality At-Bat (QAB) detection, per Brian Cain's
+    published nine-criteria definition (Ryker, Sept 2026, linking
+    briancain.com/blog/quality-at-bats-defined.html as the standard):
+    an AB counts as "quality" the moment ANY ONE of these is true.
+
+    Seven of Cain's nine are derivable from GBO's own tracked fields
+    and checked below:
+      3. Walk, HBP (catcher's interference isn't a trackable ab_outcome
+         in GBO -- see the gap note below)
+      4. Moved a runner from 2nd to 3rd with 0 outs (bases_before/after
+         on the AB-ending pitch)
+      5/6. Any RBI, including driving in a run from 3rd with <2 outs
+         (5 is a subset of 6) -- runs_scored_on_play on the AB-ending
+         pitch, excluding a reach-on-error or a double play (neither is
+         a real RBI by the official scoring rule)
+      1 (partial). Sac Bunt -- GBO tracks a successfully executed
+         sacrifice bunt as its own ab_outcome already; it does NOT
+         distinguish a sac DRAG or a suicide-SQUEEZE specifically as
+         their own play types, so those specific variants aren't
+         separately detectable (they still count via whichever other
+         criterion they also satisfy, e.g. a squeeze that scores the
+         run from 3rd is still caught by 5/6 above)
+      2. Bunt for a hit -- ab_outcome "1B" with contact_quality "Bunt"
+      7. Hard-hit ball -- pitch_outcome "In Play" with contact_quality
+         Barreled/Squared Up or Solid (GBO's own Hard Contact %
+         definition), regardless of whether it went for a hit or an
+         out -- "not all base hits qualify; bloops excluded" per Cain,
+         which this satisfies since a bloop is graded Weak/Jammed/etc.,
+         not Barreled/Solid
+      8. 8+ pitch at-bat (QAB_MIN_PITCHES)
+      9. Saw 4+ pitches from (inclusive) the point the count reached
+         0-2 (QAB_PITCHES_FROM_0_2)
+
+    NOT detectable from GBO's current data model, and so never
+    credited here (rather than guessed at): criterion 1's "hit and
+    run" specifically (GBO has no flag distinguishing a hit-and-run
+    swing from an ordinary one) and criterion 3's "catcher's
+    interference" (not one of GamePitch's ab_outcome values -- see
+    game_tracking.py's AB_OUTCOMES list). Both are rare plays that
+    often also satisfy another criterion above anyway (e.g. a
+    hit-and-run single is still a hit -- caught by ordinary offensive
+    production via the RBI/hard-hit checks, or simply IS a hit, which
+    Cain's own criteria don't separately require -- a plain single
+    with weak contact and no RBI is the one specific case this
+    function can't credit that a human charter tracking "hit and run"
+    by eye still would).
+
+    pa: one plate appearance's pitches (from _group_into_plate_
+    appearances), in order. Only meaningful for a COMPLETED PA (the
+    caller filters to pa[-1].ends_plate_appearance first, same as
+    every other situational split in this module)."""
+    last = pa[-1]
+    if last.ab_outcome in ("BB", "HBP"):
+        return True
+    if (last.runs_scored_on_play or 0) >= 1 and last.ab_outcome not in ("E", "Double Play"):
+        return True
+    outs_before = last.outs_before if last.outs_before is not None else 0
+    bases_before, bases_after = last.bases_before or "000", last.bases_after or "000"
+    if outs_before == 0 and len(bases_before) == 3 and len(bases_after) == 3 and bases_before[1] == "1" and bases_after[2] == "1":
+        return True
+    if last.ab_outcome == "Sac Bunt":
+        return True
+    if last.ab_outcome == "1B" and last.contact_quality == "Bunt":
+        return True
+    if last.pitch_outcome == "In Play" and last.contact_quality in HARD_HIT_CONTACT_QUALITIES:
+        return True
+    if max((p.pa_pitch_number or 0) for p in pa) >= QAB_MIN_PITCHES:
+        return True
+    for i, p in enumerate(pa):
+        if p.balls_before == 0 and p.strikes_before == 2:
+            return (len(pa) - i) >= QAB_PITCHES_FROM_0_2
+    return False
 
 
 def _batting_slice(completed_pas):
@@ -399,6 +503,44 @@ def _batting_slice(completed_pas):
     }
 
 
+def ops_plus(obp, slg, baseline_obp, baseline_slg):
+    """OPS+ (Sept 2026 addition, Ryker: "add ops+ ... for hitters",
+    baseline confirmed as "Team average, same season"). Standard
+    Baseball-Reference-style formula: 100 * (OBP/league_OBP +
+    SLG/league_SLG - 1) -- "league" here is GBO's own team-average
+    baseline (analytics.profile_queries.team_batting_line_for_seasons),
+    since GBO has no real league-wide data to compare against, same
+    team-relative-only caveat every other GBO "+" stat already carries
+    (Stuff+/Location+/Pitching+/Command+ in pitcher_profile.py). 100 =
+    exactly team average; unlike those other GBO "+" stats (which are
+    scored 100 +/- 10 per standard deviation on a normal-ish
+    distribution), OPS+ is NOT standard-deviation-scaled -- it's the
+    literal Baseball-Reference ratio formula, unscaled, so e.g. a
+    hitter at 10% better than the team average sits at 110 by
+    construction, not by some fitted spread.
+
+    Returns None if any input is missing/zero (no OBP or SLG yet, or
+    an empty baseline) rather than raising or returning a nonsense
+    number -- same "don't guess" convention as every rate stat in this
+    module (see _rate())."""
+    if obp is None or slg is None or not baseline_obp or not baseline_slg:
+        return None
+    return round(100 * (obp / baseline_obp + slg / baseline_slg - 1))
+
+
+def _woba_from_slice(s):
+    """wOBA computed from one _batting_slice() dict -- same
+    WOBA_WEIGHTS/denominator convention as compute_batting_line's own
+    main-line wOBA, factored out so the Ahead/Even/Behind splits below
+    (and any future split) don't repeat the formula a third time."""
+    num = (
+        WOBA_WEIGHTS["uBB"] * s["BB"] + WOBA_WEIGHTS["HBP"] * s["HBP"] + WOBA_WEIGHTS["1B"] * s["1B"]
+        + WOBA_WEIGHTS["2B"] * s["2B"] + WOBA_WEIGHTS["3B"] * s["3B"] + WOBA_WEIGHTS["HR"] * s["HR"]
+    )
+    den = s["AB"] + s["BB"] + s["SF"] + s["HBP"]
+    return round(num / den, 3) if den else None
+
+
 def compute_batting_line(pitches):
     """The slash-line/box-score-style header line for a hitter -- same
     function for a single game (get_batting_pitches(..., game_id=)) or
@@ -420,9 +562,30 @@ def compute_batting_line(pitches):
         already used for pitchers.
       - Leadoff: the PA was the first batter of an inning (reuses
         _is_leadoff_pa, the same helper compute_pitching_line() uses
-        from the pitcher's side of the exact same PAs)."""
+        from the pitcher's side of the exact same PAs).
+
+    QAB / QAB % (Sept 2026 addition, Ryker): automatic Quality At-Bat
+    detection per _is_quality_at_bat's own docstring (Brian Cain's
+    published definition) -- QAB % is QAB / PA, the standard "quality
+    at-bats per plate appearance" convention Cain's own goal figures
+    (54% per game, .500 by season's end) are expressed in.
+
+    Ahead / Even / Behind (Sept 2026 addition, Ryker: "count leverage/
+    sequencing for hitters") -- AVG/OBP/SLG/wOBA split by _count_state
+    on the count AT THE END of the PA (see that helper's docstring):
+    Ahead = more balls than strikes when the PA ended (hitter had the
+    advantage), Behind = more strikes than balls (pitcher had the
+    advantage), Even = equal. A walk always ends at strikes<=balls by
+    definition (ball 4), so it's never counted in "Behind"; a
+    strikeout is never counted in "Ahead" for the same reason in
+    reverse."""
     all_pas = _group_into_plate_appearances(pitches)
     completed_pas = [pa for pa in all_pas if pa[-1].ends_plate_appearance]
+    qab_count = sum(1 for pa in completed_pas if _is_quality_at_bat(pa))
+    ahead_pas = [pa for pa in completed_pas if _count_state(pa[-1].balls_before, pa[-1].strikes_before) == "Ahead"]
+    even_pas = [pa for pa in completed_pas if _count_state(pa[-1].balls_before, pa[-1].strikes_before) == "Even"]
+    behind_pas = [pa for pa in completed_pas if _count_state(pa[-1].balls_before, pa[-1].strikes_before) == "Behind"]
+    ahead_slice, even_slice, behind_slice = _batting_slice(ahead_pas), _batting_slice(even_pas), _batting_slice(behind_pas)
 
     base = _batting_slice(completed_pas)
     pa, ab, bb, hbp, sf = base["PA"], base["AB"], base["BB"], base["HBP"], base["SF"]
@@ -460,6 +623,15 @@ def compute_batting_line(pitches):
         "2-Strike AVG": _batting_slice(two_strike_pas)["AVG"], "2-Strike PA": len(two_strike_pas),
         "2-Strike K %": _rate(two_strike_k, len(two_strike_pas)),
         "Leadoff AVG": _batting_slice(leadoff_pas)["AVG"], "Leadoff PA": len(leadoff_pas),
+        # Quality At-Bats
+        "QAB": qab_count, "QAB %": _rate(qab_count, pa),
+        # Count leverage/sequencing: Ahead/Even/Behind splits
+        "Ahead AVG": ahead_slice["AVG"], "Ahead OBP": ahead_slice["OBP"], "Ahead SLG": ahead_slice["SLG"],
+        "Ahead wOBA": _woba_from_slice(ahead_slice), "Ahead PA": ahead_slice["PA"],
+        "Even AVG": even_slice["AVG"], "Even OBP": even_slice["OBP"], "Even SLG": even_slice["SLG"],
+        "Even wOBA": _woba_from_slice(even_slice), "Even PA": even_slice["PA"],
+        "Behind AVG": behind_slice["AVG"], "Behind OBP": behind_slice["OBP"], "Behind SLG": behind_slice["SLG"],
+        "Behind wOBA": _woba_from_slice(behind_slice), "Behind PA": behind_slice["PA"],
     }
 
 
