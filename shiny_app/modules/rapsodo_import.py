@@ -244,10 +244,13 @@ def rapsodo_import_server(input, output, session, app_state):
     def target_picker():
         req("target_type" in input)
         if input.target_type() == "game":
-            return ui.div(
+            sections = [
                 ui.h5("Intrasquad game", class_="gbo-section-title"),
                 ui.output_ui("game_picker"),
-            )
+            ]
+            if app_state.can_edit_sessions():
+                sections.append(ui.output_ui("existing_game_imports_section"))
+            return ui.div(*sections)
         return ui.div(
             ui.h5("Bullpen session", class_="gbo-section-title"),
             ui.output_ui("session_picker"),
@@ -417,6 +420,88 @@ def rapsodo_import_server(input, output, session, app_state):
                 f"Deleted \"{summary['original_filename']}\" -- removed {summary['deleted_pitch_count']} pitch(es).",
                 type="message", duration=8,
             )
+            _bump_refresh()
+        finally:
+            db.close()
+
+    @render.ui
+    def existing_game_imports_section():
+        """Game-import counterpart of existing_imports_section above --
+        see this module's Sept 2026 comment on target_picker for why this
+        exists (a game import had no DB-driven way to find/delete a past
+        import at all, unlike a bullpen session)."""
+        _refresh_tick()
+        req("target_game_id" in input, "selected_pitcher_id" in input)
+        target_game_id = input.target_game_id()
+        if not target_game_id:
+            return None
+        selected_pitcher_id = int(input.selected_pitcher_id())
+
+        db = get_session()
+        try:
+            imports = (
+                db.query(RapsodoImport)
+                .filter(RapsodoImport.game_id == int(target_game_id), RapsodoImport.player_id == selected_pitcher_id)
+                .order_by(RapsodoImport.uploaded_at.desc())
+                .all()
+            )
+            if not imports:
+                return None
+
+            import_choices = {
+                str(imp.import_id): (
+                    f"{imp.original_filename} — uploaded {imp.uploaded_at.strftime('%Y-%m-%d %I:%M %p')} "
+                    f"({imp.imported_row_count} pitch(es) imported"
+                    + (f", {imp.rejected_row_count} skipped" if imp.rejected_row_count else "")
+                    + ")"
+                )
+                for imp in imports
+            }
+            return ui.div(
+                ui.markdown("**Imports on this outing**"),
+                ui.input_select("import_to_delete_game", "Delete an import", choices=import_choices),
+                ui.input_checkbox(
+                    "confirm_delete_import_existing_game",
+                    "Yes, permanently delete this import and every pitch it added (this can't be undone)",
+                    value=False,
+                ),
+                ui.input_action_button("delete_existing_game_import_btn", "Delete selected import", class_="btn-outline-danger btn-sm mt-2"),
+                class_="mt-3 mb-2",
+            )
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.delete_existing_game_import_btn)
+    def _delete_existing_game_import():
+        if not input.confirm_delete_import_existing_game():
+            ui.notification_show("Check the confirmation box before deleting an import.", type="warning", duration=8)
+            return
+        import_id = int(input.import_to_delete_game())
+        db = get_session()
+        try:
+            try:
+                summary = delete_rapsodo_import(db, import_id)
+            except RapsodoImportNotFoundError as e:
+                ui.notification_show(str(e), type="error", duration=10)
+                return
+            except RapsodoImportError as e:
+                ui.notification_show(str(e), type="error", duration=10)
+                return
+            delete_msg = f"Deleted \"{summary['original_filename']}\" -- removed {summary['deleted_pitch_count']} pitch(es)."
+            if summary.get("cleared_location_count"):
+                delete_msg += (
+                    f" Also cleared the actual location this import had set on "
+                    f"{summary['cleared_location_count']} charted pitch(es)."
+                )
+            ui.notification_show(delete_msg, type="message", duration=10)
+            # If this was the import the reconciliation table below is
+            # still showing (_last_game_import), drop that too -- it
+            # would otherwise keep rendering a match result for pitches
+            # that no longer exist.
+            last = _last_game_import()
+            if last is not None and last[0] == import_id:
+                _last_game_import.set(None)
             _bump_refresh()
         finally:
             db.close()
