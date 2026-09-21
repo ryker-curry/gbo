@@ -727,6 +727,14 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0):
         "WHIP": round((bb + hits_allowed) / ip_decimal, 2) if ip_decimal else None,
         "K/BB": round(k / bb, 2) if bb else None,
         "K %": _rate(k, batters_faced), "K/9": round(k * 9 / ip_decimal, 2) if ip_decimal else None,
+        # BB/9, HR/9 -- added Sept 2026 for the Pitching Staff Leaderboard
+        # (Ryker: "create a pitching staff leaderboard ... allow the coach
+        # to pick what stats they want to see"). Divides by the SAME raw,
+        # unrounded ip_decimal every other rate stat here uses (WHIP, K/9,
+        # ERA, FIP) -- not the rounded "IP (decimal)" display field below --
+        # so these match the others' precision instead of double-rounding.
+        "BB/9": round(bb * 9 / ip_decimal, 2) if ip_decimal else None,
+        "HR/9": round(hr_allowed * 9 / ip_decimal, 2) if ip_decimal else None,
         "ERA (runs-allowed avg -- ER not tracked)": round(runs_allowed * 9 / ip_decimal, 2) if ip_decimal else None,
         # Real earned-run ERA, now that earned/unearned is tracked per
         # play (see earned_runs_allowed above). Kept alongside, not

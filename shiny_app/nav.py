@@ -114,6 +114,12 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             # self-scoped by role, same pattern as player_profile.py.
             NavPage("pitcher_profile", "Pitcher Profile", "graph-up-arrow"),
             NavPage("hitter_profile", "Hitter Profile", "graph-up-arrow"),
+            # Sept 2026, Ryker: "create a pitching staff leaderboard with
+            # both coaches and players can see" -- roster-wide, sortable
+            # by any stat, coach/player-configurable columns. Also added
+            # to My Development below (unconditionally, not just for
+            # pitcher-flagged players) so a Player role sees it too.
+            NavPage("pitching_leaderboard", "Pitching Staff Leaderboard", "trophy"),
         ]))
 
     # Video Coordinator -- deliberately its own small section rather than
@@ -167,6 +173,11 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             my_dev_pages.append(NavPage("player_hitting", "My Hitting", "trophy"))
             my_dev_pages.append(NavPage("hitter_profile", "My Hitter Profile", "graph-up-arrow"))
             my_dev_pages.append(NavPage("hitter_game_report", "My Game Report", "file-text"))
+        # Pitching Staff Leaderboard (Sept 2026, Ryker: "both coaches and
+        # players can see") -- unconditionally, not gated by
+        # is_pitcher_player, since any player (pitcher or hitter) might
+        # want to see the whole staff's leaderboard, not just pitchers.
+        my_dev_pages.append(NavPage("pitching_leaderboard", "Pitching Staff Leaderboard", "trophy"))
         sections.append(NavSection("My Development", my_dev_pages))
 
     return sections

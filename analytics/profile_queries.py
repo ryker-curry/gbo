@@ -23,7 +23,7 @@ the default), "intrasquad", or "external".
 from sqlalchemy.orm import joinedload
 from sqlalchemy import or_
 
-from models import GamePitch, Game, RapsodoPitch, RapsodoImport, BullpenSession, PitchType
+from models import GamePitch, Game, RapsodoPitch, RapsodoImport, BullpenSession, PitchType, Player
 
 
 def _base_pitching_query(db, player_id):
@@ -276,6 +276,59 @@ def team_location_plus_baseline(db):
     return _baseline(pitches)
 
 
+def _pitching_staff_query(db, date_from=None, date_to=None, game_scope="all"):
+    """Shared GamePitch query behind team_pitching_lines_by_player and
+    pitching_staff_leaderboard_rows below -- same team population as
+    team_location_plus_baseline (real Squad-A outings + intrasquad
+    Squad-B reps, external opponents' own pitchers excluded), with the
+    same date_from/date_to and game_scope (All/Intrasquad/External,
+    matching Game.is_intrasquad) filtering every other filtered query
+    in this module already uses."""
+    query = (
+        db.query(GamePitch)
+        .join(Game, GamePitch.game_id == Game.game_id)
+        .options(joinedload(GamePitch.pitch_type), joinedload(GamePitch.game))
+        .filter(
+            (GamePitch.is_our_team_batting.is_(False))
+            | ((GamePitch.is_our_team_batting.is_(True)) & (GamePitch.opponent_our_player_id.isnot(None)))
+        )
+    )
+    if date_from is not None:
+        query = query.filter(Game.game_date >= date_from)
+    if date_to is not None:
+        query = query.filter(Game.game_date <= date_to)
+    if game_scope == "intrasquad":
+        query = query.filter(Game.is_intrasquad.is_(True))
+    elif game_scope == "external":
+        query = query.filter(Game.is_intrasquad.is_(False))
+    return query
+
+
+def team_pitching_lines_by_player(db, date_from=None, date_to=None, game_scope="all"):
+    """{player_id: game_stats.compute_pitching_line() dict merged with a
+    "CSW %" key (analytics.performance_score.csw_pct)} for every pitcher
+    who threw at least one pitch in this population -- same population/
+    grouping team_pitching_lines below has always used, just keyed by
+    player_id instead of thrown away, so a caller that needs to know
+    WHICH pitcher a line belongs to (pitching_staff_leaderboard_rows)
+    doesn't have to re-run this same query a second time."""
+    from game_stats import compute_pitching_line
+    from analytics.performance_score import csw_pct
+    pitches = _pitching_staff_query(db, date_from, date_to, game_scope).all()
+    by_player = {}
+    for p in pitches:
+        pid = p.opponent_our_player_id if p.is_our_team_batting else p.our_player_id
+        if pid is None:
+            continue
+        by_player.setdefault(pid, []).append(p)
+    lines = {}
+    for pid, ps in by_player.items():
+        line = compute_pitching_line(ps)
+        line["CSW %"] = csw_pct(ps)
+        lines[pid] = line
+    return lines
+
+
 def team_pitching_lines(db, date_from=None, date_to=None):
     """List of per-pitcher line dicts (one per pitcher who threw at
     least one pitch in this population), each a
@@ -298,35 +351,305 @@ def team_pitching_lines(db, date_from=None, date_to=None):
     (pitcher_profile.py's pp_overview_section) pass the page's own date filter so
     the team baseline and the one pitcher's own line it's compared
     against cover the SAME window -- a fall-only filter yields a fall
-    Performance score, a spring-only filter a separate spring one."""
-    from game_stats import compute_pitching_line
-    from analytics.performance_score import csw_pct
-    query = (
-        db.query(GamePitch)
-        .join(Game, GamePitch.game_id == Game.game_id)
-        .options(joinedload(GamePitch.pitch_type), joinedload(GamePitch.game))
-        .filter(
-            (GamePitch.is_our_team_batting.is_(False))
-            | ((GamePitch.is_our_team_batting.is_(True)) & (GamePitch.opponent_our_player_id.isnot(None)))
-        )
-    )
-    if date_from is not None:
-        query = query.filter(Game.game_date >= date_from)
-    if date_to is not None:
-        query = query.filter(Game.game_date <= date_to)
-    pitches = query.all()
+    Performance score, a spring-only filter a separate spring one.
+
+    Thin wrapper over team_pitching_lines_by_player (Sept 2026, added
+    for pitching_staff_leaderboard_rows below) -- same values, just the
+    dict's values() instead of the dict itself, unchanged return shape
+    for every existing caller."""
+    return list(team_pitching_lines_by_player(db, date_from, date_to).values())
+
+
+def _fmt_grade(value):
+    return f"{value:.1f}" if value is not None else "—"
+
+
+def aggregate_trend_by_game(pitch_points):
+    """pitch_points: list of (game_id, game_date, value) for individual
+    graded pitches (value already non-None) -- one entry per pitch, as
+    compute_grading_bundle/pitcher_profile.py's pp_trend_chart build
+    them. Groups by game_id, not date alone, so two games on the same
+    date (a doubleheader) stay separate points instead of silently
+    averaging together. Returns one point per OUTING -- (date, mean,
+    lo, hi) -- sorted by date: mean is that outing's average
+    pitch-level grade, lo/hi its min/max, so
+    visualizations/profile_charts.trend_chart can show each outing's
+    spread (an error bar) around its average instead of one dot per
+    pitch.
+
+    Sept 2026, Ryker: raw pitch-by-pitch dots were too noisy to read as
+    an actual trend across outings ("how is this useful?" -- fair
+    question, given it took a whole page of pitches per outing to find
+    the shape). An outing-level average is what "trend over time"
+    actually means to a coach looking for whether a guy's pitching
+    better or worse lately, not a per-pitch scatter.
+
+    Moved here from pitcher_profile.py (Sept 2026, Pitching Staff
+    Leaderboard) so compute_grading_bundle below -- now shared by both
+    pitcher_profile.py and the new leaderboard -- can call it without
+    reaching back into that page module."""
+    from statistics import mean
+    groups = {}
+    for game_id, game_date, value in pitch_points:
+        groups.setdefault(game_id, {"date": game_date, "values": []})["values"].append(value)
+    rows = [
+        (g["date"], round(mean(g["values"]), 1), round(min(g["values"]), 1), round(max(g["values"]), 1))
+        for g in groups.values()
+    ]
+    rows.sort(key=lambda r: r[0])
+    return rows
+
+
+def compute_grading_bundle(db, game_pitches, rapsodo_pitches, stuff_baselines=None, location_baseline=None):
+    """Shared derived-data pass over one filtered pitch window --
+    Stuff+/Location+/Pitching+ per pitch, pitch usage counts,
+    attack-zone counts, the Pitching+ trend series (one point per
+    OUTING, not per pitch -- see aggregate_trend_by_game), the Arsenal
+    rollup, and the Individual Pitches rows. Moved here from
+    pitcher_profile.py (Sept 2026, Pitching Staff Leaderboard) so a
+    roster-wide caller (pitching_staff_leaderboard_rows below) can call
+    it once per pitcher without duplicating this ~60-line loop a second
+    time -- pitcher_profile.py's own pp_overview_section/pp_zone_
+    section/pp_arsenal_section still call this exact function, just
+    through profile_queries now instead of a page-local nested def.
+
+    stuff_baselines/location_baseline: pass these in (from
+    team_stuff_plus_baselines/team_location_plus_baseline) when the
+    caller is looping over many pitchers against the SAME team-wide
+    baselines, to avoid re-fitting them on every call -- a single
+    pitcher_profile.py page load still gets None here and fits them
+    itself, unchanged behavior from before this was a parameter."""
+    from strike_zone import classify_attack_zone
+    from analytics.pitch_grading import stuff_plus, location_plus, pitching_plus, arsenal_summary
+
+    if stuff_baselines is None:
+        stuff_baselines = team_stuff_plus_baselines(db)
+    if location_baseline is None:
+        location_baseline = team_location_plus_baseline(db)
+
+    game_pitch_ids = [p.game_pitch_id for p in game_pitches]
+    rap_by_gp = rapsodo_by_game_pitch_id(db, game_pitch_ids)
+
+    def _type_label(pitch_type_obj):
+        return pitch_type_obj.type_name if pitch_type_obj is not None else "Unspecified"
+
+    pitch_type_grades = {}
+    individual_rows = []
+    trend_pitch_points = []
+    zone_counts = {"Heart": 0, "Shadow": 0, "Chase": 0, "Waste": 0}
+    usage_counts = {}
+
+    for p in game_pitches:
+        label = _type_label(p.pitch_type)
+        usage_counts[label] = usage_counts.get(label, 0) + 1
+
+        rap = rap_by_gp.get(p.game_pitch_id)
+        s_val = stuff_plus(rap, stuff_baselines.get(label)) if rap is not None else None
+        l_val = location_plus(p, location_baseline)
+        pi_val = pitching_plus(s_val, l_val)
+
+        grp = pitch_type_grades.setdefault(label, {"n": 0, "stuff_plus": [], "location_plus": [], "pitching_plus": []})
+        grp["n"] += 1
+        if s_val is not None:
+            grp["stuff_plus"].append(s_val)
+        if l_val is not None:
+            grp["location_plus"].append(l_val)
+        if pi_val is not None:
+            grp["pitching_plus"].append(pi_val)
+
+        if p.actual_plate_x is not None and p.actual_plate_z is not None:
+            zone = classify_attack_zone(float(p.actual_plate_x), float(p.actual_plate_z))
+            if zone:
+                zone_counts[zone] += 1
+
+        if pi_val is not None and p.game is not None:
+            trend_pitch_points.append((p.game.game_id, p.game.game_date, pi_val))
+
+        individual_rows.append({
+            "Date": p.game.game_date.strftime("%Y-%m-%d") if p.game else "—",
+            "#": p.pitch_sequence,
+            "Pitch Type": label,
+            "Velo": f"{float(rap.velocity):.1f}" if rap is not None and rap.velocity is not None else "—",
+            "Result": p.pitch_outcome or "—",
+            "Stuff+": _fmt_grade(s_val),
+            "Location+": _fmt_grade(l_val),
+            "Pitching+": _fmt_grade(pi_val),
+        })
+
+    # Any Rapsodo pitches with no game link at all (pure bullpen
+    # reps) still count toward Arsenal's Stuff+ rollup -- see this
+    # function's callers' original docstring note (kept from
+    # pp_body's own comment, unchanged reasoning): stuff_baselines
+    # holds fitted MODELS, trained only on real-game pitches, but a
+    # fitted model scores any pitch from just its physical readings.
+    linked_rapsodo_ids = {r.rapsodo_pitch_id for r in rap_by_gp.values()}
+    for r in rapsodo_pitches:
+        if r.rapsodo_pitch_id in linked_rapsodo_ids:
+            continue
+        label = _type_label(r.pitch_type)
+        s_val = stuff_plus(r, stuff_baselines.get(label))
+        if s_val is None:
+            continue
+        grp = pitch_type_grades.setdefault(label, {"n": 0, "stuff_plus": [], "location_plus": [], "pitching_plus": []})
+        grp["n"] += 1
+        grp["stuff_plus"].append(s_val)
+
+    arsenal_rows = arsenal_summary(pitch_type_grades) if pitch_type_grades else []
+    overview_stuff = [v for row in arsenal_rows for v in [row["Stuff+"]] if v is not None]
+    overview_loc = [v for row in arsenal_rows for v in [row["Location+"]] if v is not None]
+    overview_pitching = [v for row in arsenal_rows for v in [row["Pitching+"]] if v is not None]
+
+    return {
+        "stuff_plus_value": round(sum(overview_stuff) / len(overview_stuff), 1) if overview_stuff else None,
+        "location_plus_value": round(sum(overview_loc) / len(overview_loc), 1) if overview_loc else None,
+        "pitching_plus_value": round(sum(overview_pitching) / len(overview_pitching), 1) if overview_pitching else None,
+        "usage_counts": usage_counts,
+        "zone_counts": zone_counts,
+        "trend_points": aggregate_trend_by_game(trend_pitch_points),
+        "arsenal_rows": arsenal_rows,
+        "individual_rows": individual_rows,
+    }
+
+
+def pitching_staff_leaderboard_rows(db, date_from=None, date_to=None, game_scope="all"):
+    """One row per pitcher (Player object) who threw at least one
+    qualifying pitch in this window, combining
+    game_stats.compute_pitching_line()'s traditional box-score/rate
+    stats with GBO's own team-relative pitch grades (Stuff+/Location+/
+    Pitching+/Command+/Arsenal/Results/Performance) -- the exact same
+    math pitcher_profile.py's Overview tab computes for one pitcher at
+    a time, run once per roster pitcher against baselines computed ONCE
+    up front (not re-fit per pitcher) instead of N times. Feeds
+    shiny_app/modules/pitching_leaderboard.py (Sept 2026, Ryker: "create
+    a pitching staff leaderboard").
+
+    Same team population as team_pitching_lines_by_player/
+    team_location_plus_baseline (our own Squad-A pitchers pitching,
+    plus intrasquad games where our own Squad-B pitcher is logged as
+    the 'opponent' -- an external opponent's own pitcher is never
+    included, this is GBO's own roster only), further narrowed by
+    game_scope ("all"/"intrasquad"/"external", matching
+    Game.is_intrasquad) same as every other filtered query in this
+    module.
+
+    Each row is a plain dict with a "player" key (the Player object,
+    for name/throws/etc.) plus every selectable leaderboard stat --
+    None for any stat this pitcher doesn't have enough data for (never
+    0, so the leaderboard's sort/format code can tell "no data" from
+    "actually zero")."""
+    from analytics import command_metrics, performance_score
+
+    pitches = _pitching_staff_query(db, date_from, date_to, game_scope).all()
     by_player = {}
     for p in pitches:
         pid = p.opponent_our_player_id if p.is_our_team_batting else p.our_player_id
         if pid is None:
             continue
         by_player.setdefault(pid, []).append(p)
-    lines = []
+    if not by_player:
+        return []
+
+    players_by_id = {
+        pl.player_id: pl for pl in db.query(Player).filter(Player.player_id.in_(by_player.keys())).all()
+    }
+
+    # Rapsodo pitches per pitcher, same window/game_scope, batched in
+    # ONE query rather than N -- same population get_pitcher_rapsodo_
+    # pitches uses for a single player, generalized to the whole roster
+    # via .in_() instead of == one id.
+    rap_query = (
+        db.query(RapsodoPitch)
+        .options(joinedload(RapsodoPitch.pitch_type))
+        .filter(RapsodoPitch.player_id.in_(by_player.keys()))
+    )
+    if date_from is not None:
+        rap_query = rap_query.filter(RapsodoPitch.pitch_date >= date_from)
+    if date_to is not None:
+        rap_query = rap_query.filter(RapsodoPitch.pitch_date <= date_to)
+    if game_scope in ("intrasquad", "external"):
+        rap_query = (
+            rap_query.outerjoin(GamePitch, RapsodoPitch.game_pitch_id == GamePitch.game_pitch_id)
+            .outerjoin(Game, GamePitch.game_id == Game.game_id)
+        )
+        wants_intrasquad = game_scope == "intrasquad"
+        rap_query = rap_query.filter(or_(RapsodoPitch.bullpen_id.isnot(None), Game.is_intrasquad.is_(wants_intrasquad)))
+    rapsodo_by_player = {}
+    for r in rap_query.all():
+        rapsodo_by_player.setdefault(r.player_id, []).append(r)
+
+    # Team-wide baselines, computed ONCE -- not re-fit per pitcher the
+    # way a single pitcher_profile.py page load does (there's only ever
+    # one pitcher on that page).
+    stuff_baselines = team_stuff_plus_baselines(db)
+    location_baseline = team_location_plus_baseline(db)
+    all_command_pitches = db.query(GamePitch).filter(GamePitch.intended_plate_x.isnot(None)).all()
+    command_baselines = command_metrics.team_command_plus_baselines(
+        command_metrics.game_pitches_command_view(all_command_pitches, None)
+    )
+
+    lines_by_player = team_pitching_lines_by_player(db, date_from, date_to, game_scope)
+    results_baseline = None
+    if len(lines_by_player) >= performance_score.MIN_BASELINE_PLAYERS:
+        results_baseline = performance_score.team_pitcher_results_baseline(list(lines_by_player.values()))
+
+    rows = []
     for pid, ps in by_player.items():
-        line = compute_pitching_line(ps)
-        line["CSW %"] = csw_pct(ps)
-        lines.append(line)
-    return lines
+        player = players_by_id.get(pid)
+        line = lines_by_player.get(pid)
+        if player is None or line is None:
+            continue
+        rapsodo_pitches = rapsodo_by_player.get(pid, [])
+
+        bundle = compute_grading_bundle(db, ps, rapsodo_pitches, stuff_baselines=stuff_baselines, location_baseline=location_baseline)
+
+        cmd_view_pitches = command_metrics.game_pitches_command_view(ps, player.throws)
+        command_plus_value = None
+        if command_baselines["pooled"][2] >= command_metrics.MIN_BASELINE_PITCHES:
+            command_plus_value = command_metrics.session_command_plus(cmd_view_pitches, command_baselines)
+
+        arsenal_pitching_value = performance_score.usage_weighted_average(bundle["arsenal_rows"], "Pitching+")
+
+        results_score = None
+        if results_baseline is not None:
+            results_score = performance_score.pitcher_results_score(line, results_baseline)
+
+        performance_value = performance_score.combine_pitcher_performance(
+            bundle["stuff_plus_value"], bundle["location_plus_value"], command_plus_value,
+            arsenal_pitching_value, results_score,
+        )
+
+        # BB/9, HR/9 come straight from compute_pitching_line (added
+        # there Sept 2026) rather than being re-derived here -- see
+        # the comment on the row dict below.
+        bb, k, bf = line["BB"], line["K"], line["Batters Faced"]
+        bb_pct = round(100 * bb / bf, 1) if bf else None
+        k_pct = line["K %"]
+        k_minus_bb_pct = round(k_pct - bb_pct, 1) if (k_pct is not None and bb_pct is not None) else None
+
+        rows.append({
+            "player": player,
+            "Pitcher": f"{player.first_name} {player.last_name}",
+            "IP": line["IP"], "IP (decimal)": line["IP (decimal)"],
+            "ERA": line["ERA"], "WHIP": line["WHIP"], "FIP": line["FIP"],
+            # BB/9, HR/9 now come straight from compute_pitching_line
+            # (added there Sept 2026) instead of being re-derived here
+            # against the already-rounded "IP (decimal)" field -- that
+            # double-rounding produced results a hundredth or two off
+            # from every sibling rate stat (WHIP/K-9/ERA/FIP), which all
+            # divide by compute_pitching_line's raw, unrounded innings
+            # value. Caught by the leaderboard's own fixture test.
+            "K/9": line["K/9"], "BB/9": line["BB/9"], "HR/9": line["HR/9"],
+            "K %": k_pct, "BB %": bb_pct, "K-BB %": k_minus_bb_pct, "K/BB": line["K/BB"],
+            "OBA": line["OBA (opponent AVG)"], "Strike %": line["Strike %"],
+            "FPS %": line["First Pitch Strike %"], "CSW %": line["CSW %"],
+            "Zone Execution %": line["Zone Execution %"],
+            "BF": bf, "K": k, "BB": bb,
+            "Stuff+": bundle["stuff_plus_value"], "Location+": bundle["location_plus_value"],
+            "Pitching+": bundle["pitching_plus_value"], "Command+": command_plus_value,
+            "Arsenal": arsenal_pitching_value, "Results": results_score, "Performance": performance_value,
+        })
+
+    return rows
 
 
 def team_hitting_lines(db, date_from=None, date_to=None):
