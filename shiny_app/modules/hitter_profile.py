@@ -1,15 +1,16 @@
 """
 GBO -- Hitter Profile (Aug 2026, Phase 0 of STUFF-LOCATION-PITCHING-
-PLUS-PLAN.md). Batting-side counterpart to pitcher_profile.py: a
-filterable, per-hitter deep dive across counting stats/slash line,
-plate discipline (overall and by zone tier), batted-ball profile, and
-contact quality by zone/pitch type -- all from the exact same
-game_stats.py/plate_discipline.py functions Analytics/My Stats and
-Hitter Game Report already use, just scoped to this page's own date-
-range/pitch-type/game-scope filters instead of one game_id. No
-Stuff+/Location+/Pitching+ here -- those are pitcher-only grades (see
-pitcher_profile.py); a hitter's "how am I doing against stuff" read is
-the existing Contact Quality by Zone/Pitch Type section below.
+PLUS-PLAN.md; retiled into tabs Sept 2026). Batting-side counterpart to
+pitcher_profile.py: a filterable, per-hitter deep dive across counting
+stats/slash line, plate discipline (overall and by zone tier), batted-
+ball profile, situational splits, and contact quality by zone/pitch
+type -- all from the exact same game_stats.py/plate_discipline.py
+functions Analytics/My Stats and Hitter Game Report already use, just
+scoped to this page's own date-range/pitch-type/game-scope filters
+instead of one game_id. No Stuff+/Location+/Pitching+ here -- those
+are pitcher-only grades (see pitcher_profile.py); a hitter's "how am I
+doing against stuff" read is the Contact Quality by Zone/Pitch Type
+view below.
 
 Self-scoping, same pattern as pitcher_profile.py/player_profile.py: a
 staff role sees a player picker (scoped to assigned players unless
@@ -19,6 +20,29 @@ pitchers don't get a Hitter Profile -- mirrors My Bullpens/My Hitting's
 existing is_pitcher split). A two-way player who bats and pitches only
 ever gets routed to one of the two via nav.py's is_pitcher flag, same
 simplification the rest of the app already makes.
+
+View tabs (Sept 2026, Ryker: "make hitter profile similar to pitcher
+to where it has tabs and you can choose what you want to see" -- same
+"View" dropdown convention pitcher_profile.py/pitcher_game_report.py
+already established, gating which of the render.ui sections below
+actually queries/renders, rather than one long page everyone has to
+scroll through): Overview (Line/Slash Line/OPS+/Performance), Plate
+Discipline (BB%/K%, Zone discipline, Zone-Tier table, and -- Ryker's
+own reference here was Baseball Savant's percentile-rank rows -- one
+percentile bar each for wOBA/Chase %/Whiff %/Zone Swing %, reusing
+performance_score's own single-metric z-score math one metric at a
+time instead of blended), Batted Ball (GB/FB/LD/PopUp, Pull/Center/
+Oppo or LF/CF/RF, Barrel %/Hard Contact %), Situational & Count
+Leverage (RISP/2-Strike/Leadoff AVG, QAB %, Ahead/Even/Behind table),
+and Contact Quality by Zone (the existing Hitter Tracking zone-score
+heat map). Each gated section function checks input.hp_view() itself
+and returns None immediately when not selected -- switching the
+dropdown is what stops the DB work for the other views, not CSS
+visibility -- same discipline pitcher_profile.py's pp_view_picker
+docstring spells out. GBO has no real Statcast data (no exit-velo
+radar, no xwOBA) -- the percentile-bar treatment here is GBO's own
+team-relative "+" grade system re-used per-metric, not a real Statcast
+percentile rank against the league.
 """
 
 from datetime import date, timedelta
@@ -40,6 +64,18 @@ from format_helpers import format_pct as _fmt_pct
 
 STAFF_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
 
+# One percentile bar per metric, in display order -- (HITTER_RESULTS_METRICS
+# key, display label). wOBA's own bar is still labeled "wOBA*" (same
+# generic-linear-weights caveat asterisk every other wOBA display in
+# the app carries), even though the underlying baseline/line dict key
+# is the plain "wOBA" performance_score.HITTER_RESULTS_METRICS uses.
+DISCIPLINE_PERCENTILE_METRICS = [
+    ("wOBA", "wOBA*"),
+    ("Chase %", "Chase %"),
+    ("Whiff %", "Whiff %"),
+    ("Zone Swing %", "Zone Swing %"),
+]
+
 
 def _fmt(value, decimals=3):
     return format_helpers.format_num(value, decimals)
@@ -55,10 +91,20 @@ def _my_player(db, app_state):
 @module.ui
 def hitter_profile_ui():
     return ui.div(
-        ui_helpers.page_header("Hitter Profile", actions=ui_helpers.glossary_link("hp_glossary", "Stats Glossary")),
+        ui_helpers.page_header("Hitter Profile"),
         ui.output_ui("hp_player_picker"),
         ui.output_ui("hp_filters"),
-        ui.output_ui("hp_body"),
+        # Sept 2026, Ryker: a "View" dropdown instead of every section
+        # rendering at once and scrolling forever -- same convention
+        # pitcher_profile.py already established. Each of these five
+        # stays statically listed here (Shiny needs a placeholder in
+        # the DOM for each output id) -- the gate inside each render.ui
+        # function is what actually controls which one does anything.
+        ui.output_ui("hp_view_picker"),
+        ui.output_ui("hp_overview_section"),
+        ui.output_ui("hp_discipline_section"),
+        ui.output_ui("hp_batted_ball_section"),
+        ui.output_ui("hp_situational_section"),
         ui.output_ui("hp_contact_section"),
         ui_helpers.page_footer(),
     )
@@ -153,11 +199,59 @@ def hitter_profile_server(input, output, session, app_state):
         return pid, pitches
 
     @render.ui
-    def hp_body():
+    def hp_view_picker():
+        """The "View" dropdown driving which of the sections below
+        actually renders -- same convention pitcher_profile.py's own
+        pp_view_picker already established (Sept 2026, Ryker: "make
+        hitter profile similar to pitcher to where it has tabs and you
+        can choose what you want to see"). Each gated section function
+        below checks input.hp_view() itself and returns None
+        immediately when not selected, before doing any query --
+        switching this dropdown is what stops the DB work for the
+        other views, not CSS visibility."""
         if not app_state.is_authenticated():
             return None
         role = app_state.role_name()
         if role != "Player" and role not in STAFF_ROLES:
+            return None
+        if role in STAFF_ROLES:
+            req("hp_player_select" in input)
+        db = get_session()
+        try:
+            pid, pitches = _current_pitches(db)
+            if pid is None or not pitches:
+                return None
+            return ui.div(
+                ui.hr(),
+                ui.input_select(
+                    "hp_view", "View",
+                    choices={
+                        "overview": "Overview",
+                        "discipline": "Plate Discipline",
+                        "batted_ball": "Batted Ball",
+                        "situational": "Situational & Count Leverage",
+                        "contact_zone": "Contact Quality by Zone",
+                    },
+                ),
+            )
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Overview: Line / Slash Line (incl. OPS+) / Performance -- the "at
+    # a glance" numbers, same role pitcher_profile.py's Overview view
+    # plays, and (Ryker's own reference) the top-of-page summary a
+    # Baseball Savant player page opens with.
+    # -------------------------------------------------------------------
+    @render.ui
+    def hp_overview_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("hp_view" in input)
+        if input.hp_view() != "overview":
             return None
 
         db = get_session()
@@ -182,7 +276,11 @@ def hitter_profile_server(input, output, session, app_state):
                 season_baseline["OBP"] if season_baseline else None,
                 season_baseline["SLG"] if season_baseline else None,
             )
-            sections = [ui.h5(f"{player.first_name} {player.last_name}", class_="gbo-section-title")]
+            sections = [ui.div(
+                ui.h5(f"{player.first_name} {player.last_name}", class_="gbo-section-title", style="margin-bottom:0;"),
+                ui_helpers.glossary_link("hp_glossary_overview", "Overview Glossary"),
+                style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+            )]
 
             sections.append(ui.p(ui.strong("Line")))
             sections.append(ui_helpers.render_kpi_cards([
@@ -216,32 +314,85 @@ def hitter_profile_server(input, output, session, app_state):
                 class_="text-muted small",
             ))
 
-            sections.append(ui.p(ui.strong("Plate Discipline")))
+            # Performance: results-based composite (Aug 31 2026 design
+            # call with Ryker -- see analytics/performance_score.py's
+            # module docstring). Hitters don't get a Stuff+/Location+/
+            # Command+/Arsenal equivalent (pitcher-only, pitch-quality
+            # concepts) -- this IS the whole Hitter Performance score,
+            # not a blend of several pieces the way pitcher Performance
+            # is. Needs compute_hitter_discipline for its Chase %/
+            # Whiff %/Zone Swing % inputs -- the Plate Discipline view
+            # computes the same thing again for its own KPI cards, same
+            # "each gated section computes what it needs" convention
+            # pitcher_profile.py's own views already follow.
+            discipline = compute_hitter_discipline(pitches)
+            sections.append(ui.hr())
+            sections.append(ui.p(ui.strong("Performance")))
+            sections.append(ui.p(
+                "Results-based composite -- wOBA, AVG, Chase % (lower better), Whiff % (lower better), Zone "
+                "Swing % (higher better), all team-relative -- game production, separate from the Bucket "
+                "System's physical/athletic score. Hitters don't have a pitch-quality grade to blend in the way "
+                "pitcher Performance does, so this is the Results score in full.",
+                class_="text-muted small",
+            ))
+            if discipline["Pitches Seen"] == 0:
+                sections.append(ui.p("Not enough pitches with plate-discipline data yet for a Performance score.", class_="text-muted small"))
+            else:
+                hitter_results_line = dict(line, **{
+                    "Chase %": discipline["Chase %"],
+                    "Whiff %": discipline["Whiff %"],
+                    "Zone Swing %": discipline["Zone Swing %"],
+                })
+                team_hitting_lines = profile_queries.team_hitting_lines(db, date_from=f["date_from"], date_to=f["date_to"])
+                performance_value = None
+                if len(team_hitting_lines) >= performance_score.MIN_BASELINE_PLAYERS:
+                    results_baseline = performance_score.team_hitter_results_baseline(team_hitting_lines)
+                    performance_value = performance_score.hitter_results_score(hitter_results_line, results_baseline)
+                performance_bars = ui_helpers.render_percentile_bars([("Performance", performance_value)])
+                if performance_bars is not None:
+                    sections.append(performance_bars)
+                else:
+                    sections.append(ui.p("Not enough team baseline yet for a Performance score.", class_="text-muted small"))
+
+            return ui.div(*sections)
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Plate Discipline: BB %/K % + Zone discipline (Zone %/Swing %/
+    # Chase %/Whiff %/SwStr %/1st-Pitch Swing %) + per-metric team-
+    # percentile bars (Sept 2026, Ryker's reference: Baseball Savant's
+    # percentile-rank rows) + Zone-Tier Discipline table.
+    # -------------------------------------------------------------------
+    @render.ui
+    def hp_discipline_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("hp_view" in input)
+        if input.hp_view() != "discipline":
+            return None
+
+        db = get_session()
+        try:
+            pid, pitches = _current_pitches(db)
+            if pid is None or not pitches:
+                return None
+            f = _current_filters()
+            line = compute_batting_line(pitches)
+
+            sections = [ui.div(
+                ui.p(ui.strong("Plate Discipline"), style="margin-bottom:0;"),
+                ui_helpers.glossary_link("hp_glossary_discipline", "Plate Discipline Glossary"),
+                style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+            )]
             sections.append(ui_helpers.render_kpi_cards([
                 {"label": "BB %", "value": _fmt_pct(line["BB %"])},
                 {"label": "K %", "value": _fmt_pct(line["K %"])},
                 {"label": "BB/K", "value": _fmt(line["BB/K"], 2)},
             ]))
-
-            sections.append(ui.p(ui.strong("Situational")))
-            sections.append(ui_helpers.render_kpi_cards([
-                {"label": "RISP AVG", "value": _fmt(line["RISP AVG"])},
-                {"label": "2-Strike AVG", "value": _fmt(line["2-Strike AVG"])},
-                {"label": "Leadoff AVG", "value": _fmt(line["Leadoff AVG"])},
-                {"label": "QAB %", "value": _fmt_pct(line["QAB %"])},
-            ]))
-            sections.append(ui.p(f"QAB: {line['QAB']} of {line['PA']} PA", class_="text-muted small"))
-
-            sections.append(ui.p(ui.strong("Count Leverage (Ahead / Even / Behind)")))
-            sections.append(ui_helpers.render_dict_table([
-                {"Count State": "Ahead", "PA": line["Ahead PA"], "AVG": _fmt(line["Ahead AVG"]), "OBP": _fmt(line["Ahead OBP"]), "SLG": _fmt(line["Ahead SLG"]), "wOBA*": _fmt(line["Ahead wOBA"])},
-                {"Count State": "Even", "PA": line["Even PA"], "AVG": _fmt(line["Even AVG"]), "OBP": _fmt(line["Even OBP"]), "SLG": _fmt(line["Even SLG"]), "wOBA*": _fmt(line["Even wOBA"])},
-                {"Count State": "Behind", "PA": line["Behind PA"], "AVG": _fmt(line["Behind AVG"]), "OBP": _fmt(line["Behind OBP"]), "SLG": _fmt(line["Behind SLG"]), "wOBA*": _fmt(line["Behind wOBA"])},
-            ]))
-            sections.append(ui.p(
-                "Split by the count when the at-bat ended -- Ahead = more balls than strikes, Behind = more strikes than balls, Even = equal.",
-                class_="text-muted small",
-            ))
 
             sections.append(ui.hr())
             sections.append(ui.p(ui.strong("Plate Discipline (Zone)")))
@@ -264,48 +415,80 @@ def hitter_profile_server(input, output, session, app_state):
                     class_="text-muted small",
                 ))
 
-                # --- Performance: results-based composite (Aug 31 2026
-                # design call with Ryker -- see analytics/
-                # performance_score.py's module docstring). Hitters
-                # don't get a Stuff+/Location+/Command+/Arsenal
-                # equivalent (pitcher-only, pitch-quality concepts) --
-                # this IS the whole Hitter Performance score, not a
-                # blend of several pieces the way pitcher Performance
-                # is. Gated on the same discipline["Pitches Seen"] > 0
-                # check as the section above, since Chase %/Whiff %/
-                # Zone Swing % come from `discipline`.
+                # Per-metric team-percentile bars (Sept 2026, Ryker's
+                # own reference: Baseball Savant's percentile-rank
+                # rows). Reuses performance_score's own single-metric
+                # z-score math -- performance_score._results_score
+                # already blends N metrics into one grade by averaging
+                # their z-scores; calling it with a ONE-metric baseline
+                # dict is the exact same formula with N=1, so this is
+                # not new math, just the existing Performance
+                # composite's own per-metric building blocks shown one
+                # at a time instead of averaged together.
                 hitter_results_line = dict(line, **{
                     "Chase %": discipline["Chase %"],
                     "Whiff %": discipline["Whiff %"],
                     "Zone Swing %": discipline["Zone Swing %"],
                 })
                 team_hitting_lines = profile_queries.team_hitting_lines(db, date_from=f["date_from"], date_to=f["date_to"])
-                performance_value = None
+                metric_bars = []
                 if len(team_hitting_lines) >= performance_score.MIN_BASELINE_PLAYERS:
                     results_baseline = performance_score.team_hitter_results_baseline(team_hitting_lines)
-                    performance_value = performance_score.hitter_results_score(hitter_results_line, results_baseline)
+                    for metric_key, bar_label in DISCIPLINE_PERCENTILE_METRICS:
+                        grade = performance_score._results_score(hitter_results_line, {metric_key: results_baseline[metric_key]})
+                        metric_bars.append((bar_label, grade))
 
                 sections.append(ui.hr())
-                sections.append(ui.p(ui.strong("Performance")))
+                sections.append(ui.p(ui.strong("Team Percentile (this window)")))
                 sections.append(ui.p(
-                    "Results-based composite -- wOBA, AVG, Chase % (lower better), Whiff % (lower better), Zone "
-                    "Swing % (higher better), all team-relative -- game production, separate from the Bucket "
-                    "System's physical/athletic score. Hitters don't have a pitch-quality grade to blend in the way "
-                    "pitcher Performance does, so this is the Results score in full.",
+                    "Each stat's own percentile against the rest of the team over this same date range -- same "
+                    "grade/percentile scale as the Performance bar on Overview, one metric at a time instead of "
+                    "blended together.",
                     class_="text-muted small",
                 ))
-                performance_bars = ui_helpers.render_percentile_bars([("Performance", performance_value)])
-                if performance_bars is not None:
-                    sections.append(performance_bars)
+                metric_percentile_bars = ui_helpers.render_percentile_bars(metric_bars) if metric_bars else None
+                if metric_percentile_bars is not None:
+                    sections.append(metric_percentile_bars)
                 else:
-                    sections.append(ui.p("Not enough team baseline yet for a Performance score.", class_="text-muted small"))
+                    sections.append(ui.p("Not enough team baseline yet for individual percentiles.", class_="text-muted small"))
 
             sections.append(ui.p(ui.strong("Zone-Tier Discipline")))
             sections.append(ui.p("Heart = down the middle, Shadow = straddles the zone edge, Chase = tempting but outside, Waste = nowhere near.", class_="text-muted small"))
             sections.append(ui_helpers.render_dict_table(compute_zone_tier_discipline(pitches)))
 
-            sections.append(ui.hr())
-            sections.append(ui.p(ui.strong("Batted-Ball Profile")))
+            return ui.div(*sections)
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Batted Ball: GB %/FB %/LD %/Pop Up %, Pull/Center/Oppo (or LF/CF/
+    # RF for switch-hitters/unknown bats), Barrel %/Hard Contact %.
+    # -------------------------------------------------------------------
+    @render.ui
+    def hp_batted_ball_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("hp_view" in input)
+        if input.hp_view() != "batted_ball":
+            return None
+
+        db = get_session()
+        try:
+            pid, pitches = _current_pitches(db)
+            if pid is None or not pitches:
+                return None
+            player = db.query(Player).filter(Player.player_id == pid).first()
+            if player is None:
+                return None
+
+            sections = [ui.div(
+                ui.p(ui.strong("Batted-Ball Profile"), style="margin-bottom:0;"),
+                ui_helpers.glossary_link("hp_glossary_batted_ball", "Batted Ball Glossary"),
+                style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+            )]
             profile = compute_batted_ball_profile(pitches, bats=player.bats)
             if profile["Balls in Play"] == 0:
                 sections.append(ui.p("No balls in play yet.", class_="text-muted small"))
@@ -340,18 +523,92 @@ def hitter_profile_server(input, output, session, app_state):
             db.close()
 
     # -------------------------------------------------------------------
+    # Situational & Count Leverage: RISP/2-Strike/Leadoff AVG + QAB %,
+    # and the Ahead/Even/Behind count-leverage split table.
+    # -------------------------------------------------------------------
+    @render.ui
+    def hp_situational_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("hp_view" in input)
+        if input.hp_view() != "situational":
+            return None
+
+        db = get_session()
+        try:
+            pid, pitches = _current_pitches(db)
+            if pid is None or not pitches:
+                return None
+            line = compute_batting_line(pitches)
+
+            sections = [ui.div(
+                ui.p(ui.strong("Situational"), style="margin-bottom:0;"),
+                ui_helpers.glossary_link("hp_glossary_situational", "Situational Glossary"),
+                style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+            )]
+            sections.append(ui_helpers.render_kpi_cards([
+                {"label": "RISP AVG", "value": _fmt(line["RISP AVG"])},
+                {"label": "2-Strike AVG", "value": _fmt(line["2-Strike AVG"])},
+                {"label": "Leadoff AVG", "value": _fmt(line["Leadoff AVG"])},
+                {"label": "QAB %", "value": _fmt_pct(line["QAB %"])},
+            ]))
+            sections.append(ui.p(f"QAB: {line['QAB']} of {line['PA']} PA", class_="text-muted small"))
+
+            sections.append(ui.hr())
+            sections.append(ui.p(ui.strong("Count Leverage (Ahead / Even / Behind)")))
+            sections.append(ui_helpers.render_dict_table([
+                {"Count State": "Ahead", "PA": line["Ahead PA"], "AVG": _fmt(line["Ahead AVG"]), "OBP": _fmt(line["Ahead OBP"]), "SLG": _fmt(line["Ahead SLG"]), "wOBA*": _fmt(line["Ahead wOBA"])},
+                {"Count State": "Even", "PA": line["Even PA"], "AVG": _fmt(line["Even AVG"]), "OBP": _fmt(line["Even OBP"]), "SLG": _fmt(line["Even SLG"]), "wOBA*": _fmt(line["Even wOBA"])},
+                {"Count State": "Behind", "PA": line["Behind PA"], "AVG": _fmt(line["Behind AVG"]), "OBP": _fmt(line["Behind OBP"]), "SLG": _fmt(line["Behind SLG"]), "wOBA*": _fmt(line["Behind wOBA"])},
+            ]))
+            sections.append(ui.p(
+                "Split by the count when the at-bat ended -- Ahead = more balls than strikes, Behind = more strikes than balls, Even = equal.",
+                class_="text-muted small",
+            ))
+
+            return ui.div(*sections)
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
     # Contact Quality by Zone / Pitch Type -- same reused Hitter Tracking
     # zone-score math/heatmap builder Hitter Game Report already uses,
     # just scoped by this page's own filters instead of one game_id. Own
     # top-level output (own render.ui/render_plotly split), same reason
     # as hitter_game_report.py: a render_plotly output needs its own
-    # registered function.
+    # registered function -- and, same as pitcher_profile.py's own
+    # nested per-view outputs, each of the three functions below
+    # independently re-checks input.hp_view() itself rather than
+    # relying only on DOM nesting/visibility.
     # -------------------------------------------------------------------
 
     @reactive.effect
-    @reactive.event(input.hp_glossary)
-    def _hp_show_glossary():
-        ui.modal_show(ui_helpers.glossary_modal("Hitting Stats Glossary", glossary_content.HITTING))
+    @reactive.event(input.hp_glossary_overview)
+    def _hp_show_glossary_overview():
+        ui.modal_show(ui_helpers.glossary_modal("Overview Glossary", glossary_content.HITTING_OVERVIEW))
+
+    @reactive.effect
+    @reactive.event(input.hp_glossary_discipline)
+    def _hp_show_glossary_discipline():
+        ui.modal_show(ui_helpers.glossary_modal("Plate Discipline Glossary", glossary_content.HITTING_DISCIPLINE))
+
+    @reactive.effect
+    @reactive.event(input.hp_glossary_batted_ball)
+    def _hp_show_glossary_batted_ball():
+        ui.modal_show(ui_helpers.glossary_modal("Batted Ball Glossary", glossary_content.HITTING_BATTED_BALL))
+
+    @reactive.effect
+    @reactive.event(input.hp_glossary_situational)
+    def _hp_show_glossary_situational():
+        ui.modal_show(ui_helpers.glossary_modal("Situational Glossary", glossary_content.HITTING_SITUATIONAL))
+
+    @reactive.effect
+    @reactive.event(input.hp_glossary_contact_zone)
+    def _hp_show_glossary_contact_zone():
+        ui.modal_show(ui_helpers.glossary_modal("Contact Quality by Zone Glossary", glossary_content.HITTING_CONTACT_ZONE))
 
     @render.ui
     def hp_contact_section():
@@ -359,6 +616,9 @@ def hitter_profile_server(input, output, session, app_state):
             return None
         role = app_state.role_name()
         if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("hp_view" in input)
+        if input.hp_view() != "contact_zone":
             return None
         db = get_session()
         try:
@@ -369,8 +629,11 @@ def hitter_profile_server(input, output, session, app_state):
             if not located:
                 return None
             return ui.div(
-                ui.hr(),
-                ui.p(ui.strong("Contact Quality by Zone / Pitch Type")),
+                ui.div(
+                    ui.p(ui.strong("Contact Quality by Zone / Pitch Type"), style="margin-bottom:0;"),
+                    ui_helpers.glossary_link("hp_glossary_contact_zone", "Contact Zone Glossary"),
+                    style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+                ),
                 ui.p(
                     "From this hitter's actual game at-bats in the selected range (located pitches only -- needs both "
                     "a recorded zone and a contact-quality call). Same 0-3 Barrel/Solid/Weak/Miss scale Hitter "
@@ -387,6 +650,9 @@ def hitter_profile_server(input, output, session, app_state):
     def hp_contact_chart():
         if not app_state.is_authenticated():
             return None
+        req("hp_view" in input)
+        if input.hp_view() != "contact_zone":
+            return None
         db = get_session()
         try:
             _pid, pitches = _current_pitches(db)
@@ -402,6 +668,9 @@ def hitter_profile_server(input, output, session, app_state):
     @render.ui
     def hp_contact_by_type_table():
         if not app_state.is_authenticated():
+            return None
+        req("hp_view" in input)
+        if input.hp_view() != "contact_zone":
             return None
         db = get_session()
         try:
