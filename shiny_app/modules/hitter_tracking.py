@@ -150,26 +150,27 @@ def _build_zone_heatmap_figure(title, zone_scores, zone_counts, invert_colors=Fa
     sits, same as every pitcher-side zone chart, while keeping the
     built-in Heatmap hover/colorbar the original had (a hand-drawn
     shapes version loses per-cell hover; positioning the Heatmap
-    trace itself at real coordinates keeps it for free). Blue = good
-    contact, red = poor -- inverted for a pitcher-facing view (not
-    used on this page, kept for parity with the original's shared
-    helper signature in case bullpen_tracking.py's own port wants the
-    mirror view later). Shared by both this page's own heatmap_body
-    AND hitter_profile.py's Contact Quality by Zone view (both import
-    this same function), so this one change restyles both places at
-    once.
+    trace itself at real coordinates keeps it for free). Red = good
+    (hot) contact, blue = poor (cold) -- inverted for a pitcher-facing
+    view (not used on this page, kept for parity with the original's
+    shared helper signature in case bullpen_tracking.py's own port
+    wants the mirror view later). Shared by both this page's own
+    heatmap_body AND hitter_profile.py's Contact Quality by Zone view
+    (both import this same function), so this one change restyles
+    both places at once.
 
-    Translucent cells on a diverging red-blue scale, not solid red-
-    yellow-green (Sept 2026, Ryker sent a screenshot of a broadcast-
-    style strike-zone overlay -- semi-transparent colored cells you
-    can see the background through -- and asked to match that look).
-    Plotly's "RdBu" scale runs red (score 0) -> white (mid) -> blue
-    (score 3), matching the red=poor/blue=good direction "RdYlGn"
-    used, just a different hue pair; "RdBu_r" mirrors it for
-    invert_colors. Cell text is white, not the original's near-black
-    -- needed now that cells are translucent over this app's dark
-    background (black text would disappear on a translucent dark-red
-    cell the same way it would on a photo background)."""
+    Translucent cells on a diverging red-blue "hot/cold" scale, not
+    solid red-yellow-green (Sept 2026, Ryker sent a screenshot of a
+    broadcast-style strike-zone overlay -- semi-transparent colored
+    cells you can see the background through -- and asked to match
+    that look; then corrected the color direction: "red is hot
+    (good) and blue is cold (bad)"). Plotly's "RdBu_r" scale runs
+    blue (score 0) -> white (mid) -> red (score 3); "RdBu" mirrors it
+    for invert_colors. No on-cell number labels (Ryker: "i don't
+    think we need the numbers, just want the visual") -- the exact
+    average score/sample size is still available on hover
+    (hovertemplate below) for anyone who wants it, just not shown by
+    default so the zone reads as a clean color overlay."""
     zone_width = 2 * ZONE_HALF_WIDTH
     zone_height = ZONE_TOP - ZONE_BOTTOM
     cell_width = zone_width / 3
@@ -181,13 +182,11 @@ def _build_zone_heatmap_figure(title, zone_scores, zone_counts, invert_colors=Fa
     # (1=Up-Left first).
     zone_grid = list(reversed(_ZONE_ROWS))
     z = [[zone_scores.get(zid) for zid in row] for row in zone_grid]
-    cell_labels = [[f"{zone_scores[zid]:.1f}<br>({zone_counts[zid]})" if zid in zone_scores else "—" for zid in row] for row in zone_grid]
     hover_text = [[f"{zone_scores[zid]:.2f} avg score ({zone_counts[zid]} swings)" if zid in zone_scores else "No data yet" for zid in row] for row in zone_grid]
 
-    colorscale = "RdBu_r" if invert_colors else "RdBu"
+    colorscale = "RdBu" if invert_colors else "RdBu_r"
     fig = go.Figure(data=go.Heatmap(
         x=x_centers, y=y_centers, z=z,
-        text=cell_labels, texttemplate="%{text}", textfont=dict(color="#FFFFFF", size=13),
         customdata=hover_text, hovertemplate="%{customdata}<extra></extra>",
         colorscale=colorscale, zmin=0, zmax=3, showscale=True, opacity=0.6,
         colorbar=dict(title="Avg score", tickfont=dict(color=TEXT_CREAM), title_font=dict(color=TEXT_CREAM)),
