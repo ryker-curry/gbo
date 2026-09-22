@@ -47,14 +47,76 @@ Stuff+ number once its pitch type has enough real-game data to have
 been fit -- until then, that type's Stuff+ is None (not a guess) for
 every pitch of that type, bullpen or game alike.
 
+Sept 2026 methodology fix (Ryker's call, after the Aug 31 regression-fit
+version produced a concrete bad result on real data, not just a
+theoretical worry): fitting 10 parameters per pitch type from a few
+dozen to a couple hundred real-game pitches is exactly the small-sample
+regime that overfits and memorizes noise instead of learning anything
+general. Checking Ryker Curry's 2-Seam Fastball Stuff+ of 108 against
+Luke Schimmel's ~88-93 -- despite Curry throwing 3-4 mph slower with
+less horizontal break -- found the fitted model was scoring
+release_side and gyro_degree z-score differences almost entirely, while
+velocity's fitted weight was tiny and even backwards-signed: a
+regression artifact of GBO's still-small per-type training pools, not a
+real signal the model had learned. Stuff+'s weights are now FIXED:
+hand-set once per canonical pitch type (STUFF_PLUS_FIXED_WEIGHTS below),
+informed by outside Stuff+ research (aStuff+, Driveline, Rockland -- the
+same sources Sept 2026's feature expansion drew on) and general
+pitch-design principles for each type's own defining characteristics
+(see STUFF_PLUS_FIXED_WEIGHTS's comment for the per-type reasoning),
+rather than fit from GBO's own limited run-value sample. Weights differ
+BY pitch type (a fastball's quality is driven by different physical
+traits than a curveball's) but are still fixed WITHIN a type -- every
+4-Seam Fastball, from any pitcher, scores against the same 4-Seam
+Fastball weight set. Everything else about the pipeline is unchanged --
+each pitch type still gets its own real, data-derived feature_baseline/
+prediction_baseline (plain mean/stdev, not a fitted parameter, and far
+more sample-efficient than a regression coefficient), so composites are
+still standardized and rescaled against GBO's own team population, just
+combined with a fixed rather than a fitted weight per feature. run_value
+is no longer needed to compute a Stuff+ number at all -- run_value
+remains part of fit_stuff_plus_model's input shape for backward
+compatibility with its existing caller, but is now used only
+defensively (to keep scoping to real, linkable game pitches), not to
+fit anything. MIN_STUFF_TRAINING_PITCHES dropped from 80 to 20,
+matching MIN_BASELINE_PITCHES, since descriptive statistics need far
+less data than fitting a regression.
+
+Sept 2026 methodology fix, Changeup velocity differential (Ryker's
+follow-up call, same week): the per-type weights above initially
+weighted a changeup's own standalone velocity near zero, with the
+module docstring flagging as an open gap that a changeup's real value
+driver -- velocity SEPARATION from the pitcher's own fastball -- wasn't
+something this module could see. That gap is now closed for velocity
+specifically: velocity_differential (see STUFF_PLUS_FEATURE_NAMES) is
+each pitch's own velocity minus that SAME pitcher's own average
+velocity on their primary fastball (whichever of 4-Seam/2-Seam Fastball
+they throw more, from profile_queries.
+team_pitcher_primary_fastball_velocity), sign-flipped so more separation
+is a bigger positive number. Weighted only for Changeup for now (see
+STUFF_PLUS_FIXED_WEIGHTS's comment), whose standalone velocity weight
+dropped to a hard 0.0 now that the differential captures what actually
+matters. This is still velocity-only, not movement differential (a
+changeup's fade/tumble relative to the pitcher's own fastball shape is
+a real thing too, per the plan doc, and remains unimplemented -- see
+the V1 simplifications note below).
+
 V1 simplifications, called out explicitly rather than silently guessed
 at (see plan doc sections 4 and 8 for the open items these map to):
-  - Stuff+'s regression is a simple per-type linear fit, not the
-    fastball-differential-weighted design the plan doc sketched, and
-    nowhere near the real FanGraphs decision-tree model -- GBO's pitcher
-    count can't support anything more complex without overfitting to
-    this specific roster. Revisit once there's a full season or more of
-    real-game Rapsodo data to check how well this actually predicts.
+  - Stuff+ uses a fixed, hand-set weight per feature per pitch type (see
+    the Sept 2026 methodology fixes above), not the fastball-
+    differential-weighted design the plan doc sketched, and nowhere
+    near the real FanGraphs decision-tree model -- GBO's pitcher count
+    can't support fitting weights at all without overfitting to this
+    specific roster, let alone something as complex as a decision tree.
+    Velocity differential from a pitcher's own fastball is now captured
+    for Changeup (see above), but MOVEMENT differential isn't -- every
+    feature besides velocity_differential still compares a pitch only
+    to its own pitch type's team population, never to that same
+    pitcher's own fastball shape. Revisit the fixed weights themselves
+    once there's a full season or more of real-game Rapsodo data to
+    sanity-check them against, and revisit whether per-type fitting
+    becomes viable once there's enough data to support it.
   - Location+ buckets by (attack zone tier x pitch type) only -- it
     skips the count-group split the plan doc flagged as a possible
     refinement, to avoid spreading GBO's early game-pitch volume across
@@ -70,8 +132,6 @@ at (see plan doc sections 4 and 8 for the open items these map to):
 
 from statistics import mean, stdev
 
-import numpy as np
-
 from strike_zone import classify_attack_zone
 
 # Same floor as command_metrics.py's MIN_BASELINE_PITCHES, same caveat:
@@ -80,33 +140,38 @@ from strike_zone import classify_attack_zone
 # statistically rigorous minimum -- easy to raise once GBO has more of a
 # season's worth of data to see how noisy these scores actually are
 # below that in practice. Used by Location+ and by arsenal_summary's
-# per-pitcher "Reliable" flag -- NOT by Stuff+ anymore, which fits real
-# parameters and needs a bigger floor (see MIN_STUFF_TRAINING_PITCHES).
+# per-pitcher "Reliable" flag; Stuff+ uses the same floor via its own
+# MIN_STUFF_TRAINING_PITCHES constant below (kept as a separate constant
+# so the two can diverge again if that ever proves necessary).
 MIN_BASELINE_PITCHES = 20
 
-# Fitting Stuff+'s regression needs enough RUN-VALUE-BEARING (real-game)
-# pitches to trust 10 fitted parameters (9 features + intercept -- see
-# STUFF_PLUS_FEATURE_NAMES below, expanded Sept 2026 per Ryker's review
-# of the aStuff+/Driveline/Rockland sources against what GBO's own
-# Rapsodo import already captures but Stuff+ wasn't using) -- roughly
-# 8-10 observations per parameter is a standard rule of thumb for a
-# linear fit, rounded up to a clean number here (was 40 for the
-# original 5 parameters/4 features -- raised in lockstep with the
-# feature count, not left at the old floor, since an under-powered fit
-# isn't a more "valid" model just because it still runs). This is a
-# team-wide, PER PITCH TYPE floor (see fit_stuff_plus_model) -- distinct
-# from MIN_BASELINE_PITCHES above, which just gates a plain mean/stdev.
-# release_extension was DROPPED from the feature list (see
-# STUFF_PLUS_FEATURE_NAMES comment) after a live-data check found it's
-# not just missing sometimes, it's systematically wrong -- so this is
-# 9 features, not the 10 briefly considered, and the floor is 80, not
-# 90. Real consequence, checked against live data: 4-Seam Fastball
-# (135 complete training pitches) clears it comfortably, but 2-Seam
-# Fastball (47), Slider (43), Changeup (29), Curveball (14), Splitter
-# (8), and Cutter (5) all fall short and will show no Stuff+ until
-# more real-game Rapsodo data accumulates for those types. That's the
-# honest tradeoff of fitting more parameters, not a bug.
-MIN_STUFF_TRAINING_PITCHES = 80
+# Sept 2026 (see module docstring's "Sept 2026 methodology fix"): Stuff+'s
+# weights are now fixed, not fitted, so this floor no longer needs to
+# cover 10 regression parameters -- it's gating a set of plain
+# per-pitch-type mean/stdev descriptive statistics (feature_baseline/
+# prediction_baseline), the same kind of statistic MIN_BASELINE_PITCHES
+# above already gates for Location+ and arsenal_summary. Lowered from 80
+# (the old regression-era floor, sized for 10 fitted parameters at
+# roughly 8-10 observations each) to 20 to match. Still a team-wide, PER
+# PITCH TYPE floor (see fit_stuff_plus_model), kept as its own constant
+# rather than merged into MIN_BASELINE_PITCHES in case Stuff+ and
+# Location+/arsenal ever need to diverge again.
+MIN_STUFF_TRAINING_PITCHES = 20
+
+# Sept 2026 (Changeup velocity differential -- see module docstring):
+# floor for trusting a PITCHER'S OWN average velocity on their primary
+# fastball, used by profile_queries.team_pitcher_primary_fastball_velocity
+# to build the reference velocity_differential is computed against. This
+# is a per-pitcher sample, not one of this module's team-wide pools, so
+# it's deliberately much smaller than MIN_BASELINE_PITCHES/
+# MIN_STUFF_TRAINING_PITCHES above -- checked against live data, every
+# one of GBO's real-game changeup-throwers has at least 1 real-game
+# reading of their primary fastball, most have 6+, the thinnest has
+# exactly 1. 3 is a starting floor, not a statistically rigorous
+# minimum, chosen so a personal average isn't built from a single pitch
+# -- easy to raise once there's more of a season's data to see how
+# noisy this actually is below that in practice.
+MIN_PITCHER_FASTBALL_VELO_PITCHES = 3
 
 
 # ---------------------------------------------------------------------------
@@ -153,8 +218,217 @@ MIN_STUFF_TRAINING_PITCHES = 80
 STUFF_PLUS_FEATURE_NAMES = (
     "velocity", "vb_trajectory", "hb_trajectory", "total_spin",
     "spin_axis_offset", "spin_efficiency", "gyro_degree",
-    "release_height", "release_side",
+    "release_height", "release_side", "velocity_differential",
 )
+
+# Sept 2026 methodology fix (see module docstring): fixed, hand-set
+# per-feature weights, one set PER CANONICAL PITCH TYPE, replacing the
+# per-pitch-type regression fit that used to produce quality_weights.
+# Same "higher = better" sign convention the old fitted weights used (a
+# positive weight means more of that standardized feature predicts a
+# BETTER pitch), and the same composite math in stuff_plus() below
+# consumes whichever type's dict was selected exactly as it consumed the
+# old fitted coefficients -- only where the numbers come from changed,
+# not how they're used.
+#
+# Why per-type rather than one shared set (Ryker's call, after seeing
+# the first shared-weight version): a fastball's quality genuinely comes
+# from different physical traits than a breaking ball's or a
+# changeup's, so forcing every type through the same scorecard was
+# always a simplification, not a deliberate finding. Every dict below
+# uses the SAME feature list and SAME sign convention (positive =
+# better) and keeps release_height/release_side at zero across the
+# board -- that zeroing isn't type-specific, it's the direct fix for
+# the small-sample regression artifact the Sept 2026 methodology fix
+# above documents, and nothing about moving to per-type weights changes
+# that reasoning.
+#
+# Reasoning per type, drawing on the same outside Stuff+ research as the
+# original shared weights (Salorio's aStuff+, Driveline's "What Is
+# Stuff" primer, Rockland Peak Performance's Stuff+ explainer) plus
+# general, widely-documented pitch-design characteristics of each type
+# -- the latter is standard pitching-instruction knowledge (what a good
+# example of each pitch type looks like physically), not a claim those
+# three sources specifically validated per pitch type, and is the least
+# confident part of this scorecard -- flag anything that looks off once
+# real pitchers are scored against it:
+#   - 4-Seam Fastball: velocity and spin_efficiency both weighted high
+#     -- efficient (mostly-backspin) spin at high velocity is what
+#     produces "ride"/carry, a 4-seam's main swing-and-miss driver.
+#     vb_trajectory weighted above hb_trajectory (carry matters more
+#     than arm-side run for a 4-seamer); gyro_degree penalized hardest
+#     of any type, since gyro spin directly undercuts the backspin a
+#     4-seamer's value depends on.
+#   - 2-Seam Fastball: velocity weighted the same as 4-seam, but
+#     hb_trajectory/vb_trajectory swapped in emphasis -- horizontal
+#     run/sink is the defining 2-seam characteristic, not vertical
+#     carry. spin_efficiency and the gyro_degree penalty both eased
+#     versus 4-seam, since 2-seamers can add real seam-shifted-wake
+#     movement even off less purely-efficient spin.
+#   - Cutter: velocity weighted close to the fastballs (cutters sit
+#     near fastball velocity and lose value if they slow down too much
+#     toward slider territory); hb_trajectory (the signature late cut)
+#     weighted above vb_trajectory, unlike either fastball.
+#   - Slider: velocity weighted well below the fastballs -- a slider's
+#     value is centered on movement/bite, not raw speed. hb_trajectory
+#     (sweep) weighted highest of any feature for this type.
+#     spin_efficiency and the gyro_degree penalty both eased well below
+#     the fastballs' -- unlike a fastball, a slider with meaningful gyro
+#     ("bullet") spin isn't necessarily a worse slider, so this type
+#     doesn't punish it the way 4-Seam Fastball does.
+#   - Curveball: velocity weighted lowest of any type -- depth/shape,
+#     not speed, is what makes a curveball good. vb_trajectory (vertical
+#     drop) weighted highest of any feature for any type; total_spin
+#     also weighted above every other type, since spin rate is a
+#     particularly well-established driver of curveball depth
+#     specifically (unlike for the other types, where it's mostly
+#     redundant with movement/efficiency).
+#   - Changeup: standalone velocity weighted to ZERO, not just low --
+#     superseded by velocity_differential (see that feature's own note
+#     below), which is what actually captures a changeup's real value
+#     driver now. hb_trajectory (arm-side fade) weighted above
+#     vb_trajectory. gyro_degree left at a flat 0.0 -- no clear-cut
+#     directional case either way for a changeup, so left neutral rather
+#     than guessed.
+#   - Splitter: vb_trajectory (the signature sudden vertical drop)
+#     weighted highest of any feature for this type. total_spin given a
+#     small NEGATIVE weight, the only type where it is -- splitters are
+#     commonly described as intentionally low-spin pitches, where LESS
+#     spin is part of what produces the tumbling action, not more. This
+#     is the single most speculative weight in this whole scorecard
+#     (least literature specifically on splitters of the three sources
+#     reviewed, and GBO's own Splitter sample is currently far below
+#     MIN_STUFF_TRAINING_PITCHES, so it won't be exercised until there's
+#     more data anyway) -- flag to revisit first if anything here looks
+#     wrong once Splitter has enough pitches to actually score.
+#
+# velocity_differential (Sept 2026, Ryker's follow-up call): this
+# pitch's own velocity minus the SAME pitcher's own average velocity on
+# their primary fastball (see profile_queries.
+# team_pitcher_primary_fastball_velocity), sign-flipped so a bigger
+# gap -- more separation -- is a bigger POSITIVE number, matching this
+# module's "higher = better" convention. Currently weighted only for
+# Changeup, where velocity separation from the fastball is widely
+# treated as the pitch's central value driver, well ahead of the
+# changeup's own standalone velocity (which is why Changeup's own
+# "velocity" entry is zeroed out above, not just lowered). Left at 0.0
+# for every other type for now -- Splitter is a plausible future
+# candidate for the same reasoning (a splitter also plays off the
+# fastball), deliberately not added yet since Splitter doesn't have
+# enough real-game data to fit a model at all right now (see
+# MIN_STUFF_TRAINING_PITCHES), so there's nothing to validate it
+# against; revisit once it does. A pitcher whose own fastball reference
+# can't be computed (see MIN_PITCHER_FASTBALL_VELO_PITCHES) simply has
+# this feature come back None for their pitches -- same graceful
+# degradation as any other missing feature, not an error.
+#
+# A pitch type with no entry below (the unused legacy "Fastball" catalog
+# row -- see pitch_type_config.py's docstring for why it's unused going
+# forward -- or any future/unrecognized label) falls back to 4-Seam
+# Fastball's weights via _stuff_plus_weights_for, matching the app's
+# existing convention elsewhere that an unclassified straight fastball
+# reading is assumed to be 4-seam (see migrations/
+# migrate_fastball_to_4seam.py).
+#
+# Not a validated set of numbers -- a starting point Ryker can adjust
+# per type once he's seen how each one scores real pitchers, same
+# caveat as PITCHING_PLUS_STUFF_WEIGHT below.
+STUFF_PLUS_FIXED_WEIGHTS = {
+    "4-Seam Fastball": {
+        "velocity": 3.0,
+        "vb_trajectory": 1.75,
+        "hb_trajectory": 0.75,
+        "total_spin": 0.5,
+        "spin_axis_offset": 0.25,
+        "spin_efficiency": 2.0,
+        "gyro_degree": -1.0,
+        "release_height": 0.0,
+        "release_side": 0.0,
+        "velocity_differential": 0.0,
+    },
+    "2-Seam Fastball": {
+        "velocity": 3.0,
+        "vb_trajectory": 0.75,
+        "hb_trajectory": 1.75,
+        "total_spin": 0.5,
+        "spin_axis_offset": 0.25,
+        "spin_efficiency": 1.25,
+        "gyro_degree": -0.5,
+        "release_height": 0.0,
+        "release_side": 0.0,
+        "velocity_differential": 0.0,
+    },
+    "Cutter": {
+        "velocity": 2.25,
+        "vb_trajectory": 1.0,
+        "hb_trajectory": 1.5,
+        "total_spin": 0.5,
+        "spin_axis_offset": 0.25,
+        "spin_efficiency": 1.0,
+        "gyro_degree": -0.5,
+        "release_height": 0.0,
+        "release_side": 0.0,
+        "velocity_differential": 0.0,
+    },
+    "Slider": {
+        "velocity": 1.5,
+        "vb_trajectory": 1.0,
+        "hb_trajectory": 2.0,
+        "total_spin": 0.75,
+        "spin_axis_offset": 0.25,
+        "spin_efficiency": 0.5,
+        "gyro_degree": -0.25,
+        "release_height": 0.0,
+        "release_side": 0.0,
+        "velocity_differential": 0.0,
+    },
+    "Curveball": {
+        "velocity": 0.75,
+        "vb_trajectory": 2.25,
+        "hb_trajectory": 0.75,
+        "total_spin": 1.0,
+        "spin_axis_offset": 0.25,
+        "spin_efficiency": 1.25,
+        "gyro_degree": -0.5,
+        "release_height": 0.0,
+        "release_side": 0.0,
+        "velocity_differential": 0.0,
+    },
+    "Changeup": {
+        "velocity": 0.0,
+        "vb_trajectory": 1.25,
+        "hb_trajectory": 1.5,
+        "total_spin": 0.25,
+        "spin_axis_offset": 0.25,
+        "spin_efficiency": 0.75,
+        "gyro_degree": 0.0,
+        "release_height": 0.0,
+        "release_side": 0.0,
+        "velocity_differential": 2.5,
+    },
+    "Splitter": {
+        "velocity": 0.5,
+        "vb_trajectory": 2.0,
+        "hb_trajectory": 0.75,
+        "total_spin": -0.5,
+        "spin_axis_offset": 0.25,
+        "spin_efficiency": 0.25,
+        "gyro_degree": -0.25,
+        "release_height": 0.0,
+        "release_side": 0.0,
+        "velocity_differential": 0.0,
+    },
+}
+
+
+def _stuff_plus_weights_for(pitch_type_label):
+    """STUFF_PLUS_FIXED_WEIGHTS[pitch_type_label], or 4-Seam Fastball's
+    weights as a fallback for any label with no entry (see
+    STUFF_PLUS_FIXED_WEIGHTS's comment for why 4-Seam Fastball
+    specifically is the fallback). Always returns a fresh dict copy, not
+    a reference to the shared module-level one, so a caller can't
+    accidentally mutate it through a returned model."""
+    return dict(STUFF_PLUS_FIXED_WEIGHTS.get(pitch_type_label, STUFF_PLUS_FIXED_WEIGHTS["4-Seam Fastball"]))
 
 
 def _spin_axis_offset(spin_axis_degrees):
@@ -178,7 +452,7 @@ def _spin_axis_offset(spin_axis_degrees):
     return min(degrees, 360.0 - degrees)
 
 
-def _stuff_plus_features(rapsodo_pitch):
+def _stuff_plus_features(rapsodo_pitch, pitcher_fastball_velo=None):
     """Extract Stuff+'s physical inputs from one RapsodoPitch, in the form
     used consistently for BOTH fitting and scoring. vb_trajectory/
     hb_trajectory (actual measured vertical/horizontal break) are taken
@@ -196,9 +470,21 @@ def _stuff_plus_features(rapsodo_pitch):
     release_extension was deliberately left out here -- see
     STUFF_PLUS_FEATURE_NAMES's comment for the live-data finding that
     ruled it out (a widespread literal-0.000 sentinel in real-game
-    Rapsodo Live captures, not a real reading)."""
+    Rapsodo Live captures, not a real reading).
+
+    pitcher_fastball_velo (Sept 2026, Ryker's follow-up call): this SAME
+    pitcher's own average velocity on their primary fastball, from
+    profile_queries.team_pitcher_primary_fastball_velocity -- feeds
+    velocity_differential, currently the only feature this function
+    can't compute purely from rapsodo_pitch's own columns. None (the
+    default) when the caller has no per-pitcher reference to give
+    (nothing fit yet, or this pitcher's own fastball sample is too thin
+    -- see MIN_PITCHER_FASTBALL_VELO_PITCHES), in which case
+    velocity_differential comes back None too, same graceful
+    degradation as a missing physical reading."""
+    velocity = float(rapsodo_pitch.velocity) if rapsodo_pitch.velocity is not None else None
     return {
-        "velocity": float(rapsodo_pitch.velocity) if rapsodo_pitch.velocity is not None else None,
+        "velocity": velocity,
         "vb_trajectory": abs(float(rapsodo_pitch.vb_trajectory)) if rapsodo_pitch.vb_trajectory is not None else None,
         "hb_trajectory": abs(float(rapsodo_pitch.hb_trajectory)) if rapsodo_pitch.hb_trajectory is not None else None,
         "total_spin": float(rapsodo_pitch.total_spin) if rapsodo_pitch.total_spin is not None else None,
@@ -207,86 +493,126 @@ def _stuff_plus_features(rapsodo_pitch):
         "gyro_degree": float(rapsodo_pitch.gyro_degree) if rapsodo_pitch.gyro_degree is not None else None,
         "release_height": float(rapsodo_pitch.release_height) if rapsodo_pitch.release_height is not None else None,
         "release_side": float(rapsodo_pitch.release_side) if rapsodo_pitch.release_side is not None else None,
+        # Sign-flipped (reference minus this pitch, not this pitch minus
+        # reference) so MORE separation from the pitcher's own fastball
+        # is a bigger POSITIVE number -- matching this module's
+        # "higher = better" convention. A changeup that's slower than
+        # its own pitcher's fastball (the normal case) gets a positive
+        # value here; a changeup thrown nearly as hard as the fastball
+        # (little deception) gets a value near zero or negative.
+        "velocity_differential": (
+            pitcher_fastball_velo - velocity
+            if pitcher_fastball_velo is not None and velocity is not None
+            else None
+        ),
     }
 
 
-def fit_stuff_plus_model(training_pairs):
+def fit_stuff_plus_model(training_pairs, pitch_type_label, pitcher_fastball_velocities=None):
     """training_pairs: list of (RapsodoPitch, run_value) for ONE
     canonical pitch type -- caller groups by pitch_type_id/normalized
     name first (same convention every baseline in this module uses) and
     supplies ONLY pitches that have a real run_value, i.e. a RapsodoPitch
     linked to a GamePitch whose run_value is set (see
-    profile_queries.team_stuff_plus_training_pitches). A bullpen-only
-    reading has no run_value to learn from and must never appear here --
-    that's what makes this "trained to RV" rather than the old fixed
-    equal-weighted guess.
+    profile_queries.team_stuff_plus_training_pitches). pitch_type_label
+    is that SAME canonical pitch type's name (PitchType.type_name) --
+    it's what selects which of STUFF_PLUS_FIXED_WEIGHTS's per-type
+    dicts this model uses (see _stuff_plus_weights_for); passing the
+    wrong label silently scores this type against another type's
+    weights, so callers must pass the same label they grouped
+    training_pairs by. Kept training_pairs' shape for backward
+    compatibility with the existing caller, but as of the Sept 2026
+    methodology fix (see module docstring) run_value is no longer fit
+    against anything -- Stuff+'s weights are now fixed per type, not a
+    per-pitch-type regression. run_value is still required here
+    defensively, to keep this scoped to real, run-value-linkable game
+    pitches rather than bullpen-only readings, matching every other
+    baseline builder in this module's team-scoping convention -- not
+    because anything is learned from its value.
 
-    Fits a linear regression of run_value on this type's 9 standardized
-    physical features via ordinary least squares (numpy.linalg.lstsq).
-    A full decision-tree model (what real FanGraphs Stuff+ uses) needs
-    far more distinct pitchers than GBO has without just memorizing this
-    roster; a simple per-type linear fit is the most that's honestly
-    supportable at this sample size (see module docstring). Training
-    rows missing ANY of the 4 features are dropped (listwise) --
+    pitcher_fastball_velocities: optional {player_id: float}, each
+    pitcher's own average primary-fastball velocity (see
+    profile_queries.team_pitcher_primary_fastball_velocity) -- feeds
+    velocity_differential (see _stuff_plus_features), currently only
+    given a nonzero weight for Changeup. Omitted (None), every row's
+    velocity_differential simply comes back None, same as any other
+    missing feature. The dict this model is fit with is stored on the
+    returned model itself (see below) so stuff_plus() can look a
+    pitcher's own reference back up at SCORING time too, without every
+    caller needing to pass it through separately.
+
+    Computes feature_baseline (this type's training-population mean/
+    stdev per feature) and prediction_baseline (the mean/stdev of the
+    fixed-weight composite across the training population) the same way
+    the old fitted version did -- both are plain descriptive statistics,
+    not fitted parameters, so they stay real and GBO-data-derived even
+    though the weights themselves no longer are. This is what lets a
+    raw composite be standardized against this pitch type's own team
+    population and re-centered so 100 = this type's own team average and
+    10 points = 1 SD, same scale as every other score in this module.
+
+    A training row is required to have every feature THIS TYPE actually
+    weights nonzero (dropped listwise if any of those are missing --
     imputing a value into an already-small sample would just be
-    inventing data.
-
-    Lower run_value is better for the pitcher (same sign convention as
-    location_plus), so every fitted coefficient is NEGATED before being
-    stored as that feature's "quality weight" -- a positive quality
-    weight means more of that feature predicts BETTER outcomes, matching
-    the "higher composite = better" convention every other score in this
-    module uses.
+    inventing data), but NOT features this type weights at 0.0. That
+    matters as of the Sept 2026 velocity_differential addition: most
+    types weight it 0.0, and requiring it anyway would silently shrink
+    their training populations over a feature their own composite never
+    uses (the same latent issue release_height/release_side would have
+    caused too, now fixed for all of them at once).
 
     Returns None if fewer than MIN_STUFF_TRAINING_PITCHES complete rows
-    are available -- not enough to trust 10 fitted parameters yet.
-    Otherwise a model dict:
+    are available -- descriptive statistics need far less data than a
+    regression fit did, but a baseline built from a handful of pitches
+    still swings wildly with every new pitch logged (same caveat
+    MIN_BASELINE_PITCHES documents for Location+). Otherwise a model
+    dict:
         {"feature_baseline": {feature: (mean, stdev)},
          "quality_weights": {feature: float},
          "prediction_baseline": (mean, stdev),
+         "pitcher_fastball_velocities": {player_id: float},
          "n": int}
-    feature_baseline is this type's training-population mean/stdev per
-    feature (needed to standardize any future pitch, bullpen or game,
-    the same way the training data was standardized). prediction_baseline
-    is the mean/stdev of the fitted composite ACROSS the training
-    population -- it's what lets a raw composite be re-centered so 100 =
-    this type's own team average and 10 points = 1 SD, same scale as
-    every other score in this module."""
+    quality_weights is pitch_type_label's own entry in
+    STUFF_PLUS_FIXED_WEIGHTS (or 4-Seam Fastball's, as a fallback --
+    see _stuff_plus_weights_for), copied per call so a caller can't
+    accidentally mutate the shared module-level dict through a returned
+    model. feature_baseline only has entries for features this type
+    actually weights nonzero -- stuff_plus() already skips any weight
+    whose feature_baseline entry is missing, so this needs no special
+    handling there."""
+    weights_for_type = _stuff_plus_weights_for(pitch_type_label)
+    required_features = tuple(name for name in STUFF_PLUS_FEATURE_NAMES if weights_for_type.get(name, 0.0))
+    pitcher_fastball_velocities = dict(pitcher_fastball_velocities or {})
+
     rows = []
     for rapsodo_pitch, run_value in training_pairs:
         if run_value is None:
             continue
-        features = _stuff_plus_features(rapsodo_pitch)
-        if any(features[name] is None for name in STUFF_PLUS_FEATURE_NAMES):
+        pitcher_velo = pitcher_fastball_velocities.get(rapsodo_pitch.player_id)
+        features = _stuff_plus_features(rapsodo_pitch, pitcher_velo)
+        if any(features[name] is None for name in required_features):
             continue
-        rows.append((features, float(run_value)))
+        rows.append(features)
 
     n = len(rows)
     if n < MIN_STUFF_TRAINING_PITCHES:
         return None
 
     feature_baseline = {}
-    for name in STUFF_PLUS_FEATURE_NAMES:
-        vals = [f[name] for f, _rv in rows]
+    for name in required_features:
+        vals = [f[name] for f in rows]
         # `or 1e-9` guards a (practically impossible, for continuous
         # physical readings) exactly-zero-variance feature from a
         # division-by-zero -- when every value is identical, (value -
         # mean) is also 0 for every row, so the guard changes nothing.
         feature_baseline[name] = (mean(vals), stdev(vals) or 1e-9)
 
-    x = np.ones((n, len(STUFF_PLUS_FEATURE_NAMES) + 1))
-    for j, name in enumerate(STUFF_PLUS_FEATURE_NAMES):
-        b_mean, b_sd = feature_baseline[name]
-        x[:, j + 1] = [(f[name] - b_mean) / b_sd for f, _rv in rows]
-    y = np.array([rv for _f, rv in rows])
-
-    coeffs, *_rest = np.linalg.lstsq(x, y, rcond=None)
-    quality_weights = {name: -float(coeffs[j + 1]) for j, name in enumerate(STUFF_PLUS_FEATURE_NAMES)}
+    quality_weights = weights_for_type
 
     composites = [
         sum(quality_weights[name] * (f[name] - feature_baseline[name][0]) / feature_baseline[name][1]
-            for name in STUFF_PLUS_FEATURE_NAMES)
-        for f, _rv in rows
+            for name in required_features)
+        for f in rows
     ]
     prediction_baseline = (mean(composites), stdev(composites))
 
@@ -294,6 +620,7 @@ def fit_stuff_plus_model(training_pairs):
         "feature_baseline": feature_baseline,
         "quality_weights": quality_weights,
         "prediction_baseline": prediction_baseline,
+        "pitcher_fastball_velocities": pitcher_fastball_velocities,
         "n": n,
     }
 
@@ -307,6 +634,14 @@ def stuff_plus(rapsodo_pitch, model):
     enough real-game data to fit it -- see MIN_STUFF_TRAINING_PITCHES) or
     this pitch has none of the features the model needs.
 
+    No separate pitcher_fastball_velocities parameter here (unlike
+    fit_stuff_plus_model) -- this pitch's own pitcher's fastball
+    reference is looked up from model["pitcher_fastball_velocities"]
+    (see fit_stuff_plus_model), keyed by rapsodo_pitch.player_id, so
+    every existing caller of this function keeps working unchanged and
+    automatically gets velocity_differential once the model it's
+    scoring against was fit with it.
+
     Composite is the raw weighted sum of standardized features (a
     feature this pitch is missing simply drops out of the sum, same as
     assuming that feature sits at its own team average -- there's no
@@ -316,7 +651,8 @@ def stuff_plus(rapsodo_pitch, model):
     inconsistently pitch to pitch)."""
     if model is None:
         return None
-    features = _stuff_plus_features(rapsodo_pitch)
+    pitcher_velo = model.get("pitcher_fastball_velocities", {}).get(rapsodo_pitch.player_id)
+    features = _stuff_plus_features(rapsodo_pitch, pitcher_velo)
     composite = 0.0
     used_any = False
     for name, weight in model["quality_weights"].items():
