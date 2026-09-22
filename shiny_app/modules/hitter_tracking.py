@@ -150,14 +150,26 @@ def _build_zone_heatmap_figure(title, zone_scores, zone_counts, invert_colors=Fa
     sits, same as every pitcher-side zone chart, while keeping the
     built-in Heatmap hover/colorbar the original had (a hand-drawn
     shapes version loses per-cell hover; positioning the Heatmap
-    trace itself at real coordinates keeps it for free). Green = good
+    trace itself at real coordinates keeps it for free). Blue = good
     contact, red = poor -- inverted for a pitcher-facing view (not
     used on this page, kept for parity with the original's shared
     helper signature in case bullpen_tracking.py's own port wants the
     mirror view later). Shared by both this page's own heatmap_body
     AND hitter_profile.py's Contact Quality by Zone view (both import
     this same function), so this one change restyles both places at
-    once."""
+    once.
+
+    Translucent cells on a diverging red-blue scale, not solid red-
+    yellow-green (Sept 2026, Ryker sent a screenshot of a broadcast-
+    style strike-zone overlay -- semi-transparent colored cells you
+    can see the background through -- and asked to match that look).
+    Plotly's "RdBu" scale runs red (score 0) -> white (mid) -> blue
+    (score 3), matching the red=poor/blue=good direction "RdYlGn"
+    used, just a different hue pair; "RdBu_r" mirrors it for
+    invert_colors. Cell text is white, not the original's near-black
+    -- needed now that cells are translucent over this app's dark
+    background (black text would disappear on a translucent dark-red
+    cell the same way it would on a photo background)."""
     zone_width = 2 * ZONE_HALF_WIDTH
     zone_height = ZONE_TOP - ZONE_BOTTOM
     cell_width = zone_width / 3
@@ -172,12 +184,12 @@ def _build_zone_heatmap_figure(title, zone_scores, zone_counts, invert_colors=Fa
     cell_labels = [[f"{zone_scores[zid]:.1f}<br>({zone_counts[zid]})" if zid in zone_scores else "—" for zid in row] for row in zone_grid]
     hover_text = [[f"{zone_scores[zid]:.2f} avg score ({zone_counts[zid]} swings)" if zid in zone_scores else "No data yet" for zid in row] for row in zone_grid]
 
-    colorscale = "RdYlGn_r" if invert_colors else "RdYlGn"
+    colorscale = "RdBu_r" if invert_colors else "RdBu"
     fig = go.Figure(data=go.Heatmap(
         x=x_centers, y=y_centers, z=z,
-        text=cell_labels, texttemplate="%{text}", textfont=dict(color="#111111", size=13),
+        text=cell_labels, texttemplate="%{text}", textfont=dict(color="#FFFFFF", size=13),
         customdata=hover_text, hovertemplate="%{customdata}<extra></extra>",
-        colorscale=colorscale, zmin=0, zmax=3, showscale=True,
+        colorscale=colorscale, zmin=0, zmax=3, showscale=True, opacity=0.6,
         colorbar=dict(title="Avg score", tickfont=dict(color=TEXT_CREAM), title_font=dict(color=TEXT_CREAM)),
         xgap=2, ygap=2,
     ))
