@@ -216,3 +216,10 @@ HITTING_SITUATIONAL = [
 HITTING_CONTACT_ZONE = [
     ('Contact Quality by Zone / Pitch Type', 'A heat map of the 0-3 Barrel/Solid/Weak/Miss contact-quality scale, broken out by where in the strike zone (or which pitch type) the contact happened -- shows WHERE and on WHAT a hitter does the most damage, from real game at-bats only (not simulated Hitter Tracking sessions). Same scoring scale Hitter Tracking uses elsewhere in the app.'),
 ]
+
+
+HITTING_SPRAY = [
+    ('Spray Chart', 'Every base hit (1B/2B/3B/HR) plotted at its recorded field location (batted-ball x/y from Game Tracking), colored by hit type -- matches Baseball Savant\'s own default "BASE HITS" spray chart. Outs are not plotted, same as Savant\'s default view.'),
+    ('Infield Slice Chart', "The share of all batted balls with a projected distance of 200 ft or less from home plate that land in each of five equal 18-degree field wedges, left field line to right field line -- Baseball Savant's own definition and threshold for this chart. A higher share in a wedge means more weak/short contact hit that direction; wedges are raw field side (left/center/right), not adjusted for batter handedness, same as Savant's own non-mirrored treatment."),
+    ('Why hits-only on the Spray Chart', 'Ryker\'s own call (Sept 2026), matching Savant\'s default BASE HITS view rather than plotting every ball in play -- outs would clutter the picture and this chart is meant to answer "where does this hitter get his hits," not "where does he hit the ball."'),
+]
