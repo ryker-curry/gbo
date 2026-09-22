@@ -225,6 +225,58 @@ def team_stuff_plus_training_pitches(db):
     return by_type
 
 
+def team_pitcher_primary_fastball_velocity(db):
+    """{player_id: average velocity (float)} of each pitcher's own
+    PRIMARY fastball -- whichever of 4-Seam Fastball/2-Seam Fastball
+    that pitcher has thrown more of in real games -- computed from that
+    SAME pitcher's own real-game (GamePitch-linked; bullpen excluded)
+    RapsodoPitch readings of that one type. Feeds pitch_grading.
+    STUFF_PLUS_FEATURE_NAMES's velocity_differential, currently only
+    weighted for Changeup (Ryker's Sept 2026 follow-up call, after
+    noting Stuff+ couldn't see a changeup's real value driver --
+    velocity SEPARATION from a pitcher's own fastball -- without this).
+
+    "Primary" is picked per pitcher, not assumed team-wide, because not
+    every pitcher throws both fastball types -- checked against live
+    data, 2 of GBO's real-game changeup-throwers have logged real-game
+    2-Seam Fastball only, zero 4-Seam Fastball, so always comparing to
+    4-Seam Fastball specifically would leave them with no differential
+    at all.
+
+    A pitcher whose primary fastball type has fewer than
+    pitch_grading.MIN_PITCHER_FASTBALL_VELO_PITCHES real-game readings
+    is left out of the returned dict entirely, rather than given a
+    value built from 1-2 pitches -- callers already treat a missing
+    player_id as "no differential available" the same way every other
+    optional feature in this module degrades (see
+    pitch_grading._stuff_plus_features)."""
+    from statistics import mean
+    from analytics.pitch_grading import MIN_PITCHER_FASTBALL_VELO_PITCHES
+
+    rows = (
+        db.query(RapsodoPitch.player_id, RapsodoPitch.velocity, PitchType.type_name)
+        .join(GamePitch, RapsodoPitch.game_pitch_id == GamePitch.game_pitch_id)
+        .join(PitchType, RapsodoPitch.pitch_type_id == PitchType.pitch_type_id)
+        .filter(PitchType.type_name.in_(["4-Seam Fastball", "2-Seam Fastball"]))
+        .filter(RapsodoPitch.velocity.isnot(None))
+        .all()
+    )
+    by_player_type = {}
+    for player_id, velocity, type_name in rows:
+        by_player_type.setdefault(player_id, {}).setdefault(type_name, []).append(float(velocity))
+
+    result = {}
+    for player_id, velocities_by_type in by_player_type.items():
+        # Whichever fastball type has more real-game readings for THIS
+        # pitcher -- ties broken arbitrarily by dict iteration order,
+        # not worth a tiebreak rule at GBO's current data volume.
+        primary_type, velocities = max(velocities_by_type.items(), key=lambda item: len(item[1]))
+        if len(velocities) < MIN_PITCHER_FASTBALL_VELO_PITCHES:
+            continue
+        result[player_id] = mean(velocities)
+    return result
+
+
 def team_stuff_plus_baselines(db):
     """{pitch_type_label: model} across every canonical pitch type that
     has enough real-game training data -- see
@@ -244,9 +296,21 @@ def team_stuff_plus_baselines(db):
     score ANY pitch of that type, bullpen included, once it exists."""
     from analytics.pitch_grading import fit_stuff_plus_model
     training_by_type = team_stuff_plus_training_pitches(db)
+    # Sept 2026: built once here and threaded into every type's fit
+    # below, rather than each caller of stuff_plus() needing to pass it
+    # through separately -- fit_stuff_plus_model stores this dict on the
+    # model it returns, so stuff_plus() can look a pitcher's own
+    # reference back up at SCORING time straight from the model, and
+    # every existing stuff_plus() call site keeps working unchanged.
+    pitcher_fastball_velocities = team_pitcher_primary_fastball_velocity(db)
     models = {}
     for label, pairs in training_by_type.items():
-        model = fit_stuff_plus_model(pairs)
+        # Sept 2026: Stuff+'s weights are fixed per pitch type now, not
+        # fit -- fit_stuff_plus_model needs `label` to pick the right
+        # type's weight set out of pitch_grading.STUFF_PLUS_FIXED_WEIGHTS
+        # (see that function's docstring). This is still the one and
+        # only call site.
+        model = fit_stuff_plus_model(pairs, label, pitcher_fastball_velocities)
         if model is not None:
             models[label] = model
     return models
