@@ -154,30 +154,46 @@ _PITCH_CARD_STATS = [
 
 DETAIL_COLUMN_GROUPS = {
     "Usage & Command": [
-        "Pitch Type", "Total Pitches", "Pitch Usage %", "Strikes", "Balls", "Strike %",
-        "C. Strike", "Called Strike %", "First Pitch Thrown", "FPS", "FPS %",
-        "Zone Execution Reviewed", "Zone Execution", "Zone Execution %",
+        "Pitch Type", "Total Pitches", "Pitch Usage %", "Balls", "Strike %",
+        "Called Strike %", "FPS %", "Zone Execution %",
     ],
     "Discipline & Whiffs": [
-        "Pitch Type", "Total Swings", "Swing %", "Zone Swings", "Whiffs", "Whiff %",
-        "SwStr %", "CSW %", "Zone Whiffs", "Zone Whiff %", "Pitches Out of Zone", "Chase", "Chase %",
-        "Putaway Opportunities", "Putaway Pitch", "Putaway %", "Dominant Pitches", "Dominance %",
-        "Swords", "Sword %",
+        "Pitch Type", "Swing %", "Whiff %",
+        "SwStr %", "CSW %", "Zone Whiff %", "Chase %",
+        "Putaway %", "Dominance %",
+        "Sword %",
     ],
     "Location Mix": [
         "Pitch Type", "Zone %", "Heart Zone %", "Shadow Zone %", "Chase Zone %", "Waste Zone %",
     ],
     "Contact Allowed": [
-        "Pitch Type", "Balls in Play", "GroundBalls", "Ground Ball %", "FlyBalls", "Fly Ball %",
-        "LineDrives", "Line Drive %", "PopUps", "Pop Up %", "Weak %", "Jammed %", "Off the End %",
+        "Pitch Type", "Balls in Play", "Ground Ball %", "Fly Ball %",
+        "Line Drive %", "Pop Up %", "Weak %", "Jammed %", "Off the End %",
         "Clipped %", "Solid Contact %", "Barreled %", "Hard Hit %",
     ],
     "Results": [
-        "Pitch Type", "Early", "Ahead", "E+A %", "A3P Opportunities", "A3P", "A3P %",
+        "Pitch Type", "E+A %", "A3P %",
         "BB", "HBP", "SF", "K's", "Hits", "1B", "2B", "3B", "HR", "At Bats", "BF",
         "RV", "RV/100", "Stuff+", "Stuff+ Reliable",
     ],
 }
+# Sept 2026, Ryker: "for some of those things in pitch type breakdown
+# we only need to see the percentages not the counting numbers" --
+# every raw count that was JUST the numerator/denominator for a % that
+# already appears in the same tab has been dropped above (Strikes,
+# C. Strike, FPS/First Pitch Thrown, Total Swings, Zone Swings, Whiffs,
+# Zone Whiffs, Pitches Out of Zone, Chase (swing count), Putaway
+# Opportunities/Pitch, Dominant Pitches, Zone Execution/Reviewed,
+# GroundBalls/FlyBalls/LineDrives/PopUps, Early/Ahead, A3P
+# Opportunities/A3P, Swords). Two deliberate exceptions, both still raw
+# counts with no % column shown for them at all in this table (so
+# there's no percentage they'd be duplicating): "Balls" (Usage &
+# Command) and "Balls in Play" (Contact Allowed) -- their own would-be
+# "Ball %"/"Balls in Play %" don't exist as columns here, so cutting
+# them would just delete information rather than de-duplicate it. The
+# Results tab's box-score counts (BB, K's, Hits, HR, RV, etc.) are
+# untouched for the same reason -- this table has no BB %/K % etc. to
+# make them redundant, they're the box-score totals themselves.
 
 
 def _pitch_type_cards(rows_with_stuff):
