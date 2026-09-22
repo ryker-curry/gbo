@@ -86,6 +86,13 @@ from analytics import command_metrics, performance_score, profile_queries
 from analytics.pitch_grading import (
     stuff_plus, location_plus, pitching_plus, MIN_BASELINE_PITCHES,
 )
+# Pitch Type Breakdown's cards-plus-grouped-tabs display (Sept 2026,
+# Ryker: "want it to be similar in pitcher profile") -- reused from
+# pitcher_game_report.py, where that redesign happened first, rather
+# than a second implementation. Same cross-module private-helper reuse
+# convention modules/hitter_tracking.py already establishes for
+# hitter_game_report.py/hitter_profile.py.
+from modules.pitcher_game_report import _pitch_type_breakdown_with_stuff, _pitch_type_breakdown_view
 from visualizations import command_charts, profile_charts
 from visualizations.pitch_results_chart import pitch_results_chart
 from visualizations.count_leverage_chart import count_leverage_chart
@@ -1077,10 +1084,17 @@ def pitcher_profile_server(input, output, session, app_state):
                 _hands = get_batter_hands(db, game_pitches)
                 vs_rhh = [p for p in game_pitches if _hands.get(p.game_pitch_id) == "R"]
                 vs_lhh = [p for p in game_pitches if _hands.get(p.game_pitch_id) == "L"]
+                # Cards (headline stats, incl. Stuff+ -- this cut is by
+                # opponent hand, which the Arsenal table above doesn't
+                # split by, so it's not pure duplication) + grouped
+                # detail tabs, same _pitch_type_breakdown_with_stuff/
+                # _pitch_type_breakdown_view pitcher_game_report.py uses.
+                rap_by_gp = profile_queries.rapsodo_by_game_pitch_id(db, [p.game_pitch_id for p in game_pitches])
+                stuff_baselines = profile_queries.team_stuff_plus_baselines(db)
                 sections.append(ui.navset_tab(
-                    ui.nav_panel("All Batters", ui_helpers.render_dict_table(compute_pitch_type_breakdown(game_pitches))),
-                    ui.nav_panel("vs RHH", ui_helpers.render_dict_table(compute_pitch_type_breakdown(vs_rhh)) if vs_rhh else ui.p("No pitches vs a right-handed batter in this range.", class_="text-muted small")),
-                    ui.nav_panel("vs LHH", ui_helpers.render_dict_table(compute_pitch_type_breakdown(vs_lhh)) if vs_lhh else ui.p("No pitches vs a left-handed batter in this range.", class_="text-muted small")),
+                    ui.nav_panel("All Batters", _pitch_type_breakdown_view(_pitch_type_breakdown_with_stuff(game_pitches, rap_by_gp, stuff_baselines))),
+                    ui.nav_panel("vs RHH", _pitch_type_breakdown_view(_pitch_type_breakdown_with_stuff(vs_rhh, rap_by_gp, stuff_baselines)) if vs_rhh else ui.p("No pitches vs a right-handed batter in this range.", class_="text-muted small")),
+                    ui.nav_panel("vs LHH", _pitch_type_breakdown_view(_pitch_type_breakdown_with_stuff(vs_lhh, rap_by_gp, stuff_baselines)) if vs_lhh else ui.p("No pitches vs a left-handed batter in this range.", class_="text-muted small")),
                 ))
 
             if bundle["individual_rows"]:
