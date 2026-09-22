@@ -97,6 +97,38 @@ def classify_spray_direction(x, y, bats=None):
     return "Center"
 
 
+def draw_field_diagram(fig, *, line_dist=400, arc_radius_ft=350, base_dist=90, color=GBO_CREAM, line_width=2):
+    """Draws the shared field background -- foul lines, outfield arc,
+    infield base dots -- onto an existing figure, in place. Factored
+    out of build_field_selector_figure (Sept 2026, adding
+    visualizations/spray_chart.py's hit_spray_chart) so any Cartesian
+    field chart gets the IDENTICAL background without a second copy of
+    this drawing math to keep in sync. Same feet-from-home-plate
+    convention as the rest of this module (see module docstring);
+    line_dist/arc_radius_ft/base_dist/color/line_width all default to
+    build_field_selector_figure's own original values, so calling this
+    with no keyword args reproduces exactly what it always drew."""
+    for sign in (-1, 1):
+        end_x = sign * line_dist * math.sin(math.radians(45))
+        end_y = line_dist * math.cos(math.radians(45))
+        fig.add_shape(type="line", x0=0, y0=0, x1=end_x, y1=end_y, line=dict(color=color, width=line_width))
+
+    # Outfield arc, drawn as a dense path of small line segments (Plotly
+    # shapes don't support a true arc primitive like PIL does)
+    arc_x, arc_y = [], []
+    for deg in range(-45, 46):
+        rad = math.radians(deg)
+        arc_x.append(arc_radius_ft * math.sin(rad))
+        arc_y.append(arc_radius_ft * math.cos(rad))
+    fig.add_trace(go.Scatter(x=arc_x, y=arc_y, mode="lines", line=dict(color=color, width=line_width), showlegend=False, hoverinfo="skip", name="arc"))
+
+    base_x, base_y = [], []
+    for angle in (45, 135, 225, 315):
+        base_x.append(base_dist * math.sin(math.radians(angle)))
+        base_y.append(base_dist * math.cos(math.radians(angle)))
+    fig.add_trace(go.Scatter(x=base_x, y=base_y, mode="markers", marker=dict(size=6, color=color), showlegend=False, hoverinfo="skip", name="bases"))
+
+
 def build_field_selector_figure(marker_x=None, marker_y=None):
     """Pure figure builder -- foul lines, outfield arc, infield
     reference dots, invisible dense click-grid, and (if given) a marker
@@ -113,28 +145,7 @@ def build_field_selector_figure(marker_x=None, marker_y=None):
         showlegend=False, hoverinfo="none", name="grid",
     ))
 
-    line_dist = 400
-    for sign in (-1, 1):
-        end_x = sign * line_dist * math.sin(math.radians(45))
-        end_y = line_dist * math.cos(math.radians(45))
-        fig.add_shape(type="line", x0=0, y0=0, x1=end_x, y1=end_y, line=dict(color=GBO_CREAM, width=2))
-
-    # Outfield arc, drawn as a dense path of small line segments (Plotly
-    # shapes don't support a true arc primitive like PIL does)
-    radius_ft = 350
-    arc_x, arc_y = [], []
-    for deg in range(-45, 46):
-        rad = math.radians(deg)
-        arc_x.append(radius_ft * math.sin(rad))
-        arc_y.append(radius_ft * math.cos(rad))
-    fig.add_trace(go.Scatter(x=arc_x, y=arc_y, mode="lines", line=dict(color=GBO_CREAM, width=2), showlegend=False, hoverinfo="skip", name="arc"))
-
-    base_dist = 90
-    base_x, base_y = [], []
-    for angle in (45, 135, 225, 315):
-        base_x.append(base_dist * math.sin(math.radians(angle)))
-        base_y.append(base_dist * math.cos(math.radians(angle)))
-    fig.add_trace(go.Scatter(x=base_x, y=base_y, mode="markers", marker=dict(size=6, color=GBO_CREAM), showlegend=False, hoverinfo="skip", name="bases"))
+    draw_field_diagram(fig)
 
     if marker_x is not None and marker_y is not None:
         fig.add_trace(go.Scatter(

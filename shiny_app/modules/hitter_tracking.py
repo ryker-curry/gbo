@@ -61,6 +61,9 @@ from database import get_session
 from models import Player, StaffPlayerAssignment, PitchType, HitterTrackingSession, HitterSwing, HitterSessionType
 from r2_client import upload_video_to_r2
 from video_helpers import ShinyFileAdapter as _ShinyFileAdapter
+from strike_zone import ZONE_HALF_WIDTH, ZONE_BOTTOM, ZONE_TOP, X_MIN as ZONE_X_MIN, X_MAX as ZONE_X_MAX, Z_MIN as ZONE_Z_MIN, Z_MAX as ZONE_Z_MAX
+from visualizations.chart_theme import apply_gbo_theme, TEXT_CREAM
+from visualizations.hitter_graphic import home_plate_shape
 
 import ui_helpers
 import chart_helpers
@@ -118,33 +121,87 @@ def _compute_zone_scores(swings):
     return scores, counts
 
 
+# Zone id (1-9) -> (row, col) in the SAME 3x3 layout ZONE_LABELS/
+# derive_old_zone (strike_zone.py) already use: 1=Up-Left..9=Down-
+# Right, physical plate side (not adjusted for batter handedness),
+# same convention pitch_zone carries everywhere else in the app.
+_ZONE_ROWS = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+
+
 def _build_zone_heatmap_figure(title, zone_scores, zone_counts, invert_colors=False):
-    """3x3 heatmap of average contact-quality score per zone. Green =
-    good, red = poor -- inverted for a pitcher-facing view (not used on
-    this page, kept for parity with the original's shared helper
-    signature in case bullpen_tracking.py's own port wants the mirror
-    view later)."""
-    zone_grid = [[7, 8, 9], [4, 5, 6], [1, 2, 3]]
+    """9-cell contact-quality heatmap, drawn ON the real strike-zone
+    rectangle every pitcher-side zone chart in the app already uses
+    (same ZONE_HALF_WIDTH/ZONE_BOTTOM/ZONE_TOP real-feet box, same GBO
+    dark theme via apply_gbo_theme, same home plate shape at the
+    ground line -- see visualizations/pitch_location_heatmap.py and
+    command_charts.pitch_locations_chart, which draw the identical
+    zone rectangle + plate). Sept 2026, Ryker: "i want the strike
+    zones to look like the same strike zones used for the pitchers.
+    hitters heatmaps should be the same looking strike zone." /
+    "like right now i don't like how the contact quality by zone
+    chart looks." Replaces the earlier plain go.Heatmap square (its
+    own abstract 0/1/2-index grid, no real proportions, no plate --
+    looked nothing like the rest of the app's zone charts) with a
+    go.Heatmap positioned at REAL feet coordinates (cell centers
+    computed from strike_zone.ZONE_HALF_WIDTH/ZONE_BOTTOM/ZONE_TOP,
+    same 3x3 cell layout _ZONE_ROWS/ZONE_LABELS/derive_old_zone use
+    elsewhere), with the same zone-rectangle border and home plate
+    overlaid on top -- so it sits exactly where the real strike zone
+    sits, same as every pitcher-side zone chart, while keeping the
+    built-in Heatmap hover/colorbar the original had (a hand-drawn
+    shapes version loses per-cell hover; positioning the Heatmap
+    trace itself at real coordinates keeps it for free). Green = good
+    contact, red = poor -- inverted for a pitcher-facing view (not
+    used on this page, kept for parity with the original's shared
+    helper signature in case bullpen_tracking.py's own port wants the
+    mirror view later). Shared by both this page's own heatmap_body
+    AND hitter_profile.py's Contact Quality by Zone view (both import
+    this same function), so this one change restyles both places at
+    once."""
+    zone_width = 2 * ZONE_HALF_WIDTH
+    zone_height = ZONE_TOP - ZONE_BOTTOM
+    cell_width = zone_width / 3
+    cell_height = zone_height / 3
+    x_centers = [-ZONE_HALF_WIDTH + cell_width * (i + 0.5) for i in range(3)]
+    y_centers = [ZONE_BOTTOM + cell_height * (i + 0.5) for i in range(3)]
+    # zone_grid rows bottom-to-top (matches y_centers ascending) --
+    # reversed(_ZONE_ROWS) since _ZONE_ROWS itself lists top-to-bottom
+    # (1=Up-Left first).
+    zone_grid = list(reversed(_ZONE_ROWS))
     z = [[zone_scores.get(zid) for zid in row] for row in zone_grid]
-    text = [[f"{zone_scores[zid]:.1f}<br>({zone_counts[zid]})" if zid in zone_scores else "—" for zid in row] for row in zone_grid]
+    cell_labels = [[f"{zone_scores[zid]:.1f}<br>({zone_counts[zid]})" if zid in zone_scores else "—" for zid in row] for row in zone_grid]
+    hover_text = [[f"{zone_scores[zid]:.2f} avg score ({zone_counts[zid]} swings)" if zid in zone_scores else "No data yet" for zid in row] for row in zone_grid]
 
     colorscale = "RdYlGn_r" if invert_colors else "RdYlGn"
     fig = go.Figure(data=go.Heatmap(
-        z=z, text=text, texttemplate="%{text}", textfont=dict(color="#111111", size=14),
+        x=x_centers, y=y_centers, z=z,
+        text=cell_labels, texttemplate="%{text}", textfont=dict(color="#111111", size=13),
+        customdata=hover_text, hovertemplate="%{customdata}<extra></extra>",
         colorscale=colorscale, zmin=0, zmax=3, showscale=True,
-        colorbar=dict(title="Avg score", tickfont=dict(color="#AEB6C2"), title_font=dict(color="#AEB6C2")),
-        xgap=3, ygap=3,
+        colorbar=dict(title="Avg score", tickfont=dict(color=TEXT_CREAM), title_font=dict(color=TEXT_CREAM)),
+        xgap=2, ygap=2,
     ))
-    fig.update_layout(
-        title=title,
-        height=380, width=700,
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#AEB6C2"),
-        xaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
-        margin=dict(t=40, b=20, l=20, r=20),
+
+    # Zone border, same TEXT_CREAM 2px convention every pitcher-side
+    # zone rectangle in the app uses.
+    fig.add_shape(
+        type="rect", x0=-ZONE_HALF_WIDTH, x1=ZONE_HALF_WIDTH, y0=ZONE_BOTTOM, y1=ZONE_TOP,
+        line=dict(color=TEXT_CREAM, width=2), fillcolor="rgba(0,0,0,0)",
     )
-    return fig
+    # Home plate at the ground line, view="catcher" -- same convention
+    # pitch_location_heatmap.py's own actual-location zone charts use
+    # (this chart, like that one, shows where contact/a pitch actually
+    # happened from behind the plate, not a pitcher's aim point).
+    fig.add_shape(**home_plate_shape(half_width_ft=ZONE_HALF_WIDTH, ground_y=ZONE_Z_MIN, view="catcher"))
+
+    # No x_title/y_title -- same "no axis clutter" choice pitch_location_
+    # heatmap.py's own per-zone panels make; this is a compact zone
+    # diagram, not a chart the viewer reads exact feet values off of.
+    return apply_gbo_theme(
+        fig, title=title, height=420,
+        xaxis=dict(range=[ZONE_X_MIN, ZONE_X_MAX], showticklabels=False, showgrid=False, zeroline=False, scaleanchor="y", scaleratio=1),
+        yaxis=dict(range=[-0.4, ZONE_Z_MAX], showticklabels=False, showgrid=False, zeroline=False),
+    )
 
 
 def _zone_grid_buttons(prefix, current_zone):

@@ -34,8 +34,13 @@ performance_score's own single-metric z-score math one metric at a
 time instead of blended), Batted Ball (GB/FB/LD/PopUp, Pull/Center/
 Oppo or LF/CF/RF, Barrel %/Hard Contact %), Situational & Count
 Leverage (RISP/2-Strike/Leadoff AVG, QAB %, Ahead/Even/Behind table),
-and Contact Quality by Zone (the existing Hitter Tracking zone-score
-heat map). Each gated section function checks input.hp_view() itself
+Contact Quality by Zone (the existing Hitter Tracking zone-score
+heat map), and Spray Chart (Sept 2026 addition, Ryker: "i want a hit
+spray chart as well as an infield slice chart" -- Baseball Savant's
+own two-panel Spray Chart/Infield Slice Chart, side by side, built
+from visualizations/spray_chart.py; hits-only on the spray chart,
+matching Savant's own default view -- see that module's docstring for
+the full definitions). Each gated section function checks input.hp_view() itself
 and returns None immediately when not selected -- switching the
 dropdown is what stops the DB work for the other views, not CSS
 visibility -- same discipline pitcher_profile.py's pp_view_picker
@@ -56,6 +61,7 @@ from game_stats import compute_batting_line, compute_batted_ball_profile, ops_pl
 from plate_discipline import compute_hitter_discipline, compute_zone_tier_discipline
 from analytics import performance_score, profile_queries
 from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_figure, CONTACT_QUALITY_SCORE
+from visualizations.spray_chart import hit_spray_chart, infield_slice_chart
 
 import ui_helpers
 import format_helpers
@@ -96,7 +102,7 @@ def hitter_profile_ui():
         ui.output_ui("hp_filters"),
         # Sept 2026, Ryker: a "View" dropdown instead of every section
         # rendering at once and scrolling forever -- same convention
-        # pitcher_profile.py already established. Each of these five
+        # pitcher_profile.py already established. Each of these six
         # stays statically listed here (Shiny needs a placeholder in
         # the DOM for each output id) -- the gate inside each render.ui
         # function is what actually controls which one does anything.
@@ -106,6 +112,7 @@ def hitter_profile_ui():
         ui.output_ui("hp_batted_ball_section"),
         ui.output_ui("hp_situational_section"),
         ui.output_ui("hp_contact_section"),
+        ui.output_ui("hp_spray_chart_section"),
         ui_helpers.page_footer(),
     )
 
@@ -231,6 +238,7 @@ def hitter_profile_server(input, output, session, app_state):
                         "batted_ball": "Batted Ball",
                         "situational": "Situational & Count Leverage",
                         "contact_zone": "Contact Quality by Zone",
+                        "spray_chart": "Spray Chart",
                     },
                 ),
             )
@@ -610,6 +618,11 @@ def hitter_profile_server(input, output, session, app_state):
     def _hp_show_glossary_contact_zone():
         ui.modal_show(ui_helpers.glossary_modal("Contact Quality by Zone Glossary", glossary_content.HITTING_CONTACT_ZONE))
 
+    @reactive.effect
+    @reactive.event(input.hp_glossary_spray)
+    def _hp_show_glossary_spray():
+        ui.modal_show(ui_helpers.glossary_modal("Spray Chart Glossary", glossary_content.HITTING_SPRAY))
+
     @render.ui
     def hp_contact_section():
         if not app_state.is_authenticated():
@@ -690,5 +703,98 @@ def hitter_profile_server(input, output, session, app_state):
                 for label, vals in sorted(by_type.items(), key=lambda kv: -len(kv[1]))
             ]
             return ui_helpers.render_dict_table(rows)
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Spray Chart / Infield Slice Chart -- Sept 2026, Ryker: "i want a
+    # hit spray chart as well as an infield slice chart", referencing
+    # Baseball Savant's own player-page Visuals for the concrete look
+    # (both AskUserQuestion rounds answered with the recommended
+    # defaults: a new "Spray Chart" tab here rather than folding it
+    # into an existing view, and hits-only on the spray chart, matching
+    # Savant's own default BASE HITS view over also plotting outs).
+    # Two side-by-side charts from visualizations/spray_chart.py, same
+    # Savant two-panel layout. Own top-level output/render_plotly split
+    # for the same reason as Contact Quality by Zone above -- each of
+    # the three functions below independently re-checks input.hp_view()
+    # itself rather than relying only on DOM nesting/visibility.
+    # -------------------------------------------------------------------
+    @render.ui
+    def hp_spray_chart_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("hp_view" in input)
+        if input.hp_view() != "spray_chart":
+            return None
+        db = get_session()
+        try:
+            _pid, pitches = _current_pitches(db)
+            if not pitches:
+                return None
+            # Gate on "any located ball in play at all" -- same
+            # discipline hp_contact_section's own `located` check
+            # follows: if there's nothing either chart could possibly
+            # show, don't render an empty two-panel shell.
+            located_in_play = [
+                p for p in pitches
+                if p.pitch_outcome == "In Play" and p.batted_ball_x is not None and p.batted_ball_y is not None
+            ]
+            if not located_in_play:
+                return None
+            return ui.div(
+                ui.div(
+                    ui.p(ui.strong("Spray Chart / Infield Slice Chart"), style="margin-bottom:0;"),
+                    ui_helpers.glossary_link("hp_glossary_spray", "Spray Chart Glossary"),
+                    style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+                ),
+                ui.p(
+                    "Spray Chart: every base hit (1B/2B/3B/HR) at its recorded field location, colored by hit "
+                    "type -- base hits only, same as Baseball Savant's own default view. Infield Slice Chart: the "
+                    "share of all batted balls within 200 ft of home plate landing in each of five field wedges "
+                    "-- Savant's own weak/short-contact definition.",
+                    class_="text-muted small",
+                ),
+                ui.layout_columns(
+                    output_widget("hp_spray_chart_widget"),
+                    output_widget("hp_infield_slice_widget"),
+                    col_widths=[6, 6],
+                ),
+            )
+        finally:
+            db.close()
+
+    @render_plotly
+    def hp_spray_chart_widget():
+        if not app_state.is_authenticated():
+            return None
+        req("hp_view" in input)
+        if input.hp_view() != "spray_chart":
+            return None
+        db = get_session()
+        try:
+            _pid, pitches = _current_pitches(db)
+            if not pitches:
+                return None
+            return hit_spray_chart(pitches, title="Spray Chart (Base Hits)")
+        finally:
+            db.close()
+
+    @render_plotly
+    def hp_infield_slice_widget():
+        if not app_state.is_authenticated():
+            return None
+        req("hp_view" in input)
+        if input.hp_view() != "spray_chart":
+            return None
+        db = get_session()
+        try:
+            _pid, pitches = _current_pitches(db)
+            if not pitches:
+                return None
+            return infield_slice_chart(pitches, title="Infield Slice Chart")
         finally:
             db.close()
