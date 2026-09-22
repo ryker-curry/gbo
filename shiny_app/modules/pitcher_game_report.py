@@ -126,6 +126,127 @@ def _pitch_type_breakdown_with_stuff(pitches_subset, rap_by_gp, stuff_baselines)
     return out_rows
 
 
+# Sept 2026, Ryker: Pitch Type Breakdown was one flat table of ~60
+# columns (every stat _pitch_type_row computes, plus Stuff+/Stuff+
+# Reliable) per pitch type -- "one long table you have to scroll
+# through". Two-layer redesign instead of trimming columns (nothing
+# here is dead weight, it's all stuff Ryker's own sheet tracked):
+#   1. _pitch_type_cards -- one card per pitch type (Total excluded),
+#      the ~8 numbers a coach actually glances at first.
+#   2. _pitch_type_detail_tabs -- the full row, unchanged, just split
+#      into these category tabs instead of one 60-wide table, so each
+#      tab reads without side-scrolling. _DETAIL_COLUMN_GROUPS is the
+#      full column set partitioned once, in the same order
+#      _pitch_type_row builds them in -- every key from that dict
+#      appears in exactly one group below (checked by hand against
+#      _pitch_type_row's return statement; if that function ever grows
+#      a new column, it needs a matching entry added to a group here).
+_PITCH_CARD_STATS = [
+    ("Strike %", "Strike %", "pct"),
+    ("Whiff %", "Whiff %", "pct"),
+    ("CSW %", "CSW %", "pct"),
+    ("Chase %", "Chase %", "pct"),
+    ("Zone %", "Zone %", "pct"),
+    ("Hard Hit %", "Hard Hit %", "pct"),
+    ("RV/100", "RV/100", "num3"),
+    ("Stuff+", "Stuff+", "raw"),
+]
+
+DETAIL_COLUMN_GROUPS = {
+    "Usage & Command": [
+        "Pitch Type", "Total Pitches", "Pitch Usage %", "Strikes", "Balls", "Strike %",
+        "C. Strike", "Called Strike %", "First Pitch Thrown", "FPS", "FPS %",
+        "Zone Execution Reviewed", "Zone Execution", "Zone Execution %",
+    ],
+    "Discipline & Whiffs": [
+        "Pitch Type", "Total Swings", "Swing %", "Zone Swings", "Whiffs", "Whiff %",
+        "SwStr %", "CSW %", "Zone Whiffs", "Zone Whiff %", "Pitches Out of Zone", "Chase", "Chase %",
+        "Putaway Opportunities", "Putaway Pitch", "Putaway %", "Dominant Pitches", "Dominance %",
+        "Swords", "Sword %",
+    ],
+    "Location Mix": [
+        "Pitch Type", "Zone %", "Heart Zone %", "Shadow Zone %", "Chase Zone %", "Waste Zone %",
+    ],
+    "Contact Allowed": [
+        "Pitch Type", "Balls in Play", "GroundBalls", "Ground Ball %", "FlyBalls", "Fly Ball %",
+        "LineDrives", "Line Drive %", "PopUps", "Pop Up %", "Weak %", "Jammed %", "Off the End %",
+        "Clipped %", "Solid Contact %", "Barreled %", "Hard Hit %",
+    ],
+    "Results": [
+        "Pitch Type", "Early", "Ahead", "E+A %", "A3P Opportunities", "A3P", "A3P %",
+        "BB", "HBP", "SF", "K's", "Hits", "1B", "2B", "3B", "HR", "At Bats", "BF",
+        "RV", "RV/100", "Stuff+", "Stuff+ Reliable",
+    ],
+}
+
+
+def _pitch_type_cards(rows_with_stuff):
+    """One ui_helpers.card() per pitch type actually thrown ("Total" is
+    excluded -- it belongs in the detail tables below, not as its own
+    card), a single row of the ~8 headline numbers via
+    ui_helpers.render_kpi_cards -- the fast-scan layer sitting above
+    _pitch_type_detail_tabs's full breakdown. Stacked one per row
+    (ui.div, no grid wrapper) rather than side-by-side: each card's own
+    gbo-kpi-row already lays its 8 stats out responsively, and a
+    pitcher rarely throws more than 5-6 pitch types in one outing, so a
+    vertical stack of short cards reads better than cramming multiple
+    cards per row and squeezing their internal kpi grids."""
+    cards = []
+    for row in rows_with_stuff:
+        if row["Pitch Type"] == "Total":
+            continue
+        kpis = []
+        for key, label, kind in _PITCH_CARD_STATS:
+            value = row.get(key)
+            if kind == "pct":
+                text = _fmt_pct(value)
+            elif kind == "num3":
+                text = _fmt(value, 3) if value is not None else "—"
+            else:
+                text = value if value not in (None, "") else "—"
+            kpis.append({"label": label, "value": text})
+        usage_caption = f"{row['Total Pitches']} pitches ({_fmt_pct(row['Pitch Usage %'])})"
+        cards.append(ui_helpers.card(
+            ui_helpers.render_kpi_cards(kpis),
+            title=row["Pitch Type"], right=usage_caption,
+        ))
+    return ui.div(*cards)
+
+
+def _subset_rows(rows, keys):
+    """rows, each cut down to just `keys` (in that order) -- how
+    _pitch_type_detail_tabs turns one ~60-column row into one row per
+    category tab. "—" for any key a row happens not to have (every
+    row from _pitch_type_breakdown_with_stuff has every key, but this
+    keeps the helper safe if that ever changes)."""
+    return [{k: row.get(k, "—") for k in keys} for row in rows]
+
+
+def _pitch_type_detail_tabs(rows_with_stuff):
+    """The full ~60-column breakdown, unchanged from before this
+    redesign, just partitioned into DETAIL_COLUMN_GROUPS's category
+    tabs instead of one wide table -- same row data
+    (_pitch_type_cards's caller passes the same rows_with_stuff to
+    both), so the cards above and every tab below always agree."""
+    panels = [
+        ui.nav_panel(group, ui_helpers.render_dict_table(_subset_rows(rows_with_stuff, keys)))
+        for group, keys in DETAIL_COLUMN_GROUPS.items()
+    ]
+    return ui.navset_tab(*panels)
+
+
+def _pitch_type_breakdown_view(rows_with_stuff):
+    """Cards (fast scan) + detail tabs (full breakdown), the two-layer
+    reading _pitch_type_cards/_pitch_type_detail_tabs's own docstrings
+    explain -- the single thing each of the three handedness nav_panels
+    in pitch_type_breakdown_section now renders."""
+    return ui.div(
+        _pitch_type_cards(rows_with_stuff),
+        ui.p(ui.strong("Full Stats"), class_="mt-4 mb-2"),
+        _pitch_type_detail_tabs(rows_with_stuff),
+    )
+
+
 def _pitch_shape_rows(pitches, rap_by_gp, stuff_baselines, pitcher):
     """Physical pitch-shape table for the Pitch Shape (Rapsodo) section
     (Ryker's Pitch Profiler-style reference, Sept 2026): Velocity/Spin
@@ -895,9 +1016,9 @@ def pitcher_game_report_server(input, output, session, app_state):
                     class_="text-muted small",
                 ),
                 ui.navset_tab(
-                    ui.nav_panel("All Batters", ui_helpers.render_dict_table(_pitch_type_breakdown_with_stuff(pitches, rap_by_gp, stuff_baselines))),
-                    ui.nav_panel("vs RHH", ui_helpers.render_dict_table(_pitch_type_breakdown_with_stuff(vs_rhh, rap_by_gp, stuff_baselines)) if vs_rhh else ui.p("No pitches recorded against a right-handed batter yet.", class_="text-muted small")),
-                    ui.nav_panel("vs LHH", ui_helpers.render_dict_table(_pitch_type_breakdown_with_stuff(vs_lhh, rap_by_gp, stuff_baselines)) if vs_lhh else ui.p("No pitches recorded against a left-handed batter yet.", class_="text-muted small")),
+                    ui.nav_panel("All Batters", _pitch_type_breakdown_view(_pitch_type_breakdown_with_stuff(pitches, rap_by_gp, stuff_baselines))),
+                    ui.nav_panel("vs RHH", _pitch_type_breakdown_view(_pitch_type_breakdown_with_stuff(vs_rhh, rap_by_gp, stuff_baselines)) if vs_rhh else ui.p("No pitches recorded against a right-handed batter yet.", class_="text-muted small")),
+                    ui.nav_panel("vs LHH", _pitch_type_breakdown_view(_pitch_type_breakdown_with_stuff(vs_lhh, rap_by_gp, stuff_baselines)) if vs_lhh else ui.p("No pitches recorded against a left-handed batter yet.", class_="text-muted small")),
                 ),
             )
         finally:
