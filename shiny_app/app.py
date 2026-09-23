@@ -170,6 +170,12 @@ app_ui = ui.page_fluid(
 
 def server(input, output, session):
     app_state = new_app_state()
+    # Sept 2026: which role (Coach vs Player) the interactive guest-mode
+    # sidebar is currently showing -- see _guest_ui()/_GUEST_COACH_GROUPS/
+    # _GUEST_PLAYER_GROUPS below. Only meaningful while app_state.is_guest()
+    # is True; unrelated to the real app_state.role_name() a logged-in
+    # user gets from auth.
+    guest_role = reactive.Value("coach")
 
     # --- Dark/light mode: sync the client-side toggle into AppState so
     # server-rendered plotly charts (bucket_display.py -- CSS can't
@@ -198,6 +204,16 @@ def server(input, output, session):
     @reactive.event(input.guest_back_to_login)
     def _on_guest_back_to_login():
         app_state.is_guest.set(False)
+
+    @reactive.effect
+    @reactive.event(input.guest_role_coach)
+    def _on_guest_role_coach():
+        guest_role.set("coach")
+
+    @reactive.effect
+    @reactive.event(input.guest_role_player)
+    def _on_guest_role_player():
+        guest_role.set("player")
 
     @reactive.effect
     @reactive.event(input.logout_button)
@@ -258,7 +274,7 @@ def server(input, output, session):
     @render.ui
     def shell():
         if app_state.is_guest():
-            return _guest_ui()
+            return _guest_ui(guest_role())
         if app_state.auth_user() is None:
             return _login_ui(app_state)
         if app_state.is_pending_setup():
@@ -354,124 +370,291 @@ _GUEST_DASHBOARDS = [
 ]
 
 
-def _guest_ui():
-    # Mirrors the original app.py's guest mode (pages/guest_overview.py)
-    # -- a curated, illustrative walkthrough of the platform's vision,
-    # NOT a real login and NOT connected to the actual database. Guests
-    # see example numbers and module descriptions only, never real
-    # player data -- privacy first, even for a low-stakes "show the
-    # vision" mode. Plain function (not a module) since it has no state
-    # of its own beyond the one "Go to login" button, whose click
-    # handler lives in server() below (app_state isn't in scope here).
+# --- Interactive guest-mode shell (Sept 2026) ---------------------------
+# Ryker, Sept 2026: "make it to where they can click through and see
+# what it would look like as different roles ... click on stuff in the
+# side bar and everything." This reuses the exact same sidebar/
+# navset_hidden mechanism _app_shell_ui() below uses for a real login --
+# same CSS classes (.gbo-side/.gbo-side-link/.gbo-side-group), the same
+# `sidebar_go` -> ui.update_navs("main_nav", ...) click handling
+# (server()'s _on_sidebar_go isn't guest-specific -- it just matches
+# whatever navset currently has id "main_nav"), and the same
+# _SIDEBAR_JS script. The only new server-side state is guest_role
+# (server(), right after app_state = new_app_state()) -- a small
+# reactive.Value the "View as Coach"/"View as Player" buttons flip,
+# which swaps which curated set of sidebar links is visible.
+#
+# Every real module a Coach or Player would actually see is listed
+# below as a clickable nav item -- see _GUEST_COACH_GROUPS/
+# _GUEST_PLAYER_GROUPS. Pitcher Profile (the only page with a full
+# fake-data pipeline built out so far -- see demo_data.py/
+# guest_demo.py) opens the real, complete GBO analytics page on a
+# fictional pitcher (Joe Random). Every other nav item opens a labeled
+# sample card via _guest_sample_panel() explaining what that real page
+# does and does not pretend it's the finished thing. As more modules
+# get the same fake-data treatment (Pitcher Game Report is next),
+# swap that key's entry in _GUEST_PANEL_BUILDERS for a real one --
+# nothing else about this shell needs to change.
+
+_GUEST_COACH_GROUPS = [
+    ("Overview", [("dashboard", "Dashboard")]),
+    ("Roster", [("roster", "Players")]),
+    ("Development", [("assessments", "Assessments"), ("idp", "Development Plans"), ("training_routines", "Training Sessions")]),
+    ("Scheduling", [("team_schedule", "Team Schedule"), ("player_assignments", "Assignments"), ("at_appointments", "AT Appointments")]),
+    ("Pitching", [("bullpen_dashboard", "Bullpen"), ("rapsodo_import", "Import Rapsodo")]),
+    ("Games", [("game_tracking", "Game Tracking"), ("pitcher_game_report", "Pitcher Game Report")]),
+    ("Analytics", [("pitcher_profile", "Pitcher Profile")]),
+    ("Video", [("video_import", "Video")]),
+]
+_GUEST_PLAYER_GROUPS = [
+    ("Me", [("player_profile", "My Profile"), ("player_schedule", "My Schedule"), ("player_stats", "My Stats"), ("player_bullpens", "My Bullpens"), ("player_video", "My Video")]),
+    ("Analytics", [("pitcher_profile", "Pitcher Profile")]),
+]
+
+
+def _guest_sample_panel(title, description, extra=None):
+    """A single labeled placeholder nav panel for a real GBO page that
+    doesn't have a fake-data pipeline built out yet -- see this
+    section's module comment. Same dashed-card convention
+    guest_demo.py's own "Research: coming soon" section uses, so a
+    guest never sees an unexplained blank or broken-looking page."""
+    body = [ui_helpers.page_header(title), ui.p(description)]
+    if extra is not None:
+        body.append(extra)
+    body.append(ui.div(
+        ui.strong("Sample view only. "),
+        "This exact page, on this fictional roster, isn't wired up with fake data yet -- it's next in line "
+        "as this guest mode gets built out further (Pitcher Profile, under Analytics, is the first page to "
+        "get the full treatment).",
+        class_="gbo-profile-card", style="padding:14px; border-style:dashed; margin-top:16px;",
+    ))
+    return ui.div(*body, class_="p-3")
+
+
+def _guest_dashboard_panel():
     return ui.div(
-        ui_helpers.page_header("Gorilla Baseball Operations"),
-        ui.p(
-            "A comprehensive player development platform for Pittsburg State Gorilla Baseball -- "
-            "combining physical testing, individual development plans, training logs, scheduling, "
-            "and role-based dashboards in one place. Below is a detailed look at everything the "
-            "platform does."
-        ),
-        ui.p("You're viewing example data as a guest -- this is not connected to real player records.", class_="text-muted small"),
-
-        ui.hr(),
-        # Sept 2026 addition -- see shiny_app/modules/guest_demo.py's own
-        # docstring. Deep-dive #1 (of a planned series -- one per major
-        # module, added as each gets built out here): Pitcher Profile,
-        # GBO's flagship analytics page, walked through end to end on a
-        # fictional roster with real GBO math. Placed first/high on the
-        # page since it's the strongest single argument for what GBO
-        # actually does, ahead of the plainer module-by-module list below.
-        guest_demo.build_pitcher_profile_deep_dive(),
-
-        ui.hr(),
-        ui.h5("Example: what a coach sees at a glance", class_="gbo-section-title"),
+        ui_helpers.page_header("Dashboard"),
+        ui.p("The landing page after login -- built differently for every role, all pulling from the same underlying data:"),
+        *[ui.div(ui.p(ui.strong(role)), ui.p(desc), ui.br()) for role, desc in _GUEST_DASHBOARDS],
+        ui.h6("Example: what a Head Coach sees at a glance", class_="gbo-section-title", style="margin-top:12px;"),
         ui_helpers.render_kpi_cards([
             {"label": "Players", "value": "24"},
             {"label": "Open IDP Goals", "value": "12", "delta": "3 vs last week", "delta_positive": False},
             {"label": "Assessments (7 days)", "value": "18", "delta": "5 vs last week", "delta_positive": True},
             {"label": "Training Sessions (7 days)", "value": "31", "delta": "8 vs last week", "delta_positive": True},
         ]),
-
-        ui.hr(),
-        ui.h4("Player Management"),
-        ui.p(
-            "The full team roster: name, photo, jersey number, position, class, graduation year, "
-            "throws/bats, height, weight, hometown, high school, and status (Active, Injured, Redshirt, "
-            "Medical Hold, Inactive). Searchable, filterable, sortable, and exportable to CSV. This is the "
-            "single source of truth every other module builds on -- assessments, goals, and sessions are "
-            "all tied back to a specific player record here."
+        ui.div(
+            ui.strong("Sample view only. "),
+            "This exact page isn't wired up with fake data yet -- it's next in line as this guest mode gets "
+            "built out further (Pitcher Profile, under Analytics, is the first page to get the full treatment).",
+            class_="gbo-profile-card", style="padding:14px; border-style:dashed; margin-top:16px;",
         ),
+        class_="p-3",
+    )
 
-        ui.hr(),
-        ui.h4("Assessments — 10 categories of physical testing"),
+
+def _guest_assessments_panel():
+    return ui.div(
+        ui_helpers.page_header("Assessments"),
         ui.p(
-            "Every category below supports full history (not just a snapshot) -- a player can be tested "
-            "the same way repeatedly over months or years, and the platform tracks trends (Count, Average, "
-            "Max, Min) automatically. Here's what each one measures and why it matters:"
+            "10 categories of physical testing. Every category supports full history (not just a snapshot) -- "
+            "a player can be tested the same way repeatedly over months or years, and the platform tracks "
+            "trends (Count, Average, Max, Min) automatically. Here's what each one measures and why it matters:"
         ),
         ui.accordion(*[
             ui.accordion_panel(f"{name} — {count_label}", ui.p(explanation))
             for name, count_label, explanation in _GUEST_ASSESSMENT_CATEGORIES
-        ], open=False, id=None),
-
-        ui.hr(),
-        ui.h4("Individual Development Plans (IDP)"),
-        ui.p(
-            "A development goal isn't just a note -- it's tied to a specific assessment category, and can "
-            "link directly to the exact assessment record that motivated it (e.g. a shoulder mobility deficit "
-            "found on a specific date). Each goal can carry action steps (specific tasks with due dates and "
-            "status) and progress notes (dated commentary from staff). Training Sessions can be tagged as "
-            "'prescribed toward' a specific goal, so a coach can open any goal and see the actual work that's "
-            "been logged against it -- not just a plan, but a running record of follow-through."
+        ], open=False),
+        ui.div(
+            ui.strong("Sample view only. "),
+            "This exact page isn't wired up with fake data yet -- it's next in line as this guest mode gets "
+            "built out further (Pitcher Profile, under Analytics, is the first page to get the full treatment).",
+            class_="gbo-profile-card", style="padding:14px; border-style:dashed; margin-top:16px;",
         ),
+        class_="p-3",
+    )
 
-        ui.hr(),
-        ui.h4("Training Sessions"),
-        ui.p(
-            "A day-to-day log of what actually happened: arm care, lifting, conditioning, hitting drills, or "
-            "throwing/plyometric work, each with notes, optional player feedback, and next steps. This is "
-            "distinct from a formal Assessment (which is periodic testing) -- it's the daily diary that shows "
-            "consistency and follow-through over time, and each entry can optionally be linked back to a "
-            "specific IDP goal."
+
+_GUEST_PANEL_BUILDERS = {
+    "dashboard": _guest_dashboard_panel,
+    "assessments": _guest_assessments_panel,
+    "pitcher_profile": guest_demo.build_pitcher_profile_deep_dive,
+    "roster": lambda: _guest_sample_panel(
+        "Players",
+        "The full team roster: name, photo, jersey number, position, class, graduation year, throws/bats, "
+        "height, weight, hometown, high school, and status (Active, Injured, Redshirt, Medical Hold, "
+        "Inactive). Searchable, filterable, sortable, and exportable to CSV -- the single source of truth "
+        "every other module (assessments, goals, sessions) ties back to a specific player record here.",
+    ),
+    "idp": lambda: _guest_sample_panel(
+        "Development Plans",
+        "A development goal isn't just a note -- it's tied to a specific assessment category, and can link "
+        "directly to the exact assessment record that motivated it (e.g. a shoulder mobility deficit found "
+        "on a specific date). Each goal can carry action steps (specific tasks with due dates and status) "
+        "and progress notes (dated commentary from staff). Training Sessions can be tagged as 'prescribed "
+        "toward' a specific goal, so a coach can open any goal and see the actual work that's been logged "
+        "against it -- not just a plan, but a running record of follow-through.",
+    ),
+    "training_routines": lambda: _guest_sample_panel(
+        "Training Sessions",
+        "A day-to-day log of what actually happened: arm care, lifting, conditioning, hitting drills, or "
+        "throwing/plyometric work, each with notes, optional player feedback, and next steps. Distinct from "
+        "a formal Assessment (periodic testing) -- this is the daily diary that shows consistency and "
+        "follow-through over time, and each entry can optionally link back to a specific Development Plan goal.",
+    ),
+    "team_schedule": lambda: _guest_sample_panel(
+        "Team Schedule",
+        "A shared calendar for team-wide events -- lift days, practices, games -- visible to every role, and "
+        "the thing every player's own 'My Schedule' page (see the Player-view sidebar) is built around.",
+    ),
+    "player_assignments": lambda: _guest_sample_panel(
+        "Assignments",
+        "Forward-looking, prescribed tasks for a specific player (e.g. 'today: throwing program'), assigned "
+        "ahead of time by a coach or Athletic Trainer -- separate from the Training Sessions log of completed "
+        "work, which records what actually happened after the fact.",
+    ),
+    "at_appointments": lambda: _guest_sample_panel(
+        "AT Appointments",
+        "Real, timed appointments between a specific player and a specific Athletic Trainer, so medical care "
+        "shows up on the same shared calendar as everything else a player has coming up.",
+    ),
+    "bullpen_dashboard": lambda: _guest_sample_panel(
+        "Bullpen",
+        "A roster-wide rollup of every pitcher's Rapsodo bullpen sessions -- velocity, spin, and movement "
+        "trends over time, at a glance across the whole staff, instead of opening one pitcher's Profile at a time.",
+    ),
+    "rapsodo_import": lambda: _guest_sample_panel(
+        "Import Rapsodo",
+        "Bulk-import an entire Rapsodo pitching session in one upload instead of typing in every pitch by "
+        "hand -- the platform maps columns automatically (with sensible pre-filled guesses) and converts "
+        "units where needed (like spin axis from clock format to degrees), creating one record per pitch.",
+    ),
+    "game_tracking": lambda: _guest_sample_panel(
+        "Game Tracking",
+        "Live, pitch-by-pitch game charting -- click the exact plate location instead of picking a coarse "
+        "1-9 zone, plus count, base/out state, pitch outcome, contact quality, and result, entered pitch by "
+        "pitch as the game happens. Every number on Pitcher Game Report (next in the sidebar) and the "
+        "Command+/Attack Zones views on Pitcher Profile comes from what gets charted here.",
+    ),
+    "pitcher_game_report": lambda: _guest_sample_panel(
+        "Pitcher Game Report",
+        "A single-game box score and pitch-type breakdown for one pitcher's one outing -- Usage/Strike/CSW/"
+        "Whiff/Chase/Putaway/GB-FB-LD% by pitch type, plus Command Precision and Attack Zones, split out by "
+        "opposing batter handedness. This is the next page getting the full fake-data treatment Pitcher "
+        "Profile already has.",
+    ),
+    "video_import": lambda: _guest_sample_panel(
+        "Video",
+        "Any individual pitch (or at-bat) charted in Game Tracking can have video uploaded and linked "
+        "directly to it, so a coach can pull up the exact numbers for a pitch side-by-side with the actual "
+        "footage -- comparing what the data says against what the eye sees.",
+    ),
+    "player_profile": lambda: _guest_sample_panel(
+        "My Profile",
+        "A player's own bio info and status -- the same record a coach sees on the team Players page, just "
+        "scoped to their own profile instead of the whole roster.",
+    ),
+    "player_schedule": lambda: _guest_sample_panel(
+        "My Schedule",
+        "A player's own upcoming week: team-wide schedule items, their own prescribed Assignments, and their "
+        "own AT Appointments, all pulled onto one page instead of three separate coach-side ones.",
+    ),
+    "player_stats": lambda: _guest_sample_panel(
+        "My Stats",
+        "A player's own career and season pitching/hitting numbers -- the same box-score-style stat lines a "
+        "coach sees on the team side, scoped to just them.",
+    ),
+    "player_bullpens": lambda: _guest_sample_panel(
+        "My Bullpens",
+        "A player's own Rapsodo bullpen history over time -- the same velocity/spin/movement trends the "
+        "team-wide Bullpen dashboard shows, scoped to just their own sessions.",
+    ),
+    "player_video": lambda: _guest_sample_panel(
+        "My Video",
+        "A player's own library of linked video clips, tied to specific pitches or at-bats from Game Tracking.",
+    ),
+}
+
+
+def _guest_sidebar(role, groups):
+    links = []
+    first_title = None
+    for gtitle, items in groups:
+        links.append(ui.div(gtitle, class_="gbo-side-group"))
+        for key, label in items:
+            if first_title is None:
+                first_title = label
+            links.append(ui.tags.button(
+                _icon(key), ui.span(label),
+                class_="gbo-side-link" + (" active" if label == first_title else ""),
+                type="button", **{"data-title": label},
+            ))
+    me = ui.div(
+        ui.div("G", class_="gbo-avatar"),
+        ui.div(ui.div("Guest", class_="gbo-side-me-name"), ui.span("Coach view" if role != "player" else "Player view", class_="gbo-role-badge")),
+        class_="gbo-side-me",
+    )
+    brand = ui.div(theme.logo_img(css_class=""), ui.div(ui.div("GBO", class_="gbo-brand-title"), ui.div("Gorilla Baseball Ops", class_="gbo-brand-sub")), class_="gbo-brand")
+    return ui.tags.aside(brand, *links, me, class_="gbo-side"), first_title
+
+
+def _guest_ui(role="coach"):
+    # Mirrors the original app.py's guest mode (pages/guest_overview.py)
+    # in spirit -- a curated, illustrative walkthrough, NOT a real login
+    # and NOT connected to the actual database -- but now an actually
+    # clickable sidebar experience instead of one long scroll. See this
+    # section's module comment for how the sidebar/navset plumbing is
+    # shared with the real logged-in shell below.
+    groups = _GUEST_PLAYER_GROUPS if role == "player" else _GUEST_COACH_GROUPS
+    sidebar, first_title = _guest_sidebar(role, groups)
+
+    seen_titles = set()
+    panels = []
+    for _, items in _GUEST_COACH_GROUPS + _GUEST_PLAYER_GROUPS:
+        for key, label in items:
+            if label in seen_titles:
+                continue
+            seen_titles.add(label)
+            panels.append(ui.nav_panel(label, _GUEST_PANEL_BUILDERS[key]()))
+
+    topbar = ui.div(
+        ui.tags.button(ui.HTML('<svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2"><path d="M4 7h16M4 12h16M4 17h16"/></svg>'), class_="btn btn-outline-light gbo-menu-btn", type="button"),
+        ui.div(ui.HTML(f"<b>{first_title}</b>"), class_="gbo-crumb", id="gbo-crumb"),
+        ui.div(
+            ui.input_action_button("guest_back_to_login", "Go to login", class_="btn-sm btn-outline-light"),
+            class_="gbo-top-right",
         ),
+        class_="gbo-top",
+    )
 
-        ui.hr(),
-        ui.h4("Team Schedule, Player Assignments & AT Appointments"),
-        ui.p(
-            ui.strong("Team Schedule"), " is a shared calendar for team-wide events -- lift days, practices, games. ",
-            ui.strong("Player Assignments"), " are forward-looking, prescribed tasks for a specific player (e.g. \"today: "
-            "throwing program\"), assigned ahead of time by a coach or Athletic Trainer -- separate from the "
-            "Training Sessions log of completed work. ", ui.strong("Athletic Trainer Appointments"), " are real, timed "
-            "appointments between a specific player and a specific Athletic Trainer. Together, these give "
-            "every player a clear picture of what's coming up -- team commitments, individual prescribed work, "
-            "and medical appointments -- all in one place on their own dashboard."
+    return ui.div(
+        ui.div(
+            ui_helpers.page_header("Gorilla Baseball Operations"),
+            ui.p(
+                "A comprehensive player development platform for Pittsburg State Gorilla Baseball -- click "
+                "around the sidebar below just like a real login. Everything shown is illustrative: a "
+                "fictional roster and fictional numbers, running through the exact same GBO code a real "
+                "coach or player uses."
+            ),
+            ui.p("You're viewing example data as a guest -- this is not connected to real player records.", class_="text-muted small"),
+            ui.div(
+                ui.input_action_button("guest_role_coach", "View as Coach", class_="btn-sm " + ("btn-primary" if role != "player" else "btn-outline-secondary")),
+                ui.input_action_button("guest_role_player", "View as Player", class_="btn-sm " + ("btn-primary" if role == "player" else "btn-outline-secondary")),
+                style="display:flex; gap:8px; margin-bottom:4px;",
+            ),
+            class_="p-4 pb-2",
         ),
-
-        ui.hr(),
-        ui.h4("Rapsodo & Video Integration"),
-        ui.p(
-            "Bulk-import an entire Rapsodo pitching session in one upload instead of typing in every pitch "
-            "by hand -- the platform maps columns automatically (with sensible pre-filled guesses), converts "
-            "units where needed (like spin axis from clock format to degrees), and creates one record per "
-            "pitch. Any individual pitch can then have video uploaded and linked directly to it, so a coach "
-            "can pull up the exact numbers for a pitch side-by-side with the actual footage -- comparing what "
-            "the data says against what the eye sees."
+        ui.div(
+            sidebar,
+            ui.div(
+                topbar,
+                ui.div(ui.navset_hidden(*panels, id="main_nav", selected=first_title), class_="gbo-content"),
+                class_="gbo-main",
+            ),
+            ui.tags.script(_SIDEBAR_JS),
+            class_="gbo-app",
         ),
-
-        ui.hr(),
-        ui.h4("Role-Based Dashboards"),
-        ui.p("Every role sees a dashboard built around what actually matters for their job, all pulling from the same underlying data:"),
-        *[
-            ui.div(ui.p(ui.strong(role)), ui.p(desc), ui.br())
-            for role, desc in _GUEST_DASHBOARDS
-        ],
-
-        ui.hr(),
-        ui.p("Ready to see the real thing? Log in with a GBO account using the button below.", class_="text-muted"),
-        ui.input_action_button("guest_back_to_login", "Go to login", class_="btn-primary"),
-
-        ui_helpers.page_footer(),
-        class_="p-4",
+        ui.div(ui_helpers.page_footer(), class_="p-4"),
     )
 
 
