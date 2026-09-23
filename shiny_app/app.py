@@ -518,11 +518,7 @@ _GUEST_PANEL_BUILDERS = {
         "Real, timed appointments between a specific player and a specific Athletic Trainer, so medical care "
         "shows up on the same shared calendar as everything else a player has coming up.",
     ),
-    "bullpen_dashboard": lambda: _guest_sample_panel(
-        "Bullpen",
-        "A roster-wide rollup of every pitcher's Rapsodo bullpen sessions -- velocity, spin, and movement "
-        "trends over time, at a glance across the whole staff, instead of opening one pitcher's Profile at a time.",
-    ),
+    "bullpen_dashboard": guest_demo.build_bullpen_dashboard_deep_dive,
     "rapsodo_import": lambda: _guest_sample_panel(
         "Import Rapsodo",
         "Bulk-import an entire Rapsodo pitching session in one upload instead of typing in every pitch by "
