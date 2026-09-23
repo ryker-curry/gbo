@@ -68,7 +68,7 @@ from modules import (  # noqa: E402
     pitcher_profile, hitter_profile, pitching_leaderboard,
     user_management, staff_assignments, hitter_tracking,
     opponent_teams, bullpen_scripts, training_routines, idp, bullpen_tracking,
-    game_tracking, command_tracker, roster, player_profile,
+    game_tracking, command_tracker, roster, player_profile, guest_demo,
 )
 
 # Registry of page keys (see nav.NavPage.key) that have a real Shiny
@@ -372,6 +372,16 @@ def _guest_ui():
             "platform does."
         ),
         ui.p("You're viewing example data as a guest -- this is not connected to real player records.", class_="text-muted small"),
+
+        ui.hr(),
+        # Sept 2026 addition -- see shiny_app/modules/guest_demo.py's own
+        # docstring. Deep-dive #1 (of a planned series -- one per major
+        # module, added as each gets built out here): Pitcher Profile,
+        # GBO's flagship analytics page, walked through end to end on a
+        # fictional roster with real GBO math. Placed first/high on the
+        # page since it's the strongest single argument for what GBO
+        # actually does, ahead of the plainer module-by-module list below.
+        guest_demo.build_pitcher_profile_deep_dive(),
 
         ui.hr(),
         ui.h5("Example: what a coach sees at a glance", class_="gbo-section-title"),
