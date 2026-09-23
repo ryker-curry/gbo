@@ -64,6 +64,9 @@ from analytics.pitch_grading import (
     stuff_plus as score_stuff_plus,
     team_location_plus_baseline,
 )
+import game_stats
+import pitch_location_stats
+from strike_zone import derive_old_zone
 
 _SEED = 20260923
 
@@ -234,6 +237,278 @@ def _build_stuff_plus_model(pitch_type_label, pitches_of_type, fastball_velo_by_
         "prediction_baseline": (mean(composites), p_sd or 1e-9),
         "pitcher_fastball_velocities": fastball_velo_by_player,
         "n": len(rows),
+    }
+
+
+# --- Pitcher Game Report demo data (Sept 2026) -------------------------
+# Second deep dive in the series (see module docstring above and
+# guest_demo.py's own). Same philosophy as demo_pitcher_report() above:
+# manufacture a plausible, entirely fictional single-game outing, then
+# run it through the REAL game_stats.py/pitch_location_stats.py
+# functions the live Pitcher Game Report page calls -- compute_pitching_
+# line, compute_pitch_type_breakdown, compute_command_precision,
+# compute_attack_zones. All four of those take a flat pitch list and do
+# their own PA-grouping/inning-math internally; nothing about them
+# needed changing to accept fake data.
+#
+# Three deliberate simplifications, on top of the two already in this
+# module's docstring:
+#   3. A single simulated start (a fixed number of innings, ending on
+#      the 3rd out of the last one) with a simple pitch-by-pitch count
+#      state machine and standard force/advance-one-extra-base logic on
+#      contact. No stolen bases, pickoffs, sac bunts/flies, double
+#      plays, or fielding-choice advancement -- illustrative, not a full
+#      baseball rules engine (real Game Tracking data has all of that;
+#      this doesn't need to reproduce it to show what the REPORT looks
+#      like).
+#   4. Batter handedness isn't modeled -- this game report shows
+#      overall/"All Batters" numbers only, not the real page's vs-RHH/
+#      vs-LHH split, since there's no fake opposing lineup to hang a
+#      handedness split on.
+
+_GAME_TARGET_INNINGS = 5  # a single simulated start, ~75-85 pitches
+
+# Extends the simplification-#2 run-value table above with the extra
+# outcomes a full simulated game touches that the bullpen/Command+ demo
+# data (a flat list of independent located pitches, no real PA
+# structure) never needed.
+_RUN_VALUE.update({
+    "HBP": 0.32, "K (Looking)": -0.25, "Lineout": -0.15, "3B": 0.95, "HR": 1.40,
+})
+
+# (ab_outcome, contact_quality, batted_ball_type, weight) for a ball
+# actually put in play -- skewed toward outs, same "competent college
+# staff" flavor as _OUTCOME_TABLE above.
+_IN_PLAY_TABLE = [
+    ("Groundout", "Weak", "Ground Ball", 0.24),
+    ("Groundout", "Clipped", "Ground Ball", 0.12),
+    ("Flyout", "Weak", "Fly Ball", 0.14),
+    ("Flyout", "Off the End", "Fly Ball", 0.09),
+    ("Lineout", "Solid", "Line Drive", 0.07),
+    ("1B", "Solid", "Line Drive", 0.11),
+    ("1B", "Clipped", "Ground Ball", 0.08),
+    ("2B", "Solid", "Line Drive", 0.06),
+    ("3B", "Solid", "Fly Ball", 0.01),
+    ("HR", "Barreled/Squared Up", "Fly Ball", 0.03),
+    ("E", "Weak", "Ground Ball", 0.02),
+    ("Flyout", "Jammed", "Fly Ball", 0.03),
+]
+
+# (pitch_outcome, weight) for one pitch within a plate appearance --
+# distinct from _OUTCOME_TABLE above, which bundles pitch_outcome AND a
+# specific ab_outcome/ends_pa together for the independent-pitch bullpen
+# demo. Here the ab_outcome/ends_pa is worked out from the running
+# count instead, since a real plate appearance is a sequence, not one
+# independent draw.
+_PA_PITCH_EVENT_TABLE = [
+    ("Ball", 0.36), ("Called Strike", 0.15), ("Swing and Miss", 0.09),
+    ("Foul", 0.14), ("In Play", 0.24), ("HBP", 0.02),
+]
+
+_MAX_PITCHES_PER_PA = 10  # safety valve -- forces an In Play if a PA runs long on foul-ball luck
+
+
+def _sample_in_play(rng):
+    ab_outcome, contact_quality, batted_ball_type, _w = _weighted_choice(rng, _IN_PLAY_TABLE)
+    return ab_outcome, contact_quality, batted_ball_type
+
+
+def _advance_bases(bases, ab_outcome):
+    """Simplified force/one-extra-base advancement -- see this
+    section's module comment (simplification #3). Returns
+    (outs_recorded, runs_scored, new_bases_list, unearned_runs)."""
+    b = list(bases)
+    runs = 0
+    outs = 0
+    unearned = 0
+    if ab_outcome in ("K", "K (Looking)", "Groundout", "Flyout", "Lineout"):
+        outs = 1
+    elif ab_outcome in ("BB", "HBP"):
+        if b[0]:
+            if b[1]:
+                if b[2]:
+                    runs += 1
+                b[2] = 1
+            b[1] = 1
+        b[0] = 1
+    elif ab_outcome in ("1B", "E"):
+        runs += b[2]
+        b = [1, b[0], b[1]]
+        if ab_outcome == "E":
+            unearned = runs
+    elif ab_outcome == "2B":
+        runs += b[0] + b[1] + b[2]
+        b = [0, 1, 0]
+    elif ab_outcome == "3B":
+        runs += b[0] + b[1] + b[2]
+        b = [0, 0, 1]
+    elif ab_outcome == "HR":
+        runs += b[0] + b[1] + b[2] + 1
+        b = [0, 0, 0]
+    return outs, runs, b, unearned
+
+
+def _simulate_pa(rng, arsenal, bases_before, outs_before, seq_start, game_id):
+    """One plate appearance's worth of fake GamePitch-shaped
+    SimpleNamespace rows, pitch by pitch, with a real running count and
+    real intended/actual plate coordinates -- everything
+    compute_pitching_line/compute_pitch_type_breakdown/
+    compute_command_precision/compute_attack_zones read. Returns
+    (pitches, outs_recorded, runs_scored, new_bases, unearned_runs)."""
+    labels, weights = zip(*arsenal)
+    bases_str = "".join(str(x) for x in bases_before)
+    balls = 0
+    strikes = 0
+    pitches = []
+    pa_pitch_number = 0
+    while True:
+        pa_pitch_number += 1
+        balls_before, strikes_before = balls, strikes
+        label = rng.choices(labels, weights=weights)[0]
+        event, _w = _weighted_choice(rng, _PA_PITCH_EVENT_TABLE)
+        ends_pa, ab_outcome, contact_quality, batted_ball_type = False, None, None, None
+
+        if event == "Ball":
+            balls += 1
+            if balls >= 4:
+                ends_pa, ab_outcome = True, "BB"
+        elif event == "Called Strike":
+            strikes += 1
+            if strikes >= 3:
+                ends_pa, ab_outcome = True, "K (Looking)"
+        elif event == "Swing and Miss":
+            strikes += 1
+            if strikes >= 3:
+                ends_pa, ab_outcome = True, "K"
+        elif event == "Foul":
+            if strikes < 2:
+                strikes += 1
+        elif event == "HBP":
+            ends_pa, ab_outcome = True, "HBP"
+        elif event == "In Play":
+            ends_pa = True
+            ab_outcome, contact_quality, batted_ball_type = _sample_in_play(rng)
+
+        if not ends_pa and pa_pitch_number >= _MAX_PITCHES_PER_PA:
+            event = "In Play"
+            ends_pa, ab_outcome, contact_quality, batted_ball_type = True, "Groundout", "Weak", "Ground Ball"
+
+        intended_x = round(rng.uniform(-0.6, 0.6), 3)
+        intended_z = round(rng.uniform(1.3, 3.0), 3)
+        actual_x = round(intended_x + rng.gauss(0, 0.35), 3)
+        actual_z = round(intended_z + rng.gauss(0, 0.35), 3)
+
+        seq = seq_start + pa_pitch_number - 1
+        run_value = _RUN_VALUE.get(ab_outcome if ab_outcome else event)
+
+        outs_after_val, bases_after_str, runs, new_bases, unearned = None, None, 0, bases_before, 0
+        if ends_pa:
+            outs_recorded, runs, new_bases, unearned = _advance_bases(bases_before, ab_outcome)
+            outs_after_val = outs_before + outs_recorded
+            bases_after_str = "".join(str(x) for x in new_bases)
+
+        pitches.append(SimpleNamespace(
+            pitch_type=SimpleNamespace(type_name=label),
+            game_id=game_id, game_pitch_id=game_id * 10000 + seq, pitch_sequence=seq,
+            pa_pitch_number=pa_pitch_number,
+            balls_before=balls_before, strikes_before=strikes_before,
+            outs_before=outs_before, outs_after=outs_after_val if ends_pa else outs_before,
+            bases_before=bases_str, bases_after=bases_after_str if ends_pa else bases_str,
+            intended_plate_x=intended_x, intended_plate_z=intended_z,
+            actual_plate_x=actual_x, actual_plate_z=actual_z,
+            intended_zone=derive_old_zone(intended_x, intended_z), pitch_zone=derive_old_zone(actual_x, actual_z),
+            pitch_outcome=event, ab_outcome=ab_outcome, ends_plate_appearance=ends_pa,
+            contact_quality=contact_quality, batted_ball_type=batted_ball_type,
+            is_sword=False,
+            runs_scored_on_play=runs if ends_pa else 0,
+            unearned_runs_on_play=unearned if ends_pa else 0,
+            earned_runs_on_play=(runs - unearned) if ends_pa else 0,
+            run_value=run_value,
+        ))
+        if ends_pa:
+            return pitches, (outs_after_val - outs_before), runs, new_bases, unearned
+
+
+def _simulate_game(rng, arsenal, game_id, target_innings=_GAME_TARGET_INNINGS):
+    """A single fictional start: pitch-by-pitch, inning by inning, until
+    target_innings complete (3 outs each) -- see this section's module
+    comment for exactly what is and isn't modeled."""
+    inning = 1
+    outs = 0
+    bases = [0, 0, 0]
+    seq = 1
+    all_pitches = []
+    while inning <= target_innings:
+        pa_pitches, outs_recorded, _runs, new_bases, _unearned = _simulate_pa(rng, arsenal, bases, outs, seq, game_id)
+        all_pitches.extend(pa_pitches)
+        seq += len(pa_pitches)
+        outs += outs_recorded
+        bases = new_bases
+        if outs >= 3:
+            inning += 1
+            outs = 0
+            bases = [0, 0, 0]
+    return all_pitches
+
+
+# Curated column subset for the pitch-type breakdown display -- the
+# real compute_pitch_type_breakdown() returns ~50 columns (every stat
+# on Ryker's own tracking sheet); this mirrors this module's own
+# docstring's "Usage/Strike/CSW/Whiff/Chase/Putaway/GB-FB-LD%" headline
+# set rather than dumping the entire row.
+_BREAKDOWN_DISPLAY_COLUMNS = [
+    "Pitch Type", "Total Pitches", "Pitch Usage %", "Strike %", "Whiff %", "CSW %",
+    "Chase %", "Putaway %", "Ground Ball %", "Fly Ball %", "Line Drive %", "Dominance %", "RV/100",
+]
+
+_PITCHING_LINE_DISPLAY_KEYS = [
+    "IP", "Batters Faced", "Pitches", "K", "BB", "H Allowed", "HR Allowed", "Runs Allowed",
+    "ER Allowed", "Strike %", "First Pitch Strike %", "WHIP", "ERA", "FIP", "E+A %",
+]
+
+_GAME_STATE = None  # built once, lazily -- see _game_state()
+
+
+def _game_state():
+    global _GAME_STATE
+    if _GAME_STATE is None:
+        # +1 on the seed so this draws a different (but still fixed,
+        # reproducible) random stream than _state()'s bullpen/Command+
+        # data above -- same featured pitcher, a separate fake outing.
+        rng = random.Random(_SEED + 1)
+        state = _state()
+        player = state.players[FEATURED_PLAYER_NAME]
+        spec = next(s for s in _ROSTER if s["name"] == FEATURED_PLAYER_NAME)
+        # Fastball-heavy mix, same real-world skew a two-pitch reliever/
+        # starter mix would actually show in a game.
+        arsenal = [(label, 0.62 if label == "4-Seam Fastball" else 0.38) for label in spec["pitches"]]
+        pitches = _simulate_game(rng, arsenal, game_id=999)
+        _GAME_STATE = SimpleNamespace(player=player, pitches=pitches)
+    return _GAME_STATE
+
+
+def demo_game_report():
+    """Everything the guest-mode Pitcher Game Report deep dive needs
+    for one fake single-game outing, computed with the SAME analytics
+    functions the real Pitcher Game Report page calls (see this
+    module's Pitcher Game Report section comment above)."""
+    game = _game_state()
+    player = game.player
+    pitches = game.pitches
+
+    line = game_stats.compute_pitching_line(pitches)
+    breakdown_rows = game_stats.compute_pitch_type_breakdown(pitches)
+    command_overall, command_by_type = pitch_location_stats.compute_command_precision(pitches, throws=player.throws)
+    zones_overall, zones_by_type = pitch_location_stats.compute_attack_zones(pitches)
+
+    return {
+        "player": player,
+        "pitching_line": {k: line.get(k) for k in _PITCHING_LINE_DISPLAY_KEYS},
+        "breakdown_rows": [{col: row.get(col) for col in _BREAKDOWN_DISPLAY_COLUMNS} for row in breakdown_rows],
+        "command_overall": command_overall,
+        "command_by_type": command_by_type,
+        "zones_overall": zones_overall,
+        "zones_by_type": zones_by_type,
     }
 
 
