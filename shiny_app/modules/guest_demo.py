@@ -216,15 +216,13 @@ def build_pitcher_profile_deep_dive():
 
         ui.hr(),
         ui.div(
-            ui.h5("Research: does conditioning type actually change how a fastball plays under fatigue?", class_="gbo-section-title"),
+            ui.h5("Research: do the Bucket System's physical-testing categories actually predict fastball velocity and spin rate?", class_="gbo-section-title"),
             ui.p(
-                ui.strong("Coming soon."), " I'm running two related research threads alongside GBO itself: a "
-                "correlation study checking whether the Bucket System's physical-testing categories (strength, "
-                "power, speed) actually predict fastball velocity and spin rate, and a Master's thesis testing "
-                "whether conditioning type (aerobic/endurance vs. sprint/interval vs. a hybrid) changes fatigue "
-                "and pitching performance over the course of a game or a season. Once those correlations are run "
-                "against real data, this section will walk through the testing battery, the study design, and "
-                "the actual findings -- the same way the sections above walk through Stuff+ and Command+."
+                ui.strong("Coming soon."), " I'm running a correlation study alongside GBO itself, checking "
+                "whether the Bucket System's physical-testing categories (strength, power, speed) actually "
+                "predict fastball velocity and spin rate. Once that's run against real data, this section will "
+                "walk through the testing battery, the study design, and the actual findings -- the same way "
+                "the sections above walk through Stuff+ and Command+."
             ),
             class_="gbo-profile-card", style="padding:16px; border-style:dashed;",
         ),
