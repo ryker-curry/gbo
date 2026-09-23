@@ -80,11 +80,11 @@ BODY_COMPOSITION_TESTS = [
     ("Body Weight", "lb"), ("Body Fat Mass", "lb"), ("Skeletal Muscle Mass", "lb"),
     ("Percent Body Fat", "%"), ("Skeletal Muscle Mass %", "%"), ("Fat-Free Mass", "lb"),
     ("Fat Mass Index (FMI)", "kg/m2"), ("Skeletal Muscle Index (SMI)", "kg/m2"),
-    ("ECW/TBW Ratio", "ratio"), ("Throwing Arm Lean Mass", "lb"),
-    ("Non-Throwing Arm Lean Mass", "lb"), ("Trunk Lean Mass", "lb"),
-    ("Right Leg Lean Mass", "lb"), ("Left Leg Lean Mass", "lb"),
+    ("ECW/TBW Ratio", "ratio"), ("Fat-Free Mass (Throwing Arm)", "lb"),
+    ("Fat-Free Mass (Glove/Non-Throwing Arm)", "lb"), ("Trunk Lean Mass", "lb"),
+    ("Lean Mass (Drive Leg)", "lb"), ("Lean Mass (Plant Leg)", "lb"),
     ("Throwing Arm Fat Mass", "lb"), ("Non-Throwing Arm Fat Mass", "lb"),
-    ("Trunk Fat Mass", "lb"), ("Right Leg Fat Mass", "lb"), ("Left Leg Fat Mass", "lb"),
+    ("Trunk Fat Mass", "lb"), ("Fat Mass (Drive Leg)", "lb"), ("Fat Mass (Plant Leg)", "lb"),
     # Sept 1 2026 addition (Ryker: "our machine gives bmr and recommended
     # caloric intake") -- the InBody770 printout's two metabolic-guidance
     # fields. Same "enterable, reference-only, not scored" treatment as
