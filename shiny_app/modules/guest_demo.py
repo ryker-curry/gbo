@@ -14,8 +14,9 @@ straight from analytics/pitch_grading.py's own comments, so they're
 accurate as written. Worth a re-read after any real change to that
 methodology, since this page doesn't update itself.
 
-Two deep dives so far: build_pitcher_profile_deep_dive() and
-build_game_report_deep_dive() (Sept 2026). As GBO adds features, this
+Three deep dives so far: build_pitcher_profile_deep_dive(),
+build_game_report_deep_dive(), and build_bullpen_dashboard_deep_dive()
+(Sept 2026). As GBO adds features, this
 file -- and the rest of _guest_ui() in app.py -- needs the same kind
 of update: a new deep-dive function here, wired into app.py's
 _GUEST_PANEL_BUILDERS in place of that key's placeholder sample
@@ -345,5 +346,76 @@ def build_game_report_deep_dive():
             "show what the page looks like and how it reads; not a claim that this exact math simulates a real "
             "baseball game.",
             class_="gbo-profile-card text-muted small", style="padding:14px; border-style:dashed;",
+        ),
+    )
+
+
+def build_bullpen_dashboard_deep_dive():
+    report = demo_data.demo_bullpen_dashboard()
+    player = report["player"]
+    full_name = f"{player.first_name} {player.last_name}"
+    kpis = report["kpis"]
+
+    return ui.div(
+        ui.h4("Sample Bullpen Dashboard", class_="gbo-section-title"),
+        ui.p(
+            ui.strong(full_name), "'s bullpen sessions below are not real. ", ui.strong("Every pitch is synthetic"),
+            " -- four fake Rapsodo sessions built by demo_data.py, spread over the last few weeks, scored by the "
+            "exact same analytics.bullpen_metrics functions (session_summary, pitch_type_summary) and rendered "
+            "with the exact same Plotly chart builders (movement_chart, release_point_chart, location_chart) the "
+            "real Bullpen Dashboard page uses. Nothing here is connected to the real database, and no real "
+            "player's data was used to build it.",
+        ),
+        ui.p(
+            "The real page is per-pitcher: an Overall Pitch Tracking table across every session a pitcher has "
+            "ever thrown, sitting above a full drill-down on whichever one session gets picked. This sample "
+            "shows that same shape -- the table below, then a full drill-down on the most recent session."
+        ),
+
+        ui.hr(),
+        ui.h5("Overall Pitch Tracking"),
+        ui.p("Every session on file for this pitcher, most recent last -- the same table a coach sees before picking one to open."),
+        ui_helpers.render_dict_table(report["overall_rows"]),
+        _role_callout(
+            "see at a glance whether a pitcher's bullpen work is consistent session to session, or spot a gap "
+            "in how often someone's actually getting on a mound between outings.",
+            "see their own bullpen history the same way a coach does, instead of only remembering how the last "
+            "one felt.",
+        ),
+
+        ui.hr(),
+        ui.h5(f"Session Drill-Down — {report['latest_session_date'].strftime('%B %d, %Y')}"),
+        ui.p("Opening the most recent session: the same KPI cards, pitch-type summary, and core charts the real page shows for whichever session gets picked."),
+        ui.div(
+            ui_helpers.kpi_tile("Total Pitches", kpis.get("total_pitches")),
+            ui_helpers.kpi_tile("Avg Velo", kpis.get("avg_velocity")),
+            ui_helpers.kpi_tile("Max Velo", kpis.get("max_velocity")),
+            ui_helpers.kpi_tile("Avg Spin", kpis.get("avg_spin_rate")),
+            class_="gbo-kpi-row",
+        ),
+        ui_helpers.render_dict_table(report["breakdown"]),
+
+        ui.div(
+            ui.div(ui.p(ui.strong("Pitch Movement"), style="text-align:center;"), report["movement_img"], style="flex:1; min-width:280px;"),
+            ui.div(ui.p(ui.strong("Release Point (avg. by type)"), style="text-align:center;"), report["release_img"], style="flex:1; min-width:280px;"),
+            style="display:flex; gap:16px; flex-wrap:wrap; margin:16px 0;",
+        ),
+        ui.div(
+            ui.p(ui.strong("Pitch Location"), style="text-align:center;"),
+            report["location_img"],
+            style="max-width:420px; margin:0 auto 16px;",
+        ),
+        _role_callout(
+            "check release-point consistency and movement shape session to session -- a release point that's "
+            "drifted, or a breaking ball that's lost its shape, usually shows up here before it shows up in results.",
+            "see their own stuff the same visual way a coach or a pro scouting report would show it, right after "
+            "a bullpen instead of waiting to hear about it secondhand.",
+        ),
+        _citation(
+            "Pitch Movement is drawn as a plain Cartesian grid (Horizontal Break vs. Induced Vertical Break) to "
+            "match Rapsodo's own native movement plot, on purpose -- an earlier concentric-ring version was "
+            "built first, then walked back once it was clear the rings encode total movement distance, not "
+            "either axis on its own, which reads misleading. Release Point axes are fixed to the same range on "
+            "every session so consistency is comparable session to session instead of each chart auto-zooming."
         ),
     )

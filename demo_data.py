@@ -45,12 +45,15 @@ called out again where they're used below:
      these exact numbers are calibrated.
 """
 
+import datetime
 import random
 from collections import defaultdict
 from statistics import mean, stdev
 from types import SimpleNamespace
 
-from analytics.bullpen_metrics import pitch_type_summary
+import chart_helpers
+from analytics.bullpen_metrics import pitch_type_summary, session_summary
+from visualizations.bullpen_charts import location_chart, movement_chart, release_point_chart
 from analytics.command_metrics import (
     game_pitches_command_view,
     miss_bias,
@@ -630,4 +633,109 @@ def demo_pitcher_report(name=FEATURED_PLAYER_NAME):
         "grades": grades,
         "command": scorecard,
         "miss_bias": bias,
+    }
+
+
+# --- Bullpen Dashboard demo data (Sept 2026) ----------------------------
+# Third deep dive in the series. Same philosophy as the two above:
+# manufacture plausible, entirely fictional data, then run it through
+# the REAL production functions the live Bullpen Dashboard page calls
+# -- analytics.bullpen_metrics.session_summary/pitch_type_summary, and
+# the real Plotly chart builders in visualizations.bullpen_charts
+# (movement_chart/release_point_chart/location_chart), rendered to a
+# static PNG the exact same way via chart_helpers.fig_to_img -- so this
+# is the first deep dive with real charts, not just tables.
+#
+# The real Bullpen Dashboard page is per-pitcher: an "Overall Pitch
+# Tracking" table (every session, combined) sitting above a single
+# session's full drill-down. This module's existing bullpen pitches
+# (see _build_rapsodo_pitch/_generate above) are one flat, undated pool
+# per player -- fine for Pitcher Profile's arsenal-wide averages, but
+# this page needs actual discrete, dated SESSIONS to show a real
+# "Overall Pitch Tracking" table and let one session be picked out for
+# drill-down. _build_bullpen_sessions() below builds those sessions
+# fresh (own RNG stream, own pitch objects) rather than reusing
+# _state()'s pool, so nothing about the existing Pitcher Profile/Game
+# Report demo data changes.
+
+_BULLPEN_SESSION_DAYS_AGO = [21, 14, 7, 2]  # oldest first; last one is "most recent"
+_PITCHES_PER_BULLPEN_SESSION = 16
+
+
+def _build_bullpen_sessions(rng, player_id, arsenal):
+    """arsenal: [(pitch_type_label, weight), ...] -- same shape
+    _simulate_game's arsenal argument uses. Returns a list of
+    SimpleNamespace(bullpen_id, session_date, pitches), oldest first."""
+    labels, weights = zip(*arsenal)
+    sessions = []
+    today = datetime.date.today()
+    for i, days_ago in enumerate(_BULLPEN_SESSION_DAYS_AGO, start=1):
+        session_date = today - datetime.timedelta(days=days_ago)
+        bullpen_id = player_id * 100 + i
+        pitches = []
+        for n in range(1, _PITCHES_PER_BULLPEN_SESSION + 1):
+            label = rng.choices(labels, weights=weights)[0]
+            pitch = _build_rapsodo_pitch(rng, player_id, label, _PROFILES[label])
+            pitch.pitch_number = n
+            pitch.pitch_date = datetime.datetime.combine(session_date, datetime.time(hour=15, minute=0)) + datetime.timedelta(minutes=n)
+            pitch.bullpen_id = bullpen_id
+            pitches.append(pitch)
+        sessions.append(SimpleNamespace(bullpen_id=bullpen_id, session_date=session_date, pitches=pitches))
+    return sessions
+
+
+_BULLPEN_STATE = None  # built once, lazily -- see _bullpen_state()
+
+
+def _bullpen_state():
+    global _BULLPEN_STATE
+    if _BULLPEN_STATE is None:
+        rng = random.Random(_SEED + 2)  # own draw, separate from _state()/_game_state()
+        state = _state()
+        player = state.players[FEATURED_PLAYER_NAME]
+        spec = next(s for s in _ROSTER if s["name"] == FEATURED_PLAYER_NAME)
+        arsenal = [(label, 0.62 if label == "4-Seam Fastball" else 0.38) for label in spec["pitches"]]
+        sessions = _build_bullpen_sessions(rng, player.player_id, arsenal)
+        _BULLPEN_STATE = SimpleNamespace(player=player, sessions=sessions)
+    return _BULLPEN_STATE
+
+
+def demo_bullpen_dashboard():
+    """Everything the guest-mode Bullpen Dashboard deep dive needs:
+    an Overall Pitch Tracking row per fake session, plus a full
+    drill-down (KPI summary, pitch-type breakdown, and three real
+    charts) on the most recent one -- computed with the SAME
+    analytics.bullpen_metrics/visualizations.bullpen_charts functions
+    the real page calls."""
+    bp = _bullpen_state()
+    player = bp.player
+    sessions = bp.sessions
+    latest = sessions[-1]
+
+    overall_rows = [
+        {
+            "Session": s.session_date.strftime("%b %d, %Y"),
+            "Pitches": len(s.pitches),
+            "Pitch Types": ", ".join(sorted({p.pitch_type.type_name for p in s.pitches})),
+            "Avg Velo": round(mean(p.velocity for p in s.pitches), 1),
+        }
+        for s in sessions
+    ]
+
+    kpis = session_summary(latest.pitches)
+    breakdown = pitch_type_summary(latest.pitches, player=player)
+
+    movement_img = chart_helpers.fig_to_img(movement_chart(latest.pitches))
+    release_img = chart_helpers.fig_to_img(release_point_chart(latest.pitches, mode="average"))
+    location_img = chart_helpers.fig_to_img(location_chart(latest.pitches, mode="heatmap"))
+
+    return {
+        "player": player,
+        "overall_rows": overall_rows,
+        "latest_session_date": latest.session_date,
+        "kpis": kpis,
+        "breakdown": breakdown,
+        "movement_img": movement_img,
+        "release_img": release_img,
+        "location_img": location_img,
     }
