@@ -660,6 +660,7 @@ def pitcher_profile_server(input, output, session, app_state):
                     "IVB": row["IVB"], "HB": row["HB"],
                     "Release Ht": row["Release Height"], "Release Side": row["Release Side"],
                     "Arm Angle": row.get("Est. Arm Angle", "N/A"),
+                    "Est. VAA": row.get("Est. VAA", "N/A"),
                 })
 
             # Release-point pitcher graphic (Sept 2026, Ryker: "want to
