@@ -51,7 +51,7 @@ for _p in (_REPO_ROOT, _THIS_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from shiny import App, ui, render, reactive  # noqa: E402
+from shiny import App, ui, render, reactive, req  # noqa: E402
 
 from state import new_app_state  # noqa: E402
 from auth import do_login, do_logout  # noqa: E402
@@ -60,6 +60,9 @@ import ui_helpers  # noqa: E402
 import theme  # noqa: E402
 import chart_helpers  # noqa: E402
 import click_widgets  # noqa: E402
+from shinywidgets import output_widget, render_plotly  # noqa: E402
+import demo_data  # noqa: E402
+import strike_zone  # noqa: E402
 from modules import (  # noqa: E402
     dashboard, player_schedule, player_stats, players, assessments, video_import,
     team_schedule, player_assignments, at_appointments, rapsodo_import,
@@ -214,6 +217,112 @@ def server(input, output, session):
     @reactive.event(input.guest_role_player)
     def _on_guest_role_player():
         guest_role.set("player")
+
+    # --- Guest-mode Game Tracking deep dive (4th interactive page,
+    # Sept 2026) -- see _guest_game_tracking_panel() above for the UI
+    # shell. Unlike the other three deep dives (pre-computed once from
+    # demo_data.py, never mutated), this one is genuinely live: a
+    # session-local pitch log the guest builds by clicking, resetting
+    # only on "New At-Bat". Reuses the real Live Tracking page's exact
+    # click-to-place widget (strike_zone.build_zone_selector_figure +
+    # click_widgets.click_target/build_clickable_widget) and the same
+    # PITCH_OUTCOMES/CONTACT_QUALITY_OPTIONS/is_in_zone/
+    # classify_attack_zone this app already uses for real charted
+    # pitches -- only the count-advance logic below is a deliberately
+    # simplified, single-at-bat-at-a-time stand-in for the real page's
+    # full game/inning/baserunner state (see the "what's simplified
+    # here" note on the page itself). Never touches the database.
+    guest_gt_state = reactive.Value({"balls": 0, "strikes": 0, "pa_number": 1, "log": []})
+
+    @render_plotly
+    def guest_gt_zone_widget():
+        req("guest_gt_x_input" in input)
+        x, z = input.guest_gt_x_input(), input.guest_gt_z_input()
+        return click_widgets.build_clickable_widget(strike_zone.build_zone_selector_figure(marker_x=x, marker_z=z))
+
+    @render.ui
+    def guest_gt_outcome_dependent_fields():
+        req("guest_gt_outcome" in input)
+        if input.guest_gt_outcome() != "In Play":
+            return None
+        contact_choices = [c for c in game_tracking.CONTACT_QUALITY_OPTIONS if c != "Miss"]
+        return ui.input_select("guest_gt_contact_quality", "Contact Quality", choices=contact_choices)
+
+    @reactive.effect
+    @reactive.event(input.guest_gt_log_btn)
+    def _on_guest_gt_log_pitch():
+        outcome = input.guest_gt_outcome()
+        x, z = input.guest_gt_x_input(), input.guest_gt_z_input()
+        contact_quality = input.guest_gt_contact_quality() if outcome == "In Play" and "guest_gt_contact_quality" in input else None
+        prev = guest_gt_state()
+        balls, strikes = prev["balls"], prev["strikes"]
+        balls_before, strikes_before = balls, strikes
+        ends_pa = False
+        if outcome == "Ball":
+            balls += 1
+            ends_pa = balls >= 4
+        elif outcome == "HBP":
+            ends_pa = True
+        elif outcome == "In Play":
+            ends_pa = True
+        elif outcome == "Foul":
+            if strikes < 2:
+                strikes += 1
+        else:  # Called Strike, Swing and Miss
+            strikes += 1
+            ends_pa = strikes >= 3
+        entry = {
+            "pitch_number": len(prev["log"]) + 1,
+            "balls_before": balls_before, "strikes_before": strikes_before,
+            "pitch_type": input.guest_gt_pitch_type(), "outcome": outcome,
+            "plate_x": x, "plate_z": z, "contact_quality": contact_quality,
+            "in_zone": strike_zone.is_in_zone(x, z),
+            "attack_zone": strike_zone.classify_attack_zone(x, z),
+        }
+        guest_gt_state.set({
+            "balls": 0 if ends_pa else balls, "strikes": 0 if ends_pa else strikes,
+            "pa_number": prev["pa_number"] + 1 if ends_pa else prev["pa_number"],
+            "log": prev["log"] + [entry],
+        })
+        if ends_pa:
+            ui.notification_show(f"At-bat #{prev['pa_number']} ended: {outcome}. Starting a new at-bat.", type="message", duration=5)
+
+    @reactive.effect
+    @reactive.event(input.guest_gt_new_ab_btn)
+    def _on_guest_gt_new_ab():
+        prev = guest_gt_state()
+        guest_gt_state.set({"balls": 0, "strikes": 0, "pa_number": prev["pa_number"] + 1, "log": prev["log"]})
+
+    @render.ui
+    def guest_gt_kpis():
+        st = guest_gt_state()
+        return ui.div(
+            ui_helpers.kpi_tile("Count", f"{st['balls']}-{st['strikes']}"),
+            ui_helpers.kpi_tile("At-Bat #", st["pa_number"]),
+            ui_helpers.kpi_tile("Pitches Logged", len(st["log"])),
+            class_="gbo-kpi-row",
+        )
+
+    @render.ui
+    def guest_gt_log_table():
+        st = guest_gt_state()
+        if not st["log"]:
+            return ui.p(
+                "No pitches logged yet -- click a spot in the zone, pick a pitch type and outcome, then hit Log Pitch.",
+                class_="text-muted",
+            )
+        rows = [
+            {
+                "Pitch #": p["pitch_number"], "Count": f"{p['balls_before']}-{p['strikes_before']}",
+                "Pitch Type": p["pitch_type"],
+                "Location": f"{p['plate_x']:.2f}, {p['plate_z']:.2f}" if p["plate_x"] is not None else "--",
+                "In Zone": {True: "Yes", False: "No"}.get(p["in_zone"], "--"),
+                "Attack Zone": p["attack_zone"] or "--",
+                "Outcome": p["outcome"], "Contact": p["contact_quality"] or "",
+            }
+            for p in reversed(st["log"])
+        ]
+        return ui_helpers.render_dict_table(rows)
 
     @reactive.effect
     @reactive.event(input.logout_button)
@@ -475,6 +584,75 @@ def _guest_assessments_panel():
     )
 
 
+def _guest_game_tracking_panel():
+    """Sept 2026 -- 4th interactive guest deep dive, and the first one
+    that's genuinely live rather than a pre-computed report: a real,
+    in-session pitch-by-pitch charting loop, not a static readout.
+    Reuses the exact same click-to-place widget the real Live Tracking
+    page uses (strike_zone.build_zone_selector_figure +
+    click_widgets.click_target/build_clickable_widget) -- a guest
+    clicks the literal same component a coach does, wired to a
+    throwaway reactive.Value in server() (guest_gt_state) instead of a
+    real GamePitch row. This function only builds the static shell +
+    inputs -- everything reactive lives behind the ui.output_ui/
+    output_widget ids below, wired up in server()."""
+    spec = next(s for s in demo_data._ROSTER if s["name"] == demo_data.FEATURED_PLAYER_NAME)
+    state = demo_data._state()
+    player = state.players[demo_data.FEATURED_PLAYER_NAME]
+    full_name = f"{player.first_name} {player.last_name}"
+
+    return ui.div(
+        ui_helpers.page_header("Game Tracking"),
+        ui.p(
+            ui.strong(full_name), "'s at-bat below is live. This is the exact same click-to-place widget the "
+            "real Live Tracking page uses to chart a pitch's plate location -- click a spot in the zone, pick "
+            "a pitch type and outcome, and log it. Nothing you do here is saved anywhere or touches the "
+            "database; it's a throwaway, in-session pitch log only.",
+        ),
+        ui.output_ui("guest_gt_kpis"),
+        ui.div(
+            ui.div(
+                click_widgets.click_target(output_widget("guest_gt_zone_widget"), "guest_gt_x_input", "guest_gt_z_input"),
+                ui.div(
+                    ui.input_numeric("guest_gt_x_input", "Plate X (ft)", value=0.0, min=-2.5, max=2.5, step=0.05),
+                    ui.input_numeric("guest_gt_z_input", "Plate Z (ft)", value=2.5, min=0.0, max=5.0, step=0.05),
+                    style="display:flex; gap:12px; max-width:280px;",
+                ),
+                style="flex:1; min-width:300px;",
+            ),
+            ui.div(
+                ui.input_select("guest_gt_pitch_type", "Pitch Type", choices=list(spec["pitches"])),
+                ui.input_select("guest_gt_outcome", "Pitch Outcome", choices=list(game_tracking.PITCH_OUTCOMES)),
+                ui.output_ui("guest_gt_outcome_dependent_fields"),
+                ui.div(
+                    ui.input_action_button("guest_gt_log_btn", "Log Pitch", class_="btn-primary mt-2"),
+                    ui.input_action_button("guest_gt_new_ab_btn", "New At-Bat", class_="btn-outline-secondary mt-2 ms-2"),
+                ),
+                style="flex:1; min-width:260px;",
+            ),
+            style="display:flex; gap:24px; flex-wrap:wrap; margin:16px 0;",
+        ),
+        guest_demo._role_callout(
+            "chart a live at-bat exactly the way the real page works, one pitch at a time -- click, pick a "
+            "type and outcome, log it, watch the count update -- before ever touching it during a real game.",
+            "see the other side of the numbers on Pitcher Profile and Game Report: this click-by-click entry "
+            "is literally where every one of those stats comes from.",
+        ),
+        ui.hr(),
+        ui.h5("Pitch Log (this at-bat)"),
+        ui.output_ui("guest_gt_log_table"),
+        ui.div(
+            ui.strong("What's simplified here: "),
+            "this tracks one at-bat's count at a time (resets on \"New At-Bat\") -- no real game, inning, "
+            "score, base/out state, or opposing lineup the way the full Live Tracking page manages alongside "
+            "this exact same charting widget. Good enough to show the actual click-to-chart interaction; not "
+            "a claim that this reproduces the whole page.",
+            class_="gbo-profile-card text-muted small", style="padding:14px; border-style:dashed; margin-top:12px;",
+        ),
+        class_="p-3",
+    )
+
+
 _GUEST_PANEL_BUILDERS = {
     "dashboard": _guest_dashboard_panel,
     "assessments": _guest_assessments_panel,
@@ -525,13 +703,7 @@ _GUEST_PANEL_BUILDERS = {
         "hand -- the platform maps columns automatically (with sensible pre-filled guesses) and converts "
         "units where needed (like spin axis from clock format to degrees), creating one record per pitch.",
     ),
-    "game_tracking": lambda: _guest_sample_panel(
-        "Game Tracking",
-        "Live, pitch-by-pitch game charting -- click the exact plate location instead of picking a coarse "
-        "1-9 zone, plus count, base/out state, pitch outcome, contact quality, and result, entered pitch by "
-        "pitch as the game happens. Every number on Pitcher Game Report (next in the sidebar) and the "
-        "Command+/Attack Zones views on Pitcher Profile comes from what gets charted here.",
-    ),
+    "game_tracking": _guest_game_tracking_panel,
     "pitcher_game_report": guest_demo.build_game_report_deep_dive,
     "video_import": lambda: _guest_sample_panel(
         "Video",
