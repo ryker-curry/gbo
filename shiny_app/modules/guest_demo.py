@@ -14,12 +14,12 @@ straight from analytics/pitch_grading.py's own comments, so they're
 accurate as written. Worth a re-read after any real change to that
 methodology, since this page doesn't update itself.
 
-This is intentionally scoped to ONE page (Pitcher Profile) for this
-first pass. As GBO adds features, this file -- and the rest of
-_guest_ui() in app.py -- needs the same kind of update: a new
-deep-dive section here, or a refreshed line in the existing site-map
-content, whenever a module changes enough that this page no longer
-describes the real one accurately.
+Two deep dives so far: build_pitcher_profile_deep_dive() and
+build_game_report_deep_dive() (Sept 2026). As GBO adds features, this
+file -- and the rest of _guest_ui() in app.py -- needs the same kind
+of update: a new deep-dive function here, wired into app.py's
+_GUEST_PANEL_BUILDERS in place of that key's placeholder sample
+panel, whenever a module gets the same fake-data treatment.
 """
 
 from shiny import ui
@@ -229,9 +229,121 @@ def build_pitcher_profile_deep_dive():
         ),
         ui.hr(),
         ui.p(
-            "This deep dive covers one page. Bullpen Tracking, Game Tracking, Assessments, and the rest of GBO "
-            "are still described only at a high level further down -- expanding those with the same kind of "
-            "walkthrough is the natural next update to this page.",
+            "Pitcher Game Report -- one pitcher's one outing -- gets the same full walkthrough further down "
+            "the sidebar. Bullpen Tracking, Assessments, and the rest of GBO are still described only at a "
+            "high level for now -- expanding those with the same kind of walkthrough is the natural next "
+            "update to this page.",
             class_="text-muted small",
+        ),
+    )
+
+
+def build_game_report_deep_dive():
+    report = demo_data.demo_game_report()
+    player = report["player"]
+    full_name = f"{player.first_name} {player.last_name}"
+    line = report["pitching_line"]
+
+    return ui.div(
+        ui.h4("Sample Pitcher Game Report", class_="gbo-section-title"),
+        ui.p(
+            ui.strong(full_name), "'s outing below is not a real game. ", ui.strong("Every pitch is synthetic"),
+            " -- one simulated start built by demo_data.py (pitch-by-pitch count, base/out state, and contact "
+            "quality, with simple force/advance-one-extra-base logic on balls in play), then scored by the "
+            "exact same GBO functions (game_stats.compute_pitching_line/compute_pitch_type_breakdown, "
+            "pitch_location_stats.compute_command_precision/compute_attack_zones) that turn real charted game "
+            "pitches into a real Pitcher Game Report. Nothing here is connected to the real database, and no "
+            "real player's data was used to build it.",
+        ),
+        ui.p(
+            "Where Pitcher Profile (above) rolls up everything a pitcher has ever thrown, Game Report is scoped "
+            "to one outing -- the box-score-style page a coach pulls up the morning after a start, or a player "
+            "pulls up to see exactly how their last appearance went. Every number on it traces back to Game "
+            "Tracking's pitch-by-pitch charting (see the Game Tracking sample view in the sidebar): count, "
+            "location, contact quality, and result, entered live as the game happens.",
+        ),
+
+        ui.hr(),
+        ui.h5("Box Score"),
+        ui.p(
+            "The header line a coach checks first: innings, batters faced, the strikeout/walk/hit counts, and "
+            "the standard rate stats (ERA, WHIP, FIP) -- computed the same way whether it's scoped to one game "
+            "or an entire season, since compute_pitching_line() doesn't care which slice of pitches it's handed."
+        ),
+        ui.div(
+            ui_helpers.kpi_tile("IP", line.get("IP")),
+            ui_helpers.kpi_tile("K", line.get("K")),
+            ui_helpers.kpi_tile("BB", line.get("BB")),
+            ui_helpers.kpi_tile("H", line.get("H Allowed")),
+            ui_helpers.kpi_tile("ERA", line.get("ERA")),
+            ui_helpers.kpi_tile("WHIP", line.get("WHIP")),
+            ui_helpers.kpi_tile("FIP", line.get("FIP")),
+            class_="gbo-kpi-row",
+        ),
+        ui_helpers.render_dict_table([{
+            "Batters Faced": line.get("Batters Faced"), "Pitches": line.get("Pitches"),
+            "HR Allowed": line.get("HR Allowed"), "Runs Allowed": line.get("Runs Allowed"),
+            "ER Allowed": line.get("ER Allowed"), "Strike %": line.get("Strike %"),
+            "First Pitch Strike %": line.get("First Pitch Strike %"), "E+A %": line.get("E+A %"),
+        }]),
+        _role_callout(
+            "see, in one glance, whether last night's start actually went the way the final score suggested -- "
+            "a low ERA can still hide a walk rate or a First Pitch Strike % that's headed the wrong way.",
+            "get an honest read on their own last outing without waiting on a coach to relay it, and see exactly "
+            "which counts and situations (E+A % -- Early or Ahead in the count) they actually won or lost.",
+        ),
+
+        ui.hr(),
+        ui.h5("Pitch-Type Breakdown"),
+        ui.p(
+            "The same box score, broken out by pitch type -- usage, strike/whiff/CSW rates, chase and putaway "
+            "rates, and the ground ball/fly ball/line drive mix each pitch actually produced this game. This is "
+            "the same table structure as Ryker's own paper game-tracking sheet, just computed automatically."
+        ),
+        ui_helpers.render_dict_table(report["breakdown_rows"]),
+        _role_callout(
+            "spot which specific pitch is carrying a start and which one hitters are picking up -- a great "
+            "overall CSW % can still be one dominant pitch propping up a shaky second one.",
+            "know exactly which pitch to keep leaning on and which one wasn't fooling anybody tonight, instead "
+            "of going off feel alone.",
+        ),
+
+        ui.hr(),
+        ui.h5("Command Precision"),
+        ui.p(
+            "Real miss distance (inches between where the pitch was called and where it actually crossed), "
+            "plus which direction misses tend to run -- overall and per pitch type. See the Pitcher Profile "
+            "Command+ section above for the full methodology; this is the same math, scoped to just this outing."
+        ),
+        ui_helpers.render_dict_table([report["command_overall"]] + report["command_by_type"]),
+
+        ui.hr(),
+        ui.h5("Attack Zones"),
+        ui.p(
+            "Heart/Shadow/Chase/Waste location mix for this outing -- where a pitcher actually lived in and "
+            "around the zone, not just a binary in-zone/out-of-zone split."
+        ),
+        ui_helpers.render_dict_table([report["zones_overall"]] + report["zones_by_type"]),
+        _role_callout(
+            "see whether a pitcher who got hit was living in the Heart of the zone too often, versus one who "
+            "got beat on pitches that were actually well-located -- two very different fixes.",
+            "get a concrete, honest answer to 'was I actually around the zone tonight,' broken down the same "
+            "way a pro scouting report would show it.",
+        ),
+        _citation(
+            "Heart/Shadow/Chase/Waste is a GBO approximation of Baseball Savant's own four-tier attack-zone "
+            "system -- see strike_zone.py's own comment for exactly what was used and where the boundaries "
+            "came from."
+        ),
+
+        ui.hr(),
+        ui.div(
+            ui.strong("What's simplified here: "),
+            "this is one simulated start with a simple pitch-by-pitch count and base/out model -- no stolen "
+            "bases, sac bunts/flies, double plays, or a real opposing lineup, and no vs-RHH/vs-LHH split the "
+            "way the real page shows (there's no fake opposing batter handedness to split on). Good enough to "
+            "show what the page looks like and how it reads; not a claim that this exact math simulates a real "
+            "baseball game.",
+            class_="gbo-profile-card text-muted small", style="padding:14px; border-style:dashed;",
         ),
     )

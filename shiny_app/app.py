@@ -536,13 +536,7 @@ _GUEST_PANEL_BUILDERS = {
         "pitch as the game happens. Every number on Pitcher Game Report (next in the sidebar) and the "
         "Command+/Attack Zones views on Pitcher Profile comes from what gets charted here.",
     ),
-    "pitcher_game_report": lambda: _guest_sample_panel(
-        "Pitcher Game Report",
-        "A single-game box score and pitch-type breakdown for one pitcher's one outing -- Usage/Strike/CSW/"
-        "Whiff/Chase/Putaway/GB-FB-LD% by pitch type, plus Command Precision and Attack Zones, split out by "
-        "opposing batter handedness. This is the next page getting the full fake-data treatment Pitcher "
-        "Profile already has.",
-    ),
+    "pitcher_game_report": guest_demo.build_game_report_deep_dive,
     "video_import": lambda: _guest_sample_panel(
         "Video",
         "Any individual pitch (or at-bat) charted in Game Tracking can have video uploaded and linked "
