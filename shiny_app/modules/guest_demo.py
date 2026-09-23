@@ -7,13 +7,12 @@ data), scored with the exact same analytics functions the live
 Pitcher Profile page uses, with dual coach/player explanations,
 methodology call-outs, and citations layered around the numbers.
 
-Ryker Curry -- when you're ready to personalize this for your own
-voice before showing it to anyone, the paragraphs most worth rewriting
-in your own words are marked "PERSONALIZE" in the comments below. The
-technical explanations (what each grade measures, the methodology
-history) are pulled straight from your own code comments and are
-accurate as written -- feel free to leave those, tighten them, or
-rewrite them too.
+The origin-story paragraph and the Stuff+ methodology story below are
+written in Ryker's own first-person voice -- the technical claims in
+both (the regression-overfit example, the fixed-weight fix) are pulled
+straight from analytics/pitch_grading.py's own comments, so they're
+accurate as written. Worth a re-read after any real change to that
+methodology, since this page doesn't update itself.
 
 This is intentionally scoped to ONE page (Pitcher Profile) for this
 first pass. As GBO adds features, this file -- and the rest of
@@ -88,16 +87,23 @@ def build_pitcher_profile_deep_dive():
             "database, and no real player's data was used to build it.",
         ),
         ui.p(
-            # PERSONALIZE: this is the one-paragraph "why does this page exist" pitch to a recruiter --
-            # worth it being unmistakably your own voice.
-            "The Pitcher Profile page is GBO's flagship analytics view -- a single, filterable deep dive into "
-            "one pitcher's stuff, command, and results, built so a coach and that pitcher can look at the exact "
-            "same page and both get something useful out of it. Unlike a coach's roster-wide dashboard or a "
-            "player's own personal schedule (both look different depending on who's logged in -- see the "
-            "role-based dashboards further down this page), Pitcher Profile renders identically for a coach "
-            "and for the pitcher himself, by design: there's no simplified or hidden version of a player's own "
-            "numbers. The \"how a coach uses this\" and \"how a player uses this\" notes below each section "
-            "are about how the two read the same page differently, not two different pages.",
+            "I started building Gorilla Baseball Operations as my Master's research project at Pittsburg "
+            "State, and it grew well past that. I'm also a pitcher on the team, so I built this the way I "
+            "wish a tool like it had existed for me -- one place for physical testing, development plans, "
+            "training logs, Rapsodo pitch data, and in-game performance, instead of that living across "
+            "spreadsheets, paper testing sheets, and a handful of disconnected tools. I designed and built "
+            "the whole thing myself: the database schema, every page, and the analytics underneath it. "
+            "Pitcher Profile is the one page I'd show first if I only got to show one.",
+        ),
+        ui.p(
+            "It's GBO's flagship analytics view -- a single, filterable deep dive into one pitcher's stuff, "
+            "command, and results, built so a coach and that pitcher can look at the exact same page and both "
+            "get something useful out of it. Unlike a coach's roster-wide dashboard or a player's own personal "
+            "schedule (both look different depending on who's logged in -- see the role-based dashboards "
+            "further down this page), Pitcher Profile renders identically for a coach and for the pitcher "
+            "himself, by design: there's no simplified or hidden version of a player's own numbers. The "
+            "\"how a coach uses this\" and \"how a player uses this\" notes below each section are about how "
+            "the two read the same page differently, not two different pages.",
         ),
 
         ui.hr(),
@@ -143,13 +149,12 @@ def build_pitcher_profile_deep_dive():
             ui.accordion_panel(
                 "How Stuff+'s weights were actually picked (not a regression)",
                 ui.p(
-                    # PERSONALIZE: this whole panel is your own project history -- the numbers/anecdote below
-                    # are pulled straight from your analytics/pitch_grading.py comments, but the voice should
-                    # be yours.
                     "Stuff+ started as a fixed, equal-weighted formula that never learned anything from real "
-                    "outcomes. My first fix was the textbook approach: fit a regression per pitch type, weighting "
-                    "each physical trait (velocity, movement, spin efficiency, and so on) by how much it actually "
-                    "predicted run value in our own games."
+                    "outcomes -- it scored a bullpen pitch and a real-game pitch identically, with no connection "
+                    "to what actually happened when the ball was put in play. My first fix was the textbook "
+                    "approach: fit a regression per pitch type, weighting each physical trait (velocity, "
+                    "movement, spin efficiency, and so on) by how much it actually predicted run value in our "
+                    "own games."
                 ),
                 ui.p(
                     "That fell apart in practice. Fitting roughly ten parameters per pitch type off a few dozen "
