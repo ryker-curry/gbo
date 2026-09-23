@@ -31,6 +31,15 @@ Full port of pages/dashboard.py -- role-adaptive:
     the way Sports Scientist/Strength Coach do, and NOT the pitching-
     or hitting-specific KPI split above, since a Head Coach oversees
     both sides of the ball rather than one specialty.
+
+  Sept 2026, Ryker: every Coach dashboard (Head Coach, and both
+  Coach specialties above) SKIPS the shared team_overview block
+  entirely (see body(), is_coach_role) -- no assessment counts,
+  bucket-score status, or testing coverage on a Coach's dashboard.
+  A coach sees only in-game/roster-ops data: their record, staff
+  pitching/hitting KPIs, schedule, and availability. Assessment/
+  bucket/testing detail stays on Sports Scientist's dashboard, which
+  still gets the full team_overview block plus its own section below.
   - Administrator, Data Analyst: general overview -- roster size, open
     IDP goals, recent assessments/sessions across all categories (the
     original shared "everyone else" dashboard). Revisit Administrator's
@@ -176,11 +185,20 @@ def dashboard_server(input, output, session, app_state):
             week_ago = date.today() - timedelta(days=7)
 
             # v2: team overview block (flags, attention list, today,
-            # bucket status, coverage) ahead of the role-specific section.
-            try:
-                sections.append(team_overview.build(db, players, player_ids, session.ns))
-            except Exception as exc:  # never let the overview take the whole dashboard down
-                sections.append(ui_helpers.empty_state(f"Team overview unavailable: {exc}"))
+            # bucket status, coverage) ahead of the role-specific section --
+            # Sept 2026, Ryker: a Coach only wants in-game/roster-ops data
+            # (record, next game, availability, staff pitching/hitting
+            # KPIs) on their dashboard, not assessment counts/bucket
+            # scores/testing coverage -- that's Sports Scientist's
+            # dashboard. So this block is skipped entirely for Head Coach
+            # and Coach (both specialties and no specialty); every other
+            # staff role still gets it ahead of their own section below.
+            is_coach_role = role_name in ("Head Coach", "Coach")
+            if not is_coach_role:
+                try:
+                    sections.append(team_overview.build(db, players, player_ids, session.ns))
+                except Exception as exc:  # never let the overview take the whole dashboard down
+                    sections.append(ui_helpers.empty_state(f"Team overview unavailable: {exc}"))
 
             if role_name == "Athletic Trainer":
                 sections.append(_athletic_trainer_section(db, players, player_ids))
