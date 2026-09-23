@@ -67,13 +67,13 @@ from analytics.pitch_grading import (
 
 _SEED = 20260923
 
-FEATURED_PLAYER_NAME = "Deacon Whitfield"
+FEATURED_PLAYER_NAME = "Joe Random"
 
 # Six made-up pitchers. Names, numbers, and results below are entirely
 # fictional -- not modeled on any real Pittsburg State player, current
 # or former.
 _ROSTER = [
-    dict(name="Deacon Whitfield", throws="R", height_in=74, pitches=["4-Seam Fastball", "Slider"]),
+    dict(name="Joe Random", throws="R", height_in=74, pitches=["4-Seam Fastball", "Slider"]),
     dict(name="Cole Bannister", throws="R", height_in=72, pitches=["4-Seam Fastball", "Changeup"]),
     dict(name="Trey Osgood", throws="L", height_in=73, pitches=["4-Seam Fastball", "Curveball"]),
     dict(name="Marcus Delgado", throws="R", height_in=75, pitches=["4-Seam Fastball", "Slider"]),
