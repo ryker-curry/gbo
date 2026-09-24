@@ -861,13 +861,18 @@ def pitcher_profile_server(input, output, session, app_state):
         sequences (bullpen reps and real game plate appearances alike --
         see _tunneling_pairs_for_player) and the cached flight-path
         physics (pitch_trajectory.py) rather than a chart. Tunnel/Plate/
-        Late Break/Ratio follow Baseball Prospectus's published
-        methodology (now measured at a fixed TIME before the plate
-        rather than a fixed distance -- see analytics/pitch_grading.py's
-        DECISION_TIME_BEFORE_PLATE_S comment for why); Tunneling+ itself
-        is a GBO-specific blend of Ratio and Release Consistency (see
-        that module's tunneling_plus docstring for the full citations
-        and math). Velo Diff/Break Diff are shown as separate context,
+        Late Break follow Baseball Prospectus's published methodology
+        (now measured at a fixed TIME before the plate rather than a
+        fixed distance -- see analytics/pitch_grading.py's
+        DECISION_TIME_BEFORE_PLATE_S comment for why); Ratio is GBO's
+        own Plate/Tunnel metric, NOT literally BP's own "Break:Tunnel
+        Ratio" formula despite the similar name -- see Break:Tunnel %
+        (BP) below for the field that actually matches BP's formula
+        (Sept 2026 correction, checked directly against BP's source
+        articles). Tunneling+ itself is a GBO-specific blend of Ratio
+        and Release Consistency (see that module's tunneling_plus
+        docstring for the full citations and math). Velo Diff/Break
+        Diff are shown as separate context,
         NOT part of the grade (Ryker's call, after reviewing
         seemagnus.com's finding that they predict whiffs independently
         -- see tunnel_pair_metrics' docstring for why they're kept out
@@ -882,11 +887,14 @@ def pitcher_profile_server(input, output, session, app_state):
         section"; the height/side split is display-only context, same
         as Velo/Break Diff below -- tunneling_plus still grades on the
         one combined Release number, see pitch_grading.tunnel_pair_
-        metrics' docstring), then context. Both graded rows pass
-        accent=True (Ryker: "incorporate more red in these") for the
-        crimson-tinted .gbo-kpi-card-accent look (theme.py); the plain
-        context row keeps the default card style so the "not part of
-        the grade" cards don't read as equally important."""
+        metrics' docstring), then context. Every row on this tab passes
+        accent=True (Ryker: "incorporate more red in these" -> "make
+        all of the kpi cards the red style") for the crimson-tinted
+        .gbo-kpi-card-accent look (theme.py), including the Velo/Break
+        Diff context row -- that row is still marked "For context (not
+        part of the grade)" in its own caption above it, so it stays
+        distinguishable from the graded rows by label even though the
+        card styling is now the same."""
         if not app_state.is_authenticated():
             return None
         role = app_state.role_name()
@@ -955,7 +963,7 @@ def pitcher_profile_server(input, output, session, app_state):
                     context_cards.append({"label": "Vert Break Diff", "value": f"{summary['break_diff_in']}\""})
                 if context_cards:
                     children.append(ui.p("For context (not part of the grade):", class_="text-muted small mb-1 mt-1"))
-                    children.append(ui_helpers.render_kpi_cards(context_cards))
+                    children.append(ui_helpers.render_kpi_cards(context_cards, accent=True))
             if children:
                 children.append(ui.p(
                     f"Tunnel: how far apart (in inches) this pitch and the {primary_fb} still are ~167ms "
