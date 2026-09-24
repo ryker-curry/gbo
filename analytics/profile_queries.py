@@ -107,14 +107,30 @@ def get_hitter_profile_pitches(db, player_id, date_from=None, date_to=None, pitc
     return query.order_by(Game.game_date, GamePitch.pitch_sequence).all()
 
 
-def get_pitcher_rapsodo_pitches(db, player_id, date_from=None, date_to=None, pitch_type=None, game_scope="all", game_id=None):
+def get_pitcher_rapsodo_pitches(db, player_id, date_from=None, date_to=None, pitch_type=None, game_scope="all", game_id=None, game_linked_only=False):
     """Every RapsodoPitch for this player -- bullpen-sourced AND
-    game-linked alike (Stuff+ is physical-characteristics-only, see
-    pitch_grading.py's module docstring -- it doesn't care whether the
-    reading came from a bullpen rep or a real outing). Date range reads
-    off RapsodoPitch.pitch_date directly (works for both sources) so a
-    bullpen-only pitcher still gets a populated Individual Pitches
-    physical read even before any game linking exists.
+    game-linked alike by default (Stuff+ is physical-characteristics-
+    only, see pitch_grading.py's module docstring -- it doesn't care
+    whether the reading came from a bullpen rep or a real outing). Date
+    range reads off RapsodoPitch.pitch_date directly (works for both
+    sources) so a bullpen-only pitcher still gets a populated
+    Individual Pitches physical read even before any game linking
+    exists.
+
+    game_linked_only (Sept 2026, Ryker: "i want pitcher profile to only
+    pull pitches from games") -- when True, drops every bullpen-sourced
+    reading regardless of game_scope/date range, via
+    RapsodoPitch.bullpen_id.is_(None) (the same "bullpen_id/game import
+    are mutually exclusive per row" invariant models.RapsodoPitch's own
+    bullpen_id comment documents -- a NULL bullpen_id already means this
+    reading came from a game import, whether or not it's been matched
+    to a specific charted GamePitch yet). Composes with game_scope's own
+    OR-based bullpen-always-included clause below without needing to
+    touch that clause -- once bullpen rows are excluded up front, that
+    OR's bullpen branch simply never matches anything, leaving only the
+    real intrasquad/external filter for what's left. Only
+    pitcher_profile.py passes this True so far; every other caller of
+    this function keeps today's bullpen-inclusive behavior unchanged.
 
     game_scope (Sept 2026 addition, same convention as _apply_filters
     above): unlike the GamePitch-only queries, "intrasquad"/"external"
@@ -145,6 +161,8 @@ def get_pitcher_rapsodo_pitches(db, player_id, date_from=None, date_to=None, pit
         .options(joinedload(RapsodoPitch.pitch_type))
         .filter(RapsodoPitch.player_id == player_id)
     )
+    if game_linked_only:
+        query = query.filter(RapsodoPitch.bullpen_id.is_(None))
     if game_id is not None:
         query = query.join(RapsodoImport, RapsodoPitch.import_id == RapsodoImport.import_id).filter(RapsodoImport.game_id == game_id)
         if pitch_type:
