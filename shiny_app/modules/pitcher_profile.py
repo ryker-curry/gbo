@@ -211,6 +211,7 @@ def pitcher_profile_ui():
         ui.output_ui("pp_view_picker"),
         ui.output_ui("pp_overview_section"),
         ui.output_ui("pp_metrics_section"),
+        ui.output_ui("pp_tunneling_section"),
         ui.output_ui("pp_results_section"),
         ui.output_ui("pp_zone_section"),
         ui.output_ui("pp_command_section"),
