@@ -522,9 +522,12 @@ def pitcher_profile_server(input, output, session, app_state):
                 class_="text-muted small",
             ))
             sections.append(ui.p(
-                "Blended across every pitch type thrown in this window (each pitch type counted once, not weighted "
-                "by how often it's thrown) -- not a single pitch's grade. See the Arsenal tab for the breakdown by "
-                "pitch type.",
+                "\"Overall\" below is blended across every pitch type thrown in this window (each pitch type "
+                "counted once, not weighted by how often it's thrown), not a single pitch's grade -- the "
+                "per-pitch-type breakdown underneath it grades each pitch against the team's own population of "
+                "that SAME pitch type (a 4-Seam Fastball's Stuff+ never blends with sliders or changeups). The "
+                "Arsenal tab has the same per-pitch-type numbers as a compact table, with Usage % and pitch "
+                "counts alongside them.",
                 class_="text-muted small fst-italic",
             ))
 
@@ -535,14 +538,49 @@ def pitcher_profile_server(input, output, session, app_state):
             arsenal_rows = bundle["arsenal_rows"]
 
             grade_bars = ui_helpers.render_percentile_bars([
-                ("Stuff+", stuff_plus_value),
-                ("Location+", location_plus_value),
-                ("Pitching+", pitching_plus_value),
+                ("Stuff+ (Overall)", stuff_plus_value),
+                ("Location+ (Overall)", location_plus_value),
+                ("Pitching+ (Overall)", pitching_plus_value),
             ])
             if grade_bars is not None:
                 sections.append(grade_bars)
             else:
                 sections.append(ui.p("No graded pitches yet in this range -- needs Rapsodo-linked pitches (Stuff+) or located game pitches (Location+).", class_="text-muted small"))
+
+            # Per-pitch-type grades (Sept 2026, Ryker: "for pitcher
+            # profile overview i want stuff+, location+, pitching+ for
+            # each pitch as well as overall pitches not just for all
+            # pitches... a 4sfb would have a stuff+ score and a
+            # percentile that is specific to that pitch type") --
+            # arsenal_rows (from compute_grading_bundle -> arsenal_
+            # summary) already grades every pitch type against ITS OWN
+            # team-wide population (stuff_baselines/location_baseline
+            # are both keyed by pitch type label -- see
+            # profile_queries.compute_grading_bundle), so this is
+            # display-only: the same per-type numbers the Overall bars
+            # above are themselves averaged FROM, just shown
+            # individually instead of blended. Reuses the exact same
+            # mlbpitchprofiler.com-style percentile-bar component as
+            # Overall, one group per pitch type, sorted by usage
+            # (arsenal_summary's own sort order).
+            if arsenal_rows:
+                sections.append(ui.p(ui.strong("By Pitch Type"), class_="mt-3"))
+                for row in arsenal_rows:
+                    reliability_note = "" if row["Reliable"] else " -- small sample, grade may swing"
+                    sections.append(ui.p(
+                        ui.strong(row["Pitch Type"]),
+                        f" — {row['Usage %']}% usage, {row['Pitches']} pitches{reliability_note}",
+                        class_="mt-2 mb-1",
+                    ))
+                    type_bars = ui_helpers.render_percentile_bars([
+                        ("Stuff+", row["Stuff+"]),
+                        ("Location+", row["Location+"]),
+                        ("Pitching+", row["Pitching+"]),
+                    ])
+                    sections.append(
+                        type_bars if type_bars is not None
+                        else ui.p("No graded pitches of this type yet.", class_="text-muted small")
+                    )
 
             if game_pitches:
                 baselines = _team_command_plus_baselines(db)
