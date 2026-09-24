@@ -342,8 +342,14 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 
 /* KPI tiles */
 .gbo-kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; }
-.gbo-kpi-card { background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); border-radius: 10px; padding: 16px 20px; min-width: 0; }
-.gbo-kpi-label { color: var(--gbo-gold-text); opacity: .8; font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
+/* Sept 2026, Ryker ("incorporate more red in these" on Tunneling+,
+   then "i want all kpi cards in the website to be this way") -- the
+   crimson-tinted card look that started as Tunneling+-only is now
+   every .gbo-kpi-card site-wide. Tints the card background/border and
+   the label, not the value text (.gbo-kpi-accent keeps its own
+   dark/light contrast handling -- see that class's own comment). */
+.gbo-kpi-card { background: linear-gradient(135deg, var(--gbo-crimson-soft) 0%, var(--gbo-bg-card) 65%); border: 1px solid var(--gbo-crimson-soft); border-radius: 10px; padding: 16px 20px; min-width: 0; }
+.gbo-kpi-label { color: var(--gbo-crimson); opacity: 1; font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
 .gbo-kpi-value { color: var(--gbo-text); font-family: var(--gbo-display); font-size: 2rem; font-weight: 700; line-height: 1; display: flex; align-items: baseline; gap: 6px; font-variant-numeric: tabular-nums; }
 .gbo-kpi-value .gbo-kpi-accent { color: var(--gbo-text); }
 .gbo-kpi-value small { font-family: var(--gbo-font); font-weight: 500; font-size: .8rem; color: var(--gbo-text-muted); }
@@ -352,12 +358,6 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-kpi-delta.negative { color: var(--gbo-status-flag); }
 .gbo-kpi-card.flag .gbo-kpi-value { color: var(--gbo-status-flag); }
 .gbo-kpi-card.watch .gbo-kpi-value { color: var(--gbo-status-watch); }
-/* Sept 2026, Ryker ("incorporate more red in these"): opt-in bolder
-   red treatment for a KPI row -- Tunneling+ passes accent=True (see
-   ui_helpers.render_kpi_cards). Tints the card, not the value text
-   (.gbo-kpi-accent keeps its own dark/light contrast handling). */
-.gbo-kpi-card-accent { background: linear-gradient(135deg, var(--gbo-crimson-soft) 0%, var(--gbo-bg-card) 65%); border-color: var(--gbo-crimson-soft); }
-.gbo-kpi-card-accent .gbo-kpi-label { color: var(--gbo-crimson); opacity: 1; }
 
 /* Status chips */
 .gbo-chip { display: inline-flex; align-items: center; gap: 6px; font-size: .68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding: 3px 9px; border-radius: 999px; white-space: nowrap; line-height: 1.4; }

@@ -887,14 +887,17 @@ def pitcher_profile_server(input, output, session, app_state):
         section"; the height/side split is display-only context, same
         as Velo/Break Diff below -- tunneling_plus still grades on the
         one combined Release number, see pitch_grading.tunnel_pair_
-        metrics' docstring), then context. Every row on this tab passes
-        accent=True (Ryker: "incorporate more red in these" -> "make
-        all of the kpi cards the red style") for the crimson-tinted
-        .gbo-kpi-card-accent look (theme.py), including the Velo/Break
-        Diff context row -- that row is still marked "For context (not
-        part of the grade)" in its own caption above it, so it stays
-        distinguishable from the graded rows by label even though the
-        card styling is now the same."""
+        metrics' docstring), then context. (Ryker: "incorporate more
+        red in these" -> "make all of the kpi cards the red style" ->
+        "i want all kpi cards in the website to be this way" -- the
+        crimson-tinted look this tab started with is now every
+        .gbo-kpi-card's own default styling app-wide, see
+        ui_helpers.render_kpi_cards/theme.py, so nothing here needs to
+        opt in anymore.) The Velo/Break Diff context row is still
+        marked "For context (not part of the grade)" in its own
+        caption above it, so it stays distinguishable from the graded
+        rows by label even though every row's card styling now
+        matches."""
         if not app_state.is_authenticated():
             return None
         role = app_state.role_name()
