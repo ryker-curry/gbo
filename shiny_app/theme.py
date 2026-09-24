@@ -352,6 +352,12 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-kpi-delta.negative { color: var(--gbo-status-flag); }
 .gbo-kpi-card.flag .gbo-kpi-value { color: var(--gbo-status-flag); }
 .gbo-kpi-card.watch .gbo-kpi-value { color: var(--gbo-status-watch); }
+/* Sept 2026, Ryker ("incorporate more red in these"): opt-in bolder
+   red treatment for a KPI row -- Tunneling+ passes accent=True (see
+   ui_helpers.render_kpi_cards). Tints the card, not the value text
+   (.gbo-kpi-accent keeps its own dark/light contrast handling). */
+.gbo-kpi-card-accent { background: linear-gradient(135deg, var(--gbo-crimson-soft) 0%, var(--gbo-bg-card) 65%); border-color: var(--gbo-crimson-soft); }
+.gbo-kpi-card-accent .gbo-kpi-label { color: var(--gbo-crimson); opacity: 1; }
 
 /* Status chips */
 .gbo-chip { display: inline-flex; align-items: center; gap: 6px; font-size: .68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding: 3px 9px; border-radius: 999px; white-space: nowrap; line-height: 1.4; }

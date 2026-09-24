@@ -927,7 +927,8 @@ def tunnel_pair_metrics(pitch_a, pitch_b):
     once given two already-chosen RapsodoPitch rows.
 
     Returns {"tunnel_in", "plate_in", "late_break_in", "ratio",
-    "release_in", "velo_diff_mph", "break_diff_in"}:
+    "release_in", "release_height_diff_in", "release_side_diff_in",
+    "velo_diff_mph", "break_diff_in"}:
 
       - tunnel_in/plate_in/late_break_in/release_in in inches (matching
         HB/VB's own units elsewhere in the app); ratio is unitless
@@ -946,7 +947,19 @@ def tunnel_pair_metrics(pitch_a, pitch_b):
         how well the flight paths converge afterward -- this is a THIRD
         spatial checkpoint (release -> tunnel -> plate) feeding
         tunneling_plus below, not folded into Ratio itself (Ratio stays
-        exactly BP's published Plate/Tunnel definition).
+        exactly BP's published Plate/Tunnel definition). release_in is
+        the single combined (Euclidean) number tunneling_plus actually
+        grades -- see that function's docstring.
+      - release_height_diff_in/release_side_diff_in: the same release
+        separation broken into its two axes (Sept 2026, Ryker: "i want
+        to see release height and release side differences in
+        tunneling section") -- release_in on its own doesn't say
+        whether a pitcher's two release points differ mostly in how
+        HIGH he releases them or how far to the SIDE, which matters for
+        actually coaching the fix. Purely additional context/display,
+        same as velo_diff_mph/break_diff_in below -- NOT separately
+        baselined or folded into tunneling_plus, which keeps grading on
+        the one combined release_in number.
       - velo_diff_mph/break_diff_in: absolute velocity and vertical-break
         (vb_spin) differences between the pair -- Sept 2026 addition
         (Ryker, after reviewing seemagnus.com's finding that speed/shape
@@ -961,7 +974,7 @@ def tunnel_pair_metrics(pitch_a, pitch_b):
         Tunneling+ too would double-count that same signal into two
         different "+" scores.
 
-    Each of the 7 values is independently None (never guessed) if its
+    Each of the 9 values is independently None (never guessed) if its
     own required inputs are missing -- e.g. release_in is None if either
     pitch lacks release_side/release_height, even when tunnel_in/plate_in
     are available -- but the whole pair is dropped (returns None) only
@@ -993,6 +1006,14 @@ def tunnel_pair_metrics(pitch_a, pitch_b):
             float(pitch_a.release_height) - float(pitch_b.release_height),
         ) * 12.0
 
+    release_height_diff_in = None
+    if pitch_a.release_height is not None and pitch_b.release_height is not None:
+        release_height_diff_in = abs(float(pitch_a.release_height) - float(pitch_b.release_height)) * 12.0
+
+    release_side_diff_in = None
+    if pitch_a.release_side is not None and pitch_b.release_side is not None:
+        release_side_diff_in = abs(float(pitch_a.release_side) - float(pitch_b.release_side)) * 12.0
+
     velo_diff_mph = None
     if pitch_a.velocity is not None and pitch_b.velocity is not None:
         velo_diff_mph = abs(float(pitch_a.velocity) - float(pitch_b.velocity))
@@ -1007,6 +1028,8 @@ def tunnel_pair_metrics(pitch_a, pitch_b):
         "late_break_in": round(plate_in - tunnel_in, 2),
         "ratio": round(plate_in / max(tunnel_in, MIN_TUNNEL_FLOOR_IN), 2),
         "release_in": round(release_in, 2) if release_in is not None else None,
+        "release_height_diff_in": round(release_height_diff_in, 2) if release_height_diff_in is not None else None,
+        "release_side_diff_in": round(release_side_diff_in, 2) if release_side_diff_in is not None else None,
         "velo_diff_mph": round(velo_diff_mph, 1) if velo_diff_mph is not None else None,
         "break_diff_in": round(break_diff_in, 2) if break_diff_in is not None else None,
     }
@@ -1041,12 +1064,14 @@ def tunnel_type_pair_summary(all_pairs, type_a, type_b):
     Returns None if fewer than MIN_TUNNELING_PAIRS qualifying pairs are
     found (see that constant) -- an average from a handful of sequences
     isn't a real read on how this pitcher tunnels that pitch pair yet.
-    velo_diff_mph/break_diff_in average only over the pairs that HAVE a
-    value (never block the whole summary on a field that's context-only,
-    not part of the grade)."""
+    velo_diff_mph/break_diff_in/release_height_diff_in/
+    release_side_diff_in average only over the pairs that HAVE a value
+    (never block the whole summary on a field that's context-only, not
+    part of the grade)."""
     wanted = {type_a, type_b}
     tunnel_vals, plate_vals, late_vals, ratio_vals = [], [], [], []
     release_vals, velo_diff_vals, break_diff_vals = [], [], []
+    release_height_diff_vals, release_side_diff_vals = [], []
     for p1, p2 in all_pairs:
         if {pitch_type_label(p1), pitch_type_label(p2)} != wanted:
             continue
@@ -1059,6 +1084,10 @@ def tunnel_type_pair_summary(all_pairs, type_a, type_b):
         ratio_vals.append(m["ratio"])
         if m["release_in"] is not None:
             release_vals.append(m["release_in"])
+        if m["release_height_diff_in"] is not None:
+            release_height_diff_vals.append(m["release_height_diff_in"])
+        if m["release_side_diff_in"] is not None:
+            release_side_diff_vals.append(m["release_side_diff_in"])
         if m["velo_diff_mph"] is not None:
             velo_diff_vals.append(m["velo_diff_mph"])
         if m["break_diff_in"] is not None:
@@ -1074,6 +1103,8 @@ def tunnel_type_pair_summary(all_pairs, type_a, type_b):
         "late_break_in": round(mean(late_vals), 2),
         "ratio": round(mean(ratio_vals), 2),
         "release_in": round(mean(release_vals), 2) if release_vals else None,
+        "release_height_diff_in": round(mean(release_height_diff_vals), 2) if release_height_diff_vals else None,
+        "release_side_diff_in": round(mean(release_side_diff_vals), 2) if release_side_diff_vals else None,
         "velo_diff_mph": round(mean(velo_diff_vals), 1) if velo_diff_vals else None,
         "break_diff_in": round(mean(break_diff_vals), 2) if break_diff_vals else None,
     }

@@ -396,7 +396,7 @@ def render_dict_table(rows: list, empty_message: str = None):
     return ui.div(table, class_="table-responsive")
 
 
-def render_kpi_cards(cards: list):
+def render_kpi_cards(cards: list, accent: bool = False):
     """Render a row of bordered, gradient-backed KPI cards. The value is
     wrapped in a .gbo-kpi-accent span -- theme.py gives it a
     cream-plus-crimson-glow look in dark mode and literal crimson in
@@ -408,6 +408,16 @@ def render_kpi_cards(cards: list):
 
     Each card dict: {"label": str, "value": str, "delta": str | None,
     "delta_positive": bool} -- delta and delta_positive are optional.
+
+    accent=True (Sept 2026, Ryker: "incorporate more red in these" --
+    Tunneling+'s KPI cards specifically) gives every card in this row a
+    crimson-tinted background wash and a crimson label instead of the
+    usual gold one, via .gbo-kpi-card-accent (theme.py). Opt-in per
+    call so every other page's KPI rows (HAVAA, Physical Profile,
+    Command, etc.) keep their usual look unless a caller deliberately
+    wants the bolder treatment. The value text itself stays on
+    .gbo-kpi-accent's existing cream/crimson-glow styling either way --
+    not overridden here, same contrast reasoning as above.
     """
     card_divs = []
     for c in cards:
@@ -420,7 +430,8 @@ def render_kpi_cards(cards: list):
             arrow = "▲" if c.get("delta_positive", True) else "▼"
             css_class = "positive" if c.get("delta_positive", True) else "negative"
             parts.append(ui.div(f"{arrow} {c['delta']}", class_=f"gbo-kpi-delta {css_class}"))
-        card_divs.append(ui.div(*parts, class_="gbo-kpi-card"))
+        card_class = "gbo-kpi-card gbo-kpi-card-accent" if accent else "gbo-kpi-card"
+        card_divs.append(ui.div(*parts, class_=card_class))
 
     return ui.div(*card_divs, class_="gbo-kpi-row")
 
