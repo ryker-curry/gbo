@@ -444,6 +444,11 @@ def pitcher_profile_server(input, output, session, app_state):
         ui.modal_show(ui_helpers.glossary_modal("Metrics Glossary", glossary_content.METRICS))
 
     @reactive.effect
+    @reactive.event(input.pp_glossary_tunneling)
+    def _pp_show_tunneling_glossary():
+        ui.modal_show(ui_helpers.glossary_modal("Tunneling+ Glossary", glossary_content.TUNNELING))
+
+    @reactive.effect
     @reactive.event(input.pp_glossary_results)
     def _pp_show_results_glossary():
         ui.modal_show(ui_helpers.glossary_modal("Results Glossary", glossary_content.RESULTS))
@@ -894,6 +899,7 @@ def pitcher_profile_server(input, output, session, app_state):
         try:
             header = ui.div(
                 ui.p(ui.strong("Tunneling+"), style="margin-bottom:0;"),
+                ui_helpers.glossary_link("pp_glossary_tunneling", "Tunneling+ Glossary"),
                 style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
             )
             player, rapsodo_pitches = _physical_target(db)
@@ -934,6 +940,7 @@ def pitcher_profile_server(input, output, session, app_state):
                     {"label": "Plate", "value": f"{summary['plate_in']}\""},
                     {"label": "Late Break", "value": f"{summary['late_break_in']}\""},
                     {"label": "Ratio", "value": f"{summary['ratio']}"},
+                    {"label": "Break:Tunnel % (BP)", "value": f"{summary['break_tunnel_pct']}%"},
                 ], accent=True))
                 children.append(ui_helpers.render_kpi_cards([
                     {"label": "Release (Combined)", "value": f"{summary['release_in']}\"" if summary["release_in"] is not None else "—"},
@@ -954,8 +961,11 @@ def pitcher_profile_server(input, output, session, app_state):
                     f"Tunnel: how far apart (in inches) this pitch and the {primary_fb} still are ~167ms "
                     "before THIS pitch would cross the plate -- roughly when a hitter must commit to swing. "
                     "Plate: how far apart they end up at the plate. Late Break: the difference (separation "
-                    "added after the decision point). Ratio: Plate/Tunnel -- higher means the pitches looked "
-                    "more alike early and diverged more late. Release (Combined): separation between the two "
+                    "added after the decision point). Ratio: Plate/Tunnel -- GBO's own metric, higher means "
+                    "the pitches looked more alike early and diverged more late. Break:Tunnel % (BP): Late "
+                    "Break / Tunnel as a percentage -- this is the actual formula Baseball Prospectus "
+                    "published as their \"Break:Tunnel Ratio\" (GBO's own Ratio field above shares a similar "
+                    "name but isn't the same formula). Release (Combined): separation between the two "
                     "pitches' real release points -- a pitcher who releases two pitch types from visibly "
                     "different slots is telegraphing before the ball even leaves his hand, regardless of how "
                     "well the flight paths converge afterward. Release Height Diff/Release Side Diff break that "
@@ -967,6 +977,20 @@ def pitcher_profile_server(input, output, session, app_state):
                     f"grade. Built only from real back-to-back pitch sequences (at least {MIN_TUNNELING_PAIRS} "
                     "needed per pitch pair) -- bullpen reps and real game plate appearances, not random "
                     "pitches paired across different outings.",
+                    class_="text-muted small",
+                ))
+                children.append(ui.p(
+                    "For reference: Baseball Prospectus's original 2017 MLB-wide study (Pavlidis/Long/Judge, "
+                    "\"Introducing Pitch Tunnels\") found league averages of about 10.0\" Tunnel, 18.7\" Plate, "
+                    "2.6\" Late Break, 27.6% Break:Tunnel %, and 2.4\" Release separation (their most consistent "
+                    "pitcher in that sample, Jon Lester, sat at 1.2\" Release). These aren't a direct "
+                    "apples-to-apples comparison to the numbers above -- that study measured at a fixed "
+                    "23.8-foot point rather than GBO's fixed 167ms-before-plate point, and its sample was MLB "
+                    "pitchers, not Division II college -- but they're a reasonable sense of scale. Tunneling+ "
+                    "itself, and Velo Diff/Vert Break Diff, have no outside published benchmark to compare "
+                    "against -- Tunneling+ is a GBO-specific blend that doesn't exist elsewhere, so \"good\" "
+                    "only means relative to the rest of this team (100 = team average, 110 = one standard "
+                    "deviation better).",
                     class_="text-muted small",
                 ))
             elif secondary_types:
