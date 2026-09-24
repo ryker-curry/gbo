@@ -1495,6 +1495,27 @@ def pitcher_profile_server(input, output, session, app_state):
             )
             by_type = command_metrics.command_by_pitch_type(view_pitches, throws)
             if len(by_type) > 1:
+                # Ryker, Sept 2026: "the command+ should be the big card
+                # style look ... by pitch type and then put command+ and
+                # big cards have each pitch and its respective command+.
+                # so we know what pitch each pitcher commands best, if
+                # there is one he struggles with, etc" -- one KPI-style
+                # card per pitch type instead of a column buried in the
+                # detail table below, so the best/worst pitch reads at a
+                # glance rather than requiring a scan across columns.
+                if plus_by_type:
+                    children.append(ui.h6("Command+ by pitch type", class_="mt-3"))
+                    children.append(ui_helpers.render_kpi_cards([
+                        {"label": row["Pitch Type"], "value": _fmt_grade(plus_by_type.get(row["Pitch Type"]))}
+                        for row in by_type
+                    ]))
+                    children.append(ui.p(
+                        "Which pitch this pitcher commands best -- and which he struggles with -- at a glance. "
+                        "Same Command+ scale as the KPI above (100 = team average for that pitch type), just "
+                        "broken out per pitch instead of blended into one number. A small pitch count for one "
+                        "type is a noisy read -- widen the date range above for a steadier number.",
+                        class_="text-muted small",
+                    ))
                 by_type_rows = []
                 for row in by_type:
                     tier_cols = {
@@ -1504,7 +1525,6 @@ def pitcher_profile_server(input, output, session, app_state):
                     by_type_rows.append({
                         "Pitch Type": row["Pitch Type"],
                         "Pitches": row["Pitches"],
-                        "Command+": _fmt_grade(plus_by_type.get(row["Pitch Type"])),
                         "Avg Miss (in)": row["Avg Miss"] if row["Avg Miss"] is not None else "—",
                         "Danger-Adj. Miss (in)": row["Danger-Adj. Miss"] if row["Danger-Adj. Miss"] is not None else "—",
                         "Command Execution %": row["Command Execution %"] if row["Command Execution %"] is not None else "—",
@@ -1514,13 +1534,6 @@ def pitcher_profile_server(input, output, session, app_state):
                     })
                 children.append(ui.h6("By pitch type", class_="mt-3"))
                 children.append(ui_helpers.render_dict_table(by_type_rows))
-                children.append(ui.p(
-                    "Command+ here is graded the same way as the Command+ KPI above, just grouped by pitch type "
-                    "instead of blended into one number -- compare this pitcher's command on a specific pitch "
-                    "(his slider, say) against a teammate's on Pitcher Game Report or here. A small pitch count "
-                    "for one type is a noisy read -- widen the date range above for a steadier number.",
-                    class_="text-muted small",
-                ))
 
             # Per-pitch miss direction (Ryker, Sept 2026: "would like to
             # be able to see a miss bias for each individual pitch ...
