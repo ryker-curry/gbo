@@ -537,6 +537,53 @@ def session_command_plus(pitches, baselines):
     return round(100 + 10 * (sum(z_scores) / len(z_scores)), 1)
 
 
+def command_plus_by_pitch_type(pitches, baselines):
+    """Command+ split by pitch type instead of collapsed into one session
+    number -- Sept 2026, Ryker: "create a command+ score for each pitch
+    type so we can compare command of certain pitches between pitchers."
+    session_command_plus() above already grades every located pitch
+    against its OWN pitch type's baseline (via _baseline_for_pitch) but
+    then averages every pitch's z-score into one blended session number;
+    this does the exact same per-pitch grading, just averaged WITHIN each
+    pitch type instead of across all of them -- same math, grouped before
+    averaging instead of after, mirroring how command_by_pitch_type below
+    groups its own rows.
+
+    `baselines` is team_command_plus_baselines()'s return, same as
+    session_command_plus() takes -- compute it once per page render and
+    reuse across every pitcher/window being scored against the same team
+    population.
+
+    Returns {pitch_type_label: command_plus_value} -- one entry per pitch
+    type present among the located pitches passed in. A type's value is
+    None (never omitted) when it has no usable z-score (every baseline
+    available for it is missing or has zero spread), so a caller merging
+    this into command_by_pitch_type()'s fixed row order never has to
+    guess whether a missing key means "zero" or "not computed".
+
+    Small-sample caveat, worth restating here since it matters more at
+    this granularity than for the overall session number: one pitcher's
+    count of one pitch type in one window is usually far smaller than
+    the team-wide MIN_BASELINE_PITCHES the baseline itself requires -- a
+    per-pitch-type Command+ built from a handful of pitches in a single
+    outing is noisy. Compare across a date range/multiple appearances
+    before treating a single-game number as a settled read."""
+    by_type = defaultdict(list)
+    for p in _located(pitches):
+        by_type[pitch_type_label(p)].append(p)
+    result = {}
+    for label, group in by_type.items():
+        z_scores = []
+        for p in group:
+            mean, stdev, _n = _baseline_for_pitch(p, baselines)
+            value = danger_adjusted_miss(p)
+            if value is None or mean is None or not stdev:
+                continue
+            z_scores.append((mean - value) / stdev)
+        result[label] = round(100 + 10 * (sum(z_scores) / len(z_scores)), 1) if z_scores else None
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Layer 2: aggregate reports -- read already-stored CommandPitch fields
 # ---------------------------------------------------------------------------
