@@ -48,6 +48,7 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             NavPage("player_profile", "Player Profile", "person-badge"),
             NavPage("players", "Player setup", "person"),
             NavPage("assessments", "Assessments", "clipboard-check"),
+            NavPage("assessment_import", "Import Assessments", "upload"),
             NavPage("video_import", "Video Import", "camera-video"),
             NavPage("idp", "IDP", "bullseye"),
             NavPage("team_schedule", "Team Schedule", "calendar3"),
