@@ -86,6 +86,7 @@ import command_config
 from analytics import command_metrics, performance_score, profile_queries
 from analytics.pitch_grading import (
     stuff_plus, location_plus, pitching_plus, MIN_BASELINE_PITCHES,
+    tunnel_type_pair_summary, team_tunneling_baseline, tunneling_plus, MIN_TUNNELING_PAIRS,
 )
 # Pitch Type Breakdown's cards-plus-grouped-tabs display (Sept 2026,
 # Ryker: "want it to be similar in pitcher profile") -- reused from
@@ -710,6 +711,62 @@ def pitcher_profile_server(input, output, session, app_state):
                     class_="text-muted small",
                 ))
 
+            # Tunneling+ (Sept 2026, Ryker: "keep working on the
+            # trajectory model for the tunneling+ model") -- grades how
+            # well each secondary pitch this pitcher threw tunnels off
+            # his primary fastball, using real back-to-back pitch
+            # sequences (bullpen reps and real game plate appearances
+            # alike -- see _tunneling_pairs_for_player) and the cached
+            # flight-path physics (pitch_trajectory.py) rather than a
+            # chart. Definitions (Tunnel/Plate/Late Break/Ratio) follow
+            # Baseball Prospectus's published pitch-tunneling
+            # methodology; Tunneling+ itself is GBO's own team-relative
+            # "+" scale (see analytics/pitch_grading.py's Tunneling+
+            # section for the full citation and math).
+            tunneling_children = []
+            primary_fb = _primary_fastball_type(rapsodo_pitches)
+            if primary_fb is not None:
+                tunneling_pairs = _tunneling_pairs_for_player(rapsodo_pitches)
+                secondary_types = sorted({pitch_type_label(p) for p in rapsodo_pitches} - FASTBALL_TYPES)
+                tunneling_baseline = None
+                for secondary in secondary_types:
+                    summary = tunnel_type_pair_summary(tunneling_pairs, primary_fb, secondary)
+                    if summary is None:
+                        continue
+                    if tunneling_baseline is None:
+                        tunneling_baseline = _team_tunneling_baseline(db)
+                    grade = tunneling_plus(summary, secondary, tunneling_baseline)
+                    tunneling_children.append(ui.p(
+                        ui.strong(f"Tunneling — {secondary} off {primary_fb}"), f" (n={summary['n']} sequences)",
+                        class_="mt-3 mb-1",
+                    ))
+                    tunneling_children.append(ui_helpers.render_kpi_cards([
+                        {"label": "Tunnel", "value": f"{summary['tunnel_in']}\""},
+                        {"label": "Plate", "value": f"{summary['plate_in']}\""},
+                        {"label": "Late Break", "value": f"{summary['late_break_in']}\""},
+                        {"label": "Ratio", "value": f"{summary['ratio']}"},
+                        {"label": "Tunneling+", "value": grade if grade is not None else "—"},
+                    ]))
+                if tunneling_children:
+                    tunneling_children.append(ui.p(
+                        f"Tunnel: how far apart (in inches) this pitch and the {primary_fb} still are at the "
+                        "point a hitter must commit to swing (~23.8ft from the plate). Plate: how far apart they "
+                        "end up at the plate. Late Break: the difference (separation added AFTER the decision "
+                        "point). Ratio: Plate/Tunnel -- higher means the pitches looked more alike early and "
+                        "diverged more late, the deception tunneling is about. Tunneling+ grades that Ratio "
+                        "against the rest of the team (100 = team average, 10 points = 1 SD). Built only from "
+                        f"real back-to-back pitch sequences (at least {MIN_TUNNELING_PAIRS} needed per pitch "
+                        "pair) -- bullpen reps and real game plate appearances, not random pitches paired across "
+                        "different outings.",
+                        class_="text-muted small",
+                    ))
+                elif secondary_types:
+                    tunneling_children.append(ui.p(
+                        "Not enough back-to-back pitch sequences yet to grade tunneling for this pitcher's "
+                        "secondary pitches against his fastball.",
+                        class_="text-muted small",
+                    ))
+
             # Release-point pitcher graphic (Sept 2026, Ryker: "want to
             # be able to see the graphic of pitcher outline with the
             # estimated arm angle") -- same visualizations.pitcher_
@@ -758,6 +815,7 @@ def pitcher_profile_server(input, output, session, app_state):
                 ),
                 ui_helpers.render_dict_table(table_rows),
                 *trajectory_children,
+                *tunneling_children,
                 ui.hr(),
                 *graphic_children,
                 ui.hr(),
@@ -1458,6 +1516,98 @@ def pitcher_profile_server(input, output, session, app_state):
             .all()
         )
         return team_havaa_baseline(vaa_trajectory_triples(rows))
+
+    def _primary_fastball_type(pitches):
+        """Whichever FASTBALL_TYPES member this pitcher threw the most
+        of, among the given pitches -- same "primary is picked per
+        pitcher, not assumed team-wide" reasoning as
+        profile_queries.team_pitcher_primary_fastball_velocity, just
+        scoped to whatever pool of pitches Tunneling+ is being computed
+        from here (bullpen + game combined, not real-game-only). None
+        if this pitcher has no fastball-family pitch in the pool."""
+        counts = {}
+        for p in pitches:
+            label = pitch_type_label(p)
+            if label in FASTBALL_TYPES:
+                counts[label] = counts.get(label, 0) + 1
+        return max(counts, key=counts.get) if counts else None
+
+    def _tunneling_pairs_for_player(rapsodo_pitches):
+        """Groups one player's RapsodoPitch rows (each already carrying
+        a cached trajectory_json -- see pitch_grading.py's Tunneling+
+        section) into real outings and returns every real back-to-back
+        pair within them, for pitch_grading.tunnel_type_pair_summary to
+        consume (Sept 2026, Ryker: "keep working on the trajectory
+        model for the tunneling+ model").
+
+        Bullpen-sourced pitches: grouped by bullpen_id, ordered by
+        pitch_number (chronological within that session).
+
+        Game-sourced pitches: ordered by game_pitch.pitch_sequence
+        (global chronological order across the whole game), paired only
+        when BOTH pitch_sequence AND game_pitch.pa_pitch_number advance
+        by exactly 1 from one pitch to the next -- i.e. genuinely the
+        very next pitch to the SAME batter in the SAME plate
+        appearance, not the first pitch of a new at-bat (a new batter
+        hasn't seen anything from this pitcher yet in that PA, so
+        there's nothing to tunnel off of)."""
+        pairs = []
+
+        bullpen_groups = {}
+        for p in rapsodo_pitches:
+            if p.bullpen_id is not None:
+                bullpen_groups.setdefault(p.bullpen_id, []).append(p)
+        for group in bullpen_groups.values():
+            group.sort(key=lambda p: p.pitch_number)
+            pairs.extend(zip(group, group[1:]))
+
+        game_pitches = [p for p in rapsodo_pitches if p.game_pitch is not None]
+        game_pitches.sort(key=lambda p: p.game_pitch.pitch_sequence)
+        for prev, cur in zip(game_pitches, game_pitches[1:]):
+            gp_prev, gp_cur = prev.game_pitch, cur.game_pitch
+            if gp_prev.pa_pitch_number is None or gp_cur.pa_pitch_number is None:
+                continue
+            if gp_cur.pitch_sequence == gp_prev.pitch_sequence + 1 and gp_cur.pa_pitch_number == gp_prev.pa_pitch_number + 1:
+                pairs.append((prev, cur))
+
+        return pairs
+
+    def _team_tunneling_baseline(db):
+        """Team-wide Ratio baseline per secondary pitch type (Sept
+        2026, Ryker: "keep working on the trajectory model for the
+        tunneling+ model") -- every pitcher's own (primary fastball,
+        secondary type) Ratio (see pitch_grading.
+        tunnel_type_pair_summary) feeds pitch_grading.
+        team_tunneling_baseline, same team-wide-population idea as
+        _team_command_plus_baselines/_team_havaa_baseline above. Only
+        reads RapsodoPitch.trajectory_json (already computed -- see
+        pitch_trajectory.py) rather than recomputing anything, and
+        deliberately NOT scoped to this page's own date/pitch-type
+        filters -- a stable roster-wide reference, same as the other
+        two team baselines."""
+        rows = (
+            db.query(RapsodoPitch)
+            .options(joinedload(RapsodoPitch.pitch_type), joinedload(RapsodoPitch.game_pitch))
+            .filter(RapsodoPitch.trajectory_json.isnot(None))
+            .all()
+        )
+        by_player = {}
+        for p in rows:
+            by_player.setdefault(p.player_id, []).append(p)
+
+        pitcher_type_pair_summaries = []
+        for player_pitches in by_player.values():
+            primary = _primary_fastball_type(player_pitches)
+            if primary is None:
+                continue
+            pairs = _tunneling_pairs_for_player(player_pitches)
+            secondary_types = {pitch_type_label(p) for p in player_pitches} - FASTBALL_TYPES
+            for secondary in secondary_types:
+                summary = tunnel_type_pair_summary(pairs, primary, secondary)
+                if summary is not None:
+                    pitcher_type_pair_summaries.append((secondary, summary))
+
+        return team_tunneling_baseline(pitcher_type_pair_summaries)
 
     def _cmd_bias_label(bias):
         parts = []

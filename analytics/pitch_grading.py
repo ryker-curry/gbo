@@ -130,9 +130,11 @@ at (see plan doc sections 4 and 8 for the open items these map to):
     deliberately NOT implemented yet -- see arsenal_summary's docstring.
 """
 
+import math
 from statistics import mean, stdev
 
 from strike_zone import classify_attack_zone
+from analytics.bullpen_metrics import pitch_type_label
 
 # Same floor as command_metrics.py's MIN_BASELINE_PITCHES, same caveat:
 # a baseline built from a handful of pitches swings wildly with every new
@@ -802,3 +804,236 @@ def arsenal_summary(pitch_type_grades):
         })
     rows.sort(key=lambda r: r["Usage %"] or 0, reverse=True)
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Tunneling+ -- Sept 2026 addition (Ryker: "add height adjusted vertical
+# approach angle [HAVAA] to pitcher profile", then "keep working on the
+# trajectory model for the tunneling+ model" -- see
+# HITTER-PITCHER-LAB-PLAN.md sections 3/5 for the original scope: per
+# secondary pitch, Tunnel distance (separation at the decision point),
+# Plate (separation at the plate), Late break, Ratio, and a Grade).
+# Definitions follow Baseball Prospectus's published "Introducing Pitch
+# Tunnels" methodology (Pavlidis & Long, 2017,
+# https://www.baseballprospectus.com/news/article/31030/prospectus-feature-introducing-pitch-tunnels/)
+# -- same house rule as pitch_trajectory.py: borrow a published,
+# externally-validated methodology rather than invent tunnel/plate/ratio
+# definitions from scratch. Scored on GBO's own "+" scale (100 = this
+# team's average, 10 points = 1 SD, per Ryker's call) instead of BP's
+# own scale, for consistency with every other grade in this module.
+#
+# Reads RapsodoPitch.trajectory_json -- already computed at import time
+# and backfilled for existing rows (see pitch_trajectory.py and
+# migrations/backfill_trajectory_json.py) -- rather than recomputing a
+# trajectory here, so this section keeps the same "this module never
+# does its own DB queries or physics, only scores already-loaded rows"
+# boundary as the rest of pitch_grading.py.
+# ---------------------------------------------------------------------------
+
+# BP's published "tunnel point": roughly 167ms before a pitch reaches the
+# plate for a typical fastball -- the point their research ties to when a
+# hitter must commit to swing. BP expresses it as a fixed DISTANCE from
+# the plate (~23.8 ft) rather than a per-pitch time, so two pitches in a
+# pair are always compared at the same physical point in space regardless
+# of either one's own speed. Used as published, not re-derived.
+TUNNEL_POINT_DISTANCE_FROM_PLATE_FT = 23.8
+
+# Floor for the Tunnel measurement (the Ratio denominator) -- two pitches
+# whose paths happen to cross almost exactly AT the tunnel point would
+# otherwise produce a divide-by-near-zero Ratio in the hundreds, which
+# isn't a real deception signal, just noise from where their specific
+# paths happened to intersect. Same spirit as command_metrics.py's
+# `not stdev` guard: clip the denominator instead of discarding the pair
+# entirely.
+MIN_TUNNEL_FLOOR_IN = 0.5
+
+# Real consecutive-pitch pairs pooled per (pitcher, secondary pitch type)
+# before trusting an averaged Tunnel/Plate/Ratio number enough to grade
+# it -- an average built from 2-3 sequences is noise, not a real read on
+# how that pitcher tunnels that pitch off his fastball. Same "starting
+# floor, not a statistically rigorous minimum" caveat as
+# MIN_PITCHER_FASTBALL_VELO_PITCHES above; set lower than
+# MIN_BASELINE_PITCHES because real back-to-back SEQUENCES (not raw
+# pitch counts) are the scarcer resource here.
+MIN_TUNNELING_PAIRS = 8
+
+
+def _trajectory_xy_at_distance_from_plate(trajectory_json, distance_from_plate_ft):
+    """(x, y) in feet from a cached RapsodoPitch.trajectory_json payload
+    (see pitch_trajectory.compute_trajectory's docstring for the sample
+    shape), at the point `distance_from_plate_ft` feet before the plate
+    -- linearly interpolated between the cached samples (already spaced
+    pitch_trajectory.SAMPLE_DT = 0.01s apart, so interpolation error is a
+    small fraction of an inch). Returns None if trajectory_json is
+    missing/malformed, or doesn't reach back that far -- would mean an
+    implausibly long release_extension; treated as unavailable, never
+    extrapolated past real computed data."""
+    if not trajectory_json:
+        return None
+    samples = trajectory_json.get("samples")
+    flight_distance = trajectory_json.get("flight_distance_ft")
+    if not samples or flight_distance is None:
+        return None
+    target_z = flight_distance - distance_from_plate_ft
+    if target_z < samples[0]["z"]:
+        return None
+    prev = samples[0]
+    for s in samples[1:]:
+        if s["z"] >= target_z:
+            if s["z"] == prev["z"]:
+                return (prev["x"], prev["y"])
+            frac = (target_z - prev["z"]) / (s["z"] - prev["z"])
+            return (
+                prev["x"] + frac * (s["x"] - prev["x"]),
+                prev["y"] + frac * (s["y"] - prev["y"]),
+            )
+        prev = s
+    return None
+
+
+def tunnel_pair_metrics(pitch_a, pitch_b):
+    """Raw tunneling numbers for ONE pair of pitches -- caller decides
+    which two pitches count as a real "pair" (see
+    consecutive_pitch_pairs below); this function only does the geometry
+    once given two already-chosen RapsodoPitch rows.
+
+    Returns {"tunnel_in", "plate_in", "late_break_in", "ratio"} --
+    tunnel_in/plate_in/late_break_in in inches (matching HB/VB's own
+    units elsewhere in the app); ratio is unitless (Plate/Tunnel, BP's
+    "Break:Tunnel Ratio" -- higher means the two pitches stayed closer
+    together through the decision point and diverged MORE after it,
+    i.e. more deceptive). Returns None if either pitch is missing a
+    cached trajectory or a real plate-crossing location.
+
+    late_break_in = plate_in - tunnel_in (BP's "Post-Tunnel Break") --
+    how much separation was added AFTER the decision point, as a plain
+    inches number alongside the ratio."""
+    if pitch_a.trajectory_json is None or pitch_b.trajectory_json is None:
+        return None
+    if pitch_a.plate_x_ft is None or pitch_a.plate_z_ft is None:
+        return None
+    if pitch_b.plate_x_ft is None or pitch_b.plate_z_ft is None:
+        return None
+
+    xy_a = _trajectory_xy_at_distance_from_plate(pitch_a.trajectory_json, TUNNEL_POINT_DISTANCE_FROM_PLATE_FT)
+    xy_b = _trajectory_xy_at_distance_from_plate(pitch_b.trajectory_json, TUNNEL_POINT_DISTANCE_FROM_PLATE_FT)
+    if xy_a is None or xy_b is None:
+        return None
+
+    tunnel_in = math.hypot(xy_a[0] - xy_b[0], xy_a[1] - xy_b[1]) * 12.0
+    plate_in = math.hypot(
+        float(pitch_a.plate_x_ft) - float(pitch_b.plate_x_ft),
+        float(pitch_a.plate_z_ft) - float(pitch_b.plate_z_ft),
+    ) * 12.0
+    return {
+        "tunnel_in": round(tunnel_in, 2),
+        "plate_in": round(plate_in, 2),
+        "late_break_in": round(plate_in - tunnel_in, 2),
+        "ratio": round(plate_in / max(tunnel_in, MIN_TUNNEL_FLOOR_IN), 2),
+    }
+
+
+def consecutive_pitch_pairs(pitches):
+    """Given ONE outing's pitches (a single bullpen session, or one
+    pitcher's real-game pitches within a single plate appearance)
+    already ordered the way they were actually thrown, returns adjacent
+    (pitch_i, pitch_{i+1}) tuples -- real back-to-back sequences only,
+    since tunneling is fundamentally about what the hitter just saw
+    right before the NEXT pitch arrives, not a comparison between two
+    pitches thrown innings (or bullpens) apart. Caller owns grouping
+    pitches into outings/plate-appearances and ordering them (same
+    "caller owns every DB query" boundary as the rest of this module)
+    -- see pitcher_profile.py's _tunneling_pairs_for_player for the real
+    grouping logic (bullpen: same bullpen_id, ordered by pitch_number;
+    game: same plate appearance, ordered by pa_pitch_number)."""
+    return list(zip(pitches, pitches[1:]))
+
+
+def tunnel_type_pair_summary(all_pairs, type_a, type_b):
+    """Averages tunnel_pair_metrics across every pair in `all_pairs`
+    (RapsodoPitch tuples, e.g. from consecutive_pitch_pairs) whose two
+    pitch-type labels are exactly {type_a, type_b}, in EITHER order --
+    tunneling is symmetric (how close two pitches' paths stayed through
+    the decision point is the same fact regardless of which one was
+    thrown first), so a fastball-then-slider sequence and a
+    slider-then-fastball sequence both count toward the same
+    (fastball, slider) summary.
+
+    Returns None if fewer than MIN_TUNNELING_PAIRS qualifying pairs are
+    found (see that constant) -- an average from a handful of sequences
+    isn't a real read on how this pitcher tunnels that pitch pair yet."""
+    wanted = {type_a, type_b}
+    tunnel_vals, plate_vals, late_vals, ratio_vals = [], [], [], []
+    for p1, p2 in all_pairs:
+        if {pitch_type_label(p1), pitch_type_label(p2)} != wanted:
+            continue
+        m = tunnel_pair_metrics(p1, p2)
+        if m is None:
+            continue
+        tunnel_vals.append(m["tunnel_in"])
+        plate_vals.append(m["plate_in"])
+        late_vals.append(m["late_break_in"])
+        ratio_vals.append(m["ratio"])
+
+    n = len(ratio_vals)
+    if n < MIN_TUNNELING_PAIRS:
+        return None
+    return {
+        "n": n,
+        "tunnel_in": round(mean(tunnel_vals), 2),
+        "plate_in": round(mean(plate_vals), 2),
+        "late_break_in": round(mean(late_vals), 2),
+        "ratio": round(mean(ratio_vals), 2),
+    }
+
+
+def team_tunneling_baseline(pitcher_type_pair_summaries):
+    """Team-wide mean+stdev of Ratio, grouped by secondary pitch type --
+    the population a pitcher's OWN (fastball, secondary) Ratio gets
+    graded against for Tunneling+, same shape as every other X_plus
+    baseline in this module.
+
+    pitcher_type_pair_summaries: [(secondary_pitch_type_label, summary),
+    ...] -- one entry per pitcher per secondary type they throw enough
+    of to have a real tunnel_type_pair_summary (see above); caller
+    builds this list across every pitcher on the team.
+
+    Returns {secondary_pitch_type_label: (mean_ratio, stdev_ratio, n)},
+    n counted in PITCHERS (one Ratio per pitcher per type), not raw
+    pitch pairs -- matches command_metrics.team_command_plus_baseline's
+    own "one number per pitcher feeds the baseline" pooling."""
+    by_type = {}
+    for secondary_type, summary in pitcher_type_pair_summaries:
+        if summary is None:
+            continue
+        by_type.setdefault(secondary_type, []).append(summary["ratio"])
+
+    baseline = {}
+    for secondary_type, ratios in by_type.items():
+        n = len(ratios)
+        baseline[secondary_type] = (round(mean(ratios), 4), round(stdev(ratios), 4), n) if n >= 2 else (None, None, n)
+    return baseline
+
+
+def tunneling_plus(summary, secondary_pitch_type, baseline):
+    """One pitcher's Tunneling+ for one secondary pitch type -- how this
+    pitcher's own (fastball, that type) Ratio (see
+    tunnel_type_pair_summary) compares to the rest of the team's Ratio
+    for that same type:
+
+        tunneling_plus = 100 + 10 * (ratio - baseline_mean) / baseline_stdev
+
+    HIGHER ratio is better for the pitcher (more separation added after
+    the decision point relative to how close together the pitches
+    started), so unlike Command+/Location+ this is NOT sign-flipped --
+    same orientation as Stuff+.
+
+    None if `summary` is None (not enough real sequences yet -- see
+    MIN_TUNNELING_PAIRS) or the team baseline for this pitch type isn't
+    usable yet (fewer than 2 pitchers have a real summary for it)."""
+    if summary is None:
+        return None
+    b_mean, b_sd, _b_n = baseline.get(secondary_pitch_type, (None, None, 0))
+    if b_mean is None or not b_sd:
+        return None
+    return round(100 + 10 * (summary["ratio"] - b_mean) / b_sd, 1)
