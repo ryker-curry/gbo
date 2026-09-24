@@ -1481,6 +1481,47 @@ def pitcher_profile_server(input, output, session, app_state):
             bias = command_metrics.miss_bias(view_pitches, throws)
             children.append(ui.p(f"Average miss bias: {_cmd_bias_label(bias)}", class_="text-muted small mt-2"))
 
+            # Command+ by pitch type (Ryker, Sept 2026: "i want command+
+            # by pitch type to show up in pitcher profile command and
+            # execution" -- same table/column Pitcher Game Report already
+            # has, added here too since Pitcher Profile's own window can
+            # span multiple games/a date range, which is exactly the
+            # larger sample this needs to be a trustworthy read (a
+            # single game's count of one pitch type is noisy -- see the
+            # caption below).
+            plus_by_type = (
+                command_metrics.command_plus_by_pitch_type(view_pitches, baselines)
+                if baselines["pooled"][2] >= command_metrics.MIN_BASELINE_PITCHES else {}
+            )
+            by_type = command_metrics.command_by_pitch_type(view_pitches, throws)
+            if len(by_type) > 1:
+                by_type_rows = []
+                for row in by_type:
+                    tier_cols = {
+                        f'{label} % (\u2264{radius:.0f}")': (row["Tier Pcts"].get(label) if row["Tier Pcts"].get(label) is not None else "—")
+                        for radius, label in command_config.TARGET_RADII_IN
+                    }
+                    by_type_rows.append({
+                        "Pitch Type": row["Pitch Type"],
+                        "Pitches": row["Pitches"],
+                        "Command+": _fmt_grade(plus_by_type.get(row["Pitch Type"])),
+                        "Avg Miss (in)": row["Avg Miss"] if row["Avg Miss"] is not None else "—",
+                        "Danger-Adj. Miss (in)": row["Danger-Adj. Miss"] if row["Danger-Adj. Miss"] is not None else "—",
+                        "Command Execution %": row["Command Execution %"] if row["Command Execution %"] is not None else "—",
+                        **tier_cols,
+                        "Major Miss %": row["Major Miss %"] if row["Major Miss %"] is not None else "—",
+                        "Miss Bias": _cmd_bias_label(row["Miss Bias"]),
+                    })
+                children.append(ui.h6("By pitch type", class_="mt-3"))
+                children.append(ui_helpers.render_dict_table(by_type_rows))
+                children.append(ui.p(
+                    "Command+ here is graded the same way as the Command+ KPI above, just grouped by pitch type "
+                    "instead of blended into one number -- compare this pitcher's command on a specific pitch "
+                    "(his slider, say) against a teammate's on Pitcher Game Report or here. A small pitch count "
+                    "for one type is a noisy read -- widen the date range above for a steadier number.",
+                    class_="text-muted small",
+                ))
+
             # Per-pitch miss direction (Ryker, Sept 2026: "would like to
             # be able to see a miss bias for each individual pitch ...
             # figure out why they miss where they miss ... if i am
