@@ -927,16 +927,36 @@ def tunnel_pair_metrics(pitch_a, pitch_b):
     once given two already-chosen RapsodoPitch rows.
 
     Returns {"tunnel_in", "plate_in", "late_break_in", "ratio",
-    "release_in", "release_height_diff_in", "release_side_diff_in",
-    "velo_diff_mph", "break_diff_in"}:
+    "break_tunnel_pct", "release_in", "release_height_diff_in",
+    "release_side_diff_in", "velo_diff_mph", "break_diff_in"}:
 
       - tunnel_in/plate_in/late_break_in/release_in in inches (matching
         HB/VB's own units elsewhere in the app); ratio is unitless
-        (Plate/Tunnel, BP's "Break:Tunnel Ratio" -- higher means the two
-        pitches stayed closer together through the decision point and
-        diverged MORE after it, i.e. more deceptive).
+        (Plate/Tunnel -- higher means the two pitches stayed closer
+        together through the decision point and diverged MORE after
+        it, i.e. more deceptive). Sept 2026 correction: earlier
+        GBO docs called this "BP's Break:Tunnel Ratio," which was
+        wrong -- checked directly against baseballprospectus.com/news/
+        article/31040 ("Two Ways to Tunnel"), BP's own Break:Tunnel
+        Ratio is Break Differential / Tunnel Differential, not
+        Plate/Tunnel. This field is GBO's own metric under a
+        similar-sounding name, not a reproduction of BP's stat -- see
+        break_tunnel_pct below for the one that actually matches BP's
+        formula.
       - late_break_in = plate_in - tunnel_in (BP's "Post-Tunnel Break")
         -- how much separation was added AFTER the decision point.
+      - break_tunnel_pct: late_break_in / tunnel_in, as a percentage --
+        this IS BP's actual published "Break:Tunnel Ratio" formula
+        (Break Differential / Tunnel Differential). Their 2017 MLB-wide
+        study (baseballprospectus.com/news/article/31030) found a
+        league average of 27.6%; their example, Jon Lester, sat at
+        28.3%. Not a direct apples-to-apples comparison to GBO's own
+        numbers -- BP measured at a fixed 23.8-foot point, GBO measures
+        at a fixed TIME (167ms, see DECISION_TIME_BEFORE_PLATE_S) before
+        each pitch's own plate crossing, and BP's sample was MLB
+        pitchers, not Division II college -- but useful as a rough
+        sense of scale. Context only, like velo_diff_mph/break_diff_in
+        below -- not folded into ratio or tunneling_plus.
       - release_in: separation between the two pitches' real release
         points (RapsodoPitch.release_side/release_height, feet ->
         inches) -- Sept 2026 addition (Ryker, after reviewing
@@ -946,10 +966,14 @@ def tunnel_pair_metrics(pitch_a, pitch_b):
         telegraphing before the ball even leaves his hand, regardless of
         how well the flight paths converge afterward -- this is a THIRD
         spatial checkpoint (release -> tunnel -> plate) feeding
-        tunneling_plus below, not folded into Ratio itself (Ratio stays
-        exactly BP's published Plate/Tunnel definition). release_in is
-        the single combined (Euclidean) number tunneling_plus actually
-        grades -- see that function's docstring.
+        tunneling_plus below, not folded into Ratio itself. release_in
+        is the single combined (Euclidean) number tunneling_plus
+        actually grades -- see that function's docstring. BP's own
+        2017 study found release differential averaging 2.4 inches
+        league-wide (their most consistent pitcher, Jon Lester, sat at
+        1.2 inches) -- same "rough scale, not a direct comparison"
+        caveat as break_tunnel_pct above (BP's sample was MLB, not
+        Division II college).
       - release_height_diff_in/release_side_diff_in: the same release
         separation broken into its two axes (Sept 2026, Ryker: "i want
         to see release height and release side differences in
@@ -974,7 +998,7 @@ def tunnel_pair_metrics(pitch_a, pitch_b):
         Tunneling+ too would double-count that same signal into two
         different "+" scores.
 
-    Each of the 9 values is independently None (never guessed) if its
+    Each of the 10 values is independently None (never guessed) if its
     own required inputs are missing -- e.g. release_in is None if either
     pitch lacks release_side/release_height, even when tunnel_in/plate_in
     are available -- but the whole pair is dropped (returns None) only
@@ -1022,11 +1046,13 @@ def tunnel_pair_metrics(pitch_a, pitch_b):
     if pitch_a.vb_spin is not None and pitch_b.vb_spin is not None:
         break_diff_in = abs(float(pitch_a.vb_spin) - float(pitch_b.vb_spin))
 
+    late_break_in = plate_in - tunnel_in
     return {
         "tunnel_in": round(tunnel_in, 2),
         "plate_in": round(plate_in, 2),
-        "late_break_in": round(plate_in - tunnel_in, 2),
+        "late_break_in": round(late_break_in, 2),
         "ratio": round(plate_in / max(tunnel_in, MIN_TUNNEL_FLOOR_IN), 2),
+        "break_tunnel_pct": round(100.0 * late_break_in / max(tunnel_in, MIN_TUNNEL_FLOOR_IN), 1),
         "release_in": round(release_in, 2) if release_in is not None else None,
         "release_height_diff_in": round(release_height_diff_in, 2) if release_height_diff_in is not None else None,
         "release_side_diff_in": round(release_side_diff_in, 2) if release_side_diff_in is not None else None,
@@ -1064,12 +1090,16 @@ def tunnel_type_pair_summary(all_pairs, type_a, type_b):
     Returns None if fewer than MIN_TUNNELING_PAIRS qualifying pairs are
     found (see that constant) -- an average from a handful of sequences
     isn't a real read on how this pitcher tunnels that pitch pair yet.
+    break_tunnel_pct averages over every qualifying pair, same as
+    tunnel_in/plate_in/late_break_in/ratio (it only needs the trajectory/
+    plate-location inputs every pair already requires to exist at all).
     velo_diff_mph/break_diff_in/release_height_diff_in/
     release_side_diff_in average only over the pairs that HAVE a value
     (never block the whole summary on a field that's context-only, not
     part of the grade)."""
     wanted = {type_a, type_b}
     tunnel_vals, plate_vals, late_vals, ratio_vals = [], [], [], []
+    break_tunnel_pct_vals = []
     release_vals, velo_diff_vals, break_diff_vals = [], [], []
     release_height_diff_vals, release_side_diff_vals = [], []
     for p1, p2 in all_pairs:
@@ -1082,6 +1112,7 @@ def tunnel_type_pair_summary(all_pairs, type_a, type_b):
         plate_vals.append(m["plate_in"])
         late_vals.append(m["late_break_in"])
         ratio_vals.append(m["ratio"])
+        break_tunnel_pct_vals.append(m["break_tunnel_pct"])
         if m["release_in"] is not None:
             release_vals.append(m["release_in"])
         if m["release_height_diff_in"] is not None:
@@ -1102,6 +1133,7 @@ def tunnel_type_pair_summary(all_pairs, type_a, type_b):
         "plate_in": round(mean(plate_vals), 2),
         "late_break_in": round(mean(late_vals), 2),
         "ratio": round(mean(ratio_vals), 2),
+        "break_tunnel_pct": round(mean(break_tunnel_pct_vals), 1),
         "release_in": round(mean(release_vals), 2) if release_vals else None,
         "release_height_diff_in": round(mean(release_height_diff_vals), 2) if release_height_diff_vals else None,
         "release_side_diff_in": round(mean(release_side_diff_vals), 2) if release_side_diff_vals else None,
