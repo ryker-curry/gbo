@@ -836,7 +836,25 @@ def arsenal_summary(pitch_type_grades):
 # the plate (~23.8 ft) rather than a per-pitch time, so two pitches in a
 # pair are always compared at the same physical point in space regardless
 # of either one's own speed. Used as published, not re-derived.
-TUNNEL_POINT_DISTANCE_FROM_PLATE_FT = 23.8
+# BP's published "tunnel point" is roughly 167ms before a pitch reaches
+# the plate for a typical fastball -- the point their research ties to
+# when a hitter must commit to swing. Sept 2026 (Ryker, after reviewing
+# seemagnus.com's "Pitch Sequencing Analysis: A Deeper Look at Tunneling"
+# -- https://www.seemagnus.com/blog-posts-test/pitch-sequencing-analysis-a-deeper-look-at-tunneling):
+# this used to be a fixed DISTANCE from the plate (23.8ft), which is what
+# BP's own original piece uses and what Magnus's article also falls back
+# to -- but Magnus's own analysis flags that as a real limitation of
+# THEIR data: a fixed distance is "inconsistent" across pitch velocities,
+# since a 95mph fastball and a 78mph breaking ball reach any given
+# distance-from-plate at very different TIMES before arrival, so a fixed
+# distance doesn't actually correspond to the same moment of "the hitter
+# must decide" for both pitches in a pair. Magnus was stuck with a fixed
+# distance because Statcast's public data doesn't expose a clean way to
+# measure a fixed TIME instead -- GBO isn't: pitch_trajectory.py's cached
+# samples are indexed by real time-since-release (not just distance), so
+# this is now measured as a fixed TIME before each pitch's own plate
+# crossing, resolving that exact gap.
+DECISION_TIME_BEFORE_PLATE_S = 0.167
 
 # Floor for the Tunnel measurement (the Ratio denominator) -- two pitches
 # whose paths happen to cross almost exactly AT the tunnel point would
@@ -857,32 +875,43 @@ MIN_TUNNEL_FLOOR_IN = 0.5
 # pitch counts) are the scarcer resource here.
 MIN_TUNNELING_PAIRS = 8
 
+# Equal-weight blend of Ratio and Release Consistency into one Tunneling+
+# number (Sept 2026, Ryker: "need to look at release point as well...
+# would like to combine all of these things to create our own" -- see
+# tunneling_plus's docstring for the full reasoning). A placeholder, not
+# a validated number -- same "transparent weighted blend... revisit once
+# there's enough of GBO's own outcome data to check it" treatment as
+# PITCHING_PLUS_STUFF_WEIGHT above, not a fitted weight.
+TUNNELING_PLUS_RATIO_WEIGHT = 0.5
 
-def _trajectory_xy_at_distance_from_plate(trajectory_json, distance_from_plate_ft):
+
+def _trajectory_xy_at_time_before_plate(trajectory_json, decision_time_s):
     """(x, y) in feet from a cached RapsodoPitch.trajectory_json payload
     (see pitch_trajectory.compute_trajectory's docstring for the sample
-    shape), at the point `distance_from_plate_ft` feet before the plate
-    -- linearly interpolated between the cached samples (already spaced
-    pitch_trajectory.SAMPLE_DT = 0.01s apart, so interpolation error is a
-    small fraction of an inch). Returns None if trajectory_json is
-    missing/malformed, or doesn't reach back that far -- would mean an
-    implausibly long release_extension; treated as unavailable, never
-    extrapolated past real computed data."""
+    shape), at the point `decision_time_s` seconds before THIS pitch's
+    own plate crossing -- linearly interpolated between the cached
+    samples (already spaced pitch_trajectory.SAMPLE_DT = 0.01s apart, so
+    interpolation error is a small fraction of an inch). Time-based, not
+    distance-based -- see DECISION_TIME_BEFORE_PLATE_S's comment for why.
+    Returns None if trajectory_json is missing/malformed, or the pitch's
+    own flight time is shorter than decision_time_s (would mean an
+    implausibly slow/short pitch -- treated as unavailable, never
+    extrapolated past real computed data)."""
     if not trajectory_json:
         return None
     samples = trajectory_json.get("samples")
-    flight_distance = trajectory_json.get("flight_distance_ft")
-    if not samples or flight_distance is None:
+    flight_time = trajectory_json.get("flight_time_s")
+    if not samples or flight_time is None:
         return None
-    target_z = flight_distance - distance_from_plate_ft
-    if target_z < samples[0]["z"]:
+    target_t = flight_time - decision_time_s
+    if target_t < samples[0]["t"]:
         return None
     prev = samples[0]
     for s in samples[1:]:
-        if s["z"] >= target_z:
-            if s["z"] == prev["z"]:
+        if s["t"] >= target_t:
+            if s["t"] == prev["t"]:
                 return (prev["x"], prev["y"])
-            frac = (target_z - prev["z"]) / (s["z"] - prev["z"])
+            frac = (target_t - prev["t"]) / (s["t"] - prev["t"])
             return (
                 prev["x"] + frac * (s["x"] - prev["x"]),
                 prev["y"] + frac * (s["y"] - prev["y"]),
@@ -897,17 +926,47 @@ def tunnel_pair_metrics(pitch_a, pitch_b):
     consecutive_pitch_pairs below); this function only does the geometry
     once given two already-chosen RapsodoPitch rows.
 
-    Returns {"tunnel_in", "plate_in", "late_break_in", "ratio"} --
-    tunnel_in/plate_in/late_break_in in inches (matching HB/VB's own
-    units elsewhere in the app); ratio is unitless (Plate/Tunnel, BP's
-    "Break:Tunnel Ratio" -- higher means the two pitches stayed closer
-    together through the decision point and diverged MORE after it,
-    i.e. more deceptive). Returns None if either pitch is missing a
-    cached trajectory or a real plate-crossing location.
+    Returns {"tunnel_in", "plate_in", "late_break_in", "ratio",
+    "release_in", "velo_diff_mph", "break_diff_in"}:
 
-    late_break_in = plate_in - tunnel_in (BP's "Post-Tunnel Break") --
-    how much separation was added AFTER the decision point, as a plain
-    inches number alongside the ratio."""
+      - tunnel_in/plate_in/late_break_in/release_in in inches (matching
+        HB/VB's own units elsewhere in the app); ratio is unitless
+        (Plate/Tunnel, BP's "Break:Tunnel Ratio" -- higher means the two
+        pitches stayed closer together through the decision point and
+        diverged MORE after it, i.e. more deceptive).
+      - late_break_in = plate_in - tunnel_in (BP's "Post-Tunnel Break")
+        -- how much separation was added AFTER the decision point.
+      - release_in: separation between the two pitches' real release
+        points (RapsodoPitch.release_side/release_height, feet ->
+        inches) -- Sept 2026 addition (Ryker, after reviewing
+        medium.com/@jensen.dev.01's "Quantifying Pitch Tunneling", which
+        treats release-point inconsistency as a penalty). A pitcher who
+        releases two pitch types from visibly different slots is
+        telegraphing before the ball even leaves his hand, regardless of
+        how well the flight paths converge afterward -- this is a THIRD
+        spatial checkpoint (release -> tunnel -> plate) feeding
+        tunneling_plus below, not folded into Ratio itself (Ratio stays
+        exactly BP's published Plate/Tunnel definition).
+      - velo_diff_mph/break_diff_in: absolute velocity and vertical-break
+        (vb_spin) differences between the pair -- Sept 2026 addition
+        (Ryker, after reviewing seemagnus.com's finding that speed/shape
+        separation predicts whiffs independent of tunnel/plate distance).
+        Deliberately NOT folded into Ratio, late_break_in, or
+        tunneling_plus (Ryker's call) -- shown as separate context only.
+        Reasons: Magnus's finding came from a model fit on public MLB
+        data, not validated against GBO's own pitchers or outcomes yet,
+        and velocity differential already partly feeds Stuff+ for
+        Changeup specifically (profile_queries.
+        team_pitcher_primary_fastball_velocity) -- folding it into
+        Tunneling+ too would double-count that same signal into two
+        different "+" scores.
+
+    Each of the 7 values is independently None (never guessed) if its
+    own required inputs are missing -- e.g. release_in is None if either
+    pitch lacks release_side/release_height, even when tunnel_in/plate_in
+    are available -- but the whole pair is dropped (returns None) only
+    if trajectory_json or plate location is missing on either side,
+    since those are needed for every other value here."""
     if pitch_a.trajectory_json is None or pitch_b.trajectory_json is None:
         return None
     if pitch_a.plate_x_ft is None or pitch_a.plate_z_ft is None:
@@ -915,8 +974,8 @@ def tunnel_pair_metrics(pitch_a, pitch_b):
     if pitch_b.plate_x_ft is None or pitch_b.plate_z_ft is None:
         return None
 
-    xy_a = _trajectory_xy_at_distance_from_plate(pitch_a.trajectory_json, TUNNEL_POINT_DISTANCE_FROM_PLATE_FT)
-    xy_b = _trajectory_xy_at_distance_from_plate(pitch_b.trajectory_json, TUNNEL_POINT_DISTANCE_FROM_PLATE_FT)
+    xy_a = _trajectory_xy_at_time_before_plate(pitch_a.trajectory_json, DECISION_TIME_BEFORE_PLATE_S)
+    xy_b = _trajectory_xy_at_time_before_plate(pitch_b.trajectory_json, DECISION_TIME_BEFORE_PLATE_S)
     if xy_a is None or xy_b is None:
         return None
 
@@ -925,11 +984,31 @@ def tunnel_pair_metrics(pitch_a, pitch_b):
         float(pitch_a.plate_x_ft) - float(pitch_b.plate_x_ft),
         float(pitch_a.plate_z_ft) - float(pitch_b.plate_z_ft),
     ) * 12.0
+
+    release_in = None
+    if (pitch_a.release_side is not None and pitch_a.release_height is not None
+            and pitch_b.release_side is not None and pitch_b.release_height is not None):
+        release_in = math.hypot(
+            float(pitch_a.release_side) - float(pitch_b.release_side),
+            float(pitch_a.release_height) - float(pitch_b.release_height),
+        ) * 12.0
+
+    velo_diff_mph = None
+    if pitch_a.velocity is not None and pitch_b.velocity is not None:
+        velo_diff_mph = abs(float(pitch_a.velocity) - float(pitch_b.velocity))
+
+    break_diff_in = None
+    if pitch_a.vb_spin is not None and pitch_b.vb_spin is not None:
+        break_diff_in = abs(float(pitch_a.vb_spin) - float(pitch_b.vb_spin))
+
     return {
         "tunnel_in": round(tunnel_in, 2),
         "plate_in": round(plate_in, 2),
         "late_break_in": round(plate_in - tunnel_in, 2),
         "ratio": round(plate_in / max(tunnel_in, MIN_TUNNEL_FLOOR_IN), 2),
+        "release_in": round(release_in, 2) if release_in is not None else None,
+        "velo_diff_mph": round(velo_diff_mph, 1) if velo_diff_mph is not None else None,
+        "break_diff_in": round(break_diff_in, 2) if break_diff_in is not None else None,
     }
 
 
@@ -961,9 +1040,13 @@ def tunnel_type_pair_summary(all_pairs, type_a, type_b):
 
     Returns None if fewer than MIN_TUNNELING_PAIRS qualifying pairs are
     found (see that constant) -- an average from a handful of sequences
-    isn't a real read on how this pitcher tunnels that pitch pair yet."""
+    isn't a real read on how this pitcher tunnels that pitch pair yet.
+    velo_diff_mph/break_diff_in average only over the pairs that HAVE a
+    value (never block the whole summary on a field that's context-only,
+    not part of the grade)."""
     wanted = {type_a, type_b}
     tunnel_vals, plate_vals, late_vals, ratio_vals = [], [], [], []
+    release_vals, velo_diff_vals, break_diff_vals = [], [], []
     for p1, p2 in all_pairs:
         if {pitch_type_label(p1), pitch_type_label(p2)} != wanted:
             continue
@@ -974,6 +1057,12 @@ def tunnel_type_pair_summary(all_pairs, type_a, type_b):
         plate_vals.append(m["plate_in"])
         late_vals.append(m["late_break_in"])
         ratio_vals.append(m["ratio"])
+        if m["release_in"] is not None:
+            release_vals.append(m["release_in"])
+        if m["velo_diff_mph"] is not None:
+            velo_diff_vals.append(m["velo_diff_mph"])
+        if m["break_diff_in"] is not None:
+            break_diff_vals.append(m["break_diff_in"])
 
     n = len(ratio_vals)
     if n < MIN_TUNNELING_PAIRS:
@@ -984,56 +1073,104 @@ def tunnel_type_pair_summary(all_pairs, type_a, type_b):
         "plate_in": round(mean(plate_vals), 2),
         "late_break_in": round(mean(late_vals), 2),
         "ratio": round(mean(ratio_vals), 2),
+        "release_in": round(mean(release_vals), 2) if release_vals else None,
+        "velo_diff_mph": round(mean(velo_diff_vals), 1) if velo_diff_vals else None,
+        "break_diff_in": round(mean(break_diff_vals), 2) if break_diff_vals else None,
     }
 
 
 def team_tunneling_baseline(pitcher_type_pair_summaries):
-    """Team-wide mean+stdev of Ratio, grouped by secondary pitch type --
-    the population a pitcher's OWN (fastball, secondary) Ratio gets
-    graded against for Tunneling+, same shape as every other X_plus
-    baseline in this module.
+    """Team-wide mean+stdev of Ratio AND Release Consistency, grouped by
+    secondary pitch type -- the population a pitcher's OWN (fastball,
+    secondary) numbers get graded against for Tunneling+, same shape as
+    every other X_plus baseline in this module. velo_diff_mph/
+    break_diff_in are NOT baselined here (Ryker's call -- see
+    tunnel_pair_metrics' docstring) since they're shown as context, not
+    graded.
 
     pitcher_type_pair_summaries: [(secondary_pitch_type_label, summary),
     ...] -- one entry per pitcher per secondary type they throw enough
     of to have a real tunnel_type_pair_summary (see above); caller
     builds this list across every pitcher on the team.
 
-    Returns {secondary_pitch_type_label: (mean_ratio, stdev_ratio, n)},
-    n counted in PITCHERS (one Ratio per pitcher per type), not raw
-    pitch pairs -- matches command_metrics.team_command_plus_baseline's
-    own "one number per pitcher feeds the baseline" pooling."""
-    by_type = {}
+    Returns {secondary_pitch_type_label: {"ratio": (mean, stdev, n),
+    "release_in": (mean, stdev, n)}}, n counted in PITCHERS (one value
+    per pitcher per type), not raw pitch pairs -- matches
+    command_metrics.team_command_plus_baseline's own "one number per
+    pitcher feeds the baseline" pooling. A pitcher missing release_in
+    (see tunnel_type_pair_summary) still contributes to "ratio" but not
+    "release_in"."""
+    ratios_by_type = {}
+    releases_by_type = {}
     for secondary_type, summary in pitcher_type_pair_summaries:
         if summary is None:
             continue
-        by_type.setdefault(secondary_type, []).append(summary["ratio"])
+        ratios_by_type.setdefault(secondary_type, []).append(summary["ratio"])
+        if summary["release_in"] is not None:
+            releases_by_type.setdefault(secondary_type, []).append(summary["release_in"])
 
-    baseline = {}
-    for secondary_type, ratios in by_type.items():
-        n = len(ratios)
-        baseline[secondary_type] = (round(mean(ratios), 4), round(stdev(ratios), 4), n) if n >= 2 else (None, None, n)
-    return baseline
+    def _stats(values):
+        n = len(values)
+        return (round(mean(values), 4), round(stdev(values), 4), n) if n >= 2 else (None, None, n)
+
+    all_types = set(ratios_by_type) | set(releases_by_type)
+    return {
+        secondary_type: {
+            "ratio": _stats(ratios_by_type.get(secondary_type, [])),
+            "release_in": _stats(releases_by_type.get(secondary_type, [])),
+        }
+        for secondary_type in all_types
+    }
 
 
 def tunneling_plus(summary, secondary_pitch_type, baseline):
-    """One pitcher's Tunneling+ for one secondary pitch type -- how this
-    pitcher's own (fastball, that type) Ratio (see
-    tunnel_type_pair_summary) compares to the rest of the team's Ratio
-    for that same type:
+    """One pitcher's Tunneling+ for one secondary pitch type -- Sept
+    2026 (Ryker: "need to look at release point as well. would like to
+    combine all of these things to create our own, if it makes sense to
+    do it"): a transparent equal-weight blend (TUNNELING_PLUS_RATIO_
+    WEIGHT) of two team-relative z-scores:
 
-        tunneling_plus = 100 + 10 * (ratio - baseline_mean) / baseline_stdev
+      - Ratio (see tunnel_type_pair_summary): how this pitcher's own
+        Plate/Tunnel ratio compares to the team's, for this pitch pair.
+        HIGHER is better (more late separation relative to how close
+        together the pitches started) -- same orientation as Stuff+, NOT
+        sign-flipped.
+      - Release Consistency (release_in): how this pitcher's own
+        release-point separation between the two pitch types compares to
+        the team's. LOWER is better (a tighter, more consistent release
+        slot is more deceptive) -- sign-flipped, same convention as
+        Command+/Location+'s miss-distance/run-value inputs.
 
-    HIGHER ratio is better for the pitcher (more separation added after
-    the decision point relative to how close together the pitches
-    started), so unlike Command+/Location+ this is NOT sign-flipped --
-    same orientation as Stuff+.
+    Both feed one blended z-score:
 
-    None if `summary` is None (not enough real sequences yet -- see
-    MIN_TUNNELING_PAIRS) or the team baseline for this pitch type isn't
-    usable yet (fewer than 2 pitchers have a real summary for it)."""
+        combined_z = W * z_ratio + (1 - W) * (-z_release)
+        tunneling_plus = 100 + 10 * combined_z
+
+    This is a judgment call, not a fitted or externally validated
+    weighting -- W=0.5 is a placeholder (see TUNNELING_PLUS_RATIO_
+    WEIGHT's own comment), same "transparent blend, revisit once there's
+    real outcome data to check it against" treatment pitching_plus's own
+    STUFF_WEIGHT already gets. Velocity/break differential are
+    deliberately NOT part of this blend (see tunnel_pair_metrics'
+    docstring) -- shown as separate context on the page instead.
+
+    None if `summary` is None (not enough real sequences yet), the team
+    Ratio baseline for this pitch type isn't usable, OR the team Release
+    Consistency baseline isn't usable -- a Tunneling+ that silently
+    dropped one of its two declared inputs whenever data was thin would
+    misrepresent what's actually being graded."""
     if summary is None:
         return None
-    b_mean, b_sd, _b_n = baseline.get(secondary_pitch_type, (None, None, 0))
-    if b_mean is None or not b_sd:
+    entry = baseline.get(secondary_pitch_type)
+    if entry is None:
         return None
-    return round(100 + 10 * (summary["ratio"] - b_mean) / b_sd, 1)
+    ratio_mean, ratio_sd, _ratio_n = entry["ratio"]
+    release_mean, release_sd, _release_n = entry["release_in"]
+    if ratio_mean is None or not ratio_sd:
+        return None
+    if release_mean is None or not release_sd or summary["release_in"] is None:
+        return None
+    z_ratio = (summary["ratio"] - ratio_mean) / ratio_sd
+    z_release = (release_mean - summary["release_in"]) / release_sd
+    combined_z = TUNNELING_PLUS_RATIO_WEIGHT * z_ratio + (1 - TUNNELING_PLUS_RATIO_WEIGHT) * z_release
+    return round(100 + 10 * combined_z, 1)

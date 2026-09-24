@@ -750,17 +750,26 @@ def pitcher_profile_server(input, output, session, app_state):
                 ))
 
             # Tunneling+ (Sept 2026, Ryker: "keep working on the
-            # trajectory model for the tunneling+ model") -- grades how
-            # well each secondary pitch this pitcher threw tunnels off
-            # his primary fastball, using real back-to-back pitch
-            # sequences (bullpen reps and real game plate appearances
-            # alike -- see _tunneling_pairs_for_player) and the cached
-            # flight-path physics (pitch_trajectory.py) rather than a
-            # chart. Definitions (Tunnel/Plate/Late Break/Ratio) follow
-            # Baseball Prospectus's published pitch-tunneling
-            # methodology; Tunneling+ itself is GBO's own team-relative
-            # "+" scale (see analytics/pitch_grading.py's Tunneling+
-            # section for the full citation and math).
+            # trajectory model for the tunneling+ model", then "need to
+            # look at release point as well. would like to combine all
+            # of these things to create our own") -- grades how well
+            # each secondary pitch this pitcher threw tunnels off his
+            # primary fastball, using real back-to-back pitch sequences
+            # (bullpen reps and real game plate appearances alike -- see
+            # _tunneling_pairs_for_player) and the cached flight-path
+            # physics (pitch_trajectory.py) rather than a chart.
+            # Tunnel/Plate/Late Break/Ratio follow Baseball Prospectus's
+            # published methodology (now measured at a fixed TIME before
+            # the plate rather than a fixed distance -- see
+            # analytics/pitch_grading.py's DECISION_TIME_BEFORE_PLATE_S
+            # comment for why); Tunneling+ itself is a GBO-specific blend
+            # of Ratio and Release Consistency (see that module's
+            # tunneling_plus docstring for the full citations and math).
+            # Velo Diff/Break Diff are shown as separate context, NOT
+            # part of the grade (Ryker's call, after reviewing
+            # seemagnus.com's finding that they predict whiffs
+            # independently -- see tunnel_pair_metrics' docstring for
+            # why they're kept out of the score itself).
             tunneling_children = []
             primary_fb = _primary_fastball_type(rapsodo_pitches)
             if primary_fb is not None:
@@ -783,18 +792,32 @@ def pitcher_profile_server(input, output, session, app_state):
                         {"label": "Plate", "value": f"{summary['plate_in']}\""},
                         {"label": "Late Break", "value": f"{summary['late_break_in']}\""},
                         {"label": "Ratio", "value": f"{summary['ratio']}"},
+                        {"label": "Release", "value": f"{summary['release_in']}\"" if summary["release_in"] is not None else "—"},
                         {"label": "Tunneling+", "value": grade if grade is not None else "—"},
                     ]))
+                    context_cards = []
+                    if summary["velo_diff_mph"] is not None:
+                        context_cards.append({"label": "Velo Diff", "value": f"{summary['velo_diff_mph']} mph"})
+                    if summary["break_diff_in"] is not None:
+                        context_cards.append({"label": "Vert Break Diff", "value": f"{summary['break_diff_in']}\""})
+                    if context_cards:
+                        tunneling_children.append(ui.p("For context (not part of the grade):", class_="text-muted small mb-1 mt-1"))
+                        tunneling_children.append(ui_helpers.render_kpi_cards(context_cards))
                 if tunneling_children:
                     tunneling_children.append(ui.p(
-                        f"Tunnel: how far apart (in inches) this pitch and the {primary_fb} still are at the "
-                        "point a hitter must commit to swing (~23.8ft from the plate). Plate: how far apart they "
-                        "end up at the plate. Late Break: the difference (separation added AFTER the decision "
-                        "point). Ratio: Plate/Tunnel -- higher means the pitches looked more alike early and "
-                        "diverged more late, the deception tunneling is about. Tunneling+ grades that Ratio "
-                        "against the rest of the team (100 = team average, 10 points = 1 SD). Built only from "
-                        f"real back-to-back pitch sequences (at least {MIN_TUNNELING_PAIRS} needed per pitch "
-                        "pair) -- bullpen reps and real game plate appearances, not random pitches paired across "
+                        f"Tunnel: how far apart (in inches) this pitch and the {primary_fb} still are ~167ms "
+                        "before THIS pitch would cross the plate -- roughly when a hitter must commit to swing. "
+                        "Plate: how far apart they end up at the plate. Late Break: the difference (separation "
+                        "added after the decision point). Ratio: Plate/Tunnel -- higher means the pitches looked "
+                        "more alike early and diverged more late. Release: separation between the two pitches' "
+                        "real release points -- a pitcher who releases two pitch types from visibly different "
+                        "slots is telegraphing before the ball even leaves his hand, regardless of how well the "
+                        "flight paths converge afterward. Tunneling+ blends Ratio (higher is better) and Release "
+                        "(lower is better) against the rest of the team, equally weighted (100 = team average, "
+                        "10 points = 1 SD) -- a placeholder weighting, not a validated one. Velo Diff/Vert Break "
+                        "Diff are shown for context only, not folded into the grade. Built only from real "
+                        f"back-to-back pitch sequences (at least {MIN_TUNNELING_PAIRS} needed per pitch pair) -- "
+                        "bullpen reps and real game plate appearances, not random pitches paired across "
                         "different outings.",
                         class_="text-muted small",
                     ))
