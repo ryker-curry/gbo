@@ -77,8 +77,9 @@ from datetime import date, timedelta
 
 from shiny import module, ui, render, req, reactive
 from shinywidgets import output_widget, render_plotly
+from sqlalchemy.orm import joinedload
 from database import get_session
-from models import Player, User, PitchType, PlayerPitchArsenal, StaffPlayerAssignment, Game, GamePitch
+from models import Player, User, PitchType, PlayerPitchArsenal, StaffPlayerAssignment, Game, GamePitch, RapsodoPitch
 from game_stats import compute_pitching_line, compute_pitch_type_breakdown, get_batter_hands, compute_pitch_mix_by_count
 from strike_zone import classify_attack_zone
 import command_config
@@ -98,11 +99,14 @@ from visualizations.pitch_results_chart import pitch_results_chart
 from visualizations.count_leverage_chart import count_leverage_chart
 from visualizations.pitch_location_heatmap import pitch_location_heatmaps, MIN_FOR_CONTOUR
 import glossary_content
-from pitch_type_config import get_pitch_color
+from pitch_type_config import get_pitch_color, FASTBALL_TYPES
 
 import ui_helpers
 import format_helpers
-from analytics.bullpen_metrics import pitch_type_summary, average_estimated_arm_angle, pitch_type_label
+from analytics.bullpen_metrics import (
+    pitch_type_summary, average_estimated_arm_angle, pitch_type_label,
+    fastball_trajectory_diagnostic, vaa_trajectory_triples, team_havaa_baseline,
+)
 from visualizations.bullpen_charts import movement_chart, release_point_chart, color_for_pitch_label
 from visualizations.pitcher_graphic import pitcher_release_svg
 from visualizations.attack_zones_chart import attack_zones_figure
@@ -663,6 +667,49 @@ def pitcher_profile_server(input, output, session, app_state):
                     "Est. VAA": row.get("Est. VAA", "N/A"),
                 })
 
+            # Fastball Trajectory / HAVAA (Sept 2026, Ryker: "add height
+            # adjusted vertical approach angle (HAVAA) to pitcher
+            # profile") -- same fastball_trajectory_diagnostic() card
+            # Bullpen Dashboard already shows (analytics/bullpen_metrics.py,
+            # ported here rather than reinventing it), one per fastball-
+            # family pitch type this pitcher actually threw in this
+            # window. Rendered with this page's own KPI-card look
+            # (ui_helpers.render_kpi_cards) instead of Bullpen Dashboard's
+            # dark-themed _card() styling, for visual consistency with the
+            # rest of Pitcher Profile.
+            havaa_baseline = _team_havaa_baseline(db)
+            trajectory_children = []
+            present_fastball_types = [t for t in FASTBALL_TYPES if t in groups_by_label]
+            for canonical_type in present_fastball_types:
+                diag = fastball_trajectory_diagnostic(
+                    rapsodo_pitches, player, canonical_pitch_type=canonical_type, havaa_baseline=havaa_baseline,
+                )
+                if diag is None:
+                    continue
+                trajectory_children.append(ui.p(
+                    ui.strong(f"Fastball Trajectory — {canonical_type}"), f" (n={diag['n']})",
+                    class_="mt-3 mb-1",
+                ))
+                trajectory_children.append(ui_helpers.render_kpi_cards([
+                    {"label": "Velocity", "value": f"{diag['Velocity']:.1f} mph" if diag["Velocity"] is not None else "—"},
+                    {"label": "VB", "value": f'{diag["VB"]:.1f}"' if diag["VB"] is not None else "—"},
+                    {"label": "VAA", "value": diag["VAA"]},
+                    {"label": "HAVAA", "value": diag["HAVAA"]},
+                    {"label": "Release Height", "value": f'{diag["Release Height"]:.2f} ft' if diag["Release Height"] is not None else "—"},
+                    {"label": "Extension", "value": f'{diag["Extension"]:.2f} ft' if diag["Extension"] is not None else "—"},
+                    {"label": "Arm Angle", "value": diag["Arm Angle"]},
+                    {"label": "Trajectory", "value": diag["Trajectory"]},
+                ]))
+            if trajectory_children:
+                trajectory_children.append(ui.p(
+                    "HAVAA (Height-Adjusted VAA): how many standard deviations flatter (+) or steeper (-) than a "
+                    "typical pitch of the SAME type crossing the plate at the SAME height, against a team-wide "
+                    "baseline -- isolates true ride/carry from the geometric fact that raw VAA is naturally "
+                    "flatter high in the zone and steeper low. Estimated VAA/Arm Angle are geometric estimates "
+                    "from release point and plate-crossing data, not direct biomechanical measurements.",
+                    class_="text-muted small",
+                ))
+
             # Release-point pitcher graphic (Sept 2026, Ryker: "want to
             # be able to see the graphic of pitcher outline with the
             # estimated arm angle") -- same visualizations.pitcher_
@@ -710,6 +757,7 @@ def pitcher_profile_server(input, output, session, app_state):
                     class_="text-muted small",
                 ),
                 ui_helpers.render_dict_table(table_rows),
+                *trajectory_children,
                 ui.hr(),
                 *graphic_children,
                 ui.hr(),
@@ -1384,6 +1432,32 @@ def pitcher_profile_server(input, output, session, app_state):
         all_pitches = db.query(GamePitch).filter(GamePitch.intended_plate_x.isnot(None)).all()
         view_pitches = command_metrics.game_pitches_command_view(all_pitches, None)
         return command_metrics.team_command_plus_baselines(view_pitches)
+
+    def _team_havaa_baseline(db):
+        """Team-wide Height-Adjusted VAA baseline (Sept 2026, Ryker:
+        "add height adjusted vertical approach angle (HAVAA) to pitcher
+        profile") -- ported from bullpen_dashboard_display.py's own
+        _team_havaa_baseline_query/_havaa_baseline rather than
+        reinventing it. HAVAA compares a pitch's VAA against every
+        OTHER pitch (bullpen or game, any pitcher) that crossed the
+        plate at roughly the same height, so this is deliberately NOT
+        scoped to this page's own player/date filters -- same
+        team-wide-population idea as _team_command_plus_baselines
+        above. Only pulls the 4 columns calculate_estimated_vaa needs,
+        filtered not-null here so a missing value can't silently
+        produce a bad baseline entry."""
+        rows = (
+            db.query(RapsodoPitch)
+            .options(joinedload(RapsodoPitch.pitch_type))
+            .filter(
+                RapsodoPitch.release_height.isnot(None),
+                RapsodoPitch.release_angle.isnot(None),
+                RapsodoPitch.release_extension.isnot(None),
+                RapsodoPitch.plate_z_ft.isnot(None),
+            )
+            .all()
+        )
+        return team_havaa_baseline(vaa_trajectory_triples(rows))
 
     def _cmd_bias_label(bias):
         parts = []
