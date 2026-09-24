@@ -410,6 +410,7 @@ def pitcher_profile_server(input, output, session, app_state):
                     choices={
                         "overview": "Overview",
                         "metrics": "Metrics (Physical Profile)",
+                        "tunneling": "Tunneling+",
                         "results": "Results",
                         "zone": "Zone",
                         "command": "Command & Execution",
@@ -752,85 +753,6 @@ def pitcher_profile_server(input, output, session, app_state):
                     class_="text-muted small",
                 ))
 
-            # Tunneling+ (Sept 2026, Ryker: "keep working on the
-            # trajectory model for the tunneling+ model", then "need to
-            # look at release point as well. would like to combine all
-            # of these things to create our own") -- grades how well
-            # each secondary pitch this pitcher threw tunnels off his
-            # primary fastball, using real back-to-back pitch sequences
-            # (bullpen reps and real game plate appearances alike -- see
-            # _tunneling_pairs_for_player) and the cached flight-path
-            # physics (pitch_trajectory.py) rather than a chart.
-            # Tunnel/Plate/Late Break/Ratio follow Baseball Prospectus's
-            # published methodology (now measured at a fixed TIME before
-            # the plate rather than a fixed distance -- see
-            # analytics/pitch_grading.py's DECISION_TIME_BEFORE_PLATE_S
-            # comment for why); Tunneling+ itself is a GBO-specific blend
-            # of Ratio and Release Consistency (see that module's
-            # tunneling_plus docstring for the full citations and math).
-            # Velo Diff/Break Diff are shown as separate context, NOT
-            # part of the grade (Ryker's call, after reviewing
-            # seemagnus.com's finding that they predict whiffs
-            # independently -- see tunnel_pair_metrics' docstring for
-            # why they're kept out of the score itself).
-            tunneling_children = []
-            primary_fb = _primary_fastball_type(rapsodo_pitches)
-            if primary_fb is not None:
-                tunneling_pairs = _tunneling_pairs_for_player(rapsodo_pitches)
-                secondary_types = sorted({pitch_type_label(p) for p in rapsodo_pitches} - FASTBALL_TYPES)
-                tunneling_baseline = None
-                for secondary in secondary_types:
-                    summary = tunnel_type_pair_summary(tunneling_pairs, primary_fb, secondary)
-                    if summary is None:
-                        continue
-                    if tunneling_baseline is None:
-                        tunneling_baseline = _team_tunneling_baseline(db)
-                    grade = tunneling_plus(summary, secondary, tunneling_baseline)
-                    tunneling_children.append(ui.p(
-                        ui.strong(f"Tunneling — {secondary} off {primary_fb}"), f" (n={summary['n']} sequences)",
-                        class_="mt-3 mb-1",
-                    ))
-                    tunneling_children.append(ui_helpers.render_kpi_cards([
-                        {"label": "Tunnel", "value": f"{summary['tunnel_in']}\""},
-                        {"label": "Plate", "value": f"{summary['plate_in']}\""},
-                        {"label": "Late Break", "value": f"{summary['late_break_in']}\""},
-                        {"label": "Ratio", "value": f"{summary['ratio']}"},
-                        {"label": "Release", "value": f"{summary['release_in']}\"" if summary["release_in"] is not None else "—"},
-                        {"label": "Tunneling+", "value": grade if grade is not None else "—"},
-                    ]))
-                    context_cards = []
-                    if summary["velo_diff_mph"] is not None:
-                        context_cards.append({"label": "Velo Diff", "value": f"{summary['velo_diff_mph']} mph"})
-                    if summary["break_diff_in"] is not None:
-                        context_cards.append({"label": "Vert Break Diff", "value": f"{summary['break_diff_in']}\""})
-                    if context_cards:
-                        tunneling_children.append(ui.p("For context (not part of the grade):", class_="text-muted small mb-1 mt-1"))
-                        tunneling_children.append(ui_helpers.render_kpi_cards(context_cards))
-                if tunneling_children:
-                    tunneling_children.append(ui.p(
-                        f"Tunnel: how far apart (in inches) this pitch and the {primary_fb} still are ~167ms "
-                        "before THIS pitch would cross the plate -- roughly when a hitter must commit to swing. "
-                        "Plate: how far apart they end up at the plate. Late Break: the difference (separation "
-                        "added after the decision point). Ratio: Plate/Tunnel -- higher means the pitches looked "
-                        "more alike early and diverged more late. Release: separation between the two pitches' "
-                        "real release points -- a pitcher who releases two pitch types from visibly different "
-                        "slots is telegraphing before the ball even leaves his hand, regardless of how well the "
-                        "flight paths converge afterward. Tunneling+ blends Ratio (higher is better) and Release "
-                        "(lower is better) against the rest of the team, equally weighted (100 = team average, "
-                        "10 points = 1 SD) -- a placeholder weighting, not a validated one. Velo Diff/Vert Break "
-                        "Diff are shown for context only, not folded into the grade. Built only from real "
-                        f"back-to-back pitch sequences (at least {MIN_TUNNELING_PAIRS} needed per pitch pair) -- "
-                        "bullpen reps and real game plate appearances, not random pitches paired across "
-                        "different outings.",
-                        class_="text-muted small",
-                    ))
-                elif secondary_types:
-                    tunneling_children.append(ui.p(
-                        "Not enough back-to-back pitch sequences yet to grade tunneling for this pitcher's "
-                        "secondary pitches against his fastball.",
-                        class_="text-muted small",
-                    ))
-
             # Release-point pitcher graphic (Sept 2026, Ryker: "want to
             # be able to see the graphic of pitcher outline with the
             # estimated arm angle") -- same visualizations.pitcher_
@@ -879,7 +801,6 @@ def pitcher_profile_server(input, output, session, app_state):
                 ),
                 ui_helpers.render_dict_table(table_rows),
                 *trajectory_children,
-                *tunneling_children,
                 ui.hr(),
                 *graphic_children,
                 ui.hr(),
@@ -904,6 +825,161 @@ def pitcher_profile_server(input, output, session, app_state):
                 ),
                 output_widget("pp_spin_axis_chart"),
             )
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Tunneling+ (Sept 2026, Ryker: "keep working on the trajectory
+    # model for the tunneling+ model", then "need to look at release
+    # point as well. would like to combine all of these things to
+    # create our own", then "give tunneling its own tab in dropdown") --
+    # split out of Metrics into its own View entry. Two reasons: it's
+    # conceptually its own analysis (pitch-pair sequencing, not a
+    # single pitch's physical profile), and practically, this section
+    # has NO input controls of its own, so its .shiny-html-output
+    # wrapper never matches theme.py's ".gbo-content .shiny-html-
+    # output:has(.shiny-input-container)" rule -- the one that boxes
+    # Metrics (which DOES have input_slider/input_radio_buttons for its
+    # charts) into a single max-width:900px card. Outside that box,
+    # .gbo-kpi-row's own grid (repeat(auto-fit, minmax(160px,1fr)))
+    # can actually spread its cards across the full page width instead
+    # of every row falling back to one card per line (Ryker: "don't
+    # want all the kpi cards to be one vertical line up and down.
+    # spread them across in a way that makes sense").
+    # -------------------------------------------------------------------
+
+    @render.ui
+    def pp_tunneling_section():
+        """Grades how well each secondary pitch this pitcher threw
+        tunnels off his primary fastball, using real back-to-back pitch
+        sequences (bullpen reps and real game plate appearances alike --
+        see _tunneling_pairs_for_player) and the cached flight-path
+        physics (pitch_trajectory.py) rather than a chart. Tunnel/Plate/
+        Late Break/Ratio follow Baseball Prospectus's published
+        methodology (now measured at a fixed TIME before the plate
+        rather than a fixed distance -- see analytics/pitch_grading.py's
+        DECISION_TIME_BEFORE_PLATE_S comment for why); Tunneling+ itself
+        is a GBO-specific blend of Ratio and Release Consistency (see
+        that module's tunneling_plus docstring for the full citations
+        and math). Velo Diff/Break Diff are shown as separate context,
+        NOT part of the grade (Ryker's call, after reviewing
+        seemagnus.com's finding that they predict whiffs independently
+        -- see tunnel_pair_metrics' docstring for why they're kept out
+        of the score itself).
+
+        Cards are grouped into rows that mean something (Ryker: "spread
+        them across in a way that makes sense") rather than one long
+        strip: tunnel geometry (Tunnel/Plate/Late Break/Ratio), then
+        release consistency and the grade itself (Release/Release
+        Height Diff/Release Side Diff/Tunneling+ -- Ryker: "i want to
+        see release height and release side differences in tunneling
+        section"; the height/side split is display-only context, same
+        as Velo/Break Diff below -- tunneling_plus still grades on the
+        one combined Release number, see pitch_grading.tunnel_pair_
+        metrics' docstring), then context. Both graded rows pass
+        accent=True (Ryker: "incorporate more red in these") for the
+        crimson-tinted .gbo-kpi-card-accent look (theme.py); the plain
+        context row keeps the default card style so the "not part of
+        the grade" cards don't read as equally important."""
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "tunneling":
+            return None
+        db = get_session()
+        try:
+            header = ui.div(
+                ui.p(ui.strong("Tunneling+"), style="margin-bottom:0;"),
+                style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+            )
+            player, rapsodo_pitches = _physical_target(db)
+            if player is None or not rapsodo_pitches:
+                return ui.div(
+                    header,
+                    ui.p("No Rapsodo-linked GAME pitches in this range yet.", class_="text-muted small"),
+                )
+
+            primary_fb = _primary_fastball_type(rapsodo_pitches)
+            if primary_fb is None:
+                return ui.div(
+                    header,
+                    ui.p(
+                        "This pitcher has no fastball-family pitch in this range to tunnel other pitches off of.",
+                        class_="text-muted small",
+                    ),
+                )
+
+            tunneling_pairs = _tunneling_pairs_for_player(rapsodo_pitches)
+            secondary_types = sorted({pitch_type_label(p) for p in rapsodo_pitches} - FASTBALL_TYPES)
+            tunneling_baseline = None
+            children = []
+            for secondary in secondary_types:
+                summary = tunnel_type_pair_summary(tunneling_pairs, primary_fb, secondary)
+                if summary is None:
+                    continue
+                if tunneling_baseline is None:
+                    tunneling_baseline = _team_tunneling_baseline(db)
+                grade = tunneling_plus(summary, secondary, tunneling_baseline)
+                children.append(ui.p(
+                    ui.strong(f"{secondary} off {primary_fb}"), f" (n={summary['n']} sequences)",
+                    class_="mt-4 mb-2",
+                    style="border-left:3px solid var(--gbo-crimson); padding-left:10px;",
+                ))
+                children.append(ui_helpers.render_kpi_cards([
+                    {"label": "Tunnel", "value": f"{summary['tunnel_in']}\""},
+                    {"label": "Plate", "value": f"{summary['plate_in']}\""},
+                    {"label": "Late Break", "value": f"{summary['late_break_in']}\""},
+                    {"label": "Ratio", "value": f"{summary['ratio']}"},
+                ], accent=True))
+                children.append(ui_helpers.render_kpi_cards([
+                    {"label": "Release (Combined)", "value": f"{summary['release_in']}\"" if summary["release_in"] is not None else "—"},
+                    {"label": "Release Height Diff", "value": f"{summary['release_height_diff_in']}\"" if summary["release_height_diff_in"] is not None else "—"},
+                    {"label": "Release Side Diff", "value": f"{summary['release_side_diff_in']}\"" if summary["release_side_diff_in"] is not None else "—"},
+                    {"label": "Tunneling+", "value": grade if grade is not None else "—"},
+                ], accent=True))
+                context_cards = []
+                if summary["velo_diff_mph"] is not None:
+                    context_cards.append({"label": "Velo Diff", "value": f"{summary['velo_diff_mph']} mph"})
+                if summary["break_diff_in"] is not None:
+                    context_cards.append({"label": "Vert Break Diff", "value": f"{summary['break_diff_in']}\""})
+                if context_cards:
+                    children.append(ui.p("For context (not part of the grade):", class_="text-muted small mb-1 mt-1"))
+                    children.append(ui_helpers.render_kpi_cards(context_cards))
+            if children:
+                children.append(ui.p(
+                    f"Tunnel: how far apart (in inches) this pitch and the {primary_fb} still are ~167ms "
+                    "before THIS pitch would cross the plate -- roughly when a hitter must commit to swing. "
+                    "Plate: how far apart they end up at the plate. Late Break: the difference (separation "
+                    "added after the decision point). Ratio: Plate/Tunnel -- higher means the pitches looked "
+                    "more alike early and diverged more late. Release (Combined): separation between the two "
+                    "pitches' real release points -- a pitcher who releases two pitch types from visibly "
+                    "different slots is telegraphing before the ball even leaves his hand, regardless of how "
+                    "well the flight paths converge afterward. Release Height Diff/Release Side Diff break that "
+                    "same separation into its two axes (how high vs. how far to the side) -- context for "
+                    "coaching the fix, not separately graded. Tunneling+ blends Ratio (higher is better) and "
+                    "the combined Release number (lower is better) against the rest of the team, equally "
+                    "weighted (100 = team average, 10 points = 1 SD) -- a placeholder weighting, not a "
+                    "validated one. Velo Diff/Vert Break Diff are shown for context only, not folded into the "
+                    f"grade. Built only from real back-to-back pitch sequences (at least {MIN_TUNNELING_PAIRS} "
+                    "needed per pitch pair) -- bullpen reps and real game plate appearances, not random "
+                    "pitches paired across different outings.",
+                    class_="text-muted small",
+                ))
+            elif secondary_types:
+                children.append(ui.p(
+                    "Not enough back-to-back pitch sequences yet to grade tunneling for this pitcher's "
+                    "secondary pitches against his fastball.",
+                    class_="text-muted small",
+                ))
+            else:
+                children.append(ui.p(
+                    "This pitcher has no secondary pitch types in this range to tunnel off his fastball.",
+                    class_="text-muted small",
+                ))
+            return ui.div(header, *children)
         finally:
             db.close()
 
