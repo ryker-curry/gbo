@@ -1292,6 +1292,17 @@ def pitcher_game_report_server(input, output, session, app_state):
             bias = command_metrics.miss_bias(view_pitches, throws)
             children.append(ui.p(f"Average miss bias: {_cmd_bias_label(bias)}", class_="text-muted small mt-2"))
 
+            # Command+ by pitch type (Ryker, Sept 2026: "create a command+
+            # score for each pitch type so we can compare command of
+            # certain pitches between pitchers") -- reuses the same
+            # `baselines`/baseline_n gate as the overall Command+ KPI card
+            # above, so this column reads "—" under the same "not enough
+            # team data yet" condition instead of showing a number built on
+            # too thin a baseline.
+            plus_by_type = (
+                command_metrics.command_plus_by_pitch_type(view_pitches, baselines)
+                if baseline_n >= command_metrics.MIN_BASELINE_PITCHES else {}
+            )
             by_type = command_metrics.command_by_pitch_type(view_pitches, throws)
             if len(by_type) > 1:
                 rows = []
@@ -1303,6 +1314,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                     rows.append({
                         "Pitch Type": row["Pitch Type"],
                         "Pitches": row["Pitches"],
+                        "Command+": _cmd_fmt(plus_by_type.get(row["Pitch Type"])),
                         "Avg Miss (in)": row["Avg Miss"] if row["Avg Miss"] is not None else "—",
                         "Danger-Adj. Miss (in)": row["Danger-Adj. Miss"] if row["Danger-Adj. Miss"] is not None else "—",
                         "Command Execution %": row["Command Execution %"] if row["Command Execution %"] is not None else "—",
@@ -1312,6 +1324,14 @@ def pitcher_game_report_server(input, output, session, app_state):
                     })
                 children.append(ui.h6("By pitch type", class_="mt-3"))
                 children.append(ui_helpers.render_dict_table(rows))
+                children.append(ui.p(
+                    "Command+ here is graded the same way as the Command+ KPI above, just grouped by pitch type "
+                    "instead of blended into one session number -- lets you compare this pitcher's command on a "
+                    "specific pitch (his slider, say) against a teammate's. A single game's count of one pitch "
+                    "type is a small sample -- read a single-outing number as a rough sense, not a settled one, "
+                    "until you can compare across a stretch of appearances.",
+                    class_="text-muted small",
+                ))
 
             # Miss by call (Ryker, Sept 2026: replaced the old raw
             # per-pitch "Miss direction by pitch" list and the
