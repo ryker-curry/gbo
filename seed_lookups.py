@@ -91,6 +91,14 @@ BODY_COMPOSITION_TESTS = [
     # Body Fat Mass/Percent Body Fat below -- see BODY_COMP_ENTRY_FIELDS/
     # BODY_COMP_DISPLAY_METRICS in bucket_system.py.
     ("Basal Metabolic Rate (BMR)", "kcal"), ("Recommended Caloric Intake", "kcal"),
+    # Sept 2026 addition -- closing the Assessment Importer's Body
+    # Composition schema gap (assessment_import_spec.py's BODY_COMPOSITION
+    # list already expected these 7, flagged "unmapped_new" until now).
+    # Same InBody770-export, reference-only treatment as BMR/Recommended
+    # Caloric Intake above -- not part of the Body Comp composite score.
+    ("Age", "yrs"), ("Body Mass Index (BMI)", "kg/m2"), ("Fat-Free Mass Index (FFMI)", "kg/m2"),
+    ("Total Body Water", "lb"), ("Total Body Water %", "%"),
+    ("Intracellular Water", "lb"), ("Extracellular Water", "lb"),
 ]
 
 # (test_name, unit) -- pruned down to exactly what's actually measured
@@ -174,6 +182,10 @@ UPPER_BODY_STRENGTH_TESTS = [
     ("Neutral Grip Chin Up Max External Load", "lbs"),
     ("Neutral Grip/DB Bench Press Max Load", "lbs"),
     ("Grip Strength (Seated, Throwing Hand)", "lbs"),
+    # Sept 2026 addition -- Glove Hand counterpart, closing the Assessment
+    # Importer's schema gap (assessment_import_spec.py's template already
+    # had this column, flagged "unmapped_new" until now).
+    ("Grip Strength (Seated, Glove Hand)", "lbs"),
 ]
 
 # (test_name, unit) -- matches Ryker's bucket-system spreadsheet exactly
@@ -208,6 +220,19 @@ EXPLOSIVE_POWER_TESTS = [
     ("Hop Test Mean Contact Time", "ms"),
     ("Single-Leg Jump Height (Drive Leg)", "in"), ("Single-Leg Jump Concentric Impulse (Drive Leg)", "Ns"),
     ("Single-Leg Jump Height (Plant Leg)", "in"), ("Single-Leg Jump Concentric Impulse (Plant Leg)", "Ns"),
+    # Sept 2026 addition -- the 9 CMJ force-plate variables Ryker sent
+    # verbatim, closing the Assessment Importer's remaining Explosive
+    # Power schema gap (assessment_import_spec.py's EXPLOSIVE_POWER list
+    # already expected these 9, flagged "unmapped_new"/"*NEW*" until now).
+    # Named "CMJ ..." (not spelled out "Countermovement Jump ...", unlike
+    # the CMJ tests above) to match the import template's header text
+    # exactly -- these were already sent to Ryker as "*NEW* CMJ ..."
+    # columns, so keeping the name/header in lockstep avoids making him
+    # re-type headers on a sheet he may have already started filling in.
+    ("CMJ Bodyweight", "kg"), ("CMJ Concentric Impulse", "N s"), ("CMJ Peak Power", "W"),
+    ("CMJ Concentric Peak Force", "N"), ("CMJ Concentric Peak Velocity", "m/s"),
+    ("CMJ Eccentric Duration", "ms"), ("CMJ Eccentric Peak Force", "N"),
+    ("CMJ Eccentric Peak Power", "W"), ("CMJ Eccentric Peak Velocity", "m/s"),
 ]
 
 # (test_name, unit) -- Distance matches Ryker's bucket-system spreadsheet
