@@ -396,7 +396,7 @@ def render_dict_table(rows: list, empty_message: str = None):
     return ui.div(table, class_="table-responsive")
 
 
-def render_kpi_cards(cards: list, accent: bool = False):
+def render_kpi_cards(cards: list, accent: bool = True):
     """Render a row of bordered, gradient-backed KPI cards. The value is
     wrapped in a .gbo-kpi-accent span -- theme.py gives it a
     cream-plus-crimson-glow look in dark mode and literal crimson in
@@ -409,15 +409,17 @@ def render_kpi_cards(cards: list, accent: bool = False):
     Each card dict: {"label": str, "value": str, "delta": str | None,
     "delta_positive": bool} -- delta and delta_positive are optional.
 
-    accent=True (Sept 2026, Ryker: "incorporate more red in these" --
-    Tunneling+'s KPI cards specifically) gives every card in this row a
-    crimson-tinted background wash and a crimson label instead of the
-    usual gold one, via .gbo-kpi-card-accent (theme.py). Opt-in per
-    call so every other page's KPI rows (HAVAA, Physical Profile,
-    Command, etc.) keep their usual look unless a caller deliberately
-    wants the bolder treatment. The value text itself stays on
-    .gbo-kpi-accent's existing cream/crimson-glow styling either way --
-    not overridden here, same contrast reasoning as above.
+    Sept 2026, Ryker: "incorporate more red in these" (Tunneling+
+    specifically), then "i want all kpi cards in the website to be
+    this way" -- the crimson-tinted background/label look is now
+    .gbo-kpi-card's own default styling (theme.py), so every KPI row
+    app-wide has it without any caller needing to opt in. The `accent`
+    param is kept (default True, harmless if ever passed False -- there
+    is currently no separate "plain" card style to fall back to) purely
+    so existing call sites that pass accent=True explicitly don't need
+    editing. The value text itself stays on .gbo-kpi-accent's existing
+    cream/crimson-glow styling either way -- not overridden here, same
+    contrast reasoning as above.
     """
     card_divs = []
     for c in cards:
@@ -430,8 +432,7 @@ def render_kpi_cards(cards: list, accent: bool = False):
             arrow = "▲" if c.get("delta_positive", True) else "▼"
             css_class = "positive" if c.get("delta_positive", True) else "negative"
             parts.append(ui.div(f"{arrow} {c['delta']}", class_=f"gbo-kpi-delta {css_class}"))
-        card_class = "gbo-kpi-card gbo-kpi-card-accent" if accent else "gbo-kpi-card"
-        card_divs.append(ui.div(*parts, class_=card_class))
+        card_divs.append(ui.div(*parts, class_="gbo-kpi-card"))
 
     return ui.div(*card_divs, class_="gbo-kpi-row")
 
