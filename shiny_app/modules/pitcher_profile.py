@@ -64,8 +64,10 @@ game_id), analytics/bullpen_metrics.py + visualizations/bullpen_charts.py
 + visualizations/spin_axis_chart.py (Physical Profile -- the same
 Movement/Release Point/Spin Axis figure builders the Bullpen Dashboard
 uses, called directly here against this pitcher's WHOLE Rapsodo history
-in the selected date range -- bullpen sessions and intrasquad games
-alike, via profile_queries.get_pitcher_rapsodo_pitches, the same
+in the selected date range -- games only, not bullpen sessions (Sept
+2026, Ryker: "i want pitcher profile to only pull pitches from games"
+-- see profile_queries.get_pitcher_rapsodo_pitches' game_linked_only
+param), via profile_queries.get_pitcher_rapsodo_pitches, the same
 unified query this page's Zone tab already uses), and
 analytics/pitch_grading.py (Stuff+/Location+/Pitching+/Arsenal).
 analytics/profile_queries.py is the one new piece: the date-range/
@@ -345,7 +347,8 @@ def pitcher_profile_server(input, output, session, app_state):
     # 2026 rebuild, see module docstring). _physical_target(db) is the
     # one shared query pp_metrics_section and the three chart outputs
     # below all call -- same "player_pitches" scope (this pitcher's
-    # WHOLE Rapsodo history, bullpen AND game alike, filtered by date
+    # WHOLE Rapsodo history, GAMES ONLY -- see module docstring's
+    # "games only, not bullpen sessions" note -- filtered by date
     # range/pitch type/game scope) the old bullpen-dashboard fragment
     # used, just without that fragment's kaleido/click-gate machinery.
     # -------------------------------------------------------------------
@@ -361,7 +364,7 @@ def pitcher_profile_server(input, output, session, app_state):
         rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
             db, pid, date_from=f["date_from"], date_to=f["date_to"],
             pitch_type=f["pitch_type"], game_scope=f["game_scope"],
-            game_id=f["game_id"],
+            game_id=f["game_id"], game_linked_only=True,
         )
         return player, rapsodo_pitches
 
@@ -396,7 +399,7 @@ def pitcher_profile_server(input, output, session, app_state):
             )
             rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
-                game_id=f["game_id"],
+                game_id=f["game_id"], game_linked_only=True,
             )
             if not game_pitches and not rapsodo_pitches:
                 return None
@@ -481,7 +484,7 @@ def pitcher_profile_server(input, output, session, app_state):
             )
             rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
-                game_id=f["game_id"],
+                game_id=f["game_id"], game_linked_only=True,
             )
             if not game_pitches and not rapsodo_pitches:
                 return ui_helpers.card(ui_helpers.empty_state(
@@ -679,7 +682,7 @@ def pitcher_profile_server(input, output, session, app_state):
             if player is None or not rapsodo_pitches:
                 return ui.div(
                     header,
-                    ui.p("No Rapsodo-linked pitches (bullpen or game) in this range yet.", class_="text-muted small"),
+                    ui.p("No Rapsodo-linked GAME pitches in this range yet.", class_="text-muted small"),
                 )
 
             # pitch_type_summary already covers Velo/Max Velo/Spin/IVB/
@@ -870,8 +873,8 @@ def pitcher_profile_server(input, output, session, app_state):
             return ui.div(
                 header,
                 ui.p(
-                    "Every Rapsodo-linked pitch this pitcher has thrown in this window -- bullpen sessions and "
-                    "intrasquad games alike -- broken out by pitch type.",
+                    "Every Rapsodo-linked pitch this pitcher has thrown in real games (intrasquad or external) "
+                    "in this window, broken out by pitch type -- bullpen sessions aren't counted here.",
                     class_="text-muted small",
                 ),
                 ui_helpers.render_dict_table(table_rows),
@@ -1107,7 +1110,7 @@ def pitcher_profile_server(input, output, session, app_state):
             )
             rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
-                game_id=f["game_id"],
+                game_id=f["game_id"], game_linked_only=True,
             )
             if not game_pitches and not rapsodo_pitches:
                 return None
@@ -1213,7 +1216,7 @@ def pitcher_profile_server(input, output, session, app_state):
             )
             rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
-                game_id=f["game_id"],
+                game_id=f["game_id"], game_linked_only=True,
             )
             if not game_pitches and not rapsodo_pitches:
                 return None
@@ -1558,17 +1561,26 @@ def pitcher_profile_server(input, output, session, app_state):
         profile") -- ported from bullpen_dashboard_display.py's own
         _team_havaa_baseline_query/_havaa_baseline rather than
         reinventing it. HAVAA compares a pitch's VAA against every
-        OTHER pitch (bullpen or game, any pitcher) that crossed the
-        plate at roughly the same height, so this is deliberately NOT
-        scoped to this page's own player/date filters -- same
+        OTHER pitch in a real game (any pitcher) that crossed the plate
+        at roughly the same height, so this is deliberately NOT scoped
+        to this page's own player/date filters -- same
         team-wide-population idea as _team_command_plus_baselines
         above. Only pulls the 4 columns calculate_estimated_vaa needs,
         filtered not-null here so a missing value can't silently
-        produce a bad baseline entry."""
+        produce a bad baseline entry.
+
+        Games-only (Sept 2026, Ryker: "i want pitcher profile to only
+        pull pitches from games") -- excludes bullpen-sourced readings
+        via RapsodoPitch.bullpen_id.is_(None), same filter every
+        rapsodo_pitches query on this page now applies (see
+        profile_queries.get_pitcher_rapsodo_pitches' game_linked_only
+        param), so the population a pitcher's OWN games-only HAVAA gets
+        compared against matches what's actually being measured."""
         rows = (
             db.query(RapsodoPitch)
             .options(joinedload(RapsodoPitch.pitch_type))
             .filter(
+                RapsodoPitch.bullpen_id.is_(None),
                 RapsodoPitch.release_height.isnot(None),
                 RapsodoPitch.release_angle.isnot(None),
                 RapsodoPitch.release_extension.isnot(None),
@@ -1634,22 +1646,31 @@ def pitcher_profile_server(input, output, session, app_state):
         return pairs
 
     def _team_tunneling_baseline(db):
-        """Team-wide Ratio baseline per secondary pitch type (Sept
-        2026, Ryker: "keep working on the trajectory model for the
-        tunneling+ model") -- every pitcher's own (primary fastball,
-        secondary type) Ratio (see pitch_grading.
-        tunnel_type_pair_summary) feeds pitch_grading.
+        """Team-wide Ratio/Release baseline per secondary pitch type
+        (Sept 2026, Ryker: "keep working on the trajectory model for
+        the tunneling+ model") -- every pitcher's own (primary fastball,
+        secondary type) numbers (see pitch_grading.
+        tunnel_type_pair_summary) feed pitch_grading.
         team_tunneling_baseline, same team-wide-population idea as
         _team_command_plus_baselines/_team_havaa_baseline above. Only
         reads RapsodoPitch.trajectory_json (already computed -- see
         pitch_trajectory.py) rather than recomputing anything, and
         deliberately NOT scoped to this page's own date/pitch-type
         filters -- a stable roster-wide reference, same as the other
-        two team baselines."""
+        two team baselines.
+
+        Games-only (Sept 2026, Ryker: "i want pitcher profile to only
+        pull pitches from games") -- excludes bullpen-sourced readings,
+        same as _team_havaa_baseline above. This also naturally means
+        _tunneling_pairs_for_player's bullpen-session pairing branch
+        never finds anything to pair here (every row it sees is already
+        game-linked) -- real in-game plate-appearance sequences are the
+        only source of tunneling pairs now, for every pitcher on the
+        team, not just this page's own player."""
         rows = (
             db.query(RapsodoPitch)
             .options(joinedload(RapsodoPitch.pitch_type), joinedload(RapsodoPitch.game_pitch))
-            .filter(RapsodoPitch.trajectory_json.isnot(None))
+            .filter(RapsodoPitch.bullpen_id.is_(None), RapsodoPitch.trajectory_json.isnot(None))
             .all()
         )
         by_player = {}
