@@ -65,7 +65,7 @@ import demo_data  # noqa: E402
 import strike_zone  # noqa: E402
 from modules import (  # noqa: E402
     dashboard, player_schedule, player_stats, players, assessments, video_import,
-    team_schedule, player_assignments, at_appointments, rapsodo_import,
+    team_schedule, player_assignments, at_appointments, rapsodo_import, assessment_import,
     player_development, player_game_stats, player_hitting, player_video, player_bullpens,
     analytics, pitcher_game_report, hitter_game_report, bullpen_dashboard,
     pitcher_profile, hitter_profile, pitching_leaderboard,
@@ -84,6 +84,7 @@ MODULE_UI = {
     "player_stats": lambda: player_stats.player_stats_ui("player_stats"),
     "players": lambda: players.players_ui("players"),
     "assessments": lambda: assessments.assessments_ui("assessments"),
+    "assessment_import": lambda: assessment_import.assessment_import_ui("assessment_import"),
     "video_import": lambda: video_import.video_import_ui("video_import"),
     "team_schedule": lambda: team_schedule.team_schedule_ui("team_schedule"),
     "player_assignments": lambda: player_assignments.player_assignments_ui("player_assignments"),
@@ -349,6 +350,7 @@ def server(input, output, session):
     player_stats.player_stats_server("player_stats", app_state)
     players.players_server("players", app_state)
     assessments.assessments_server("assessments", app_state)
+    assessment_import.assessment_import_server("assessment_import", app_state)
     video_import.video_import_server("video_import", app_state)
     team_schedule.team_schedule_server("team_schedule", app_state)
     player_assignments.player_assignments_server("player_assignments", app_state)
@@ -846,7 +848,7 @@ def _account_not_set_up_ui():
 _NAV_GROUPS = [
     ("Overview", ["dashboard"]),
     ("Roster", ["roster", "player_profile", "players"]),
-    ("Development", ["assessments", "idp", "training_routines", "player_assignments", "team_schedule"]),
+    ("Development", ["assessments", "assessment_import", "idp", "training_routines", "player_assignments", "team_schedule"]),
     # at_appointments/bullpen_scripts intentionally omitted from every group
     # below (Aug 31 2026 -- Ryker's call, kept in the codebase/MODULE_UI,
     # just out of the visible sidebar) -- see nav.py's matching comments.
@@ -864,6 +866,7 @@ _NAV_GROUPS = [
 ]
 _NAV_LABELS = {
     "players": "Player setup", "roster": "Players", "idp": "Development plans", "rapsodo_import": "Import Rapsodo",
+    "assessment_import": "Import Assessments",
     "analytics": "Player stats", "at_appointments": "AT appointments", "player_assignments": "Assignments",
     "team_schedule": "Team schedule", "user_management": "Users", "staff_assignments": "Staff assignments",
 }
@@ -873,6 +876,7 @@ _ICONS = {
     "dashboard": '<path d="M3 11l9-7 9 7v9a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z"/>',
     "players": '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/>',
     "assessments": '<path d="M9 4h6v3H9zM7 6H5v15h14V6h-2M8 13l2 2 5-5"/>',
+    "assessment_import": '<path d="M12 3v12M7 10l5 5 5-5M4 21h16"/>',
     "idp": '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1"/>',
     "training_routines": '<path d="M4 12h3l2-6 4 12 2-6h5"/>',
     "player_assignments": '<path d="M5 5h14v14H5zM8 12l3 3 5-6"/>',
