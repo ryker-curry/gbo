@@ -1305,6 +1305,27 @@ def pitcher_game_report_server(input, output, session, app_state):
             )
             by_type = command_metrics.command_by_pitch_type(view_pitches, throws)
             if len(by_type) > 1:
+                # Ryker, Sept 2026: "the command+ should be the big card
+                # style look ... by pitch type and then put command+ and
+                # big cards have each pitch and its respective command+.
+                # so we know what pitch each pitcher commands best, if
+                # there is one he struggles with, etc" -- same KPI-card
+                # treatment as Pitcher Profile's own by-pitch-type Command+
+                # (see that module for the fuller comment).
+                if plus_by_type:
+                    children.append(ui.h6("Command+ by pitch type", class_="mt-3"))
+                    children.append(ui_helpers.render_kpi_cards([
+                        {"label": row["Pitch Type"], "value": _cmd_fmt(plus_by_type.get(row["Pitch Type"]))}
+                        for row in by_type
+                    ]))
+                    children.append(ui.p(
+                        "Which pitch this pitcher commanded best in this game -- and which he struggled with -- "
+                        "at a glance. Same Command+ scale as the KPI above (100 = team average for that pitch "
+                        "type), just broken out per pitch. A single game's count of one pitch type is a small "
+                        "sample -- read this as a rough sense, not a settled one, until you can compare across a "
+                        "stretch of appearances (Pitcher Profile's version of this table covers more games at once).",
+                        class_="text-muted small",
+                    ))
                 rows = []
                 for row in by_type:
                     tier_cols = {
@@ -1314,7 +1335,6 @@ def pitcher_game_report_server(input, output, session, app_state):
                     rows.append({
                         "Pitch Type": row["Pitch Type"],
                         "Pitches": row["Pitches"],
-                        "Command+": _cmd_fmt(plus_by_type.get(row["Pitch Type"])),
                         "Avg Miss (in)": row["Avg Miss"] if row["Avg Miss"] is not None else "—",
                         "Danger-Adj. Miss (in)": row["Danger-Adj. Miss"] if row["Danger-Adj. Miss"] is not None else "—",
                         "Command Execution %": row["Command Execution %"] if row["Command Execution %"] is not None else "—",
@@ -1324,14 +1344,6 @@ def pitcher_game_report_server(input, output, session, app_state):
                     })
                 children.append(ui.h6("By pitch type", class_="mt-3"))
                 children.append(ui_helpers.render_dict_table(rows))
-                children.append(ui.p(
-                    "Command+ here is graded the same way as the Command+ KPI above, just grouped by pitch type "
-                    "instead of blended into one session number -- lets you compare this pitcher's command on a "
-                    "specific pitch (his slider, say) against a teammate's. A single game's count of one pitch "
-                    "type is a small sample -- read a single-outing number as a rough sense, not a settled one, "
-                    "until you can compare across a stretch of appearances.",
-                    class_="text-muted small",
-                ))
 
             # Miss by call (Ryker, Sept 2026: replaced the old raw
             # per-pitch "Miss direction by pitch" list and the
