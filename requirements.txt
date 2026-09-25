@@ -1,6 +1,16 @@
 streamlit>=1.42.0
 sqlalchemy>=2.0
 psycopg2-binary>=2.9
+# Our own code only ever uses psycopg2 (via SQLAlchemy's plain postgresql://
+# URL -- see database.py). This is NOT that: it's here only because Posit
+# Connect Cloud's own "Python API" loader fails the whole deploy with
+# "Error while loading Python API: No module named 'psycopg'" before our
+# app code even runs, on a platform-level probe/import that's unrelated to
+# anything we call ourselves (confirmed Sept 2026: psycopg2-binary was
+# already installed and importable in that exact failing environment, so
+# this genuinely isn't a psycopg2-vs-psycopg2-binary mixup -- Connect Cloud
+# wants the newer psycopg (v3) present too, just to finish loading).
+psycopg[binary]>=3.1
 python-dotenv>=1.0
 pandas>=2.2
 openpyxl>=3.1
