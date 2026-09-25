@@ -90,7 +90,7 @@ from shinywidgets import output_widget, render_plotly
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import Game, GamePitch, GameRunnerEvent, GameForcedHalfInningEnd, GameLineupSlot, LineupSubstitution, PitchType
+from models import Game, GamePitch, GameRunnerEvent, GameForcedHalfInningEnd, GameLineupSlot, LineupSubstitution, PitchType, RapsodoPitch, GameVideoClip
 import strike_zone
 import field_location
 import click_widgets
@@ -1869,6 +1869,23 @@ def register_game_tracking_pitch_log(
     @reactive.effect
     @reactive.event(input.gt_pl_confirm_delete_btn)
     def _confirm_pitch_log_delete():
+        """Delete a pitch from the Pitch Log.
+
+        Sept 2026 fix (Ryker: "everytime i delete the pitch it logs me out
+        shows error and doesn't work"): a GamePitch that a Rapsodo reading
+        (RapsodoPitch.game_pitch_id) or an uploaded video clip
+        (GameVideoClip.matched_game_pitch_id) had been matched to could not
+        actually be deleted -- neither FK has an ON DELETE rule, so
+        db.commit() raised an IntegrityError. That exception was never
+        caught, so it propagated out of this reactive effect and crashed
+        the whole Shiny session; the browser showed a hard error and
+        reloaded to a logged-out state, which is exactly what Ryker saw.
+        Fixed two ways: (1) detach any matched Rapsodo/video rows first --
+        that data is untouched, it just stops pointing at a pitch that's
+        about to stop existing -- so the delete can actually succeed, and
+        (2) wrap the whole thing in try/except so ANY future failure here
+        shows a notification instead of taking the session down.
+        """
         pitch_id = _gt_pending_delete_pitch_id()
         if pitch_id is None:
             return
@@ -1891,10 +1908,24 @@ def register_game_tracking_pitch_log(
                     game.our_score = max(0, game.our_score - pitch.runs_scored_on_play)
                 else:
                     game.opponent_score = max(0, game.opponent_score - pitch.runs_scored_on_play)
+            db.query(RapsodoPitch).filter(RapsodoPitch.game_pitch_id == pitch_id).update(
+                {"game_pitch_id": None}
+            )
+            db.query(GameVideoClip).filter(GameVideoClip.matched_game_pitch_id == pitch_id).update(
+                {"matched_game_pitch_id": None}
+            )
             deleted_seq = pitch.pitch_sequence
             db.delete(pitch)
             db.commit()
             ui.notification_show(f"Deleted pitch #{deleted_seq}.", type="message", duration=6)
+        except Exception:
+            db.rollback()
+            import traceback
+            traceback.print_exc()
+            ui.notification_show(
+                "Couldn't delete that pitch -- nothing was changed. Please try again.",
+                type="error", duration=10,
+            )
         finally:
             db.close()
         _gt_pending_delete_pitch_id.set(None)
