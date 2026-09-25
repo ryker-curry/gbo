@@ -25,7 +25,7 @@ Renderer._auto_register).
 from shiny import ui, render, reactive
 
 from database import get_session
-from models import Game, GamePitch, RapsodoPitch, GameVideoClip
+from models import Game, GamePitch, RapsodoPitch, GameVideoClip, RapsodoImport
 
 
 def register_game_tracking_manage(input, output, session, _refresh_tick, _active_game_id, _bump_refresh, _access_ok, _can_edit):
@@ -233,7 +233,17 @@ def register_game_tracking_manage(input, output, session, _refresh_tick, _active
         a matched Rapsodo reading or video clip on ANY pitch in this game
         would hit the same uncaught FK IntegrityError and crash the
         session. Detach those first, and don't let a failure here take the
-        session down."""
+        session down.
+
+        Second FK gap found while chasing that one (Ryker: "when i try to
+        delete it wont let"): RapsodoImport.game_id is ALSO a plain FK onto
+        games.game_id with no cascade, set when a Rapsodo file was uploaded
+        straight against an intrasquad game rather than a bullpen session.
+        Game has no relationship() for it at all (unlike every other child
+        table above, which all cascade), so it was never being cleared
+        either. Detached the same way -- the RapsodoImport row (and its
+        RapsodoPitch children, already handled above) survive, just no
+        longer linked to a game that's gone."""
         if not (input.confirm_delete_game() if "confirm_delete_game" in input else False):
             return
         game_id = _active_game_id()
@@ -255,6 +265,9 @@ def register_game_tracking_manage(input, output, session, _refresh_tick, _active
                 db.query(GameVideoClip).filter(GameVideoClip.matched_game_pitch_id.in_(pitch_ids)).update(
                     {"matched_game_pitch_id": None}, synchronize_session=False
                 )
+            db.query(RapsodoImport).filter(RapsodoImport.game_id == game_id).update(
+                {"game_id": None}, synchronize_session=False
+            )
             deleted_id = game.game_id
             db.delete(game)
             db.commit()
