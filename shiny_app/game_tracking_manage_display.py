@@ -25,7 +25,7 @@ Renderer._auto_register).
 from shiny import ui, render, reactive
 
 from database import get_session
-from models import Game
+from models import Game, GamePitch, RapsodoPitch, GameVideoClip
 
 
 def register_game_tracking_manage(input, output, session, _refresh_tick, _active_game_id, _bump_refresh, _access_ok, _can_edit):
@@ -225,6 +225,15 @@ def register_game_tracking_manage(input, output, session, _refresh_tick, _active
     @reactive.effect
     @reactive.event(input.delete_game_btn)
     def _delete_game():
+        """Delete a whole game (and, via Game.pitches' cascade, every
+        GamePitch in it).
+
+        Sept 2026: same fix as Pitch Log's single-pitch delete
+        (_confirm_pitch_log_delete in game_tracking_pitch_log_display.py) --
+        a matched Rapsodo reading or video clip on ANY pitch in this game
+        would hit the same uncaught FK IntegrityError and crash the
+        session. Detach those first, and don't let a failure here take the
+        session down."""
         if not (input.confirm_delete_game() if "confirm_delete_game" in input else False):
             return
         game_id = _active_game_id()
@@ -235,11 +244,30 @@ def register_game_tracking_manage(input, output, session, _refresh_tick, _active
             game = db.query(Game).filter(Game.game_id == game_id).first()
             if game is None:
                 return
+            pitch_ids = [
+                row[0] for row in
+                db.query(GamePitch.game_pitch_id).filter(GamePitch.game_id == game_id).all()
+            ]
+            if pitch_ids:
+                db.query(RapsodoPitch).filter(RapsodoPitch.game_pitch_id.in_(pitch_ids)).update(
+                    {"game_pitch_id": None}, synchronize_session=False
+                )
+                db.query(GameVideoClip).filter(GameVideoClip.matched_game_pitch_id.in_(pitch_ids)).update(
+                    {"matched_game_pitch_id": None}, synchronize_session=False
+                )
             deleted_id = game.game_id
             db.delete(game)
             db.commit()
             _active_game_id.set(None)
             ui.notification_show(f"Deleted game #{deleted_id}.", type="message", duration=8)
             _bump_refresh()
+        except Exception:
+            db.rollback()
+            import traceback
+            traceback.print_exc()
+            ui.notification_show(
+                "Couldn't delete that game -- nothing was changed. Please try again.",
+                type="error", duration=10,
+            )
         finally:
             db.close()
