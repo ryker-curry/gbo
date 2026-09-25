@@ -613,8 +613,27 @@ def rapsodo_import_server(input, output, session, app_state):
                 # with no way back to the reconciliation step. Ryker hit
                 # this exact dead end (Sept 2026) on Bradley Neill's
                 # 9/8 intrasquad outing.
-                if e.import_id is not None and e.game_id == target_game_id:
+                #
+                # Sept 2026, second variant of the same dead end: e.game_id
+                # can also be None -- the earlier import's original game
+                # was deleted and recreated (see the RapsodoImport.game_id
+                # detach in game_tracking_manage_display.py's _delete_game,
+                # which keeps the import/pitch rows on purpose instead of
+                # losing them). That import isn't linked to ANY game
+                # anymore, so it can't collide with a different real
+                # outing -- safe to re-point it at whatever game is
+                # currently selected and match against that, same as the
+                # same-game case above. A NON-None game_id that doesn't
+                # match target_game_id is a genuinely different outing
+                # and stays a hard error -- auto-relinking that would risk
+                # silently moving one game's Rapsodo data onto another.
+                if e.import_id is not None and e.game_id in (target_game_id, None):
                     try:
+                        if e.game_id is None:
+                            orphaned_import = db.query(RapsodoImport).filter(RapsodoImport.import_id == e.import_id).first()
+                            if orphaned_import is not None:
+                                orphaned_import.game_id = target_game_id
+                                db.commit()
                         match_result = auto_match_rapsodo_to_game_pitches(db, e.import_id, target_game_id)
                     except RapsodoImportError as match_err:
                         ui.notification_show(f"{e} Also couldn't re-check the match: {match_err}", type="error", duration=12)
