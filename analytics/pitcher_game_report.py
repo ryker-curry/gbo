@@ -72,7 +72,7 @@ FIP_CONSTANT = 3.10  # commonly-cited recent-MLB-average value -- swap for your 
 # Staff-totals goal thresholds (Ryker, Sept 2026) -- see
 # compute_staff_game_totals below. Only these two of the five staff-
 # totals stats have a goal at all right now.
-FPS_GOAL_PCT = 62.0
+FPS_GOAL_PCT = 60.0
 SECONDARY_STRIKE_GOAL_PCT = 58.0
 
 
