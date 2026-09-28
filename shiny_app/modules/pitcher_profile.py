@@ -202,6 +202,25 @@ def _stacked_bar(segments):
     return ui.div(bar, legend)
 
 
+def _zone_hand_filtered(db, pitches, hand_choice):
+    """Sept 2026, Ryker: "for the zone tab in pitcher profile be able
+    to select vs right and left handed hitters" -- shared by pp_zone_
+    section (Attack Zone Distribution bar + per-type breakdown table)
+    and pp_location_heatmap (the density heatmap widget) so both
+    pieces of the Zone tab reflect the same selection. Resolved via
+    get_batter_hands (roster Player.bats/OpponentPlayer.bats, with the
+    switch-hitter fix), same as every other hand-split view on this
+    page (pp_arsenal_section, pp_zone_damage_chart) -- never the raw
+    GamePitch.opponent_hand column, which silently holds the pitcher's
+    own throwing hand instead of the batter's on a three-squad
+    intrasquad pitch (get_batter_hands' own docstring)."""
+    if hand_choice in (None, "All Batters"):
+        return pitches
+    hands = get_batter_hands(db, pitches)
+    target = "R" if hand_choice == "vs RHH" else "L"
+    return [p for p in pitches if hands.get(p.game_pitch_id) == target]
+
+
 @module.ui
 def pitcher_profile_ui():
     return ui.div(
@@ -220,6 +239,7 @@ def pitcher_profile_ui():
         ui.output_ui("pp_metrics_section"),
         ui.output_ui("pp_tunneling_section"),
         ui.output_ui("pp_results_section"),
+        ui.output_ui("pp_zone_hand_filter"),
         ui.output_ui("pp_zone_section"),
         ui.output_ui("pp_command_section"),
         ui.output_ui("pp_arsenal_section"),
@@ -1277,6 +1297,35 @@ def pitcher_profile_server(input, output, session, app_state):
             db.close()
 
     @render.ui
+    def pp_zone_hand_filter():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "zone":
+            return None
+        # Sept 2026, Ryker: "for the zone tab in pitcher profile be
+        # able to select vs right and left handed hitters" -- a plain
+        # radio-button filter (not a small-multiples split like the
+        # Results tab's Damage by Zone) so the density heatmap below
+        # stays ONE interactive Plotly widget rather than three, same
+        # single-selector-drives-one-widget shape hitter_tracking.py's
+        # own "Filter by pitcher hand" heatmap control already uses.
+        # Split into its own function/placeholder (rather than folding
+        # into pp_zone_section itself) for the same reason hitter_
+        # tracking.py splits heatmap_hand_filter from heatmap_body --
+        # a render.ui can't reliably read an input it defines in that
+        # same call, since the client hasn't registered the widget's
+        # default value back into `input` until after this render
+        # finishes.
+        return ui.input_radio_buttons(
+            "pp_zone_hand", "Filter by batter hand",
+            choices=["All Batters", "vs RHH", "vs LHH"], selected="All Batters", inline=True,
+        )
+
+    @render.ui
     def pp_zone_section():
         if not app_state.is_authenticated():
             return None
@@ -1286,6 +1335,7 @@ def pitcher_profile_server(input, output, session, app_state):
         req("pp_view" in input)
         if input.pp_view() != "zone":
             return None
+        req("pp_zone_hand" in input)
         f = _current_filters()
         db = get_session()
         try:
@@ -1303,6 +1353,18 @@ def pitcher_profile_server(input, output, session, app_state):
             )
             if not game_pitches and not rapsodo_pitches:
                 return None
+
+            hand_choice = input.pp_zone_hand()
+            game_pitches = _zone_hand_filtered(db, game_pitches, hand_choice)
+            if hand_choice != "All Batters" and not game_pitches:
+                return ui.div(
+                    ui.p(ui.strong("Attack Zone Distribution"), style="margin-bottom:0;"),
+                    ui.p(
+                        f"No pitches {'vs a right-handed' if hand_choice == 'vs RHH' else 'vs a left-handed'} batter in this range.",
+                        class_="text-muted small",
+                    ),
+                )
+
             bundle = profile_queries.compute_grading_bundle(db, game_pitches, rapsodo_pitches)
             sections = [ui.div(
                 ui.p(ui.strong("Attack Zone Distribution"), style="margin-bottom:0;"),
@@ -1365,6 +1427,7 @@ def pitcher_profile_server(input, output, session, app_state):
         req("pp_view" in input)
         if input.pp_view() != "zone":
             return None
+        req("pp_zone_hand" in input)
         f = _current_filters()
         db = get_session()
         try:
@@ -1376,6 +1439,12 @@ def pitcher_profile_server(input, output, session, app_state):
                 pitch_type=f["pitch_type"], game_scope=f["game_scope"],
                 game_id=f["game_id"],
             )
+            if not game_pitches:
+                return None
+            # Same pp_zone_hand selection pp_zone_section's Attack Zone
+            # Distribution bar and per-type table already apply, so the
+            # heatmap below them stays in sync with the rest of the tab.
+            game_pitches = _zone_hand_filtered(db, game_pitches, input.pp_zone_hand())
             if not game_pitches:
                 return None
             return pitch_location_heatmaps(game_pitches)
