@@ -54,6 +54,17 @@ Ryker, Sept 2026, "Gavin Derr...only faced left handed hitters" /
 same column). Every other hand-split view in this app already goes
 through get_batter_hands for this exact reason, so this chart does too
 rather than reopening that bug.
+
+Sept 2026, Ryker: "add the hitter graphic on their respective side"
+-- the vs RHH/vs LHH panels each draw ONE batter silhouette
+(visualizations/hitter_graphic.py) on that hand's real side (see
+_draw_panel's own docstring for the hand-to-side mapping, same one
+already established for the catcher-view Pitch Detail card), sized
+with command_charts.py's own tuned HITTER_HEIGHT_FT (solved against
+the SAME fixed ZONE_BOTTOM/TOP box this chart already draws, so the
+zone lands at the anatomically correct spot on the silhouette). The
+All Batters panel gets no silhouette -- there's no single hand to
+draw one for.
 """
 
 import plotly.graph_objects as go
@@ -61,7 +72,16 @@ from plotly.subplots import make_subplots
 
 from strike_zone import X_MIN, X_MAX, Z_MIN, Z_MAX, ZONE_HALF_WIDTH, ZONE_BOTTOM, ZONE_TOP
 from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, TEXT_CREAM, MUTED_GRAY
-from visualizations.hitter_graphic import home_plate_shape
+from visualizations.hitter_graphic import home_plate_shape, hitter_images
+# Reusing command_charts.py's own tuned batter-silhouette constants
+# (Sept 2026, Ryker: "add the hitter graphic on their respective side"
+# for the vs RHH/vs LHH panels) rather than a second set of magic
+# numbers -- HITTER_HEIGHT_FT in particular isn't an arbitrary choice,
+# it's solved against MLB ABS's height-based zone convention so THIS
+# app's fixed strike_zone.ZONE_BOTTOM/TOP box (the same box this chart
+# already draws) lands at the anatomically correct spot on the
+# silhouette (see command_charts.py's own comment for the math).
+from visualizations.command_charts import HITTER_HEIGHT_FT, HITTER_CENTER_X, CHART_X_EXTENT_FT
 
 # Below this many located pitches in a cell, mute it rather than color
 # it -- matches pitch_location_heatmap.py's MIN_FOR_CONTOUR judgment
@@ -147,10 +167,21 @@ def _zone_damage_pieces(zone_damage):
     return x_centers, y_centers, z_matrix, text_matrix, muted_zones
 
 
-def _draw_panel(fig, pieces, *, row, col, showscale, zmin, zmax):
+def _draw_panel(fig, pieces, *, row, col, showscale, zmin, zmax, hand=None):
     """Adds one zone-damage panel's heatmap trace + shapes onto `fig`
     at the given subplot (row, col) -- fig must come from
-    make_subplots (even a 1x1 grid), so row/col are always valid."""
+    make_subplots (even a 1x1 grid), so row/col are always valid.
+
+    hand ('R'/'L'/None, Sept 2026, Ryker: "add the hitter graphic on
+    their respective side"): draws ONE batter silhouette on the side
+    that hand actually stands on, same hand-to-side mapping already
+    established for the catcher-view Pitch Detail card (pitcher_game_
+    report.py's own docstring on that function) -- a RIGHT-handed
+    batter stands on the LEFT/negative-x side of the plate (the box
+    closer to 3B) and a LEFT-handed batter on the RIGHT/positive-x
+    side (closer to 1B), same side Statcast's own graphics use. None
+    (the "All Batters" panel, or a hand that couldn't be resolved)
+    skips the silhouette entirely rather than guessing a side."""
     x_centers, y_centers, z_matrix, text_matrix, muted_zones = pieces
 
     fig.add_trace(
@@ -186,6 +217,16 @@ def _draw_panel(fig, pieces, *, row, col, showscale, zmin, zmax):
         line=dict(color=GRID_GRAY, width=1),
         row=row, col=col,
     )
+    if hand in ("R", "L"):
+        # Same center_x-decides-facing logic as the Pitch Detail card
+        # (batter always faces the zone, bat cocked back over the
+        # away-from-zone shoulder -- anything else reads as backwards)
+        # -- no hand-specific facing override, center_x's sign alone
+        # determines it.
+        center_x = -HITTER_CENTER_X if hand == "R" else HITTER_CENTER_X
+        facing = "right" if center_x > 0 else "left"
+        for img in hitter_images(center_x=center_x, facing=facing, height_ft=HITTER_HEIGHT_FT, ground_y=Z_MIN):
+            fig.add_layout_image(**img, row=row, col=col)
     plate = {k: v for k, v in home_plate_shape(half_width_ft=ZONE_HALF_WIDTH, ground_y=Z_MIN, view="catcher").items()
              if k not in ("xref", "yref")}
     fig.add_shape(row=row, col=col, **plate)
@@ -206,7 +247,7 @@ def _shared_scale(panels):
     would defeat the point)."""
     values = [
         cell["avg_rv"]
-        for _, zone_damage in panels
+        for _, zone_damage, _ in panels
         for cell in zone_damage["cells"].values()
         if cell["avg_rv"] is not None and cell["n"] >= MIN_PITCHES_FOR_COLOR
     ]
@@ -223,20 +264,24 @@ def zone_damage_heatmap(zone_damage, pitch_type_label):
     in this app)."""
     if zone_damage["n_located"] == 0:
         return None
-    return zone_damage_heatmap_by_hand([("", zone_damage)], pitch_type_label, _single_title=True)
+    return zone_damage_heatmap_by_hand([("", zone_damage, None)], pitch_type_label, _single_title=True)
 
 
 def zone_damage_heatmap_by_hand(panels, pitch_type_label, _single_title=False):
-    """panels: an ordered list of (label, zone_damage) tuples -- e.g.
-    [("All Batters", dmg_all), ("vs RHH", dmg_r), ("vs LHH", dmg_l)]
-    (Sept 2026, Ryker: "add damage by zone for left and right hitters
-    as well"). Any panel whose zone_damage has nothing located yet is
-    dropped (same "skip if nothing to draw" convention
+    """panels: an ordered list of (label, zone_damage, hand) tuples --
+    e.g. [("All Batters", dmg_all, None), ("vs RHH", dmg_r, "R"),
+    ("vs LHH", dmg_l, "L")] (Sept 2026, Ryker: "add damage by zone for
+    left and right hitters as well"). hand is 'R'/'L'/None -- None
+    (e.g. the All Batters panel) draws no batter silhouette; 'R'/'L'
+    draws one on that hand's real side (Ryker: "add the hitter graphic
+    on their respective side" -- see _draw_panel's own docstring for
+    the hand-to-side mapping). Any panel whose zone_damage has nothing
+    located yet is dropped (same "skip if nothing to draw" convention
     pitch_location_heatmaps.py uses per pitch type), so a hand this
     pitcher hasn't faced yet simply doesn't get an empty frame. Returns
     a single Plotly Figure with one small-multiple per remaining panel,
     or None if none of them have anything located."""
-    panels = [(label, zd) for label, zd in panels if zd["n_located"] > 0]
+    panels = [(label, zd, hand) for label, zd, hand in panels if zd["n_located"] > 0]
     if not panels:
         return None
 
@@ -244,21 +289,36 @@ def zone_damage_heatmap_by_hand(panels, pitch_type_label, _single_title=False):
     n = len(panels)
     fig = make_subplots(
         rows=1, cols=n,
-        subplot_titles=None if _single_title else [_panel_title(label, zd) for label, zd in panels],
+        subplot_titles=None if _single_title else [_panel_title(label, zd) for label, zd, _ in panels],
         horizontal_spacing=0.08,
     )
-    for i, (label, zone_damage) in enumerate(panels):
+    for i, (label, zone_damage, hand) in enumerate(panels):
         pieces = _zone_damage_pieces(zone_damage)
-        _draw_panel(fig, pieces, row=1, col=i + 1, showscale=(i == n - 1), zmin=zmin, zmax=zmax)
+        _draw_panel(fig, pieces, row=1, col=i + 1, showscale=(i == n - 1), zmin=zmin, zmax=zmax, hand=hand)
 
-    fig.update_xaxes(range=[X_MIN, X_MAX], showticklabels=False, showgrid=False, zeroline=False)
-    fig.update_yaxes(range=[-0.4, Z_MAX], showticklabels=False, showgrid=False, zeroline=False,
+    # Widened axis extents (Ryker's own tuned command_charts.py
+    # constants) whenever ANY panel in this figure draws a batter
+    # silhouette -- applied to every panel uniformly, including a
+    # hand-less "All Batters" one sharing the row. A per-panel version
+    # of this (tight range only where a batter is drawn) was tried and
+    # rendered -- Plotly's scaleanchor recomputes each subplot's actual
+    # displayed range against its own pixel domain at render time
+    # regardless of the narrower range requested here, so the zone
+    # ended up the same visual size either way; keeping one shared
+    # range is simpler and keeps every panel's zone at an identical,
+    # directly comparable scale, which matters more than avoiding the
+    # extra whitespace beside the hand-less panel.
+    has_hitter = any(hand in ("R", "L") for _, _, hand in panels)
+    x_range = [-CHART_X_EXTENT_FT, CHART_X_EXTENT_FT] if has_hitter else [X_MIN, X_MAX]
+    y_range = [-0.4, HITTER_HEIGHT_FT + 0.4] if has_hitter else [-0.4, Z_MAX]
+    fig.update_xaxes(range=x_range, showticklabels=False, showgrid=False, zeroline=False)
+    fig.update_yaxes(range=y_range, showticklabels=False, showgrid=False, zeroline=False,
                       scaleanchor="x", scaleratio=1)
     for annotation in fig.layout.annotations:
         annotation.font = dict(color=TEXT_CREAM, size=11)
 
     any_muted = any(cell["n"] < MIN_PITCHES_FOR_COLOR or cell["avg_rv"] is None
-                     for _, zd in panels for cell in zd["cells"].values() if cell["n"] > 0)
+                     for _, zd, _ in panels for cell in zd["cells"].values() if cell["n"] > 0)
 
     fig = apply_gbo_theme(fig, title=f"{pitch_type_label} — Damage by Zone", height=420)
 
