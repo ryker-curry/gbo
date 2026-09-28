@@ -1699,9 +1699,9 @@ def pitcher_game_report_server(input, output, session, app_state):
             vs_rhh = [p for p in pitches if hands.get(p.game_pitch_id) == "R"]
             vs_lhh = [p for p in pitches if hands.get(p.game_pitch_id) == "L"]
             panels = [
-                ("All Batters", compute_zone_damage(pitches)),
-                ("vs RHH", compute_zone_damage(vs_rhh)),
-                ("vs LHH", compute_zone_damage(vs_lhh)),
+                ("All Batters", compute_zone_damage(pitches), None),
+                ("vs RHH", compute_zone_damage(vs_rhh), "R"),
+                ("vs LHH", compute_zone_damage(vs_lhh), "L"),
             ]
             return zone_damage_heatmap_by_hand(panels, label)
         finally:
