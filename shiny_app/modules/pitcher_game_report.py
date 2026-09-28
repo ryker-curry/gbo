@@ -59,7 +59,7 @@ from visualizations import command_charts
 from visualizations.bullpen_charts import movement_chart, color_for_pitch_label
 from visualizations.pitcher_graphic import pitcher_release_svg
 from visualizations.attack_zones_chart import attack_zones_figure as _attack_zones_figure
-from visualizations.zone_damage_chart import zone_damage_heatmap
+from visualizations.zone_damage_chart import zone_damage_heatmap_by_hand
 from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, MUTED_GRAY, TEXT_CREAM, GOLD, CRIMSON
 from visualizations.hitter_graphic import home_plate_shape, hitter_images
 
@@ -1654,11 +1654,13 @@ def pitcher_game_report_server(input, output, session, app_state):
                 ui.p(ui.strong("Results")),
                 ui.p(
                     "Where the damage got done this outing, re-sliced spatially into the same 1-9 zone grid "
-                    "used everywhere else in GBO. Colored by average run value per zone (red = favors the "
-                    "hitter, blue = favors the pitcher), centered on break-even -- the same RV number behind "
-                    "the RV/100 column in Pitch Type Breakdown above, not a separate wOBA or contact-quality-"
-                    "only score. Contact quality and hits allowed show on hover; zones with only a pitch or "
-                    "two are grayed out rather than colored.",
+                    "used everywhere else in GBO, broken out into All Batters/vs RHH/vs LHH side by side on "
+                    "one shared color scale so the two really are comparable. Colored by average run value "
+                    "per zone (red = favors the hitter, blue = favors the pitcher), centered on break-even -- "
+                    "the same RV number behind the RV/100 column in Pitch Type Breakdown above, not a "
+                    "separate wOBA or contact-quality-only score. Contact quality and hits allowed show on "
+                    "hover; zones with only a pitch or two are grayed out rather than colored, and a hand "
+                    "this pitcher hasn't faced yet in this outing just doesn't get a panel.",
                     class_="text-muted small",
                 ),
                 ui.input_select("res_pitch_type", "Pitch Type", choices=type_choices),
@@ -1692,9 +1694,16 @@ def pitcher_game_report_server(input, output, session, app_state):
             if not pitches:
                 return None
 
-            damage = compute_zone_damage(pitches)
             label = "All Pitch Types" if pitch_type_choice == "all" else pitch_type_choice
-            return zone_damage_heatmap(damage, label)
+            hands = get_batter_hands(db, pitches)
+            vs_rhh = [p for p in pitches if hands.get(p.game_pitch_id) == "R"]
+            vs_lhh = [p for p in pitches if hands.get(p.game_pitch_id) == "L"]
+            panels = [
+                ("All Batters", compute_zone_damage(pitches)),
+                ("vs RHH", compute_zone_damage(vs_rhh)),
+                ("vs LHH", compute_zone_damage(vs_lhh)),
+            ]
+            return zone_damage_heatmap_by_hand(panels, label)
         finally:
             db.close()
 

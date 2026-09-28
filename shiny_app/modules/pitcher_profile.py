@@ -107,7 +107,7 @@ from visualizations.pitch_location_heatmap import pitch_location_heatmaps, MIN_F
 # existing Pitch Type filter (no separate dropdown needed, see
 # pp_zone_damage_chart's own comment).
 from analytics.pitcher_zone_damage import compute_zone_damage
-from visualizations.zone_damage_chart import zone_damage_heatmap
+from visualizations.zone_damage_chart import zone_damage_heatmap_by_hand
 import glossary_content
 from pitch_type_config import get_pitch_color, FASTBALL_TYPES
 
@@ -1182,12 +1182,14 @@ def pitcher_profile_server(input, output, session, app_state):
                 ui.p(
                     "Where opposing hitters do the most damage against this pitch selection (Pitch Type filter "
                     "above -- pick one pitch type or leave it on All Pitches), every charted pitch re-sliced "
-                    "spatially into the same 1-9 zone grid used everywhere else in GBO. Colored by average run "
-                    "value per zone (red = favors the hitter, blue = favors the pitcher), centered on break-even "
-                    "-- the same RV number behind this page's own RV/100 column, not a separate wOBA or "
-                    "contact-quality-only score. Contact quality and hits allowed show on hover. Needs Video "
-                    "Review, same as the Zone tab's location heatmaps -- zones with fewer than a handful of "
-                    "pitches are grayed out rather than colored.",
+                    "spatially into the same 1-9 zone grid used everywhere else in GBO, broken out into All "
+                    "Batters/vs RHH/vs LHH side by side on one shared color scale so the two really are "
+                    "comparable. Colored by average run value per zone (red = favors the hitter, blue = favors "
+                    "the pitcher), centered on break-even -- the same RV number behind this page's own RV/100 "
+                    "column, not a separate wOBA or contact-quality-only score. Contact quality and hits "
+                    "allowed show on hover. Needs Video Review, same as the Zone tab's location heatmaps -- "
+                    "zones with fewer than a handful of pitches are grayed out rather than colored, and a hand "
+                    "this pitcher hasn't faced yet in this window just doesn't get a panel.",
                     class_="text-muted small",
                 ),
                 output_widget("pp_zone_damage_chart"),
@@ -1235,7 +1237,14 @@ def pitcher_profile_server(input, output, session, app_state):
         one type from that same dropdown narrows this chart (and only
         this chart re-slices spatially instead of by pitch type -- see
         analytics/pitcher_zone_damage.py's own docstring for the RV
-        vs. wOBA vs. contact-quality-alone reasoning)."""
+        vs. wOBA vs. contact-quality-alone reasoning). Sept 2026,
+        Ryker: "add damage by zone for left and right hitters as
+        well" -- draws All Batters/vs RHH/vs LHH side by side
+        (zone_damage_heatmap_by_hand), with the batter's hand resolved
+        via game_stats.get_batter_hands (roster Player.bats, with the
+        switch-hitter and three-squad fixes already established for
+        every other hand split in this app) rather than trusted from
+        GamePitch.opponent_hand directly."""
         if not app_state.is_authenticated():
             return None
         req("pp_view" in input)
@@ -1254,9 +1263,16 @@ def pitcher_profile_server(input, output, session, app_state):
             )
             if not game_pitches:
                 return None
-            damage = compute_zone_damage(game_pitches)
             label = f["pitch_type"] or "All Pitch Types"
-            return zone_damage_heatmap(damage, label)
+            hands = get_batter_hands(db, game_pitches)
+            vs_rhh = [p for p in game_pitches if hands.get(p.game_pitch_id) == "R"]
+            vs_lhh = [p for p in game_pitches if hands.get(p.game_pitch_id) == "L"]
+            panels = [
+                ("All Batters", compute_zone_damage(game_pitches)),
+                ("vs RHH", compute_zone_damage(vs_rhh)),
+                ("vs LHH", compute_zone_damage(vs_lhh)),
+            ]
+            return zone_damage_heatmap_by_hand(panels, label)
         finally:
             db.close()
 
