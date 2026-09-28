@@ -101,6 +101,13 @@ from visualizations import command_charts, profile_charts
 from visualizations.pitch_results_chart import pitch_results_chart
 from visualizations.count_leverage_chart import count_leverage_chart
 from visualizations.pitch_location_heatmap import pitch_location_heatmaps, MIN_FOR_CONTOUR
+# Sept 2026, Ryker: "an opposing hitters heat map for each of my
+# pitchers ... this would go in pitcher profile ... under the
+# results section" -- run-value-by-zone, reusing this page's own
+# existing Pitch Type filter (no separate dropdown needed, see
+# pp_zone_damage_chart's own comment).
+from analytics.pitcher_zone_damage import compute_zone_damage
+from visualizations.zone_damage_chart import zone_damage_heatmap
 import glossary_content
 from pitch_type_config import get_pitch_color, FASTBALL_TYPES
 
@@ -1170,6 +1177,20 @@ def pitcher_profile_server(input, output, session, app_state):
                     }
                     for r in type_rows
                 ]),
+                ui.hr(),
+                ui.p(ui.strong("Damage by Zone"), style="margin-bottom:0;"),
+                ui.p(
+                    "Where opposing hitters do the most damage against this pitch selection (Pitch Type filter "
+                    "above -- pick one pitch type or leave it on All Pitches), every charted pitch re-sliced "
+                    "spatially into the same 1-9 zone grid used everywhere else in GBO. Colored by average run "
+                    "value per zone (red = favors the hitter, blue = favors the pitcher), centered on break-even "
+                    "-- the same RV number behind this page's own RV/100 column, not a separate wOBA or "
+                    "contact-quality-only score. Contact quality and hits allowed show on hover. Needs Video "
+                    "Review, same as the Zone tab's location heatmaps -- zones with fewer than a handful of "
+                    "pitches are grayed out rather than colored.",
+                    class_="text-muted small",
+                ),
+                output_widget("pp_zone_damage_chart"),
             )
         finally:
             db.close()
@@ -1196,6 +1217,46 @@ def pitcher_profile_server(input, output, session, app_state):
                 return None
             rows = compute_pitch_type_breakdown(game_pitches)
             return pitch_results_chart(rows)
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_zone_damage_chart():
+        """Sept 2026, Ryker: "an opposing hitters heat map for each of
+        my pitchers ... select a pitch type from a drop down then see
+        a strikezone that has red zones ... under pitcher profile it
+        would go under the results section." Deliberately reuses this
+        page's own existing "Pitch Type" filter (input.pp_pitch_type,
+        via f["pitch_type"]/_current_filters) rather than adding a
+        second, competing pitch-type dropdown just for this chart --
+        it's the exact same filter pp_results_chart above and every
+        other section on this page already honors, so "All Pitches"
+        shows every pitch type blended into one zone map and picking
+        one type from that same dropdown narrows this chart (and only
+        this chart re-slices spatially instead of by pitch type -- see
+        analytics/pitcher_zone_damage.py's own docstring for the RV
+        vs. wOBA vs. contact-quality-alone reasoning)."""
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "results":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            if not game_pitches:
+                return None
+            damage = compute_zone_damage(game_pitches)
+            label = f["pitch_type"] or "All Pitch Types"
+            return zone_damage_heatmap(damage, label)
         finally:
             db.close()
 
