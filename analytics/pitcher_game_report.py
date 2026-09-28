@@ -82,11 +82,38 @@ def _outs_from_string(bases_str):
 
 def _is_leadoff_pitch(p):
     """The FIRST pitch of a PA (pa_pitch_number == 1) that started with
-    nobody on and nobody out -- i.e. this PA is the leadoff PA of a
-    half-inning. Checked on pa_pitch_number == 1 rows only; every other
-    pitch in that same PA inherits the same leadoff-ness (see
-    _pa_is_leadoff below, which looks this up once per PA)."""
+    nobody on and nobody out. NOTE: this alone is NOT enough to identify
+    the real leadoff batter of a half-inning -- see _leadoff_pas below,
+    which is what every leadoff stat actually uses."""
     return p.pa_pitch_number == 1 and p.outs_before == 0 and (p.bases_before or "000") == "000"
+
+
+def _leadoff_pas(completed_pas):
+    """The PAs in completed_pas that were truly the FIRST plate
+    appearance of their half-inning -- i.e. the real leadoff batter.
+
+    _is_leadoff_pitch's outs_before==0/bases_before=="000" check alone
+    is NOT sufficient: those same conditions recur for the batter right
+    after a scoreless (0-out) home run, since the bases reset to empty
+    and no out was recorded. That batter isn't the leadoff hitter, just
+    the next one up. (Ryker, Sept 2026: Sept 16 game, bottom of the
+    4th -- Ryker Curry allowed a leadoff HR to James Dagenhart, and the
+    very next batter, Jackson Lundquist, was incorrectly ALSO counted
+    as a leadoff PA, turning a clean 1-inning, 1-leadoff-batter outing
+    into a false "2 leadoff PAs, 1 out" -- 50% instead of the correct
+    0%.) The real definition: the first PA, in game order, for each
+    half-inning (tracked here by GamePitch.inning) -- so only the
+    single, actual leadoff batter of each inning ever counts, no matter
+    what happens on the first pitch of the inning."""
+    result = []
+    innings_seen = set()
+    for pa in completed_pas:
+        inning = pa[0].inning
+        if inning not in innings_seen:
+            innings_seen.add(inning)
+            if _is_leadoff_pitch(pa[0]):
+                result.append(pa)
+    return result
 
 
 def _pitcher_id(p):
@@ -229,7 +256,7 @@ def _compute_header_stats(all_pitches, completed_pas):
     ks = sum(1 for pa in completed_pas if pa[-1].ab_outcome in K_OUTCOMES)
     runs = sum((pa[-1].runs_scored_on_play or 0) for pa in completed_pas)
 
-    leadoff_pas = [pa for pa in completed_pas if _is_leadoff_pitch(pa[0])]
+    leadoff_pas = _leadoff_pas(completed_pas)
     leadoff_outs = sum(1 for pa in leadoff_pas if pa[-1].ab_outcome in OUT_AB_OUTCOMES)
     leadoff_bb = sum(1 for pa in leadoff_pas if pa[-1].ab_outcome == "BB")
 
@@ -511,7 +538,7 @@ def _ab4_stat(completed_pas):
 
 
 def _leadoff_out_stat(completed_pas):
-    leadoff_pas = [pa for pa in completed_pas if _is_leadoff_pitch(pa[0])]
+    leadoff_pas = _leadoff_pas(completed_pas)
     outs = sum(1 for pa in leadoff_pas if pa[-1].ab_outcome in OUT_AB_OUTCOMES)
     return {
         "leadoff_outs": outs, "leadoff_opportunities": len(leadoff_pas),
