@@ -45,6 +45,11 @@ from pitch_location_stats import compute_command_precision, compute_attack_zones
 from analytics import command_metrics, profile_queries
 from analytics.pitcher_game_report import compute_staff_game_totals, FPS_GOAL_PCT, SECONDARY_STRIKE_GOAL_PCT
 from analytics.pitch_grading import stuff_plus, arsenal_summary, location_plus, MIN_BASELINE_PITCHES
+# Sept 2026, Ryker: "add a results section to game report as well"
+# -- same run-value-by-zone heat map as Pitcher Profile's Results
+# tab, just scoped to this one outing (see analytics/
+# pitcher_zone_damage.py's own docstring for the metric reasoning).
+from analytics.pitcher_zone_damage import compute_zone_damage
 from analytics.bullpen_metrics import (
     average_estimated_arm_angle, pitch_type_label,
     _pitch_level_vaa, _pitch_level_haa, _avg_pitch_level,
@@ -54,6 +59,7 @@ from visualizations import command_charts
 from visualizations.bullpen_charts import movement_chart, color_for_pitch_label
 from visualizations.pitcher_graphic import pitcher_release_svg
 from visualizations.attack_zones_chart import attack_zones_figure as _attack_zones_figure
+from visualizations.zone_damage_chart import zone_damage_heatmap
 from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, MUTED_GRAY, TEXT_CREAM, GOLD, CRIMSON
 from visualizations.hitter_graphic import home_plate_shape, hitter_images
 
@@ -650,6 +656,7 @@ def pitcher_game_report_ui():
         ui.output_ui("pitch_locations_section"),
         ui.output_ui("rapsodo_shape_section"),
         ui.output_ui("pitch_by_pitch_section"),
+        ui.output_ui("results_section"),
         ui_helpers.page_footer(),
     )
 
@@ -995,6 +1002,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                         "pitch_locations": "Pitch Locations",
                         "pitch_shape": "Pitch Shape / Rapsodo",
                         "pitch_by_pitch": "Pitch-by-Pitch",
+                        "results": "Results",
                     },
                 ),
             )
@@ -1594,6 +1602,99 @@ def pitcher_game_report_server(input, output, session, app_state):
             baseline = profile_queries.team_location_plus_baseline(db) if color_by == "result" else None
             own_idx_map = _own_pitch_index_map(db, int(input.pitcher_select()), int(input.game_select()))
             return _all_pitch_locations_figure(pitches, color_by, baseline, own_idx_map)
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Results -- Sept 2026, Ryker: "add a results section to game
+    # report as well" (alongside the same heat map going into Pitcher
+    # Profile's existing Results tab -- see pitcher_profile.py's
+    # pp_zone_damage_chart). This one is scoped to just this outing
+    # rather than a filtered date range, so it gets its own Pitch Type
+    # dropdown here (this page has no page-level pitch-type filter the
+    # way Pitcher Profile does) -- same dropdown-from-actually-thrown-
+    # types-with-counts template pitch_locations_section already
+    # established just above.
+    # -------------------------------------------------------------------
+
+    @render.ui
+    def results_section():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        req("pitcher_select" in input)
+        req("report_section" in input)
+        if input.report_section() != "results":
+            return None
+        db = get_session()
+        try:
+            pitches = _selected_pitcher_located_pitches(db)
+            if not pitches:
+                return ui.div(
+                    ui.hr(),
+                    ui.p(ui.strong("Results")),
+                    ui.p("No located pitches yet -- needs Video Review.", class_="text-muted small"),
+                )
+
+            type_counts = {}
+            type_order = []
+            for p in pitches:
+                label = p.pitch_type.type_name if p.pitch_type is not None else "Unspecified"
+                if label not in type_counts:
+                    type_counts[label] = 0
+                    type_order.append(label)
+                type_counts[label] += 1
+            type_order.sort(key=lambda label: type_counts[label], reverse=True)
+            type_choices = {"all": "All Pitch Types"}
+            for label in type_order:
+                type_choices[label] = f"{label} ({type_counts[label]})"
+
+            return ui.div(
+                ui.hr(),
+                ui.p(ui.strong("Results")),
+                ui.p(
+                    "Where the damage got done this outing, re-sliced spatially into the same 1-9 zone grid "
+                    "used everywhere else in GBO. Colored by average run value per zone (red = favors the "
+                    "hitter, blue = favors the pitcher), centered on break-even -- the same RV number behind "
+                    "the RV/100 column in Pitch Type Breakdown above, not a separate wOBA or contact-quality-"
+                    "only score. Contact quality and hits allowed show on hover; zones with only a pitch or "
+                    "two are grayed out rather than colored.",
+                    class_="text-muted small",
+                ),
+                ui.input_select("res_pitch_type", "Pitch Type", choices=type_choices),
+                output_widget("results_chart"),
+            )
+        finally:
+            db.close()
+
+    @render_plotly
+    def results_chart():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        req("pitcher_select" in input)
+        req("report_section" in input)
+        if input.report_section() != "results":
+            return None
+        req("res_pitch_type" in input)
+        db = get_session()
+        try:
+            pitches = _selected_pitcher_located_pitches(db)
+            if not pitches:
+                return None
+
+            pitch_type_choice = input.res_pitch_type()
+            if pitch_type_choice != "all":
+                pitches = [
+                    p for p in pitches
+                    if (p.pitch_type.type_name if p.pitch_type is not None else "Unspecified") == pitch_type_choice
+                ]
+            if not pitches:
+                return None
+
+            damage = compute_zone_damage(pitches)
+            label = "All Pitch Types" if pitch_type_choice == "all" else pitch_type_choice
+            return zone_damage_heatmap(damage, label)
         finally:
             db.close()
 
