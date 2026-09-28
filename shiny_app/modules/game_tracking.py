@@ -1090,6 +1090,29 @@ def compute_current_state(pitches, runner_events=None, forced_ends=None, game=No
     return state
 
 
+def _inning_display(raw_inning):
+    """compute_current_state's state["inning"] is a raw HALF-inning
+    counter -- it increments by 1 every time a half-inning rolls over,
+    so a 9-inning game runs 1..18, not 1..9 (see
+    compute_staff_game_totals's "raw, inflated inning column" comment,
+    and the Pitch Log's "Inn 8" meaning bottom of the 4th). That's fine
+    internally, but showing it to a coach unconverted reads as a real
+    inning number. Convert it to what a coach actually expects: the
+    real inning (1st, 2nd, 3rd...) plus Top/Bottom. Away always bats
+    first (raw inning 1), real baseball convention (see
+    compute_current_state's away_is_squad_b docstring), so odd raw
+    values are always Top and even are always Bottom, regardless of
+    which squad is actually away. (Ryker, Sept 2026: scoring the Sept
+    15 game live, finishing just the top of the 1st rolled the raw
+    counter from 1 to 2, and both the Live Game Dashboard and the
+    pitch-entry header printed "Inning 2" -- read as the 2nd inning
+    starting, when it was really still the 1st, just the bottom half.)"""
+    real_inning = (raw_inning + 1) // 2
+    is_top = raw_inning % 2 == 1
+    ordinal_suffix = "th" if real_inning % 100 in (11, 12, 13) else {1: "st", 2: "nd", 3: "rd"}.get(real_inning % 10, "th")
+    return f"{real_inning}{ordinal_suffix} ({'Top' if is_top else 'Bot'})"
+
+
 def replay_game(pitches, runner_events, re_lookup, forced_ends=None):
     """Recompute every pitch's forward-derived chain (balls_before,
     strikes_before, outs_before, bases_before, inning, is_our_team_batting,
@@ -2961,7 +2984,7 @@ def game_tracking_server(input, output, session, app_state):
                 ui.h5("Live Game Dashboard", class_="gbo-section-title"),
                 ui_helpers.render_kpi_cards([
                     {"label": "Score", "value": score_value},
-                    {"label": "Inning", "value": f"{state['inning']} — {half_label}"},
+                    {"label": "Inning", "value": f"{_inning_display(state['inning'])} — {half_label}"},
                     {"label": "Outs", "value": str(state["outs"])},
                     {"label": "Count", "value": f"{state['balls']}-{state['strikes']}"},
                 ]),
@@ -3021,7 +3044,7 @@ def game_tracking_server(input, output, session, app_state):
                 return None
             half_label = f"{TEAM_LABEL[suggest_current_batting_squad(pitches, state)]} batting" if game.uses_three_squad_intrasquad else ("We're batting" if state["is_our_batting"] else "We're pitching")
             children = [
-                ui.h5(f"Inning {state['inning']} — {half_label}", class_="gbo-section-title"),
+                ui.h5(f"{_inning_display(state['inning'])} — {half_label}", class_="gbo-section-title"),
                 ui_helpers.render_kpi_cards([
                     {"label": "Outs", "value": str(state["outs"])},
                     {"label": "Count", "value": f"{state['balls']}-{state['strikes']}"},
