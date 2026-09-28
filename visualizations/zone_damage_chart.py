@@ -218,26 +218,13 @@ def _draw_panel(fig, pieces, *, row, col, showscale, zmin, zmax, hand=None):
         row=row, col=col,
     )
     if hand in ("R", "L"):
-        # Side placement (R = 3B/left side, L = 1B/right side) stays
-        # tied to center_x's sign, same convention as the Pitch Detail
-        # card. But POSE (which of the two mirrored silhouette images
-        # gets used) is tied directly to hand, not derived from
-        # center_x's sign -- Sept 2026, Ryker, looking at this chart's
-        # own vs RHH/vs LHH panels side by side for the first time
-        # (something the single-batter Pitch Detail card never
-        # surfaced): "lhh view looks like a right handed hitter and
-        # right handed hitter looks like a lhh." Rendering both
-        # options and comparing confirmed hitter_silhouette.png's own
-        # unflipped pose ("facing=right") reads as the right-handed
-        # stance and its mirror ("facing=left") reads as the
-        # left-handed one, regardless of which side of the zone it
-        # sits on -- deriving facing from center_x's sign instead
-        # (the Pitch Detail card's approach) happened to hand the
-        # mirrored image to R and the unflipped one to L, exactly
-        # backwards. The Pitch Detail card carries the identical bug;
-        # not touched here since Ryker hasn't asked for that one yet.
+        # Same center_x-decides-facing logic as the Pitch Detail card
+        # (batter always faces the zone, bat cocked back over the
+        # away-from-zone shoulder -- anything else reads as backwards)
+        # -- no hand-specific facing override, center_x's sign alone
+        # determines it.
         center_x = -HITTER_CENTER_X if hand == "R" else HITTER_CENTER_X
-        facing = "right" if hand == "R" else "left"
+        facing = "right" if center_x > 0 else "left"
         for img in hitter_images(center_x=center_x, facing=facing, height_ft=HITTER_HEIGHT_FT, ground_y=Z_MIN):
             fig.add_layout_image(**img, row=row, col=col)
     plate = {k: v for k, v in home_plate_shape(half_width_ft=ZONE_HALF_WIDTH, ground_y=Z_MIN, view="catcher").items()
