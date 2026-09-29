@@ -580,7 +580,7 @@ def compute_batting_line(pitches):
     strikeout is never counted in "Ahead" for the same reason in
     reverse."""
     all_pas = _group_into_plate_appearances(pitches)
-    completed_pas = [pa for pa in all_pas if pa[-1].ends_plate_appearance]
+    completed_pas = [pa for pa in all_pas if pa[-1].ends_plate_appearance and pa[-1].ab_outcome != "No Result"]
     qab_count = sum(1 for pa in completed_pas if _is_quality_at_bat(pa))
     ahead_pas = [pa for pa in completed_pas if _count_state(pa[-1].balls_before, pa[-1].strikes_before) == "Ahead"]
     even_pas = [pa for pa in completed_pas if _count_state(pa[-1].balls_before, pa[-1].strikes_before) == "Even"]
@@ -809,7 +809,7 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0):
     which IS now MIAA-specific and calibrated against the real
     earned-run figure -- see this module's WOBA_WEIGHTS/FIP_CONSTANT for
     exactly what's used and why."""
-    pa_pitches = [p for p in pitches if p.ends_plate_appearance]
+    pa_pitches = [p for p in pitches if p.ends_plate_appearance and p.ab_outcome != "No Result"]
     batters_faced = len(pa_pitches)
     k = sum(1 for p in pa_pitches if p.ab_outcome in K_OUTCOMES)
     bb = sum(1 for p in pa_pitches if p.ab_outcome == "BB")
@@ -845,7 +845,7 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0):
     # does (see _group_into_plate_appearances), since this function
     # doesn't currently receive pre-grouped PAs.
     all_pas = _group_into_plate_appearances(pitches)
-    completed_pas = [pa for pa in all_pas if pa[-1].ends_plate_appearance]
+    completed_pas = [pa for pa in all_pas if pa[-1].ends_plate_appearance and pa[-1].ab_outcome != "No Result"]
 
     # First-Pitch Strike % -- classic pitcher-command KPI: of all
     # completed plate appearances, how many started with pitch #1 being
@@ -1050,7 +1050,7 @@ def _compute_early_ahead_attribution(pitches):
     early, ahead, bf = {}, {}, {}
     for pa in _group_into_plate_appearances(pitches):
         last = pa[-1]
-        if not last.ends_plate_appearance or last.pitch_type is None:
+        if not last.ends_plate_appearance or last.ab_outcome == "No Result" or last.pitch_type is None:
             continue
         label = last.pitch_type.type_name
         bf[label] = bf.get(label, 0) + 1
@@ -1198,7 +1198,7 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
     # Hits/BB/K/etc. attribute to whichever pitch type actually ended
     # the plate appearance -- the same convention a real box score uses
     # ("2 of his 5 Ks came on the slider").
-    pa_ending = [p for p in pitches if p.ends_plate_appearance]
+    pa_ending = [p for p in pitches if p.ends_plate_appearance and p.ab_outcome != "No Result"]
     bb = sum(1 for p in pa_ending if p.ab_outcome == "BB")
     hbp = sum(1 for p in pa_ending if p.ab_outcome == "HBP")
     sf = sum(1 for p in pa_ending if p.ab_outcome == "Sac Fly")

@@ -382,7 +382,21 @@ PITCH_OUTCOMES = ["Ball", "Called Strike", "Swing and Miss", "Foul", "In Play", 
 AB_OUTCOMES = [
     "K", "K (Looking)", "BB", "HBP", "1B", "2B", "3B", "HR", "E", "FC",
     "Sac Bunt", "Sac Fly", "Groundout", "Flyout", "Lineout", "Double Play",
+    "No Result",
 ]
+# "No Result" (Ryker, Sept 2026: a batter got hurt mid-at-bat in a
+# scrimmage -- pitches already thrown should still count for the
+# pitcher's pitch-level stats, but the at-bat itself shouldn't be
+# charged as a PA/AB/K/BB/hit/out to either side). Deliberately left
+# out of K_OUTCOMES below and out of NON_AB_OUTCOMES/OUT_AB_OUTCOMES/
+# HIT_AB_OUTCOMES/XBH_AB_OUTCOMES (game_stats.py,
+# analytics/pitcher_game_report.py) -- those modules instead exclude
+# it directly from every completed-PA gate (completed_pas/pa_pitches/
+# pa_ending) so it never counts as a PA at all, not even a
+# non-AB one. suggest_after_state has no branch for it either, so
+# outs/bases/runs fall through unchanged from before the pitch -- a
+# true no-op close. See result_fields_body and the submission handler
+# below for how it's forced to stay a no-op in the UI.
 # Both count as a strikeout/out everywhere stats are computed from
 # ab_outcome (game_stats.py, analytics/pitcher_game_report.py) -- "K
 # (Looking)" exists only so a strikeout looking shows as its own
@@ -4390,6 +4404,15 @@ def game_tracking_server(input, output, session, app_state):
                 return None
             req("ab_outcome_select" in input)
             ab_outcome = input.ab_outcome_select()
+            if ab_outcome == "No Result":
+                # No editable fields for this one -- it's a no-op by
+                # definition (see AB_OUTCOMES comment above).
+                return ui.p(
+                    "No Result -- this at-bat won't be charged to either side. "
+                    "Outs, baserunners, and score stay exactly as they were "
+                    "before this pitch.",
+                    class_="text-muted small",
+                )
             suggested_outs, suggested_bases, suggested_runs = suggest_after_state(ab_outcome, state["bases"], state["outs"])
             return ui.div(
                 ui.layout_columns(
@@ -4652,27 +4675,37 @@ def game_tracking_server(input, output, session, app_state):
                     batted_x, batted_y = input.batted_ball_x_input(), input.batted_ball_y_input()
 
             ab_outcome = final_outs = final_bases = final_runs = None
+            unearned_runs = 0
             if ends_pa:
                 if "ab_outcome_select" not in input:
                     ui.notification_show("Confirm the AB result before recording this pitch.", type="error", duration=8)
                     return
                 ab_outcome = input.ab_outcome_select()
-                final_outs = int(input.final_outs_input())
-                final_bases = (input.final_bases_input() or "").strip()
-                if not re.fullmatch(r"[01]{3}", final_bases):
-                    ui.notification_show(
-                        'Bases after must be exactly 3 characters of 0/1 (e.g. "010" = runner on 2nd only) -- pitch not recorded.',
-                        type="error", duration=10,
-                    )
-                    return
-                final_runs = int(input.final_runs_input())
-                unearned_runs = int(input.unearned_runs_input()) if "unearned_runs_input" in input else 0
-                if unearned_runs > final_runs:
-                    ui.notification_show(
-                        "Unearned runs can't exceed runs scored on the play -- pitch not recorded.",
-                        type="error", duration=8,
-                    )
-                    return
+                if ab_outcome == "No Result":
+                    # result_fields_body doesn't render the outs/bases/
+                    # runs inputs for this outcome (it's a no-op by
+                    # definition) -- force them to exactly the pre-pitch
+                    # state instead of reading fields that don't exist.
+                    final_outs = state["outs"]
+                    final_bases = state["bases"]
+                    final_runs = 0
+                else:
+                    final_outs = int(input.final_outs_input())
+                    final_bases = (input.final_bases_input() or "").strip()
+                    if not re.fullmatch(r"[01]{3}", final_bases):
+                        ui.notification_show(
+                            'Bases after must be exactly 3 characters of 0/1 (e.g. "010" = runner on 2nd only) -- pitch not recorded.',
+                            type="error", duration=10,
+                        )
+                        return
+                    final_runs = int(input.final_runs_input())
+                    unearned_runs = int(input.unearned_runs_input()) if "unearned_runs_input" in input else 0
+                    if unearned_runs > final_runs:
+                        ui.notification_show(
+                            "Unearned runs can't exceed runs scored on the play -- pitch not recorded.",
+                            type="error", duration=8,
+                        )
+                        return
 
             notes = ((input.pitch_notes_input() or "").strip() if "pitch_notes_input" in input else "")
 
