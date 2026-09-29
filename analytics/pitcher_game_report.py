@@ -204,7 +204,7 @@ def compute_pitcher_game_report(session, game_id, pitcher_player_id):
         pas.append(current_pa)
     # Only fully-ended PAs count toward PA-level stats -- a PA still in
     # progress (e.g. report pulled mid-at-bat) has no ab_outcome yet.
-    completed_pas = [pa for pa in pas if pa[-1].ends_plate_appearance]
+    completed_pas = [pa for pa in pas if pa[-1].ends_plate_appearance and pa[-1].ab_outcome != "No Result"]
 
     header = _compute_header_stats(all_pitches, completed_pas)
     breakdown_overall = _compute_pitch_type_breakdown(all_pitches, completed_pas, pitch_types)
@@ -763,7 +763,7 @@ def compute_staff_game_totals(session, game_id):
 
     pitch_types = {pt.pitch_type_id: pt.type_name for pt in session.query(PitchType).all()}
     all_pas = _group_into_pas(our_pitches)
-    completed_pas = [pa for pa in all_pas if pa[-1].ends_plate_appearance]
+    completed_pas = [pa for pa in all_pas if pa[-1].ends_plate_appearance and pa[-1].ab_outcome != "No Result"]
 
     staff_total = _staff_stat_bundle(our_pitches, completed_pas, pitch_types)
 
@@ -781,7 +781,7 @@ def compute_staff_game_totals(session, game_id):
     by_inning = []
     for i, inn_pitches in enumerate(frames, start=1):
         inn_pas = [pa for pa in all_pas if pa[0] in inn_pitches]
-        inn_completed = [pa for pa in inn_pas if pa[-1].ends_plate_appearance]
+        inn_completed = [pa for pa in inn_pas if pa[-1].ends_plate_appearance and pa[-1].ab_outcome != "No Result"]
         raw_innings_covered = {p.inning for p in inn_pitches}
         row = {"inning": i if game.is_intrasquad else inn_pitches[0].inning}
         row.update(_staff_stat_bundle(inn_pitches, inn_completed, pitch_types))
@@ -810,7 +810,7 @@ def compute_staff_game_totals(session, game_id):
     for pid in pitcher_ids_in_order:
         p_pitches = [p for p in our_pitches if _pitcher_id(p) == pid]
         p_pas = [pa for pa in all_pas if _pitcher_id(pa[0]) == pid]
-        p_completed = [pa for pa in p_pas if pa[-1].ends_plate_appearance]
+        p_completed = [pa for pa in p_pas if pa[-1].ends_plate_appearance and pa[-1].ab_outcome != "No Result"]
         player = players.get(pid)
         row = {
             "player_id": pid,
