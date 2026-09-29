@@ -658,7 +658,7 @@ def suggest_next_our_batter(game, lineup_slots):
     if not lineup_slots:
         return None
     our_pa_endings = sorted(
-        [p for p in game.pitches if p.is_our_team_batting and p.ends_plate_appearance],
+        [p for p in game.pitches if p.is_our_team_batting and p.ends_plate_appearance and p.ab_outcome != "No Result"],
         key=lambda p: p.pitch_sequence,
     )
     if not our_pa_endings:
@@ -685,7 +685,7 @@ def suggest_next_squad_b_batter(game, squad_b_slots):
     if not squad_b_slots:
         return None
     squad_b_pa_endings = sorted(
-        [p for p in game.pitches if not p.is_our_team_batting and p.ends_plate_appearance and p.opponent_our_player_id],
+        [p for p in game.pitches if not p.is_our_team_batting and p.ends_plate_appearance and p.ab_outcome != "No Result" and p.opponent_our_player_id],
         key=lambda p: p.pitch_sequence,
     )
     if not squad_b_pa_endings:
@@ -780,7 +780,7 @@ def suggest_next_squad_batter(game, squad, slots):
     if not slots:
         return None
     squad_pa_endings = sorted(
-        [p for p in game.pitches if p.batting_squad == squad and p.ends_plate_appearance],
+        [p for p in game.pitches if p.batting_squad == squad and p.ends_plate_appearance and p.ab_outcome != "No Result"],
         key=lambda p: p.pitch_sequence,
     )
     if not squad_pa_endings:
@@ -815,7 +815,7 @@ def get_current_three_squad_pitcher_id(game):
 
 def suggest_next_opponent_order(game):
     opp_pa_endings = sorted(
-        [p for p in game.pitches if not p.is_our_team_batting and p.ends_plate_appearance and p.opponent_batting_order],
+        [p for p in game.pitches if not p.is_our_team_batting and p.ends_plate_appearance and p.ab_outcome != "No Result" and p.opponent_batting_order],
         key=lambda p: p.pitch_sequence,
     )
     if not opp_pa_endings:
@@ -828,7 +828,7 @@ def suggest_next_opponent_lineup_player(game, opponent_lineup_slots):
     if not opponent_lineup_slots:
         return None
     opp_pa_endings = sorted(
-        [p for p in game.pitches if not p.is_our_team_batting and p.ends_plate_appearance and p.opponent_player_id],
+        [p for p in game.pitches if not p.is_our_team_batting and p.ends_plate_appearance and p.ab_outcome != "No Result" and p.opponent_player_id],
         key=lambda p: p.pitch_sequence,
     )
     if not opp_pa_endings:
