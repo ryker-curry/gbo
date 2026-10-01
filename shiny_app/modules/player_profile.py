@@ -30,6 +30,16 @@ except the Assessments page's own history view. Full History covers
 every category uniformly (not just those two) so nothing needs special-
 casing here.
 
+Oct 2026 restructure (Ryker: "two separate profiles, a strength and
+conditioning/athleticism one and a baseball one ... an overall profile
+combining everything with an overall similar to mlb the show"): the
+hero card is now the combined Overall from analytics/player_ratings.py
+(85% baseball / 15% athleticism, 0-99, Show tiers), with a "how this
+was built" breakdown beside it. Below it, two halves: Athlete (the old
+Overview / Assessments / Mobility tabs, unchanged, as sub-tabs) and
+Baseball (season hitting line + the old Pitching tab), then
+Development and Video.
+
 Who lands here: coaches via the Roster (app_state.deep_link_player_id
 + update_navs) or the in-page picker; a Player-role user always sees
 their own linked player and gets no picker.
@@ -50,6 +60,7 @@ from analytics.profile_queries import get_pitcher_profile_pitches, rapsodo_by_ga
 from game_stats import compute_pitching_line, get_pitching_extras_for_pitches
 from assessment_history import assessment_history_query, assessment_history_rows
 from pitch_type_config import FASTBALL_TYPES
+from analytics.player_ratings import load_player_card
 import bucket_display
 import ui_helpers
 
@@ -272,11 +283,17 @@ def player_profile_server(input, output, session, app_state):
                 rows = assessment_history_rows(assessment_history_query(db, pid, cat.category_id).all())
                 if rows:
                     history_panels.append(ui.accordion_panel(f"{cat.category_name} ({len(rows)})", ui_helpers.render_dict_table(rows)))
-            return _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, season_label, game_pitching_extras)
+            # Oct 2026: the Show-style Overall card (analytics/player_ratings.py),
+            # same season window as everything else on the page.
+            rating = load_player_card(
+                db, p, bd, season_start, game_date_to,
+                avg_fastball_velo=(game_fastball_summ or {}).get("avg_velocity"),
+            )
+            return _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, season_label, game_pitching_extras, rating)
         finally:
             db.close()
 
-    def _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, game_season_label, game_pitching_extras=(0, 0)):
+    def _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, game_season_label, game_pitching_extras=(0, 0), rating=None):
         pos = p.player_position.position_name if p.player_position else None
         cls = p.player_class.class_name if p.player_class else None
         meta = " · ".join(x for x in [f"#{p.jersey_number}" if p.jersey_number else None, pos, cls, f"{p.bats or '-'}/{p.throws or '-'}",
@@ -304,7 +321,10 @@ def player_profile_server(input, output, session, app_state):
         # Pitching tab below, which are both explicitly about the
         # latest bullpen session, not the hero card.
 
-        card = ui_helpers.show_card(p, bd, summ, flag, fastball_summary=game_fastball_summ)
+        # Oct 2026 (Ryker): the hero card is now the combined Overall --
+        # 85% baseball / 15% athleticism, see analytics/player_ratings.py.
+        # The Bucket System's own physical scores live in the Athlete tab.
+        card = ui_helpers.rating_card(p, rating)
         tiles = ui.div(
             ui_helpers.kpi_tile("Status", ui_helpers.status_chip(flag), delta=f"{sum(1 for s,_,_ in pris if s=='flag')} priority · {sum(1 for s,_,_ in pris if s=='watch')} attention" if pris else "No flags"),
             ui_helpers.kpi_tile("Last assessed", last_date.strftime("%b %d") if last_date else "—", delta=f"{last_cat} · {(date.today()-last_date).days} days ago" if last_date else "No assessments yet"),
@@ -315,8 +335,7 @@ def player_profile_server(input, output, session, app_state):
         # from _priorities(bd) (worst bucket-system/ROM metrics). pris
         # is still computed above and still drives the Status tile and
         # the hero card's flag color, just no longer rendered here.
-        priorities = ui_helpers.card(title="Development priorities")
-        hero = ui.div(card, ui.div(tiles, priorities), class_="gbo-profile-hero")
+        hero = ui.div(card, ui.div(ui_helpers.rating_breakdown(rating)), class_="gbo-profile-hero")
 
         # --- tabs ---
         overview = _overview_tab(bd, summ, pitches, bullpen, goals, mode)
@@ -343,16 +362,64 @@ def player_profile_server(input, output, session, app_state):
         dev_tab = _dev_tab(goals)
         video_tab = ui_helpers.card(*( [ui.div(ui.div(v.recorded_date.strftime("%b %d, %Y") if v.recorded_date else "—", class_="gbo-li-dt"), ui.div(ui.a(v.description or "Video", href=v.video_url, target="_blank") if v.video_url else (v.description or "Video")), class_="gbo-li") for v in videos] or [ui_helpers.empty_state("No video linked to this player yet. Pitch and swing clips upload from Bullpen Tracking, Hitter Tracking, and Video Import.")]), title="Video")
 
+        # Oct 2026 (Ryker): two halves -- Athlete (strength & conditioning,
+        # everything that used to be Overview/Assessments/Mobility, moved
+        # unchanged) and Baseball (game production + the latest bullpen).
+        athlete_tab = ui.div(
+            tiles,
+            ui.navset_pill(
+                ui.nav_panel("Overview", ui.div(overview, class_="gbo-tab-body")),
+                ui.nav_panel("Assessments", ui.div(assessments_tab, class_="gbo-tab-body")),
+                ui.nav_panel("Mobility", ui.div(mobility_tab, class_="gbo-tab-body")),
+                id="profile_athlete_tabs",
+            ),
+        )
+        baseball_tab = _baseball_tab(p, rating, pitching_tab)
         tabs = ui.navset_tab(
-            ui.nav_panel("Overview", ui.div(overview, class_="gbo-tab-body")),
-            ui.nav_panel("Assessments", ui.div(assessments_tab, class_="gbo-tab-body")),
-            ui.nav_panel("Mobility", ui.div(mobility_tab, class_="gbo-tab-body")),
-            ui.nav_panel("Pitching", ui.div(pitching_tab, class_="gbo-tab-body")),
+            ui.nav_panel("Athlete", ui.div(athlete_tab, class_="gbo-tab-body")),
+            ui.nav_panel("Baseball", ui.div(baseball_tab, class_="gbo-tab-body")),
             ui.nav_panel("Development", ui.div(dev_tab, class_="gbo-tab-body")),
             ui.nav_panel("Video", ui.div(video_tab, class_="gbo-tab-body")),
             id="profile_tabs",
         )
         return ui.div(header, hero, ui.div(tabs, style="margin-top:24px;"))
+
+    def _baseball_tab(p, rating, pitching_tab):
+        """Oct 2026: the Baseball half of Player Profile -- a hitting line
+        (when this player has PAs this season) plus the existing pitching
+        content (game results + latest bullpen). Detailed splits stay on
+        Pitcher Profile / Hitter Profile; this is the at-a-glance view."""
+        rating = rating or {}
+        sections = []
+        line = rating.get("hitter_line")
+        if line and (line.get("PA") or 0) > 0:
+            def f3(v):
+                return f"{v:.3f}".replace("0.", ".", 1) if v is not None else "—"
+
+            def fp(v):
+                return f"{v:.1f}%" if v is not None else "—"
+            sections.append(ui_helpers.card(
+                ui.div(
+                    ui_helpers.kpi_tile("PA", line.get("PA")),
+                    ui_helpers.kpi_tile("AVG / OBP / SLG", f"{f3(line.get('AVG'))} / {f3(line.get('OBP'))} / {f3(line.get('SLG'))}"),
+                    ui_helpers.kpi_tile("wOBA", f3(line.get("wOBA"))),
+                    ui_helpers.kpi_tile("K %", fp(line.get("K %"))),
+                    ui_helpers.kpi_tile("BB %", fp(line.get("BB %"))),
+                    ui_helpers.kpi_tile("Chase %", fp(line.get("Chase %"))),
+                    class_="gbo-kpi-row",
+                ),
+                ui.p("Full splits, spray charts and pitch-location views are on Hitter Profile.", class_="text-muted small", style="margin-top:8px;"),
+                title="Hitting", right="this season",
+            ))
+        if p.is_pitcher or (rating.get("roles") or {}).get("pitching"):
+            sections.append(ui.div(
+                ui.h5("Pitching", class_="gbo-section-title"),
+                pitching_tab,
+                ui.p("Full arsenal, command and results breakdowns are on Pitcher Profile.", class_="text-muted small", style="margin-top:8px;"),
+            ))
+        if not sections:
+            sections.append(ui_helpers.card(ui_helpers.empty_state("No game data for this player this season yet.")))
+        return ui.div(*sections)
 
     def _overview_tab(bd, summ, pitches, bullpen, goals, mode):
         def flat(sub):

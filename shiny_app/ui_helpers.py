@@ -604,3 +604,92 @@ def show_card(player, bucket_data, pitch_summary=None, flag="neutral", fastball_
         ui.div(ui.tags.img(src=theme.LOGO_URL, alt=""), ui.span("Pitt State"), ui.span(f"{tier} tier", class_="rt"), class_="gbo-show-ft"),
         class_="gbo-show", style=f"--tier:{tier_color}",
     )
+
+
+def rating_card(player, card):
+    """MLB-The-Show-style Overall card (Oct 2026) -- the new top-of-
+    Player-Profile card built from analytics/player_ratings.build_card.
+    Same .gbo-show look as show_card (which it replaces on Player
+    Profile), but every number is a 0-99 rating: the big number is the
+    Overall (85% baseball / 15% athleticism), the bars are the primary
+    role's baseball attributes plus ATH, and the footer splits out the
+    Baseball and Athlete ratings. A provisional (small-sample) card
+    says so instead of hiding the number."""
+    card = card or {}
+    overall = card.get("overall")
+    tier = card.get("tier") or "common"
+    tier_color = {"diamond": "var(--gbo-diamond)", "gold": "var(--gbo-gold)", "silver": "var(--gbo-silver)",
+                  "bronze": "var(--gbo-bronze)", "common": "var(--gbo-common)"}[tier]
+    role = card.get("primary_role")
+    role_data = (card.get("roles") or {}).get(role) or {}
+    attrs = role_data.get("attributes") or {}
+
+    def bar(label, rating):
+        if rating is None:
+            return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_="neutral", style="width:0"), class_="b"), ui.span("—", class_="v"), class_="gbo-at")
+        pct = max(0, min(100, (rating - 40) / (99 - 40) * 100))
+        st = "gold" if rating >= 85 else "good" if rating >= 70 else "watch" if rating >= 55 else "flag"
+        return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_=st, style=f"width:{pct:.0f}%"), class_="b"), ui.span(str(rating), class_="v"), class_="gbo-at")
+
+    bars = [bar(key, (attrs.get(key) or (None, None))[0]) for key in (role_data.get("weights") or {})]
+    bars.append(bar("ATH", card.get("athlete")))
+
+    pos = player.player_position.position_name if getattr(player, "player_position", None) else None
+    cls = player.player_class.class_name if getattr(player, "player_class", None) else None
+    cls_short = (cls or "").replace("Redshirt ", "RS ").replace("Freshman", "FR").replace("Sophomore", "SO").replace("Junior", "JR").replace("Senior", "SR").replace("Graduate", "GR")
+    meta = [pill(x) for x in [pos, f"{player.bats or '-'} / {player.throws or '-'}", cls_short] if x]
+    if card.get("provisional"):
+        meta.append(pill("Provisional"))
+    photo = ui.tags.img(src=player.photo_url, class_="gbo-show-photo-img", alt="") if getattr(player, "photo_url", None) else ui.HTML('<svg viewBox="0 0 24 24" fill="currentColor" class="gbo-show-silhouette"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0z"/></svg>')
+    split = " · ".join(x for x in [
+        f"BSB {card['baseball']}" if card.get("baseball") is not None else None,
+        f"ATH {card['athlete']}" if card.get("athlete") is not None else None,
+    ] if x)
+    return ui.div(
+        ui.div(
+            ui.div(str(overall) if overall is not None else "—", ui.tags.small("Overall"), class_="gbo-show-ovr"),
+            ui.div(ui.div(player.first_name, class_="gbo-show-nm"), ui.div(player.last_name, class_="gbo-show-ln"), ui.div(*meta, class_="gbo-show-meta"), class_="gbo-show-who"),
+            class_="gbo-show-hd",
+        ),
+        ui.div(photo, ui.div(str(player.jersey_number) if player.jersey_number else "", class_="gbo-show-num"), class_="gbo-show-photo"),
+        ui.div(*bars, class_="gbo-show-attrs"),
+        ui.div(ui.tags.img(src=theme.LOGO_URL, alt=""), ui.span(split or "Pitt State"), ui.span(f"{tier} tier", class_="rt"), class_="gbo-show-ft"),
+        class_="gbo-show", style=f"--tier:{tier_color}",
+    )
+
+
+def rating_breakdown(rc):
+    """The "how this number was built" panel next to the rating card:
+    every attribute's rating, its weight, and the raw stat behind it,
+    for each role the player has data in."""
+    from analytics.player_ratings import ATTRIBUTE_LABELS, ATHLETE_WEIGHT
+    rc = rc or {}
+    blocks = []
+    for role in ("pitching", "hitting"):
+        data = (rc.get("roles") or {}).get(role)
+        if not data:
+            continue
+        rows = []
+        for key, weight in data["weights"].items():
+            rating, raw = data["attributes"].get(key, (None, None))
+            rows.append({
+                "Attribute": ATTRIBUTE_LABELS.get(key, key),
+                "Rating": rating if rating is not None else "—",
+                "Weight": f"{weight * 100:.0f}%",
+                "Based on": raw or "Not enough data yet",
+            })
+        title = ("Pitching" if role == "pitching" else "Hitting") + (f" — Baseball {data['baseball']}" if data.get("baseball") is not None else "")
+        right = " · ".join(x for x in [data.get("sample"), "provisional" if data.get("provisional") else None] if x)
+        blocks.append(card(render_dict_table(rows), title=title, right=right or None))
+    ath_rows = [{
+        "Attribute": "Athleticism", "Rating": rc.get("athlete") if rc.get("athlete") is not None else "—",
+        "Weight": f"{ATHLETE_WEIGHT * 100:.0f}% of Overall", "Based on": rc.get("athlete_raw") or "No scored assessments yet",
+    }]
+    blocks.append(card(render_dict_table(ath_rows), title="Athlete" + (f" — {rc['athlete']}" if rc.get("athlete") is not None else "")))
+    blocks.append(ui.p(
+        "Ratings run 40-99: 70 is a PSU-average player, every 15 points is about one standard deviation. "
+        "Velocity is graded against fixed college benchmarks; the other baseball attributes are graded against "
+        "the PSU roster for the selected season. Overall = 85% Baseball + 15% Athlete.",
+        class_="text-muted small",
+    ))
+    return ui.div(*blocks)
