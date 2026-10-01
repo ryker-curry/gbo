@@ -50,6 +50,24 @@ remaining weights renormalized, never zero-filled):
             speed score).
   Overall = 85% Baseball + 15% Athlete (or whichever of the two exists).
 
+PERCENTILE OVERALL (Oct 2026, Ryker: "right now everybody is about a 78,
+need to adjust the scoring so we have diamonds")
+  Averaging several attributes squeezes the composite (strengths and
+  weaknesses cancel), so the raw Overall only spread ~6 points and
+  nobody reached Diamond. The Overall, Baseball and Athlete numbers are
+  now ROSTER PERCENTILES mapped onto a Show-shaped curve
+  (PERCENTILE_CURVE), with Ryker's tier split:
+      top 10% Diamond (85-99) · next 15% Gold (80-84) · next 25% Silver
+      (75-79) · next 30% Bronze (65-74) · bottom 20% Common (<65)
+  Overall and Baseball rank against qualified (non-provisional)
+  players of the same primary role; Athlete ranks against every player
+  with a Bucket System score. Provisional players are placed on the
+  same curve but never count toward the pool. Pools smaller than
+  MIN_PERCENTILE_POOL fall back to the raw (unranked) value. The
+  attribute bars (Velocity, Stuff, Contact...) are NOT percentiled --
+  they keep the 70-average/15-per-SD scale so strengths/weaknesses
+  still read on the card.
+
 RELIABILITY
   A pitcher with fewer than PROVISIONAL_BF batters faced, or a hitter
   with fewer than PROVISIONAL_PA plate appearances, in the window gets
@@ -88,6 +106,13 @@ MIN_BASELINE_HITTERS = 5
 MIN_BASELINE_PA = 10
 
 TIERS = [(85, "diamond"), (80, "gold"), (75, "silver"), (65, "bronze")]
+
+# (roster percentile 0-100, rating) -- piecewise-linear. Lands the tier
+# lines exactly on Ryker's split: 20th pct = 65 (Bronze starts), 50th =
+# 75 (Silver), 75th = 80 (Gold), 90th = 85 (Diamond), best = 99.
+PERCENTILE_CURVE = [(0, 45), (20, 65), (50, 75), (75, 80), (90, 85), (100, 99)]
+MIN_PERCENTILE_POOL = 5
+ROSTER_CACHE_SECONDS = 300
 
 
 def _clamp(r):
@@ -316,43 +341,150 @@ def build_card(*, is_pitcher, bucket_data, pitcher_row=None, avg_fastball_velo=N
     }
 
 
-# ---------------------------------------------------------- DB loaders
+# ------------------------------------------------------ percentile layer
 
-def load_player_card(db, player, bucket_data, date_from, date_to, avg_fastball_velo=None):
-    """Runs the roster-wide queries a card needs (pitching leaderboard
-    rows, roster hitting lines) for the given window and builds this
-    player's card."""
+def roster_percentile(value, pool, is_member):
+    """0-100. Members: share of the OTHER pool members below (ties
+    count half), so the best qualified player is 100 and the worst 0.
+    Non-members (provisional players): share of the pool below."""
+    if value is None or not pool:
+        return None
+    below = sum(1 for v in pool if v < value)
+    equal = sum(1 for v in pool if v == value)
+    if is_member:
+        n = len(pool) - 1
+        if n <= 0:
+            return 50.0
+        return 100.0 * (below + 0.5 * max(equal - 1, 0)) / n
+    return 100.0 * (below + 0.5 * equal) / len(pool)
+
+
+def percentile_rating(pct):
+    """Roster percentile -> rating on PERCENTILE_CURVE. Floors (not
+    rounds) so the tier lines land exactly on the percentile split -- a
+    player at the 89.9th percentile is Gold (84), not rounded up into
+    Diamond."""
+    if pct is None:
+        return None
+    import math
+    v = max(0.0, min(100.0, float(pct)))
+    for (x0, y0), (x1, y1) in zip(PERCENTILE_CURVE, PERCENTILE_CURVE[1:]):
+        if x0 <= v <= x1:
+            r = y0 + (v - x0) * (y1 - y0) / (x1 - x0)
+            return int(max(RATING_FLOOR, min(RATING_CAP, math.floor(r + 1e-9))))
+    return RATING_CAP
+
+
+def apply_roster_percentiles(card, raw_cards, player_id):
+    """Rescales card's overall/baseball/athlete to roster percentiles.
+    raw_cards: {player_id: raw build_card() output} for the roster.
+    Keeps the raw composites as overall_raw/baseball_raw/athlete_raw_value
+    and adds *_pct and pool sizes for the breakdown. Returns card."""
+    role = card.get("primary_role")
+    card["overall_raw"], card["baseball_raw"], card["athlete_raw_value"] = card["overall"], card["baseball"], card["athlete"]
+
+    def scale(field, value, pool_cards):
+        """pool_cards: list of (pid, raw_card). The player's own pool slot
+        (if he qualifies) is filled with his CURRENT value, so the page's
+        live numbers and the ranking always agree."""
+        member = any(pid == player_id and c.get(field) is not None for pid, c in pool_cards)
+        pool = [c[field] for pid, c in pool_cards if pid != player_id and c.get(field) is not None]
+        if member and value is not None:
+            pool.append(value)
+        if value is None or len(pool) < MIN_PERCENTILE_POOL:
+            return value, None, len(pool)
+        pct = roster_percentile(value, pool, member)
+        return percentile_rating(pct), pct, len(pool)
+
+    role_pool = [(pid, c) for pid, c in raw_cards.items() if c.get("primary_role") == role and not c.get("provisional")]
+    card["overall"], card["overall_pct"], card["overall_pool"] = scale("overall", card["overall_raw"], role_pool)
+    card["baseball"], card["baseball_pct"], card["baseball_pool"] = scale("baseball", card["baseball_raw"], role_pool)
+    athlete_pool = [(pid, c) for pid, c in raw_cards.items() if c.get("athlete") is not None]
+    card["athlete"], card["athlete_pct"], card["athlete_pool"] = scale("athlete", card["athlete_raw_value"], athlete_pool)
+    card["tier"] = tier_for(card["overall"])
+    return card
+
+
+_ROSTER_CACHE = {}
+
+
+def roster_context(db, date_from, date_to, season_label=None):
+    """Everything roster-wide a card needs, computed once and cached for
+    ROSTER_CACHE_SECONDS per season window (it grades the whole staff
+    and scores every player's Bucket System, too slow to redo on every
+    page load). New games/imports/assessments show up within that
+    window. Returns dict with pitch_rows, staff_velos, velo_base,
+    hit_lines, hit_base, buckets, raw_cards."""
+    import time
+    from models import Player
     from analytics.profile_queries import pitching_staff_leaderboard_rows
+    from bucket_system import build_roster_batch_cache, compute_bucket_system
 
-    pitcher_row = None
-    bf = None
-    rows = pitching_staff_leaderboard_rows(db, date_from=date_from, date_to=date_to)
-    for row in rows:
-        if row["player"].player_id == player.player_id:
-            pitcher_row = row
-            bf = row.get("BF")
-            break
+    key = (date_from, date_to, season_label)
+    hit = _ROSTER_CACHE.get(key)
+    if hit and time.time() - hit[0] < ROSTER_CACHE_SECONDS:
+        return hit[1]
 
-    # Velocity: this pitcher's own average from the SAME roster query the
-    # baseline is built from, so the number and the comparison always
-    # agree. Falls back to the caller's value if he isn't in it.
+    pitch_rows = {r["player"].player_id: r for r in pitching_staff_leaderboard_rows(db, date_from=date_from, date_to=date_to)}
     staff_velos = roster_fastball_velos(db, date_from, date_to)
     velo_base = velo_baseline(staff_velos)
-    own = staff_velos.get(player.player_id)
+    hit_lines = roster_hitting_lines(db, date_from, date_to)
+    hit_base = hitter_baseline(list(hit_lines.values()))
+
+    buckets = {}
+    try:
+        cache, units, throws_map, _active_only = build_roster_batch_cache(db, season_label=season_label)
+        for p in db.query(Player).filter(Player.active.is_(True)).all():
+            try:
+                buckets[p.player_id] = compute_bucket_system(db, p.player_id, season_label=season_label, _cache=cache, _units=units, _throws_map=throws_map) or {}
+            except Exception:
+                buckets[p.player_id] = {}
+    except Exception:
+        buckets = {}
+
+    players = {p.player_id: p for p in db.query(Player).filter(
+        Player.player_id.in_(set(pitch_rows) | set(staff_velos) | set(hit_lines) | set(buckets))
+    ).all()}
+    raw_cards = {}
+    for pid, p in players.items():
+        own_v = staff_velos.get(pid)
+        line = hit_lines.get(pid)
+        row = pitch_rows.get(pid)
+        raw_cards[pid] = build_card(
+            is_pitcher=bool(p.is_pitcher), bucket_data=buckets.get(pid, {}),
+            pitcher_row=row, avg_fastball_velo=own_v[0] if own_v else None, bf=(row or {}).get("BF"),
+            hitter_line=line, hitter_baseline_=hit_base, pa=(line or {}).get("PA"), velo_base=velo_base,
+        )
+    ctx = dict(pitch_rows=pitch_rows, staff_velos=staff_velos, velo_base=velo_base,
+               hit_lines=hit_lines, hit_base=hit_base, buckets=buckets, raw_cards=raw_cards)
+    _ROSTER_CACHE.clear()
+    _ROSTER_CACHE[key] = (time.time(), ctx)
+    return ctx
+
+
+# ---------------------------------------------------------- DB loaders
+
+def load_player_card(db, player, bucket_data, date_from, date_to, avg_fastball_velo=None, season_label=None):
+    """This player's card for the given window: attributes from the
+    roster-wide context (roster_context, cached briefly), Overall/
+    Baseball/Athlete as roster percentiles (apply_roster_percentiles).
+    bucket_data is the page's own live Bucket System rollup for him."""
+    ctx = roster_context(db, date_from, date_to, season_label)
+    pid = player.player_id
+    pitcher_row = ctx["pitch_rows"].get(pid)
+    own = ctx["staff_velos"].get(pid)
     if own is not None and own[0] is not None:
         avg_fastball_velo = own[0]
-
-    hitter_lines = roster_hitting_lines(db, date_from, date_to)
-    hitter_line = hitter_lines.get(player.player_id)
-    baseline = hitter_baseline(list(hitter_lines.values()))
+    hitter_line = ctx["hit_lines"].get(pid)
 
     card = build_card(
         is_pitcher=bool(getattr(player, "is_pitcher", False)),
         bucket_data=bucket_data,
-        pitcher_row=pitcher_row, avg_fastball_velo=avg_fastball_velo, bf=bf,
-        hitter_line=hitter_line, hitter_baseline_=baseline, pa=(hitter_line or {}).get("PA"),
-        velo_base=velo_base,
+        pitcher_row=pitcher_row, avg_fastball_velo=avg_fastball_velo, bf=(pitcher_row or {}).get("BF"),
+        hitter_line=hitter_line, hitter_baseline_=ctx["hit_base"], pa=(hitter_line or {}).get("PA"),
+        velo_base=ctx["velo_base"],
     )
+    apply_roster_percentiles(card, ctx["raw_cards"], pid)
     # Raw inputs too, so Player Profile's Baseball tab can show the
     # underlying lines without re-running these roster queries.
     card["pitcher_row"] = pitcher_row

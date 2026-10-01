@@ -660,13 +660,34 @@ def rating_card(player, card):
 
 def rating_breakdown(rc):
     """The "how this number was built" panel next to the rating card:
-    every attribute's rating, its weight, and the raw stat behind it,
-    for each role the player has data in."""
+    the Overall/Baseball/Athlete percentile placement on top, then every
+    attribute's rating, its weight, and the raw stat behind it, for each
+    role the player has data in."""
     from analytics.player_ratings import ATTRIBUTE_LABELS, ATHLETE_WEIGHT
     rc = rc or {}
-    blocks = []
-    for role in ("pitching", "hitting"):
-        data = (rc.get("roles") or {}).get(role)
+    role = rc.get("primary_role")
+    group = "pitchers" if role == "pitching" else "hitters" if role == "hitting" else "players"
+
+    def ordinal(n):
+        n = int(round(n))
+        return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+    def placement(pct, pool, who):
+        if pct is None:
+            return f"Not enough qualified {who} to rank yet ({pool or 0})" if pool is not None else "—"
+        return f"{ordinal(pct)} percentile of {pool} {who}"
+
+    summary_rows = [
+        {"": "Overall", "Rating": rc.get("overall") if rc.get("overall") is not None else "—",
+         "Placement": placement(rc.get("overall_pct"), rc.get("overall_pool"), f"qualified {group}")},
+        {"": "Baseball", "Rating": rc.get("baseball") if rc.get("baseball") is not None else "—",
+         "Placement": placement(rc.get("baseball_pct"), rc.get("baseball_pool"), f"qualified {group}")},
+        {"": "Athlete", "Rating": rc.get("athlete") if rc.get("athlete") is not None else "—",
+         "Placement": placement(rc.get("athlete_pct"), rc.get("athlete_pool"), "tested players")},
+    ]
+    blocks = [card(render_dict_table(summary_rows), title="Where he ranks", right="provisional -- not in the ranking pool" if rc.get("provisional") else None)]
+    for r in ("pitching", "hitting"):
+        data = (rc.get("roles") or {}).get(r)
         if not data:
             continue
         rows = []
@@ -678,18 +699,16 @@ def rating_breakdown(rc):
                 "Weight": f"{weight * 100:.0f}%",
                 "Based on": raw or "Not enough data yet",
             })
-        title = ("Pitching" if role == "pitching" else "Hitting") + (f" — Baseball {data['baseball']}" if data.get("baseball") is not None else "")
+        title = "Pitching attributes" if r == "pitching" else "Hitting attributes"
         right = " · ".join(x for x in [data.get("sample"), "provisional" if data.get("provisional") else None] if x)
         blocks.append(card(render_dict_table(rows), title=title, right=right or None))
-    ath_rows = [{
-        "Attribute": "Athleticism", "Rating": rc.get("athlete") if rc.get("athlete") is not None else "—",
-        "Weight": f"{ATHLETE_WEIGHT * 100:.0f}% of Overall", "Based on": rc.get("athlete_raw") or "No scored assessments yet",
-    }]
-    blocks.append(card(render_dict_table(ath_rows), title="Athlete" + (f" — {rc['athlete']}" if rc.get("athlete") is not None else "")))
     blocks.append(ui.p(
-        "Ratings run 40-99: 70 is a PSU-average player, every 15 points is about one standard deviation. "
-        "Every baseball attribute, velocity included, is graded against the PSU roster for the selected season. "
-        "Overall = 85% Baseball + 15% Athlete.",
+        "Overall, Baseball and Athlete are roster percentiles: top 10% of qualified players = Diamond (85-99), "
+        "next 15% Gold, next 25% Silver, next 30% Bronze, bottom 20% Common. Overall ranks the combined "
+        f"{100 - ATHLETE_WEIGHT * 100:.0f}% Baseball + {ATHLETE_WEIGHT * 100:.0f}% Athlete score. Attribute bars use a fixed scale: "
+        "70 = PSU average, ~15 points per standard deviation, all graded against the PSU roster for the selected season. "
+        "Provisional players (under 50 BF / 30 PA) are placed on the same curve but don't count toward it."
+        + (f" Athlete is based on: {rc['athlete_raw']}." if rc.get("athlete_raw") else ""),
         class_="text-muted small",
     ))
     return ui.div(*blocks)
