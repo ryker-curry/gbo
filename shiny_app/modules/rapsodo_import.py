@@ -78,7 +78,7 @@ from shiny import module, ui, render, reactive, req
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import Player, StaffPlayerAssignment, BullpenSession, BullpenType, RapsodoPitch, RapsodoImport, Game
+from models import Player, StaffPlayerAssignment, BullpenSession, BullpenType, RapsodoPitch, RapsodoImport, Game, PitchType, PlayerPitchArsenal
 from services.rapsodo_import import (
     import_rapsodo_file, validate_file_structure, read_csv_bytes, delete_rapsodo_import,
     auto_match_rapsodo_to_game_pitches, apply_manual_rapsodo_game_pitch_matches,
@@ -105,12 +105,24 @@ def _fastball_shape_note(db, import_record):
             db.query(RapsodoPitch).options(joinedload(RapsodoPitch.pitch_type))
             .filter(RapsodoPitch.player_id == player.player_id).all()
         )
-        res = fastball_shape.check_pitcher(history, player.throws or "R")
+        arsenal = [
+            pt.type_name for pt in db.query(PitchType)
+            .join(PlayerPitchArsenal, PlayerPitchArsenal.pitch_type_id == PitchType.pitch_type_id)
+            .filter(PlayerPitchArsenal.player_id == player.player_id, PlayerPitchArsenal.active.is_(True)).all()
+        ]
+        res = fastball_shape.check_pitcher(history, player.throws or "R", arsenal=arsenal or None)
         new_ids = {p.rapsodo_pitch_id for p in import_record.pitches}
-        n = sum(1 for f in res["flags"] if f["pitch"].rapsodo_pitch_id in new_ids and f["kind"] == "mismatch")
-        if not n:
+        new_flags = [f for f in res["flags"] if f["pitch"].rapsodo_pitch_id in new_ids]
+        n_os = sum(1 for f in new_flags if f["kind"] == "offspeed")
+        n_fb = sum(1 for f in new_flags if f["kind"] == "mismatch")
+        parts = []
+        if n_os:
+            parts.append(f"{n_os} pitch(es) logged as fastballs look off-speed")
+        if n_fb:
+            parts.append(f"{n_fb} fastball(s) move like his other fastball")
+        if not parts:
             return ""
-        return (f" Heads-up: {n} fastball(s) in this file move like his other fastball -- "
+        return (f" Heads-up: {' and '.join(parts)} -- "
                 f"review them in Pitcher Profile → Fastball Shape Check.")
     except Exception:
         return ""
