@@ -613,6 +613,27 @@ def delete_rapsodo_import(db_session, import_id: int) -> dict:
     return summary
 
 
+
+def _use_game_pitch_type(db_session, rp, gp):
+    """Make a matched Rapsodo reading carry the pitch type charted in
+    Game Tracking, not the label Rapsodo assigned. Some pitchers'
+    Rapsodo labels can't be fixed on the device (e.g. everything comes
+    through as "Fastball"), and the coach's call in Game Tracking is the
+    source of truth for game pitches. Rapsodo's own label stays in
+    raw_pitch_type. If the game pitch has no type charted, or the
+    reading is unlinked (gp is None), fall back to Rapsodo's label.
+    """
+    if gp is not None and gp.pitch_type_id is not None:
+        rp.pitch_type_id = gp.pitch_type_id
+        return
+    rapsodo_name = normalize_pitch_type(rp.raw_pitch_type)
+    pt = (
+        db_session.query(PitchType).filter(PitchType.type_name == rapsodo_name).first()
+        if rapsodo_name else None
+    )
+    rp.pitch_type_id = pt.pitch_type_id if pt else None
+
+
 def auto_match_rapsodo_to_game_pitches(db_session, import_id: int, game_id: int) -> dict:
     """Attempts to automatically match every RapsodoPitch row from a
     game-linked import (RapsodoImport.game_id set) to the specific
@@ -633,7 +654,10 @@ def auto_match_rapsodo_to_game_pitches(db_session, import_id: int, game_id: int)
     counts differ and instead reports the mismatch for a coach to
     reconcile by hand (see apply_manual_rapsodo_game_pitch_matches).
 
-    For each matched pair: sets RapsodoPitch.game_pitch_id, and -- only
+    For each matched pair: sets RapsodoPitch.game_pitch_id, sets
+    RapsodoPitch.pitch_type_id to the pitch type charted in Game Tracking
+    (see _use_game_pitch_type -- Rapsodo's label stays in raw_pitch_type),
+    and -- only
     when the GamePitch doesn't already have a location on file (a video
     review pass may have already set one, and that's the more-verified
     source per Ryker's call: Rapsodo's raw coordinates are the first-pass
@@ -682,6 +706,7 @@ def auto_match_rapsodo_to_game_pitches(db_session, import_id: int, game_id: int)
     try:
         for rp, gp in zip(rapsodo_pitches, game_pitches):
             rp.game_pitch_id = gp.game_pitch_id
+            _use_game_pitch_type(db_session, rp, gp)
             if (
                 gp.actual_plate_x is None
                 and gp.actual_plate_z is None
@@ -789,6 +814,7 @@ def apply_manual_rapsodo_game_pitch_matches(db_session, import_id: int, matches:
                     old_gp.pitch_zone = None
 
             rp.game_pitch_id = game_pitch_id
+            _use_game_pitch_type(db_session, rp, gp)
             if (
                 gp is not None
                 and gp.actual_plate_x is None
