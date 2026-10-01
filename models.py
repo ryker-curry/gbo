@@ -1806,3 +1806,32 @@ class CommandPitch(Base):
 
     bullpen = relationship("BullpenSession", back_populates="command_pitches")
     pitch_type = relationship("PitchType")
+
+
+class PitchTypeChange(Base):
+    """One pitch relabeled through the Fastball Shape Check (Oct 2026,
+    Ryker: "if it fits the other type then we can switch it") -- an
+    audit/undo log, one row per switched Rapsodo reading. A switch
+    updates RapsodoPitch.pitch_type_id AND (when matched) the linked
+    GamePitch.pitch_type_id, so both previous values are kept here for
+    Undo. Both FKs are ON DELETE SET NULL (see
+    migrations/migrate_pitch_type_changes.py) so this log can never block
+    deleting a game, a pitch, or a Rapsodo import -- the FK-blocks-delete
+    bug class already hit twice in Sept 2026.
+
+    undone_at: set when a coach undoes the switch (row kept for history,
+    never deleted)."""
+    __tablename__ = "pitch_type_changes"
+
+    pitch_type_change_id = Column(Integer, primary_key=True)
+    rapsodo_pitch_id = Column(Integer, ForeignKey("rapsodo_pitches.rapsodo_pitch_id", ondelete="SET NULL"), nullable=True)
+    game_pitch_id = Column(Integer, ForeignKey("game_pitches.game_pitch_id", ondelete="SET NULL"), nullable=True)
+    player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)
+    from_rapsodo_pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=True)
+    from_game_pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=True)
+    to_pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=False)
+    source = Column(String(30), nullable=False, default="shape_check")
+    reason = Column(Text, nullable=True)
+    changed_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    changed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    undone_at = Column(DateTime, nullable=True)

@@ -112,6 +112,9 @@ import plotly.graph_objects as go
 from visualizations.chart_theme import apply_gbo_theme
 import glossary_content
 from pitch_type_config import get_pitch_color, FASTBALL_TYPES
+from analytics import fastball_shape
+from services.pitch_type_switch import apply_switches, undo_switches
+from models import PitchTypeChange
 
 import ui_helpers
 import format_helpers
@@ -246,6 +249,7 @@ def pitcher_profile_ui():
         ui.output_ui("pp_command_section"),
         ui.output_ui("pp_arsenal_section"),
         ui.output_ui("pp_count_leverage_section"),
+        ui.output_ui("pp_fastball_shape_section"),
         ui_helpers.page_footer(),
     )
 
@@ -446,6 +450,7 @@ def pitcher_profile_server(input, output, session, app_state):
                         "command": "Command & Execution",
                         "arsenal": "Arsenal",
                         "count_leverage": "Count Leverage",
+                        "fastball_shape": "Fastball Shape Check",
                     },
                 ),
             )
@@ -2321,3 +2326,209 @@ def pitcher_profile_server(input, output, session, app_state):
         if not plan:
             return None
         return command_charts.pitch_targeting_chart(plan)
+
+    # -------------------------------------------------------------------
+    # Fastball Shape Check (Oct 2026, Ryker: "build this into the
+    # website. fastball shape check. if it fits the other type then we
+    # can switch it"). Pitches are logged by GRIP; this compares each
+    # Rapsodo-tracked fastball's movement against the pitcher's own
+    # 4-seam/2-seam groups (analytics/fastball_shape.py) and lists the
+    # ones that move like the other type. A coach checks the ones to
+    # switch and confirms -- the Rapsodo reading and its matched game
+    # pitch are relabeled together and logged (PitchTypeChange) so every
+    # switch can be undone. Ignores the page's Pitch Type filter (it's
+    # always about fastballs); honors the date range / game picker.
+    # Bullpen readings are included (their labels feed Stuff+ too).
+    # -------------------------------------------------------------------
+    FS_SWITCH_ROLES = ("Administrator", "Head Coach", "Coach", "Data Analyst")
+    _fs_tick = reactive.Value(0)
+
+    def _fs_data(db):
+        pid = _current_player_id(db)
+        if pid is None:
+            return None, None
+        player = db.query(Player).filter(Player.player_id == pid).first()
+        if player is None:
+            return None, None
+        f = _current_filters()
+        raps = profile_queries.get_pitcher_rapsodo_pitches(
+            db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+            game_scope=f["game_scope"], game_id=f["game_id"], game_linked_only=False,
+        )
+        return player, fastball_shape.check_pitcher(raps, player.throws or "R")
+
+    def _fs_pitch_label(fl):
+        p = fl["pitch"]
+        when = p.pitch_date.strftime("%b %d") if p.pitch_date else "—"
+        src = "Game" if p.bullpen_id is None else "Bullpen"
+        velo = f"{fl['velo']:.1f} mph · " if fl.get("velo") is not None else ""
+        return (f"{when} {src} #{p.pitch_number}: {fl['labeled']} → {fl['suggested']} "
+                f"({velo}{fl['ivb']:.1f}\" ride, {fl['run']:.1f}\" run)")
+
+    @render.ui
+    def pp_fastball_shape_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "fastball_shape":
+            return None
+        _fs_tick()
+        db = get_session()
+        try:
+            player, res = _fs_data(db)
+            if player is None:
+                return None
+            if res["mode"] == "none":
+                return ui.p("No Rapsodo-tracked fastballs (4-seam / 2-seam / Fastball) with movement data in this range yet.", class_="text-muted small")
+            can_switch = role in FS_SWITCH_ROLES
+            counts = " · ".join(f"{t}: {n}" for t, n in sorted(res["counts"].items()))
+            if res["mode"] == "per_pitcher":
+                c4, c2 = res["centers"][fastball_shape.FOUR_SEAM], res["centers"][fastball_shape.TWO_SEAM]
+                mode_text = (f"Compared to his own fastballs -- 4-seam avg {c4[0]:.1f}\" ride / {c4[1]:.1f}\" arm-side run, "
+                             f"2-seam avg {c2[0]:.1f}\" ride / {c2[1]:.1f}\" run (group medians).")
+            else:
+                mode_text = ("He doesn't throw enough of both fastballs (or they move too much alike) to compare him to himself, "
+                             "so this uses general guidelines: a 4-seam rides well over its run, a 2-seam runs more than it rides.")
+            flags = res["flags"]
+            children = [
+                ui.hr(),
+                ui.h5("Fastball Shape Check", class_="gbo-section-title"),
+                ui.p("Pitches are logged by grip. This flags Rapsodo-tracked fastballs that move like his other fastball, "
+                     "so you can confirm and switch the label. " + mode_text, class_="text-muted small"),
+                ui.p(f"Checked: {counts}", class_="text-muted small"),
+                output_widget("pp_fastball_shape_chart"),
+            ]
+            if not flags:
+                children.append(ui_helpers.card(ui_helpers.empty_state("Every fastball matches its label. Nothing to switch.")))
+            else:
+                mism = sum(1 for f in flags if f["kind"] == "mismatch")
+                unl = len(flags) - mism
+                summary = f"{mism} pitch(es) move like the other fastball" + (f", {unl} unlabeled \"Fastball\" reading(s) with a suggested type" if unl else "")
+                table = ui_helpers.render_dict_table([{
+                    "Date": f["pitch"].pitch_date.strftime("%Y-%m-%d") if f["pitch"].pitch_date else "—",
+                    "Source": "Game" if f["pitch"].bullpen_id is None else "Bullpen",
+                    "#": f["pitch"].pitch_number,
+                    "Logged as": f["labeled"], "Moves like": f["suggested"],
+                    "Velo": f"{f['velo']:.1f}" if f["velo"] is not None else "—",
+                    "Ride (IVB)": f"{f['ivb']:.1f}", "Arm-side run": f"{f['run']:.1f}",
+                    "Why": f["reason"],
+                } for f in flags])
+                body = [ui.p(summary, class_="small"), table]
+                if can_switch:
+                    body += [
+                        ui.input_checkbox_group(
+                            "pp_fs_select", "Switch these pitches to the type they move like:",
+                            choices={str(f["pitch"].rapsodo_pitch_id): _fs_pitch_label(f) for f in flags},
+                        ),
+                        ui.input_action_button("pp_fs_switch", "Switch selected", class_="btn-sm btn-primary"),
+                        ui.p("Updates the Rapsodo reading and its matched game pitch. Every switch is logged and can be undone below.",
+                             class_="text-muted small", style="margin-top:6px;"),
+                    ]
+                children.append(ui_helpers.card(*body, title="Flagged fastballs"))
+
+            if can_switch:
+                recent = (
+                    db.query(PitchTypeChange)
+                    .filter(PitchTypeChange.player_id == player.player_id, PitchTypeChange.undone_at.is_(None))
+                    .order_by(PitchTypeChange.changed_at.desc()).limit(50).all()
+                )
+                if recent:
+                    type_names = {t.pitch_type_id: t.type_name for t in db.query(PitchType).all()}
+                    choices = {
+                        str(ch.pitch_type_change_id):
+                            f"{ch.changed_at.strftime('%b %d %H:%M')} -- Rapsodo #{ch.rapsodo_pitch_id or '?'}: "
+                            f"{type_names.get(ch.from_rapsodo_pitch_type_id, '?')} → {type_names.get(ch.to_pitch_type_id, '?')}"
+                        for ch in recent
+                    }
+                    children.append(ui_helpers.card(
+                        ui.input_checkbox_group("pp_fs_undo_select", None, choices=choices),
+                        ui.input_action_button("pp_fs_undo", "Undo selected", class_="btn-sm btn-outline-light"),
+                        title="Recent switches", right="undo puts both labels back",
+                    ))
+            return ui.div(*children)
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_fastball_shape_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "fastball_shape":
+            return None
+        _fs_tick()
+        db = get_session()
+        try:
+            player, res = _fs_data(db)
+            if player is None or not res or not res["points"]:
+                return None
+            fig = go.Figure()
+            for label in (fastball_shape.FOUR_SEAM, fastball_shape.TWO_SEAM, fastball_shape.GENERIC):
+                pts = [pt for pt in res["points"] if pt["labeled"] == label]
+                if not pts:
+                    continue
+                fig.add_trace(go.Scatter(
+                    x=[pt["run"] for pt in pts], y=[pt["ivb"] for pt in pts], mode="markers", name=f"Logged {label}",
+                    marker=dict(size=[12 if pt["flagged"] else 8 for pt in pts], color=get_pitch_color(label),
+                                line=dict(width=[2.5 if pt["flagged"] else 0 for pt in pts], color="#FFFDE5"), opacity=0.85),
+                    text=[f"{'FLAGGED -- ' if pt['flagged'] else ''}{label}<br>{pt['ivb']:.1f}\" ride, {pt['run']:.1f}\" run"
+                          + (f"<br>{pt['velo']:.1f} mph" if pt['velo'] is not None else "") for pt in pts],
+                    hovertemplate="%{text}<extra></extra>",
+                ))
+            for label, c in res["centers"].items():
+                fig.add_trace(go.Scatter(
+                    x=[c[1]], y=[c[0]], mode="markers", name=f"His {label} center",
+                    marker=dict(symbol="x", size=14, color=get_pitch_color(label), line=dict(width=2)),
+                    hovertemplate=f"{label} group center<br>{c[0]:.1f}\" ride, {c[1]:.1f}\" run<extra></extra>",
+                ))
+            fig = apply_gbo_theme(fig, title="Fastball movement (outlined = flagged)", height=420,
+                                  x_title="Arm-side run (in)", y_title="Induced vertical break (in)")
+            return fig
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.pp_fs_switch)
+    def _pp_fs_switch():
+        if app_state.role_name() not in FS_SWITCH_ROLES:
+            return
+        selected = set(input.pp_fs_select() or []) if "pp_fs_select" in input else set()
+        if not selected:
+            ui.notification_show("Check at least one pitch to switch.", type="warning", duration=6)
+            return
+        db = get_session()
+        try:
+            _player, res = _fs_data(db)
+            switches = [
+                (f["pitch"].rapsodo_pitch_id, f["suggested"], f["reason"])
+                for f in (res or {}).get("flags", []) if str(f["pitch"].rapsodo_pitch_id) in selected
+            ]
+            n = apply_switches(db, switches, user_id=app_state.user_id())
+            ui.notification_show(f"Switched {n} pitch(es).", type="message", duration=6)
+        except Exception as e:
+            ui.notification_show(f"Couldn't switch those pitches -- nothing was changed. ({e})", type="error", duration=10)
+        finally:
+            db.close()
+        _fs_tick.set(_fs_tick() + 1)
+
+    @reactive.effect
+    @reactive.event(input.pp_fs_undo)
+    def _pp_fs_undo():
+        if app_state.role_name() not in FS_SWITCH_ROLES:
+            return
+        selected = [int(x) for x in (input.pp_fs_undo_select() or [])] if "pp_fs_undo_select" in input else []
+        if not selected:
+            ui.notification_show("Check at least one switch to undo.", type="warning", duration=6)
+            return
+        db = get_session()
+        try:
+            n = undo_switches(db, selected)
+            ui.notification_show(f"Undid {n} switch(es).", type="message", duration=6)
+        except Exception as e:
+            ui.notification_show(f"Couldn't undo -- nothing was changed. ({e})", type="error", duration=10)
+        finally:
+            db.close()
+        _fs_tick.set(_fs_tick() + 1)
