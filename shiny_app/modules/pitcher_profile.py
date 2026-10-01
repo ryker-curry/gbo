@@ -108,6 +108,8 @@ from visualizations.pitch_location_heatmap import pitch_location_heatmaps, MIN_F
 # pp_zone_damage_chart's own comment).
 from analytics.pitcher_zone_damage import compute_zone_damage
 from visualizations.zone_damage_chart import zone_damage_heatmap_by_hand
+import plotly.graph_objects as go
+from visualizations.chart_theme import apply_gbo_theme
 import glossary_content
 from pitch_type_config import get_pitch_color, FASTBALL_TYPES
 
@@ -1209,15 +1211,26 @@ def pitcher_profile_server(input, output, session, app_state):
                 ui.p(
                     "Where opposing hitters do the most damage against this pitch selection (Pitch Type filter "
                     "above -- pick one pitch type or leave it on All Pitches), every charted pitch re-sliced "
-                    "spatially into the same 1-9 zone grid used everywhere else in GBO, broken out into All "
-                    "Batters/vs RHH/vs LHH side by side on one shared color scale so the two really are "
-                    "comparable. Colored by average run value per zone (red = favors the hitter, blue = favors "
+                    "spatially into the same 1-9 zone grid used everywhere else in GBO. Use the Batters "
+                    "dropdown to see both hands together, or just vs RHH / vs LHH. Colored by average run value per zone (red = favors the hitter, blue = favors "
                     "the pitcher), centered on break-even -- the same RV number behind this page's own RV/100 "
                     "column, not a separate wOBA or contact-quality-only score. Contact quality and hits "
                     "allowed show on hover. Needs Video Review, same as the Zone tab's location heatmaps -- "
                     "zones with fewer than a handful of pitches are grayed out rather than colored, and a hand "
-                    "this pitcher hasn't faced yet in this window just doesn't get a panel.",
+                    "this pitcher hasn't faced yet in this window shows a short note instead of a chart.",
                     class_="text-muted small",
+                ),
+                # Oct 2026, Ryker: "select both, rhh, or lhh in a
+                # dropdown so you would only see one at a time." Lives
+                # here (static content), read by pp_zone_damage_chart --
+                # a separate render, so no same-render input issue.
+                # isolate() keeps the current pick when this section
+                # re-renders after a filter change.
+                ui.input_select(
+                    "pp_damage_hand", "Batters",
+                    choices={"all": "Both (All Batters)", "R": "vs RHH", "L": "vs LHH"},
+                    selected=_current_damage_hand(),
+                    width="220px",
                 ),
                 output_widget("pp_zone_damage_chart"),
             )
@@ -1248,6 +1261,14 @@ def pitcher_profile_server(input, output, session, app_state):
             return pitch_results_chart(rows)
         finally:
             db.close()
+
+    def _current_damage_hand():
+        with reactive.isolate():
+            try:
+                choice = input.pp_damage_hand() if "pp_damage_hand" in input else "all"
+            except Exception:
+                choice = "all"
+        return choice if choice in ("all", "R", "L") else "all"
 
     @render_plotly
     def pp_zone_damage_chart():
@@ -1291,15 +1312,27 @@ def pitcher_profile_server(input, output, session, app_state):
             if not game_pitches:
                 return None
             label = f["pitch_type"] or "All Pitch Types"
-            hands = get_batter_hands(db, game_pitches)
-            vs_rhh = [p for p in game_pitches if hands.get(p.game_pitch_id) == "R"]
-            vs_lhh = [p for p in game_pitches if hands.get(p.game_pitch_id) == "L"]
-            panels = [
-                ("All Batters", compute_zone_damage(game_pitches), None),
-                ("vs RHH", compute_zone_damage(vs_rhh), "R"),
-                ("vs LHH", compute_zone_damage(vs_lhh), "L"),
-            ]
-            return zone_damage_heatmap_by_hand(panels, label)
+            # One panel at a time, picked from the Batters dropdown
+            # (Oct 2026) -- "all" = both hands combined, no silhouette.
+            hand_choice = input.pp_damage_hand() if "pp_damage_hand" in input else "all"
+            if hand_choice in ("R", "L"):
+                hands = get_batter_hands(db, game_pitches)
+                subset = [p for p in game_pitches if hands.get(p.game_pitch_id) == hand_choice]
+                panel_label, hand = ("vs RHH", "R") if hand_choice == "R" else ("vs LHH", "L")
+            else:
+                subset, panel_label, hand = game_pitches, "All Batters", None
+            fig = zone_damage_heatmap_by_hand([(panel_label, compute_zone_damage(subset), hand)], label)
+            if fig is None:
+                # No located pitches against that hand in this window.
+                fig = go.Figure()
+                fig.add_annotation(
+                    text=f"No located pitches {panel_label.lower()} in this selection yet.",
+                    x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False,
+                )
+                fig.update_xaxes(visible=False)
+                fig.update_yaxes(visible=False)
+                fig = apply_gbo_theme(fig, title=f"{label} — Damage by Zone", height=200)
+            return fig
         finally:
             db.close()
 

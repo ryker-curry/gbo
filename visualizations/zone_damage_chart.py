@@ -83,6 +83,17 @@ from visualizations.hitter_graphic import home_plate_shape, hitter_images
 # silhouette (see command_charts.py's own comment for the math).
 from visualizations.command_charts import HITTER_HEIGHT_FT, HITTER_CENTER_X, CHART_X_EXTENT_FT
 
+# Oct 2026, Ryker: the batter looked like he was standing in front of
+# the plate, too close to the pitcher -- his feet sat on the plate's
+# FRONT (pitcher-side) edge. This chart is drawn from the catcher's
+# view, where the plate's point hangs down toward the viewer, so "back
+# toward the catcher" means lower on screen: drop his feet this far
+# below the ground line so he stands in the box. Set so the FRONT
+# (higher-drawn, pitcher-side) foot sits exactly on the gray ground
+# line: in assets/hitter_silhouette.png that foot's sole is 63px above
+# the image bottom out of 818px, i.e. 63/818 * HITTER_HEIGHT_FT.
+HITTER_FEET_BACK_FT = 63 / 818 * HITTER_HEIGHT_FT  # ~0.47 ft
+
 # Below this many located pitches in a cell, mute it rather than color
 # it -- matches pitch_location_heatmap.py's MIN_FOR_CONTOUR judgment
 # (there for density, here for a reliable average).
@@ -225,7 +236,7 @@ def _draw_panel(fig, pieces, *, row, col, showscale, zmin, zmax, hand=None):
         # determines it.
         center_x = -HITTER_CENTER_X if hand == "R" else HITTER_CENTER_X
         facing = "right" if center_x > 0 else "left"
-        for img in hitter_images(center_x=center_x, facing=facing, height_ft=HITTER_HEIGHT_FT, ground_y=Z_MIN):
+        for img in hitter_images(center_x=center_x, facing=facing, height_ft=HITTER_HEIGHT_FT, ground_y=Z_MIN - HITTER_FEET_BACK_FT):
             fig.add_layout_image(**img, row=row, col=col)
     plate = {k: v for k, v in home_plate_shape(half_width_ft=ZONE_HALF_WIDTH, ground_y=Z_MIN, view="catcher").items()
              if k not in ("xref", "yref")}
@@ -310,7 +321,7 @@ def zone_damage_heatmap_by_hand(panels, pitch_type_label, _single_title=False):
     # extra whitespace beside the hand-less panel.
     has_hitter = any(hand in ("R", "L") for _, _, hand in panels)
     x_range = [-CHART_X_EXTENT_FT, CHART_X_EXTENT_FT] if has_hitter else [X_MIN, X_MAX]
-    y_range = [-0.4, HITTER_HEIGHT_FT + 0.4] if has_hitter else [-0.4, Z_MAX]
+    y_range = [-0.6, HITTER_HEIGHT_FT + 0.1] if has_hitter else [-0.4, Z_MAX]
     fig.update_xaxes(range=x_range, showticklabels=False, showgrid=False, zeroline=False)
     fig.update_yaxes(range=y_range, showticklabels=False, showgrid=False, zeroline=False,
                       scaleanchor="x", scaleratio=1)
