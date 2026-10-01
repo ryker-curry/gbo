@@ -437,22 +437,23 @@ def pitcher_profile_server(input, output, session, app_state):
             )
             if not game_pitches and not rapsodo_pitches:
                 return None
+            view_choices = {
+                "overview": "Overview",
+                "metrics": "Metrics (Physical Profile)",
+                "tunneling": "Tunneling+",
+                "results": "Results",
+                "zone": "Zone",
+                "command": "Command & Execution",
+                "arsenal": "Arsenal",
+                "count_leverage": "Count Leverage",
+            }
+            # Oct 2026, Ryker: "i don't want guys to see it" -- the
+            # Fastball Shape Check is a staff-only data-cleanup tool.
+            if app_state.role_name() in STAFF_ROLES:
+                view_choices["fastball_shape"] = "Fastball Shape Check"
             return ui.div(
                 ui.hr(),
-                ui.input_select(
-                    "pp_view", "View",
-                    choices={
-                        "overview": "Overview",
-                        "metrics": "Metrics (Physical Profile)",
-                        "tunneling": "Tunneling+",
-                        "results": "Results",
-                        "zone": "Zone",
-                        "command": "Command & Execution",
-                        "arsenal": "Arsenal",
-                        "count_leverage": "Count Leverage",
-                        "fastball_shape": "Fastball Shape Check",
-                    },
-                ),
+                ui.input_select("pp_view", "View", choices=view_choices),
             )
         finally:
             db.close()
@@ -2398,7 +2399,7 @@ def pitcher_profile_server(input, output, session, app_state):
         if not app_state.is_authenticated():
             return None
         role = app_state.role_name()
-        if role != "Player" and role not in STAFF_ROLES:
+        if role not in STAFF_ROLES:
             return None
         req("pp_view" in input)
         if input.pp_view() != "fastball_shape":
@@ -2502,7 +2503,7 @@ def pitcher_profile_server(input, output, session, app_state):
 
     @render_plotly
     def pp_fastball_shape_chart():
-        if not app_state.is_authenticated():
+        if not app_state.is_authenticated() or app_state.role_name() not in STAFF_ROLES:
             return None
         req("pp_view" in input)
         if input.pp_view() != "fastball_shape":
