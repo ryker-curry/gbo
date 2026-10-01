@@ -288,6 +288,7 @@ def player_profile_server(input, output, session, app_state):
             rating = load_player_card(
                 db, p, bd, season_start, game_date_to,
                 avg_fastball_velo=(game_fastball_summ or {}).get("avg_velocity"),
+                season_label=season_label,
             )
             return _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, season_label, game_pitching_extras, rating)
         finally:
