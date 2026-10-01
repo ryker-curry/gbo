@@ -87,6 +87,33 @@ from services.rapsodo_import import (
 from game_stats import get_pitching_pitches
 
 import ui_helpers
+from analytics import fastball_shape
+
+
+def _fastball_shape_note(db, import_record):
+    """Oct 2026 (Fastball Shape Check): after an import, check this
+    file's fastballs against the pitcher's whole Rapsodo history and
+    return a short heads-up if any move like his other fastball -- the
+    review/switch itself lives on Pitcher Profile -> Fastball Shape
+    Check. Never raises (a check failure must not look like a failed
+    import)."""
+    try:
+        player = db.query(Player).filter(Player.player_id == import_record.player_id).first()
+        if player is None:
+            return ""
+        history = (
+            db.query(RapsodoPitch).options(joinedload(RapsodoPitch.pitch_type))
+            .filter(RapsodoPitch.player_id == player.player_id).all()
+        )
+        res = fastball_shape.check_pitcher(history, player.throws or "R")
+        new_ids = {p.rapsodo_pitch_id for p in import_record.pitches}
+        n = sum(1 for f in res["flags"] if f["pitch"].rapsodo_pitch_id in new_ids and f["kind"] == "mismatch")
+        if not n:
+            return ""
+        return (f" Heads-up: {n} fastball(s) in this file move like his other fastball -- "
+                f"review them in Pitcher Profile → Fastball Shape Check.")
+    except Exception:
+        return ""
 
 ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst")
 
@@ -692,7 +719,8 @@ def rapsodo_import_server(input, output, session, app_state):
                 )
             elif status == "no_pitches":
                 summary_msg += " Nothing to auto-match yet -- see details below."
-            ui.notification_show(summary_msg, type="message", duration=10)
+            summary_msg += _fastball_shape_note(db, import_record)
+            ui.notification_show(summary_msg, type="message", duration=12)
             _bump_refresh()
         finally:
             db.close()
@@ -766,7 +794,8 @@ def rapsodo_import_server(input, output, session, app_state):
             summary_msg = f"Imported {import_record.imported_row_count} pitch(es) into the {target_bullpen.session_date.strftime('%Y-%m-%d (%a)')} session."
             if import_record.rejected_row_count:
                 summary_msg += f" {import_record.rejected_row_count} row(s) were skipped -- see details below."
-            ui.notification_show(summary_msg, type="message", duration=10)
+            summary_msg += _fastball_shape_note(db, import_record)
+            ui.notification_show(summary_msg, type="message", duration=12)
             _bump_refresh()
         finally:
             db.close()
