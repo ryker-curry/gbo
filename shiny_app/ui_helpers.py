@@ -688,8 +688,8 @@ def rating_breakdown(rc):
     blocks.append(card(render_dict_table(ath_rows), title="Athlete" + (f" — {rc['athlete']}" if rc.get("athlete") is not None else "")))
     blocks.append(ui.p(
         "Ratings run 40-99: 70 is a PSU-average player, every 15 points is about one standard deviation. "
-        "Velocity is graded against fixed college benchmarks; the other baseball attributes are graded against "
-        "the PSU roster for the selected season. Overall = 85% Baseball + 15% Athlete.",
+        "Every baseball attribute, velocity included, is graded against the PSU roster for the selected season. "
+        "Overall = 85% Baseball + 15% Athlete.",
         class_="text-muted small",
     ))
     return ui.div(*blocks)
