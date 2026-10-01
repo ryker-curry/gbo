@@ -63,6 +63,24 @@ from visualizations.hitter_graphic import home_plate_shape
 MIN_FOR_CONTOUR = 5
 MAX_COLS = 3
 
+# Oct 2026, Ryker: "need to be able to see the plate to know what view we
+# are looking at. right now it is all blue and can't see the plate." The
+# filled contour covered the whole panel -- its lowest (near-zero density)
+# band was solid blue, painted over the plate (home_plate_shape draws on
+# layer="below"). Now the lowest band is see-through, so only where he
+# actually throws gets color, and the plate is drawn on top.
+# Reversed RdBu stops, with the bottom band transparent.
+DENSITY_COLORSCALE = [
+    [0.0, "rgba(0,0,0,0)"],
+    [0.12, "rgba(0,0,0,0)"],
+    [0.12, "rgba(33,102,172,0.55)"],
+    [0.30, "rgba(103,169,207,0.75)"],
+    [0.45, "rgba(209,229,240,0.85)"],
+    [0.60, "rgba(253,219,199,0.9)"],
+    [0.75, "rgba(239,138,98,0.95)"],
+    [1.0, "rgb(178,24,43)"],
+]
+
 
 def _type_label(p):
     return p.pitch_type.type_name if p.pitch_type is not None else "Unspecified"
@@ -116,7 +134,7 @@ def pitch_location_heatmaps(game_pitches):
         if len(located) >= MIN_FOR_CONTOUR:
             fig.add_trace(
                 go.Histogram2dContour(
-                    x=xs, y=zs, colorscale="RdBu", reversescale=True,
+                    x=xs, y=zs, colorscale=DENSITY_COLORSCALE,
                     ncontours=8,
                     contours=dict(coloring="fill", showlines=True),
                     line=dict(width=0.75, color="rgba(23,27,33,0.55)", smoothing=1.3),
@@ -149,6 +167,7 @@ def pitch_location_heatmaps(game_pitches):
         )
         plate = {k: v for k, v in home_plate_shape(half_width_ft=ZONE_HALF_WIDTH, ground_y=Z_MIN, view="catcher").items()
                  if k not in ("xref", "yref")}
+        plate["layer"] = "above"
         fig.add_shape(row=r, col=c, **plate)
 
     fig.update_xaxes(range=[X_MIN, X_MAX], showticklabels=False, showgrid=False, zeroline=False)
@@ -160,4 +179,4 @@ def pitch_location_heatmaps(game_pitches):
     for annotation in fig.layout.annotations:
         annotation.font = dict(color=TEXT_CREAM, size=12)
 
-    return apply_gbo_theme(fig, title="Pitch Locations", height=280 * rows + 40)
+    return apply_gbo_theme(fig, title="Pitch Locations (catcher's view)", height=280 * rows + 40)
