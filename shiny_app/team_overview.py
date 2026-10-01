@@ -90,7 +90,7 @@ def build(db, players, player_ids, ns):
                 ui.tags.td(last.strftime("%b %d") if last else "—", class_="text-end", style="font-family:var(--gbo-mono);"),
                 ui.tags.td(f"{bd.get('total_score'):.0f}" if bd.get("total_score") is not None else "—", class_="text-end", style="font-family:var(--gbo-mono); color:var(--gbo-text);"),
             ))
-        attention_table = ui.div(ui.tags.table(ui.tags.thead(ui.tags.tr(ui.tags.th("Player"), ui.tags.th("Pos"), ui.tags.th("Flag"), ui.tags.th("Why"), ui.tags.th("Last test", class_="text-end"), ui.tags.th("Overall", class_="text-end"))), ui.tags.tbody(*trs), class_="table"), class_="table-responsive")
+        attention_table = ui.div(ui.tags.table(ui.tags.thead(ui.tags.tr(ui.tags.th("Player"), ui.tags.th("Pos"), ui.tags.th("Flag"), ui.tags.th("Why"), ui.tags.th("Last test", class_="text-end"), ui.tags.th("Athlete", class_="text-end"))), ui.tags.tbody(*trs), class_="table"), class_="table-responsive")
         if len(flagged) > 8:
             attention_table = ui.div(attention_table, ui.div(f"Showing 8 of {len(flagged)} · open the roster for the full list", class_="gbo-page-sub", style="margin-top:10px; font-size:.78rem;"))
     else:
