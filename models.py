@@ -1835,3 +1835,24 @@ class PitchTypeChange(Base):
     changed_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
     changed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     undone_at = Column(DateTime, nullable=True)
+
+
+class PlayerReportNote(Base):
+    """Coach's saved focus points for one Pitcher Meeting Report (Oct
+    2026, Ryker: "typed and saved" coach notes that print on the sheet).
+    One row per (player, report kind, game or season): kind "game" uses
+    game_id, kind "season" uses season_id. Uniqueness is enforced in the
+    module (save = update-or-insert), since a plain UNIQUE wouldn't catch
+    the NULL side of each pair in Postgres. Both FKs ON DELETE CASCADE --
+    notes about a deleted game/season go with it and never block the
+    delete (see migrations/migrate_player_report_notes.py)."""
+    __tablename__ = "player_report_notes"
+
+    note_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    report_kind = Column(String(10), nullable=False)  # "game" / "season"
+    game_id = Column(Integer, ForeignKey("games.game_id", ondelete="CASCADE"), nullable=True)
+    season_id = Column(Integer, ForeignKey("seasons.season_id", ondelete="CASCADE"), nullable=True)
+    notes = Column(Text, nullable=True)
+    updated_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
