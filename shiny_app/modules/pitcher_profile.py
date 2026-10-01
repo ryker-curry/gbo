@@ -82,7 +82,7 @@ from shinywidgets import output_widget, render_plotly
 from sqlalchemy.orm import joinedload
 from database import get_session
 from models import Player, User, PitchType, PlayerPitchArsenal, StaffPlayerAssignment, Game, GamePitch, RapsodoPitch
-from game_stats import compute_pitching_line, compute_pitch_type_breakdown, get_batter_hands, compute_pitch_mix_by_count
+from game_stats import compute_pitching_line, compute_pitch_type_breakdown, get_batter_hands, compute_pitch_mix_by_count, get_pitching_extras_for_pitches
 from strike_zone import classify_attack_zone
 import command_config
 from analytics import command_metrics, performance_score, profile_queries
@@ -532,7 +532,14 @@ def pitcher_profile_server(input, output, session, app_state):
             )]
 
             if game_pitches:
-                line = compute_pitching_line(game_pitches)
+                # Runner-event outs / forced-end runs belong to the whole
+                # outing, not any one pitch type -- only fold them in for
+                # the unfiltered line (see get_pitching_extras_for_pitches).
+                if f["pitch_type"]:
+                    line = compute_pitching_line(game_pitches)
+                else:
+                    extra_runs, extra_outs = get_pitching_extras_for_pitches(db, pid, game_pitches)
+                    line = compute_pitching_line(game_pitches, extra_earned_runs=extra_runs, extra_outs=extra_outs)
                 sections.append(ui.p(ui.strong("Line")))
                 sections.append(ui_helpers.render_kpi_cards([
                     {"label": "IP", "value": str(line["IP"])},
@@ -1893,10 +1900,16 @@ def pitcher_profile_server(input, output, session, app_state):
             pairs.extend(zip(group, group[1:]))
 
         game_pitches = [p for p in rapsodo_pitches if p.game_pitch is not None]
-        game_pitches.sort(key=lambda p: p.game_pitch.pitch_sequence)
+        # Oct 2026 bug fix: sort within each game -- pitch_sequence
+        # restarts every game, so a pitch_sequence-only sort interleaved
+        # outings (dropping real back-to-back pairs and allowing
+        # cross-game ones). Pairs must also come from the same game.
+        game_pitches.sort(key=lambda p: (p.game_pitch.game_id or 0, p.game_pitch.pitch_sequence))
         for prev, cur in zip(game_pitches, game_pitches[1:]):
             gp_prev, gp_cur = prev.game_pitch, cur.game_pitch
             if gp_prev.pa_pitch_number is None or gp_cur.pa_pitch_number is None:
+                continue
+            if gp_prev.game_id != gp_cur.game_id:
                 continue
             if gp_cur.pitch_sequence == gp_prev.pitch_sequence + 1 and gp_cur.pa_pitch_number == gp_prev.pa_pitch_number + 1:
                 pairs.append((prev, cur))

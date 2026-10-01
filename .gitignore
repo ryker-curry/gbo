@@ -21,3 +21,7 @@ env/
 # Local runtime artifacts
 shiny_debug.log
 _to_delete/
+
+# Local scratch / previews (not app code)
+Claude outputs/
+_style_preview/
