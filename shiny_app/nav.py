@@ -105,6 +105,9 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
         sections.append(NavSection("Analytics", [
             NavPage("analytics", "Player Stats", "graph-up"),
             NavPage("pitcher_game_report", "Pitcher Game Report", "file-text"),
+            # Oct 2026, Ryker: one-page, printable report to go through
+            # with a pitcher in a meeting (game or season).
+            NavPage("pitcher_meeting_report", "Pitcher Meeting Report", "printer"),
             NavPage("hitter_game_report", "Hitter Game Report", "trophy"),
             # Filterable per-player deep dive (Aug 2026, Stat Lab plan) --
             # Stuff+/Location+/Pitching+ grading, physical charts, Command
@@ -170,6 +173,7 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             # pickers to this player's own outings instead of showing a
             # roster-wide picker.
             my_dev_pages.append(NavPage("pitcher_game_report", "My Game Report", "file-text"))
+            my_dev_pages.append(NavPage("pitcher_meeting_report", "My Meeting Report", "printer"))
         else:
             my_dev_pages.append(NavPage("player_hitting", "My Hitting", "trophy"))
             my_dev_pages.append(NavPage("hitter_profile", "My Hitter Profile", "graph-up-arrow"))
