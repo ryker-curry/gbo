@@ -2355,7 +2355,12 @@ def pitcher_profile_server(input, output, session, app_state):
             db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
             game_scope=f["game_scope"], game_id=f["game_id"], game_linked_only=False,
         )
-        return player, fastball_shape.check_pitcher(raps, player.throws or "R")
+        arsenal = [
+            pt.type_name for pt in db.query(PitchType)
+            .join(PlayerPitchArsenal, PlayerPitchArsenal.pitch_type_id == PitchType.pitch_type_id)
+            .filter(PlayerPitchArsenal.player_id == pid, PlayerPitchArsenal.active.is_(True)).all()
+        ]
+        return player, fastball_shape.check_pitcher(raps, player.throws or "R", arsenal=arsenal or None)
 
     def _fs_pitch_label(fl):
         p = fl["pitch"]
@@ -2392,11 +2397,23 @@ def pitcher_profile_server(input, output, session, app_state):
             else:
                 mode_text = ("He doesn't throw enough of both fastballs (or they move too much alike) to compare him to himself, "
                              "so this uses general guidelines: a 4-seam rides well over its run, a 2-seam runs more than it rides.")
+            fb_ref = res.get("fb_ref")
+            if fb_ref is not None:
+                src = res.get("offspeed_sources") or {}
+                src_txt = ", ".join(f"{t} ({'his own' if v == 'his' else 'guideline'})" for t, v in src.items())
+                mode_text += (f" Off-speed check: his fastball sits {fb_ref[2]:.1f} mph, {fb_ref[0]:.1f}\" ride / "
+                              f"{fb_ref[1]:.1f}\" run. A pitch logged as a fastball that's {fastball_shape.OFFSPEED_VELO_GAP:.0f}+ mph "
+                              f"slower, or breaks well glove-side with much less ride, is flagged with the off-speed pitch it "
+                              f"moves most like" + (f" -- checking {src_txt}." if src_txt else "."))
+            else:
+                mode_text += (f" Off-speed check needs at least {fastball_shape.MIN_FB_REFERENCE} fastball readings "
+                              f"with velo to know his fastball, so it's skipped here.")
             flags = res["flags"]
             children = [
                 ui.hr(),
                 ui.h5("Fastball Shape Check", class_="gbo-section-title"),
-                ui.p("Pitches are logged by grip. This flags Rapsodo-tracked fastballs that move like his other fastball, "
+                ui.p("Pitches are logged by grip. This flags Rapsodo-tracked pitches logged as fastballs that are really "
+                     "off-speed (too slow or breaking the wrong way), and fastballs that move like his other fastball, "
                      "so you can confirm and switch the label. " + mode_text, class_="text-muted small"),
                 ui.p(f"Checked: {counts}", class_="text-muted small"),
                 output_widget("pp_fastball_shape_chart"),
@@ -2404,9 +2421,17 @@ def pitcher_profile_server(input, output, session, app_state):
             if not flags:
                 children.append(ui_helpers.card(ui_helpers.empty_state("Every fastball matches its label. Nothing to switch.")))
             else:
+                osn = sum(1 for f in flags if f["kind"] == "offspeed")
                 mism = sum(1 for f in flags if f["kind"] == "mismatch")
-                unl = len(flags) - mism
-                summary = f"{mism} pitch(es) move like the other fastball" + (f", {unl} unlabeled \"Fastball\" reading(s) with a suggested type" if unl else "")
+                unl = sum(1 for f in flags if f["kind"] == "unlabeled")
+                parts = []
+                if osn:
+                    parts.append(f"{osn} logged as a fastball but look off-speed")
+                if mism:
+                    parts.append(f"{mism} move like the other fastball")
+                if unl:
+                    parts.append(f"{unl} unlabeled \"Fastball\" reading(s) with a suggested type")
+                summary = "; ".join(parts) + "."
                 table = ui_helpers.render_dict_table([{
                     "Date": f["pitch"].pitch_date.strftime("%Y-%m-%d") if f["pitch"].pitch_date else "—",
                     "Source": "Game" if f["pitch"].bullpen_id is None else "Bullpen",
@@ -2427,7 +2452,7 @@ def pitcher_profile_server(input, output, session, app_state):
                         ui.p("Updates the Rapsodo reading and its matched game pitch. Every switch is logged and can be undone below.",
                              class_="text-muted small", style="margin-top:6px;"),
                     ]
-                children.append(ui_helpers.card(*body, title="Flagged fastballs"))
+                children.append(ui_helpers.card(*body, title="Flagged pitches"))
 
             if can_switch:
                 recent = (
@@ -2467,7 +2492,7 @@ def pitcher_profile_server(input, output, session, app_state):
                 return None
             fig = go.Figure()
             for label in (fastball_shape.FOUR_SEAM, fastball_shape.TWO_SEAM, fastball_shape.GENERIC):
-                pts = [pt for pt in res["points"] if pt["labeled"] == label]
+                pts = [pt for pt in res["points"] if pt["labeled"] == label and not pt.get("offspeed")]
                 if not pts:
                     continue
                 fig.add_trace(go.Scatter(
@@ -2478,13 +2503,31 @@ def pitcher_profile_server(input, output, session, app_state):
                           + (f"<br>{pt['velo']:.1f} mph" if pt['velo'] is not None else "") for pt in pts],
                     hovertemplate="%{text}<extra></extra>",
                 ))
+            for os_type in sorted({pt["offspeed"] for pt in res["points"] if pt.get("offspeed")}):
+                pts = [pt for pt in res["points"] if pt.get("offspeed") == os_type]
+                fig.add_trace(go.Scatter(
+                    x=[pt["run"] for pt in pts], y=[pt["ivb"] for pt in pts], mode="markers",
+                    name=f"Logged fastball → looks like {os_type}",
+                    marker=dict(size=12, symbol="diamond", color=get_pitch_color(os_type),
+                                line=dict(width=2.5, color="#FFFDE5"), opacity=0.9),
+                    text=[f"FLAGGED -- logged {pt['labeled']}, looks like {os_type}<br>{pt['ivb']:.1f}\" ride, {pt['run']:.1f}\" run"
+                          + (f"<br>{pt['velo']:.1f} mph" if pt['velo'] is not None else "") for pt in pts],
+                    hovertemplate="%{text}<extra></extra>",
+                ))
+            fb_ref = res.get("fb_ref")
+            if fb_ref is not None:
+                fig.add_trace(go.Scatter(
+                    x=[fb_ref[1]], y=[fb_ref[0]], mode="markers", name="His fastball (reference)",
+                    marker=dict(symbol="star", size=16, color="#FFFDE5", line=dict(width=1, color="#000")),
+                    hovertemplate=f"His fastball reference<br>{fb_ref[2]:.1f} mph, {fb_ref[0]:.1f}\" ride, {fb_ref[1]:.1f}\" run<extra></extra>",
+                ))
             for label, c in res["centers"].items():
                 fig.add_trace(go.Scatter(
                     x=[c[1]], y=[c[0]], mode="markers", name=f"His {label} center",
                     marker=dict(symbol="x", size=14, color=get_pitch_color(label), line=dict(width=2)),
                     hovertemplate=f"{label} group center<br>{c[0]:.1f}\" ride, {c[1]:.1f}\" run<extra></extra>",
                 ))
-            fig = apply_gbo_theme(fig, title="Fastball movement (outlined = flagged)", height=420,
+            fig = apply_gbo_theme(fig, title="Pitches logged as fastballs (outlined = flagged)", height=420,
                                   x_title="Arm-side run (in)", y_title="Induced vertical break (in)")
             return fig
         finally:
