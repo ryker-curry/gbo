@@ -5,9 +5,12 @@ overall similar to mlb the show").
 
 Decisions made with Ryker before building (AskUserQuestion, Oct 1 2026):
   - Visible to everyone, players included.
-  - Hybrid scale: real outside benchmarks where one exists (fastball
-    velocity), PSU-roster-relative for everything else (Stuff+,
-    Command+, results, hitting rates).
+  - Hybrid scale: real outside benchmarks where one exists,
+    PSU-roster-relative for everything else (Stuff+, Command+, results,
+    hitting rates). Oct 2026 change (Ryker: "change the benchmarks for
+    velocity to be based on our own teams velocity stats"): fastball
+    velocity is now roster-relative too -- graded against every PSU
+    pitcher's average game fastball for the same season.
   - Player Profile layout: this card on top, then Athlete / Baseball
     tabs.
   - Athleticism (the Bucket System) is 15% of the Overall.
@@ -25,9 +28,10 @@ THE 0-99 SCALE
   Show-like choice: in MLB The Show a 70 is an everyday player, not a
   failing grade.
 
-  Fastball velocity uses VELO_ANCHORS (an outside benchmark, not
-  roster-relative) -- a GBO starting point for college pitchers, meant
-  to be tuned once Ryker looks at real cards. Athleticism maps the
+  Fastball velocity is roster-relative (see roster_fastball_velos):
+  z-score of this pitcher's average game fastball against every PSU
+  pitcher with MIN_VELO_FASTBALLS+ game fastballs that season, needing
+  MIN_BASELINE_PITCHERS such pitchers for a baseline. Athleticism maps the
   Bucket System total (already a percent-of-team-max score, so it runs
   high) through ATHLETE_ANCHORS the same way.
 
@@ -37,7 +41,7 @@ THE 0-99 SCALE
 ATTRIBUTES AND WEIGHTS (Baseball rating = weighted average of the
 attributes this player actually has; missing ones are dropped and the
 remaining weights renormalized, never zero-filled):
-  Pitchers: VELO 20% (avg game fastball), STUFF 25% (Stuff+),
+  Pitchers: VELO 20% (avg game fastball vs. the PSU staff), STUFF 25% (Stuff+),
             CMD 20% (avg of Command+ and Location+), ARS 10% (Arsenal,
             usage-weighted Pitching+), RES 25% (Results composite:
             FIP/WHIP/K-BB/CSW/Zone Execution).
@@ -70,8 +74,11 @@ ATTRIBUTE_LABELS = {
     "CON": "Contact", "POW": "Power", "EYE": "Eye", "SPD": "Speed", "ATH": "Athleticism",
 }
 
-# (avg game fastball mph, rating) -- piecewise-linear, clamped.
-VELO_ANCHORS = [(78, 45), (82, 55), (85, 65), (88, 75), (91, 85), (94, 93), (97, 99)]
+# Velocity baseline (roster-relative since Oct 2026): a pitcher counts
+# toward the staff average/SD only with this many game fastballs in the
+# window, and the baseline needs this many such pitchers to exist.
+MIN_VELO_FASTBALLS = 10
+MIN_BASELINE_PITCHERS = 5
 # (Bucket System 0-100 score, rating) -- used for ATH (total_score) and SPD (speed_score).
 ATHLETE_ANCHORS = [(50, 45), (70, 60), (80, 72), (90, 85), (100, 99)]
 
@@ -152,9 +159,27 @@ def _mean_or_none(values):
 
 # ----------------------------------------------------------------- pitchers
 
-def pitcher_attributes(row, avg_fastball_velo):
+def velo_baseline(staff_velos):
+    """staff_velos: {player_id: (avg_mph, n_fastballs)} from
+    roster_fastball_velos. Returns (mean, sd) over qualified pitchers,
+    or None if there aren't enough of them."""
+    vals = [v for v, n in staff_velos.values() if v is not None and n >= MIN_VELO_FASTBALLS]
+    if len(vals) < MIN_BASELINE_PITCHERS:
+        return None
+    sd = stdev(vals)
+    return (mean(vals), sd) if sd > 0 else None
+
+
+def velo_rating(avg_fastball_velo, baseline):
+    if avg_fastball_velo is None or baseline is None:
+        return None
+    return z_to_rating((float(avg_fastball_velo) - baseline[0]) / baseline[1])
+
+
+def pitcher_attributes(row, avg_fastball_velo, velo_base=None):
     """row: one dict from profile_queries.pitching_staff_leaderboard_rows
-    (or None). Returns {key: (rating, raw_text)}."""
+    (or None). velo_base: velo_baseline() output. Returns
+    {key: (rating, raw_text)}."""
     row = row or {}
     cmd_plus = _mean_or_none([row.get("Command+"), row.get("Location+")])
 
@@ -162,7 +187,11 @@ def pitcher_attributes(row, avg_fastball_velo):
         return f"{float(v):.0f}" if v is not None else None
 
     out = {
-        "VELO": (anchored_rating(avg_fastball_velo, VELO_ANCHORS), f"{float(avg_fastball_velo):.1f} mph FB" if avg_fastball_velo is not None else None),
+        "VELO": (
+            velo_rating(avg_fastball_velo, velo_base),
+            (f"{float(avg_fastball_velo):.1f} mph FB" + (f" (staff avg {velo_base[0]:.1f})" if velo_base else ""))
+            if avg_fastball_velo is not None else None,
+        ),
         "STUFF": (plus_to_rating(row.get("Stuff+")), f"Stuff+ {fmt_plus(row.get('Stuff+'))}" if row.get("Stuff+") is not None else None),
         "CMD": (plus_to_rating(cmd_plus), " · ".join(x for x in [
             f"Command+ {fmt_plus(row.get('Command+'))}" if row.get("Command+") is not None else None,
@@ -240,7 +269,7 @@ def _fmt_hitting(metric, v):
 # ------------------------------------------------------------- full card
 
 def build_card(*, is_pitcher, bucket_data, pitcher_row=None, avg_fastball_velo=None, bf=None,
-               hitter_line=None, hitter_baseline_=None, pa=None):
+               hitter_line=None, hitter_baseline_=None, pa=None, velo_base=None):
     """Everything the Player Profile card needs, for one player. Pitching
     and hitting are both computed when there's data for them (two-way
     players); the Overall uses the primary role -- pitching for a player
@@ -251,7 +280,7 @@ def build_card(*, is_pitcher, bucket_data, pitcher_row=None, avg_fastball_velo=N
 
     roles = {}
     if pitcher_row is not None or avg_fastball_velo is not None:
-        attrs = pitcher_attributes(pitcher_row, avg_fastball_velo)
+        attrs = pitcher_attributes(pitcher_row, avg_fastball_velo, velo_base)
         roles["pitching"] = {
             "attributes": attrs,
             "baseball": weighted_rating({k: v[0] for k, v in attrs.items()}, PITCHER_WEIGHTS),
@@ -304,6 +333,15 @@ def load_player_card(db, player, bucket_data, date_from, date_to, avg_fastball_v
             bf = row.get("BF")
             break
 
+    # Velocity: this pitcher's own average from the SAME roster query the
+    # baseline is built from, so the number and the comparison always
+    # agree. Falls back to the caller's value if he isn't in it.
+    staff_velos = roster_fastball_velos(db, date_from, date_to)
+    velo_base = velo_baseline(staff_velos)
+    own = staff_velos.get(player.player_id)
+    if own is not None and own[0] is not None:
+        avg_fastball_velo = own[0]
+
     hitter_lines = roster_hitting_lines(db, date_from, date_to)
     hitter_line = hitter_lines.get(player.player_id)
     baseline = hitter_baseline(list(hitter_lines.values()))
@@ -313,6 +351,7 @@ def load_player_card(db, player, bucket_data, date_from, date_to, avg_fastball_v
         bucket_data=bucket_data,
         pitcher_row=pitcher_row, avg_fastball_velo=avg_fastball_velo, bf=bf,
         hitter_line=hitter_line, hitter_baseline_=baseline, pa=(hitter_line or {}).get("PA"),
+        velo_base=velo_base,
     )
     # Raw inputs too, so Player Profile's Baseball tab can show the
     # underlying lines without re-running these roster queries.
@@ -358,3 +397,28 @@ def roster_hitting_lines(db, date_from=None, date_to=None):
         line["Zone Swing %"] = disc["Zone Swing %"]
         lines[pid] = line
     return lines
+
+
+def roster_fastball_velos(db, date_from=None, date_to=None):
+    """{player_id: (avg_mph, n)} -- every pitcher's average GAME fastball
+    velocity (Rapsodo readings matched to a GamePitch, fastball types
+    only -- the same pitches Player Profile's VELO stat has always used)
+    for games in the window."""
+    from models import Game, GamePitch, PitchType, RapsodoPitch
+    from pitch_type_config import FASTBALL_TYPES
+
+    query = (
+        db.query(RapsodoPitch.player_id, RapsodoPitch.velocity)
+        .join(GamePitch, RapsodoPitch.game_pitch_id == GamePitch.game_pitch_id)
+        .join(Game, GamePitch.game_id == Game.game_id)
+        .join(PitchType, RapsodoPitch.pitch_type_id == PitchType.pitch_type_id)
+        .filter(PitchType.type_name.in_(FASTBALL_TYPES), RapsodoPitch.velocity.isnot(None))
+    )
+    if date_from is not None:
+        query = query.filter(Game.game_date >= date_from)
+    if date_to is not None:
+        query = query.filter(Game.game_date <= date_to)
+    by_player = {}
+    for pid, velo in query.all():
+        by_player.setdefault(pid, []).append(float(velo))
+    return {pid: (sum(v) / len(v), len(v)) for pid, v in by_player.items()}
