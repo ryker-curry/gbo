@@ -3,6 +3,14 @@ GBO -- Player Ratings: the MLB-The-Show-style Overall on Player Profile
 (Oct 2026, Ryker: "an overall profile combining everything with an
 overall similar to mlb the show").
 
+STATUS (Oct 2026): NOT SHOWN IN THE APP right now. Ryker: "take the
+athlete/baseball rating off for now, keep the knowledge but take it off
+the website" -- Player Profile, Roster and Team Overview were restored
+to their pre-ratings versions (commit cfcd42a). This module,
+ui_helpers.rating_card/rating_breakdown and scripts/rating_report.py are
+kept as-is so the ratings can be re-wired later; the report script
+still works for looking at the numbers offline.
+
 Decisions made with Ryker before building (AskUserQuestion, Oct 1 2026):
   - Visible to everyone, players included.
   - Hybrid scale: real outside benchmarks where one exists,
