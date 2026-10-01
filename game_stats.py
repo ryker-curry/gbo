@@ -229,8 +229,15 @@ def get_batter_hands(session, pitches):
             else:
                 hands[p.game_pitch_id] = None
 
+    # Last-resort fallback to the stored opponent_hand -- ONLY on rows
+    # where that column actually means the batter's hand
+    # (is_our_team_batting False). On is_our_team_batting True rows it
+    # holds the PITCHER's hand (see get_pitcher_hands' docstring), so
+    # falling back to it there would label the batter with the pitcher's
+    # throwing hand (Oct 2026 fix -- e.g. a hitter with no Player.bats on
+    # file facing a RHP was being counted as a RHH).
     for p in pitches:
-        if hands[p.game_pitch_id] is None and p.opponent_hand in ("R", "L"):
+        if hands[p.game_pitch_id] is None and not p.is_our_team_batting and p.opponent_hand in ("R", "L"):
             hands[p.game_pitch_id] = p.opponent_hand
     return hands
 
@@ -311,6 +318,53 @@ def get_runner_event_outs(session, player_id, season_id=None, game_id=None):
         if pitcher_id == player_id:
             total += 1
     return total
+
+
+def get_pitching_extras_for_pitches(session, player_id, pitches):
+    """(extra_earned_runs, extra_outs) for compute_pitching_line(), scoped
+    to exactly the games present in `pitches` -- forced-half-inning-end
+    runs (get_forced_half_inning_end_runs) and pickoff/caught-stealing
+    outs (get_runner_event_outs) for this pitcher, summed per game.
+
+    Oct 2026 bug fix: Pitch Game Report, Analytics and My Stats already
+    passed these extras in, but Pitcher Profile, Player Profile and the
+    Pitching Staff Leaderboard called compute_pitching_line(pitches)
+    bare -- so the same pitcher's IP/ERA/WHIP (and every rate stat
+    divided by IP) disagreed between pages whenever he'd had a
+    pickoff/caught stealing behind him or runners swept home by an
+    "End half-inning early." Scoping by the pitches' own game_ids (not a
+    season_id) keeps it correct for any date-range / game filter the
+    caller already applied."""
+    game_ids = {p.game_id for p in pitches if getattr(p, "game_id", None) is not None}
+    if not game_ids:
+        return 0, 0
+    # Two queries total (not two per game) -- the leaderboard calls this
+    # once per pitcher. Same attribution rules as
+    # get_forced_half_inning_end_runs / get_runner_event_outs above.
+    extra_runs = sum(
+        row.runs_scored or 0 for row in session.query(GameForcedHalfInningEnd).filter(
+            GameForcedHalfInningEnd.credited_player_id == player_id,
+            GameForcedHalfInningEnd.game_id.in_(game_ids),
+        ).all()
+    )
+    extra_outs = 0
+    rows = (
+        session.query(GameRunnerEvent, GamePitch)
+        .outerjoin(
+            GamePitch,
+            (GamePitch.game_id == GameRunnerEvent.game_id)
+            & (GamePitch.pitch_sequence == GameRunnerEvent.pitch_sequence_after),
+        )
+        .filter(GameRunnerEvent.is_out.is_(True), GameRunnerEvent.game_id.in_(game_ids))
+        .all()
+    )
+    for _ev, anchor_pitch in rows:
+        if anchor_pitch is None:
+            continue
+        pitcher_id = anchor_pitch.our_player_id if not anchor_pitch.is_our_team_batting else anchor_pitch.opponent_our_player_id
+        if pitcher_id == player_id:
+            extra_outs += 1
+    return extra_runs, extra_outs
 
 
 def get_pitches_thrown_to_opponent_batter(session, opponent_player_id, season_id=None, game_id=None):
@@ -601,7 +655,7 @@ def compute_batting_line(pitches):
     risp_pas = [p for p in completed_pas if _has_risp(p[0])]
     two_strike_pas = [p for p in completed_pas if _reached_two_strikes(p)]
     two_strike_k = sum(1 for p in two_strike_pas if p[-1].ab_outcome in K_OUTCOMES)
-    leadoff_pas = [p for p in completed_pas if _is_leadoff_pa(p[0])]
+    leadoff_pas = leadoff_pas_fn(completed_pas)
 
     rv_values = [float(p.run_value) for p in pitches if p.run_value is not None]
 
@@ -763,6 +817,67 @@ def _is_leadoff_pa(pa_pitches_for_this_pa_first_pitch):
     return p.pa_pitch_number == 1 and p.outs_before == 0 and (p.bases_before or "000") == "000"
 
 
+def leadoff_pas(completed_pas):
+    """The PAs in completed_pas that were the real leadoff PA of their
+    half-inning (Oct 2026, shared by compute_pitching_line,
+    compute_batting_line and analytics/pitcher_game_report so every
+    page agrees).
+
+    Why not just _is_leadoff_pa (0 outs, bases empty, 1st pitch of the
+    PA): the batter right after a scoreless leadoff home run matches
+    that pattern too. The Sept 28 fix for that (commit 3e3e3e7) only
+    landed in pitcher_game_report.py, so the Game Report's header said
+    one leadoff PA while compute_pitching_line's "Leadoff Out %" --
+    shown on the same page's Line card, Pitcher Profile, Analytics and
+    the leaderboard -- still double counted, and hitters' "Leadoff AVG"
+    did too.
+
+    Rule: a PA is the leadoff PA iff its first pitch is the first pitch
+    of its half-inning in the game (lowest pitch_sequence for that
+    game + inning value, read off the full game via GamePitch.game).
+    When the full game isn't reachable (plain objects without a .game,
+    e.g. guest-demo data), fall back to "first matching PA seen per
+    (game, inning)" in this list -- the Sept 28 report logic."""
+    first_seq = {}  # (game_id, inning) -> first pitch_sequence of that half
+    unavailable = set()
+    for pa in completed_pas:
+        p0 = pa[0]
+        gid = getattr(p0, "game_id", None)
+        if gid in unavailable or any(k[0] == gid for k in first_seq):
+            continue
+        game = getattr(p0, "game", None)
+        game_pitches = getattr(game, "pitches", None) if game is not None else None
+        if not game_pitches:
+            unavailable.add(gid)
+            continue
+        for gp in game_pitches:
+            key = (gid, getattr(gp, "inning", None))
+            if gp.pitch_sequence is not None and (key not in first_seq or gp.pitch_sequence < first_seq[key]):
+                first_seq[key] = gp.pitch_sequence
+    result, seen = [], set()
+    for pa in sorted(completed_pas, key=lambda pa: (getattr(pa[0], "game_id", None) or 0, getattr(pa[0], "pitch_sequence", None) or 0)):
+        p0 = pa[0]
+        inning = getattr(p0, "inning", None)
+        if inning is None:
+            # No half-inning info at all (lightweight demo objects) --
+            # nothing better than the per-PA pattern check.
+            if _is_leadoff_pa(p0):
+                result.append(pa)
+            continue
+        key = (getattr(p0, "game_id", None), inning)
+        if key[0] in unavailable or key not in first_seq:
+            if key not in seen:
+                seen.add(key)
+                if _is_leadoff_pa(p0):
+                    result.append(pa)
+        elif p0.pitch_sequence == first_seq[key]:
+            result.append(pa)
+    return result
+
+
+leadoff_pas_fn = leadoff_pas  # callers below have a local variable named leadoff_pas
+
+
 def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0):
     """The box-score-style header line for a pitcher -- either for a
     single game (pass pitches from get_pitching_pitches(..., game_id=))
@@ -866,7 +981,7 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0):
         elif is_ahead:
             ahead_pas += 1
 
-    leadoff_pas = [pa for pa in completed_pas if _is_leadoff_pa(pa[0])]
+    leadoff_pas = leadoff_pas_fn(completed_pas)
     leadoff_outs = sum(1 for pa in leadoff_pas if pa[-1].ab_outcome in K_OUTCOMES + ("Groundout", "Flyout", "Lineout", "Double Play", "Sac Bunt", "Sac Fly"))
     leadoff_bb = sum(1 for pa in leadoff_pas if pa[-1].ab_outcome == "BB")
     two_out_bb = sum(1 for pa in completed_pas if pa[-1].ab_outcome == "BB" and pa[-1].outs_before == 2)
@@ -1073,7 +1188,15 @@ def _group_into_plate_appearances(pitches):
     included too, since A3P only looks at pitches #3/#4 which may
     already both be in hand even if the PA hasn't concluded yet."""
     sortable = [p for p in pitches if getattr(p, "pitch_sequence", None) is not None]
-    sortable.sort(key=lambda p: p.pitch_sequence)
+    # Oct 2026 bug fix: pitch_sequence restarts at 1 in every game, so
+    # sorting a multi-game list (season / all-time / profile views) by
+    # pitch_sequence alone interleaved pitches from different games --
+    # game A's pitch 5 next to game B's pitch 5 -- and stitched PAs
+    # together across games. Every PA-level stat built on this (First
+    # Pitch Strike %, Leadoff, Early/Ahead, QAB, RISP/2-strike/count
+    # splits, A3P) was wrong for any span longer than one game. Sort
+    # within each game instead.
+    sortable.sort(key=lambda p: (getattr(p, "game_id", None) or 0, p.pitch_sequence))
     pas, current = [], []
     for p in sortable:
         current.append(p)

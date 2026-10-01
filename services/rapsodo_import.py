@@ -29,6 +29,15 @@ the architecture review:
     file's own "No" column -- see RapsodoPitch's docstring in models.py
     for why ("No" was found to be most-recent-first in the real export
     reviewed).
+  - Sept 2026, restored: each pitch's flight-path trajectory (see
+    pitch_trajectory.py) is computed and cached on trajectory_json at
+    import time again, for pitch-tunneling analytics to consume later
+    -- backend data only this time, no chart (see pitch_trajectory.py's
+    docstring for the full history of why this was pulled once and is
+    back now). A pitch missing the inputs a trajectory needs
+    (release_extension, hb_spin, etc.) just gets trajectory_json=None,
+    same "never guess a missing physics input" rule pitch_trajectory.py
+    itself follows.
 
 Kept deliberately free of any Streamlit import -- this is pure data
 logic, callable from a page, a script, or a test, per the spec's
@@ -46,6 +55,7 @@ from pitch_type_config import normalize_pitch_type
 from rapsodo_conventions import spin_clock_to_degrees, strike_zone_inches_to_plate_feet
 from strike_zone import derive_old_zone
 from game_stats import get_pitching_pitches
+from pitch_trajectory import compute_trajectory
 
 
 class RapsodoImportError(Exception):
@@ -438,7 +448,7 @@ def import_rapsodo_file(
                 raw.get("strike_zone_side"), raw.get("strike_zone_height")
             )
 
-            db_session.add(RapsodoPitch(
+            new_pitch = RapsodoPitch(
                 bullpen_id=bullpen_id,
                 player_id=player_id,
                 import_id=import_record.import_id,
@@ -478,7 +488,20 @@ def import_rapsodo_file(
                 spin_axis_degrees=spin_axis_degrees,
                 plate_x_ft=plate_x_ft,
                 plate_z_ft=plate_z_ft,
-            ))
+            )
+            try:
+                # Backend data only -- see module docstring and
+                # pitch_trajectory.py. A trajectory is an input for
+                # later analytics, not a required field -- never let a
+                # physics-engine edge case (e.g. an out-of-range
+                # release_extension in a bad row) abort an otherwise-
+                # successful import. Missing inputs already return None
+                # cleanly (see pitch_trajectory.py); this try/except is
+                # only a backstop against a genuine bug.
+                new_pitch.trajectory_json = compute_trajectory(new_pitch)
+            except Exception:
+                new_pitch.trajectory_json = None
+            db_session.add(new_pitch)
         db_session.commit()
     except Exception:
         db_session.rollback()

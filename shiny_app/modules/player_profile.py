@@ -47,7 +47,7 @@ from models import (Player, StaffPlayerAssignment, Assessment, AssessmentCategor
 from bucket_system import compute_bucket_system, list_seasons, current_season_label, season_date_range
 from analytics.bullpen_metrics import session_summary, pitch_type_summary
 from analytics.profile_queries import get_pitcher_profile_pitches, rapsodo_by_game_pitch_id
-from game_stats import compute_pitching_line
+from game_stats import compute_pitching_line, get_pitching_extras_for_pitches
 from assessment_history import assessment_history_query, assessment_history_rows
 from pitch_type_config import FASTBALL_TYPES
 import bucket_display
@@ -252,6 +252,7 @@ def player_profile_server(input, output, session, app_state):
             season_start, season_end = season_date_range(season_label)
             game_date_to = (season_end - timedelta(days=1)) if season_end else None
             game_pitches = get_pitcher_profile_pitches(db, pid, date_from=season_start, date_to=game_date_to) if p.is_pitcher else []
+            game_pitching_extras = get_pitching_extras_for_pitches(db, pid, game_pitches) if game_pitches else (0, 0)
             game_pitch_ids = [gp.game_pitch_id for gp in game_pitches if gp.game_pitch_id is not None]
             game_rapsodo_by_id = rapsodo_by_game_pitch_id(db, game_pitch_ids)
             game_fastball_pitches = [rp for rp in game_rapsodo_by_id.values() if rp.pitch_type and rp.pitch_type.type_name in FASTBALL_TYPES]
@@ -271,11 +272,11 @@ def player_profile_server(input, output, session, app_state):
                 rows = assessment_history_rows(assessment_history_query(db, pid, cat.category_id).all())
                 if rows:
                     history_panels.append(ui.accordion_panel(f"{cat.category_name} ({len(rows)})", ui_helpers.render_dict_table(rows)))
-            return _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, season_label)
+            return _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, season_label, game_pitching_extras)
         finally:
             db.close()
 
-    def _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, game_season_label):
+    def _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, game_season_label, game_pitching_extras=(0, 0)):
         pos = p.player_position.position_name if p.player_position else None
         cls = p.player_class.class_name if p.player_class else None
         meta = " · ".join(x for x in [f"#{p.jersey_number}" if p.jersey_number else None, pos, cls, f"{p.bats or '-'}/{p.throws or '-'}",
@@ -338,7 +339,7 @@ def player_profile_server(input, output, session, app_state):
             ui.div(bucket_display.build_movement_flag_ring(mf, rom, key_prefix="profile", mode=mode) if mf else None, style="margin-bottom:16px;"),
             ui_helpers.card(bucket_display.build_mobility_rom_report(rom) if rom else ui_helpers.empty_state("No Mobility & ROM assessment yet."), title="Mobility & ROM", right="threshold-based, not percentile"),
         )
-        pitching_tab = _pitching_tab(p, bullpen, pitches, summ, n_bullpens, game_pitches, game_season_label)
+        pitching_tab = _pitching_tab(p, bullpen, pitches, summ, n_bullpens, game_pitches, game_season_label, game_pitching_extras)
         dev_tab = _dev_tab(goals)
         video_tab = ui_helpers.card(*( [ui.div(ui.div(v.recorded_date.strftime("%b %d, %Y") if v.recorded_date else "—", class_="gbo-li-dt"), ui.div(ui.a(v.description or "Video", href=v.video_url, target="_blank") if v.video_url else (v.description or "Video")), class_="gbo-li") for v in videos] or [ui_helpers.empty_state("No video linked to this player yet. Pitch and swing clips upload from Bullpen Tracking, Hitter Tracking, and Video Import.")]), title="Video")
 
@@ -413,7 +414,7 @@ def player_profile_server(input, output, session, app_state):
         right = ui.div(rings, latest_pen, goals_card, class_="gbo-stack")
         return ui.div(left, right, class_="gbo-grid gbo-grid-2", style="align-items:start;")
 
-    def _pitching_tab(p, bullpen, pitches, summ, n_bullpens, game_pitches, game_season_label):
+    def _pitching_tab(p, bullpen, pitches, summ, n_bullpens, game_pitches, game_season_label, game_pitching_extras=(0, 0)):
         if not p.is_pitcher and not pitches and not game_pitches:
             return ui_helpers.card(ui_helpers.empty_state("Not flagged as a pitcher. Mark the player as a pitcher in Player setup to track pitching here."))
 
@@ -430,7 +431,8 @@ def player_profile_server(input, output, session, app_state):
         # computed in body() for the hero card's game-outings VELO/SPIN,
         # so this is season-accurate for free and never double-queries.
         if game_pitches:
-            line = compute_pitching_line(game_pitches)
+            extra_runs, extra_outs = game_pitching_extras
+            line = compute_pitching_line(game_pitches, extra_earned_runs=extra_runs, extra_outs=extra_outs)
             results_kpis = ui.div(
                 ui_helpers.kpi_tile("IP", line["IP"]),
                 ui_helpers.kpi_tile("Pitches", line["Pitches"]),

@@ -1104,7 +1104,7 @@ def compute_current_state(pitches, runner_events=None, forced_ends=None, game=No
     return state
 
 
-def _inning_display(raw_inning):
+def _inning_display(raw_inning, game=None, state=None):
     """compute_current_state's state["inning"] is a raw HALF-inning
     counter -- it increments by 1 every time a half-inning rolls over,
     so a 9-inning game runs 1..18, not 1..9 (see
@@ -1121,8 +1121,30 @@ def _inning_display(raw_inning):
     counter from 1 to 2, and both the Live Game Dashboard and the
     pitch-entry header printed "Inning 2" -- read as the 2nd inning
     starting, when it was really still the 1st, just the bottom half.)"""
+    # Oct 2026 fixes:
+    #  - Three-squad intrasquads rotate A -> B -> C one half at a time,
+    #    so there's no Top/Bottom and odd/even parity means nothing --
+    #    the old version labeled squad C's first turn "2nd (Top)". Show
+    #    the half-inning count instead (the header already names which
+    #    squad is batting).
+    #  - In a two-sided game, a forced half-inning end with "same team
+    #    continues" bumps the raw counter WITHOUT switching sides, which
+    #    flipped the odd/even parity for the rest of the game (every
+    #    later half showed Top/Bot backwards). Top/Bot now comes from
+    #    which side is actually batting -- Top whenever the side that
+    #    batted first (the away side, per compute_current_state's
+    #    starting state) is up.
+    if game is not None and getattr(game, "uses_three_squad_intrasquad", False):
+        return f"Half-inning {raw_inning}"
     real_inning = (raw_inning + 1) // 2
-    is_top = raw_inning % 2 == 1
+    if state is not None and "is_our_batting" in state:
+        away_is_squad_b = bool(
+            game is not None and game.is_intrasquad and not game.uses_three_squad_intrasquad
+            and game.intrasquad_away_squad == "B"
+        )
+        is_top = state["is_our_batting"] == (not away_is_squad_b)
+    else:
+        is_top = raw_inning % 2 == 1
     ordinal_suffix = "th" if real_inning % 100 in (11, 12, 13) else {1: "st", 2: "nd", 3: "rd"}.get(real_inning % 10, "th")
     return f"{real_inning}{ordinal_suffix} ({'Top' if is_top else 'Bot'})"
 
@@ -2942,6 +2964,7 @@ def game_tracking_server(input, output, session, app_state):
                 ui.output_ui("opponent_scouting_card"),
                 ui.output_ui("squad_a_lineup_moves"),
                 ui.output_ui("squad_b_lineup_moves"),
+                ui.output_ui("squad_c_lineup_moves"),
                 ui.hr(),
                 ui.output_ui("live_pitch_sequence_display"),
                 ui.hr(),
@@ -2998,7 +3021,7 @@ def game_tracking_server(input, output, session, app_state):
                 ui.h5("Live Game Dashboard", class_="gbo-section-title"),
                 ui_helpers.render_kpi_cards([
                     {"label": "Score", "value": score_value},
-                    {"label": "Inning", "value": f"{_inning_display(state['inning'])} — {half_label}"},
+                    {"label": "Inning", "value": f"{_inning_display(state['inning'], game, state)} — {half_label}"},
                     {"label": "Outs", "value": str(state["outs"])},
                     {"label": "Count", "value": f"{state['balls']}-{state['strikes']}"},
                 ]),
@@ -3058,7 +3081,7 @@ def game_tracking_server(input, output, session, app_state):
                 return None
             half_label = f"{TEAM_LABEL[suggest_current_batting_squad(pitches, state)]} batting" if game.uses_three_squad_intrasquad else ("We're batting" if state["is_our_batting"] else "We're pitching")
             children = [
-                ui.h5(f"{_inning_display(state['inning'])} — {half_label}", class_="gbo-section-title"),
+                ui.h5(f"{_inning_display(state['inning'], game, state)} — {half_label}", class_="gbo-section-title"),
                 ui_helpers.render_kpi_cards([
                     {"label": "Outs", "value": str(state["outs"])},
                     {"label": "Count", "value": f"{state['balls']}-{state['strikes']}"},
@@ -3936,6 +3959,11 @@ def game_tracking_server(input, output, session, app_state):
                 game = db.query(Game).filter(Game.game_id == game_id).first()
                 if game is None or game.status != "In Progress" or (squad == "B" and not game.is_intrasquad):
                     return None
+                # Oct 2026: squad C (three-squad intrasquads) had no live
+                # substitution panel at all -- registered below now, but
+                # only shown when this game actually has a third squad.
+                if squad == "C" and not game.uses_three_squad_intrasquad:
+                    return None
                 slots = (
                     db.query(GameLineupSlot)
                     .options(joinedload(GameLineupSlot.substitutions))
@@ -3978,7 +4006,10 @@ def game_tracking_server(input, output, session, app_state):
                 max_order = max((s.batting_order for s in slots), default=0)
                 order_choices = {str(i): str(i) for i in range(1, max_order + 2)}
 
-                title_suffix = f" ({_squad_display(game, 'B')})" if squad == "B" else ""
+                # Label every squad in an intrasquad (previously only B
+                # got a suffix, so in a three-squad game the A panel was
+                # unlabeled next to B's and C's).
+                title_suffix = f" ({_squad_display(game, squad)})" if game.is_intrasquad else ""
 
                 return ui.accordion(
                     ui.accordion_panel(
@@ -4067,6 +4098,7 @@ def game_tracking_server(input, output, session, app_state):
 
     _register_lineup_moves("A", "squad_a_lineup")
     _register_lineup_moves("B", "squad_b_lineup")
+    _register_lineup_moves("C", "squad_c_lineup")
 
     def _resolve_actual_pitcher_id(game, state):
         """Whoever is ACTUALLY pitching this plate appearance, across

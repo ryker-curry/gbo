@@ -38,13 +38,15 @@ A Phase 4 flight-path trajectory chart (visualizations/trajectory_
 chart.py, gravity+drag physics calibrated to each pitch's own
 measured movement) was built, shipped, and then removed again per
 Ryker's call after seeing it live -- didn't read as useful. The
-underlying physics engine (pitch_trajectory.py), its import-time
-wiring, and the backfill script are gone too; see the git history
-around that change if this is ever revisited. RapsodoPitch.
-trajectory_json (models.py) was deliberately left in place, still
-holding already-computed values from the pitches it ran against --
-nothing reads it anymore, but there was no reason to force a schema
-change / data loss just to remove a chart.
+chart itself (visualizations/trajectory_chart.py) and its dashboard
+wiring are still gone; see the git history around commits e454fa2/
+1f251e2 if a rendered trajectory view is ever wanted again -- that's
+a fresh decision to make, not something to quietly re-add. The
+underlying physics engine (pitch_trajectory.py) was RESTORED Sept
+2026, backend-only, so RapsodoPitch.trajectory_json (models.py) is
+being actively computed again as an input for pitch-tunneling
+analytics (analytics/pitch_grading.py) -- nothing in this dashboard
+module reads it.
 """
 
 import streamlit as st

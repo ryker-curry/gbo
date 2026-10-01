@@ -44,6 +44,7 @@ imply "reviewed and found bad," when the truth is "not reviewed yet."
 from models import GamePitch, PitchType, Player, Game
 import strike_zone
 from pitch_type_config import FASTBALL_TYPES
+from game_stats import get_batter_hands, leadoff_pas as shared_leadoff_pas
 
 # Pitch outcomes that reach the batter and get a swing/take decision --
 # used throughout to distinguish "a pitch was thrown" (all rows) from
@@ -89,31 +90,11 @@ def _is_leadoff_pitch(p):
 
 
 def _leadoff_pas(completed_pas):
-    """The PAs in completed_pas that were truly the FIRST plate
-    appearance of their half-inning -- i.e. the real leadoff batter.
-
-    _is_leadoff_pitch's outs_before==0/bases_before=="000" check alone
-    is NOT sufficient: those same conditions recur for the batter right
-    after a scoreless (0-out) home run, since the bases reset to empty
-    and no out was recorded. That batter isn't the leadoff hitter, just
-    the next one up. (Ryker, Sept 2026: Sept 16 game, bottom of the
-    4th -- Ryker Curry allowed a leadoff HR to James Dagenhart, and the
-    very next batter, Jackson Lundquist, was incorrectly ALSO counted
-    as a leadoff PA, turning a clean 1-inning, 1-leadoff-batter outing
-    into a false "2 leadoff PAs, 1 out" -- 50% instead of the correct
-    0%.) The real definition: the first PA, in game order, for each
-    half-inning (tracked here by GamePitch.inning) -- so only the
-    single, actual leadoff batter of each inning ever counts, no matter
-    what happens on the first pitch of the inning."""
-    result = []
-    innings_seen = set()
-    for pa in completed_pas:
-        inning = pa[0].inning
-        if inning not in innings_seen:
-            innings_seen.add(inning)
-            if _is_leadoff_pitch(pa[0]):
-                result.append(pa)
-    return result
+    """Real leadoff PAs -- delegates to game_stats.leadoff_pas so the
+    Game Report header, staff totals and every compute_pitching_line
+    view use one definition (see that function's docstring; the
+    scoreless-leadoff-HR fix from Sept 28 lives there now)."""
+    return shared_leadoff_pas(completed_pas)
 
 
 def _pitcher_id(p):
@@ -130,21 +111,6 @@ def _pitcher_id(p):
     recorded as the "opponent" side -- see compute_pitcher_game_report
     and compute_staff_game_totals below, both fixed to use this)."""
     return p.opponent_our_player_id if p.is_our_team_batting else p.our_player_id
-
-
-def _batter_hand(p, players_by_id):
-    """The batter's handedness on this pitch, regardless of which side
-    recorded it. On an ordinary (is_our_team_batting False) row,
-    opponent_hand already holds the batter's hand directly. On an
-    intrasquad game's OTHER squad's pitching (is_our_team_batting
-    True), our_player_id is the real batter (one of our own roster)
-    and opponent_hand instead holds the PITCHER's hand -- so the
-    batter's hand has to come from their own Player.bats instead.
-    players_by_id: {player_id: Player}, pre-loaded by the caller."""
-    if p.is_our_team_batting:
-        batter = players_by_id.get(p.our_player_id)
-        return batter.bats if batter else None
-    return p.opponent_hand
 
 
 def compute_pitcher_game_report(session, game_id, pitcher_player_id):
@@ -186,9 +152,16 @@ def compute_pitcher_game_report(session, game_id, pitcher_player_id):
         return None
 
     pitch_types = {pt.pitch_type_id: pt.type_name for pt in session.query(PitchType).all()}
-    # Only needed for _batter_hand's intrasquad-batting-side lookup --
-    # harmless (and just as cheap) to build unconditionally.
-    players_by_id = {pl.player_id: pl for pl in session.query(Player).filter(Player.player_id.in_({p.our_player_id for p in all_pitches})).all()}
+    # Oct 2026 bug fix: the vs RHH / vs LHH splits below used to call
+    # _batter_hand(), which returned a switch hitter's raw Player.bats
+    # ("S") -- so every switch hitter (e.g. Martinez, Freeland) was
+    # silently dropped from BOTH splits -- and trusted the stored
+    # opponent_hand on the other side of the game, which can be a stale
+    # live-entry default. Now resolved through game_stats.get_batter_hands,
+    # the same canonical helper every other hand split in the app uses
+    # (roster Player.bats, switch hitters resolved against the actual
+    # opposing pitcher's hand).
+    batter_hands = get_batter_hands(session, all_pitches)
 
     # Group into PAs (pa_pitch_number resets to 1 at the start of each
     # PA) so PA-level stats (Early/Ahead/A3P/Leadoff/AB-outcome-based
@@ -209,13 +182,13 @@ def compute_pitcher_game_report(session, game_id, pitcher_player_id):
     header = _compute_header_stats(all_pitches, completed_pas)
     breakdown_overall = _compute_pitch_type_breakdown(all_pitches, completed_pas, pitch_types)
     breakdown_rhh = _compute_pitch_type_breakdown(
-        [p for p in all_pitches if _batter_hand(p, players_by_id) == "R"],
-        [pa for pa in completed_pas if _batter_hand(pa[0], players_by_id) == "R"],
+        [p for p in all_pitches if batter_hands.get(p.game_pitch_id) == "R"],
+        [pa for pa in completed_pas if batter_hands.get(pa[0].game_pitch_id) == "R"],
         pitch_types,
     )
     breakdown_lhh = _compute_pitch_type_breakdown(
-        [p for p in all_pitches if _batter_hand(p, players_by_id) == "L"],
-        [pa for pa in completed_pas if _batter_hand(pa[0], players_by_id) == "L"],
+        [p for p in all_pitches if batter_hands.get(p.game_pitch_id) == "L"],
+        [pa for pa in completed_pas if batter_hands.get(pa[0].game_pitch_id) == "L"],
         pitch_types,
     )
 
