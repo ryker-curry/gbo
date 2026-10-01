@@ -1654,20 +1654,35 @@ def pitcher_game_report_server(input, output, session, app_state):
                 ui.p(ui.strong("Results")),
                 ui.p(
                     "Where the damage got done this outing, re-sliced spatially into the same 1-9 zone grid "
-                    "used everywhere else in GBO, broken out into All Batters/vs RHH/vs LHH side by side on "
-                    "one shared color scale so the two really are comparable. Colored by average run value "
+                    "used everywhere else in GBO. Use the Batters dropdown to see both hands together, or "
+                    "just vs RHH / vs LHH. Colored by average run value "
                     "per zone (red = favors the hitter, blue = favors the pitcher), centered on break-even -- "
                     "the same RV number behind the RV/100 column in Pitch Type Breakdown above, not a "
                     "separate wOBA or contact-quality-only score. Contact quality and hits allowed show on "
                     "hover; zones with only a pitch or two are grayed out rather than colored, and a hand "
-                    "this pitcher hasn't faced yet in this outing just doesn't get a panel.",
+                    "this pitcher hasn't faced yet in this outing shows a short note instead of a chart.",
                     class_="text-muted small",
                 ),
                 ui.input_select("res_pitch_type", "Pitch Type", choices=type_choices),
+                # Oct 2026, Ryker: same Batters dropdown as Pitcher
+                # Profile's Damage by Zone -- one panel at a time.
+                ui.input_select(
+                    "res_batter_hand", "Batters",
+                    choices={"all": "Both (All Batters)", "R": "vs RHH", "L": "vs LHH"},
+                    selected=_current_res_batter_hand(),
+                ),
                 output_widget("results_chart"),
             )
         finally:
             db.close()
+
+    def _current_res_batter_hand():
+        with reactive.isolate():
+            try:
+                choice = input.res_batter_hand() if "res_batter_hand" in input else "all"
+            except Exception:
+                choice = "all"
+        return choice if choice in ("all", "R", "L") else "all"
 
     @render_plotly
     def results_chart():
@@ -1695,15 +1710,24 @@ def pitcher_game_report_server(input, output, session, app_state):
                 return None
 
             label = "All Pitch Types" if pitch_type_choice == "all" else pitch_type_choice
-            hands = get_batter_hands(db, pitches)
-            vs_rhh = [p for p in pitches if hands.get(p.game_pitch_id) == "R"]
-            vs_lhh = [p for p in pitches if hands.get(p.game_pitch_id) == "L"]
-            panels = [
-                ("All Batters", compute_zone_damage(pitches), None),
-                ("vs RHH", compute_zone_damage(vs_rhh), "R"),
-                ("vs LHH", compute_zone_damage(vs_lhh), "L"),
-            ]
-            return zone_damage_heatmap_by_hand(panels, label)
+            hand_choice = input.res_batter_hand() if "res_batter_hand" in input else "all"
+            if hand_choice in ("R", "L"):
+                hands = get_batter_hands(db, pitches)
+                subset = [p for p in pitches if hands.get(p.game_pitch_id) == hand_choice]
+                panel_label, hand = ("vs RHH", "R") if hand_choice == "R" else ("vs LHH", "L")
+            else:
+                subset, panel_label, hand = pitches, "All Batters", None
+            fig = zone_damage_heatmap_by_hand([(panel_label, compute_zone_damage(subset), hand)], label)
+            if fig is None:
+                fig = go.Figure()
+                fig.add_annotation(
+                    text=f"No located pitches {panel_label.lower()} this outing.",
+                    x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False,
+                )
+                fig.update_xaxes(visible=False)
+                fig.update_yaxes(visible=False)
+                fig = apply_gbo_theme(fig, title=f"{label} — Damage by Zone", height=200)
+            return fig
         finally:
             db.close()
 
