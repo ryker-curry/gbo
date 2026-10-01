@@ -2031,6 +2031,16 @@ def pitcher_profile_server(input, output, session, app_state):
             output_widget("pp_command_chart"),
 
             ui.hr(),
+            ui.p(ui.strong("Miss Map")),
+            ui.p(
+                "Every pitch placed by how it missed its called spot, one panel per pitch. Arm side is always to "
+                "the right (lefties flipped to match). The gold star is his average miss -- the way he leans. A "
+                "pitch that landed inside the called spot sits on the center x.",
+                class_="text-muted small",
+            ),
+            output_widget("pp_miss_map"),
+
+            ui.hr(),
             ui.p(ui.strong("Attack Zones")),
             ui.p(
                 "Heart = down the middle, Shadow = straddles the zone edge, Chase = tempting but outside, Waste "
@@ -2182,6 +2192,19 @@ def pitcher_profile_server(input, output, session, app_state):
         if not located:
             return None
         return command_charts.command_chart(view_pitches)
+
+    @render_plotly
+    def pp_miss_map():
+        """Oct 2026, Ryker: "build miss map" -- see command_charts.miss_map."""
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        view_pitches, throws = _view_pitches()
+        if not view_pitches:
+            return None
+        return command_charts.miss_map(view_pitches, throws)
 
     # -------------------------------------------------------------------
     # Attack Zones / Miss by Call / Pitch Targeting Plan -- Sept 2026,

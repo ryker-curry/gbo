@@ -419,3 +419,130 @@ def pitch_targeting_chart(plan_rows):
         legend=dict(orientation="h", y=-0.15),
     )
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Miss Map (Oct 2026, Ryker: "build miss map"). Same miss-from-target
+# offsets command_chart plots, but split into one small panel per pitch
+# type and turned to the PITCHER'S side: x is flipped so + is always arm
+# side and - glove side (normalize_horizontal_to_arm_side), so a RHP's and
+# a LHP's maps read the same way. Each panel adds his average miss (gold
+# line + star from the target) and a one-line read in its title: how many
+# hit the called spot, average miss, and which way he misses. The point is
+# a pitch-by-pitch miss PATTERN ("slider misses low glove side"), which a
+# called-vs-actual pair of heat maps can't show.
+#
+# Misses are measured from the edge of the CALLED CELL (compute_miss), so
+# a pitch that landed inside the called spot sits exactly on the target.
+# ---------------------------------------------------------------------------
+
+MISS_MAP_EXTENT_IN = 22.0
+MISS_MAP_RINGS_IN = (4.0, 8.0, 12.0, 20.0)
+MISS_MAP_MAX_COLS = 3
+
+
+def _miss_map_panels(pitches, throws):
+    from analytics.command_metrics import normalize_horizontal_to_arm_side
+    located = [p for p in pitches if p.horizontal_miss is not None and p.vertical_miss is not None]
+    order, groups = _group_by_type(located)
+    order.sort(key=lambda label: len(groups[label]), reverse=True)
+    panels = []
+    if len(order) > 1:
+        panels.append(("All pitches", located))
+    panels += [(label, groups[label]) for label in order]
+    out = []
+    for label, group in panels:
+        xs = [normalize_horizontal_to_arm_side(p.horizontal_miss, throws) for p in group]
+        ys = [float(p.vertical_miss) for p in group]
+        n = len(group)
+        hit = sum(1 for p in group if float(p.miss_distance or 0) == 0)
+        avg_miss = sum(float(p.miss_distance) for p in group) / n
+        mx, my = sum(xs) / n, sum(ys) / n
+        out.append(dict(label=label, group=group, xs=xs, ys=ys, n=n, hit=hit,
+                        avg_miss=avg_miss, mean=(mx, my)))
+    return out
+
+
+def _bias_text(mx, my):
+    parts = []
+    if abs(mx) >= 1:
+        parts.append(f'{abs(mx):.0f}" {"arm" if mx > 0 else "glove"}')
+    if abs(my) >= 1:
+        parts.append(f'{abs(my):.0f}" {"high" if my > 0 else "low"}')
+    return "misses " + " / ".join(parts) if parts else "no lean"
+
+
+def miss_map(pitches, throws):
+    """pitches: command-view objects (game_pitches_command_view) or
+    CommandPitch rows. throws: 'R'/'L'. Returns a Plotly Figure, or None
+    if nothing has both a called and an actual location."""
+    from plotly.subplots import make_subplots
+    panels = _miss_map_panels(pitches, throws)
+    if not panels:
+        return None
+    cols = min(MISS_MAP_MAX_COLS, len(panels))
+    rows = (len(panels) + cols - 1) // cols
+    titles = [
+        f"<b>{pn['label']}</b> (n={pn['n']})<br>"
+        f"<span style='font-size:11px'>hit spot {100 * pn['hit'] / pn['n']:.0f}% · avg miss {pn['avg_miss']:.1f}\" · "
+        f"{_bias_text(*pn['mean'])}</span>"
+        for pn in panels
+    ]
+    fig = make_subplots(rows=rows, cols=cols, subplot_titles=titles,
+                        horizontal_spacing=0.05, vertical_spacing=0.16)
+    E = MISS_MAP_EXTENT_IN
+    for i, pn in enumerate(panels):
+        r, c = i // cols + 1, i % cols + 1
+        for radius in MISS_MAP_RINGS_IN:
+            fig.add_shape(type="circle", x0=-radius, x1=radius, y0=-radius, y1=radius,
+                          line=dict(color=GRID_GRAY, width=1), fillcolor="rgba(0,0,0,0)", layer="below",
+                          row=r, col=c)
+        fig.add_shape(type="line", x0=0, x1=0, y0=-E, y1=E, line=dict(color=GRID_GRAY, width=1), layer="below", row=r, col=c)
+        fig.add_shape(type="line", x0=-E, x1=E, y0=0, y1=0, line=dict(color=GRID_GRAY, width=1), layer="below", row=r, col=c)
+
+        if pn["label"] == "All pitches":
+            sub_order, sub_groups = _group_by_type(pn["group"])
+            idx = {id(p): k for k, p in enumerate(pn["group"])}
+            series = [(lab, [idx[id(p)] for p in sub_groups[lab]]) for lab in sub_order]
+        else:
+            series = [(pn["label"], list(range(pn["n"])))]
+        for lab, ks in series:
+            color = get_pitch_color(lab) if lab != "Unspecified" else MUTED_GRAY
+            grp = pn["group"]
+            fig.add_trace(go.Scatter(
+                x=[pn["xs"][k] for k in ks], y=[pn["ys"][k] for k in ks], mode="markers",
+                marker=dict(color=color, size=8, opacity=0.8, line=dict(color="#1E1E1E", width=1)),
+                name=lab, showlegend=False,
+                customdata=[[grp[k].pitch_number, float(grp[k].miss_distance), grp[k].miss_direction or "—"] for k in ks],
+                hovertemplate=f"{lab}<br>Pitch #%{{customdata[0]}}<br>Miss %{{customdata[1]:.1f}} in (%{{customdata[2]}})<extra></extra>",
+            ), row=r, col=c)
+
+        mx, my = pn["mean"]
+        fig.add_trace(go.Scatter(
+            x=[0, mx], y=[0, my], mode="lines+markers",
+            line=dict(color=GOLD, width=3),
+            marker=dict(symbol=["circle", "star"], size=[4, 15], color=GOLD, line=dict(color="#1E1E1E", width=1)),
+            showlegend=False,
+            hovertemplate=f"Average miss: {abs(mx):.1f}\" {'arm' if mx >= 0 else 'glove'} side, "
+                          f"{abs(my):.1f}\" {'high' if my >= 0 else 'low'}<extra></extra>",
+        ), row=r, col=c)
+        fig.add_trace(go.Scatter(
+            x=[0], y=[0], mode="markers", showlegend=False, hoverinfo="skip",
+            marker=dict(symbol="x-thin", size=14, line=dict(color=TEXT_CREAM, width=2)),
+        ), row=r, col=c)
+
+    fig.update_xaxes(range=[-E, E], showgrid=False, zeroline=False, tickvals=[-12, 0, 12],
+                     ticktext=["12\" glove", "target", "12\" arm"], tickfont=dict(size=10, color=MUTED_GRAY))
+    fig.update_yaxes(range=[-E, E], showgrid=False, zeroline=False, tickvals=[-12, 0, 12],
+                     ticktext=["12\" low", "", "12\" high"], tickfont=dict(size=10, color=MUTED_GRAY),
+                     scaleanchor="x", scaleratio=1)
+    # each subplot's y must anchor to its OWN x
+    for k in range(1, rows * cols + 1):
+        suffix = "" if k == 1 else str(k)
+        fig.layout[f"yaxis{suffix}"].scaleanchor = f"x{suffix}"
+    for a in fig.layout.annotations:
+        a.font = dict(color=TEXT_CREAM, size=12)
+    fig = apply_gbo_theme(fig, title="Miss Map (arm side to the right, called spot = center)",
+                          height=330 * rows + 90)
+    fig.update_layout(margin=dict(t=110))
+    return fig
