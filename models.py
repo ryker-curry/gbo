@@ -1907,3 +1907,27 @@ class WeeklyReportSend(Base):
     status = Column(String(20), nullable=False)  # "sent" / "failed" / "no_email"
     detail = Column(Text, nullable=True)
     sent_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AdvanceReport(Base):
+    """An advance scouting report for a series vs one opponent (Oct 2026).
+    Numbers are computed live from our charting (analytics/
+    advance_scouting.py); this row holds only what coaches decide: the
+    title/date, each of their pitchers' expected role (roles JSON,
+    {opponent_player_id: "Fri"/"Closer"/...}), the edited series plan,
+    and whether hitters can see it (published). Per-pitcher scouting
+    notes live on OpponentPlayer.notes so they carry across reports."""
+    __tablename__ = "advance_reports"
+
+    report_id = Column(Integer, primary_key=True)
+    opponent_team_id = Column(Integer, ForeignKey("opponent_teams.team_id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(200), nullable=False)
+    series_date = Column(Date, nullable=True)
+    roles = Column(JSON, nullable=True)
+    plan_text = Column(Text, nullable=True)
+    published = Column(Boolean, default=False, nullable=False)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    opponent_team = relationship("OpponentTeam")

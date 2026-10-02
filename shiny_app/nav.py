@@ -101,7 +101,11 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
     # a nav-level concern). Sports Scientist stays read-only.
     if role_name in ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator"):
         sections.append(NavSection("Game Operations", [NavPage("game_tracking", "Game Tracking", "clipboard-data")]))
-        sections.append(NavSection("Scouting", [NavPage("opponent_teams", "Opponent Teams", "people")]))
+        sections.append(NavSection("Scouting", [
+            # Oct 2026: series advance reports from our own charting.
+            NavPage("advance_scouting", "Advance Scouting", "binoculars"),
+            NavPage("opponent_teams", "Opponent Teams", "people"),
+        ]))
         sections.append(NavSection("Analytics", [
             NavPage("analytics", "Player Stats", "graph-up"),
             NavPage("pitcher_game_report", "Pitcher Game Report", "file-text"),
@@ -181,6 +185,8 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             my_dev_pages.append(NavPage("player_hitting", "My Hitting", "trophy"))
             my_dev_pages.append(NavPage("hitter_profile", "My Hitter Profile", "graph-up-arrow"))
             my_dev_pages.append(NavPage("hitter_game_report", "My Game Report", "file-text"))
+            # Oct 2026: published advance scouting reports, read-only.
+            my_dev_pages.append(NavPage("advance_scouting", "Scouting Reports", "binoculars"))
         # Pitching Staff Leaderboard (Sept 2026, Ryker: "both coaches and
         # players can see") -- unconditionally, not gated by
         # is_pitcher_player, since any player (pitcher or hitter) might
