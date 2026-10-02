@@ -166,7 +166,7 @@ def _key_table(r):
 def _mix_table(r):
     has_velo = any(p["velo"] is not None for p in r["mix"])
     head = ('<tr><th>Pitch</th><th>#</th><th>Use</th>' + ('<th>Velo</th>' if has_velo else '')
-            + '<th>Strike</th><th>Whiff</th><th>Hit spot</th><th>Misses toward</th></tr>')
+            + '<th>Strike</th><th>Whiff</th><th>Hit spot</th><th>Best zone</th><th>Misses toward</th></tr>')
     rows = []
     for p in r["mix"]:
         velo = ""
@@ -175,9 +175,11 @@ def _mix_table(r):
         rows.append(
             f'<tr><td><span class="sw" style="background:{get_pitch_color(p["pitch"])}"></span>{_e(p["pitch"])}</td>'
             f'<td>{p["n"]}</td><td>{_pct(p["usage_pct"])}</td>{velo}<td>{_pct(p["strike_pct"])}</td>'
-            f'<td>{_pct(p["whiff_pct"])}</td><td>{_pct(p["spot_pct"])}</td><td>{_e(p["lean"] or "—")}</td></tr>')
+            f'<td>{_pct(p["whiff_pct"])}</td><td>{_pct(p["spot_pct"])}</td><td>{_pct(p.get("bz_pct"))}</td>'
+            f'<td>{_e(p["lean"] or "—")}</td></tr>')
     note = ('<div class="small" style="margin-top:3px">Velo = average (top) from Rapsodo. Whiff = misses per swing. '
-            'Hit spot = landed in the called zone. Misses toward = average miss from the called spot.</div>')
+            'Hit spot = landed in the called zone. Best zone = landed where that pitch plays best. '
+            'Misses toward = average miss from the called spot.</div>')
     return f'<table>{head}{"".join(rows)}</table>{note}'
 
 
