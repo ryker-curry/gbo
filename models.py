@@ -1856,3 +1856,24 @@ class PlayerReportNote(Base):
     notes = Column(Text, nullable=True)
     updated_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class ArsenalTarget(Base):
+    """A coach's override of one pitch's target shape on the Arsenal Plan
+    (Oct 2026, Ryker: REAPER-style recommender -- "a coach can override
+    any target"). One row per (player, pitch family); when present it's
+    used instead of the rule-based target from analytics/arsenal_plan.py.
+    Shape is in the pitcher's own frame: ivb = induced vertical break
+    (in), run = + toward his ARM side (in), velo = mph (optional)."""
+    __tablename__ = "arsenal_targets"
+    __table_args__ = (UniqueConstraint("player_id", "family", name="uq_arsenal_target_player_family"),)
+
+    target_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    family = Column(String(20), nullable=False)  # changeup / slider / sweeper / curveball / cutter / sinker / four_seam
+    velo = Column(Numeric(5, 1), nullable=True)
+    ivb = Column(Numeric(5, 1), nullable=False)
+    run = Column(Numeric(5, 1), nullable=False)
+    note = Column(Text, nullable=True)
+    updated_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
