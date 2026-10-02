@@ -42,7 +42,7 @@ from pitch_location_stats import compute_command_precision, compute_attack_zones
 # Command Precision/Attack Zones above are untouched, computed the way
 # they always have been -- this is a new, additional section, not a
 # replacement.
-from analytics import command_metrics, profile_queries, approach_angles
+from analytics import command_metrics, profile_queries, approach_angles, best_zone
 from analytics.pitcher_game_report import compute_staff_game_totals, FPS_GOAL_PCT, SECONDARY_STRIKE_GOAL_PCT
 from analytics.pitch_grading import stuff_plus, arsenal_summary, location_plus, MIN_BASELINE_PITCHES
 # Sept 2026, Ryker: "add a results section to game report as well"
@@ -1577,9 +1577,32 @@ def pitcher_game_report_server(input, output, session, app_state):
                     col_widths=[4, 4, 4],
                 ),
                 output_widget("pitch_locations_chart"),
+                *_best_zone_table(db, pitches),
             )
         finally:
             db.close()
+
+    def _best_zone_table(db, pitches):
+        """Oct 2026 (Best Zone, analytics/best_zone.py): % of each pitch
+        type that landed in the area where that pitch plays best."""
+        pitcher = db.query(Player).filter(Player.player_id == int(input.pitcher_select())).first()
+        if pitcher is None or pitcher.throws not in ("R", "L"):
+            return []
+        scored, _maps = best_zone.score_for_pitcher(db, pitches, pitcher.throws)
+        if not scored:
+            return []
+        pct = lambda v: "—" if v is None else f"{v:.0f}%"
+        rows = [{
+            "Pitch Type": r["label"], "#": r["n"], "In best zone": pct(r["inside_pct"]),
+            "Within 3\"": pct(r["near_pct"]), "6\"+ away": pct(r["far_pct"]),
+            "Avg distance": f'{r["avg_dist"]:.1f}"', "Best zone": r["where"],
+        } for r in best_zone.summary_by_type(scored)]
+        return [
+            ui.p(ui.strong("Best Zone"), class_="mt-3 mb-1"),
+            ui.p("How far each pitch landed from the area where that pitch plays best (by batter hand) -- see "
+                 "Pitcher Profile → Zone for the full breakdown and results by distance.", class_="text-muted small"),
+            ui_helpers.render_dict_table(rows),
+        ]
 
     @render_plotly
     def pitch_locations_chart():

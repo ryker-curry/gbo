@@ -115,7 +115,8 @@ from pitch_type_config import get_pitch_color, FASTBALL_TYPES
 from analytics import fastball_shape
 from services.pitch_type_switch import apply_switches, undo_switches
 from models import PitchTypeChange
-from analytics import approach_angles
+from analytics import approach_angles, best_zone
+from visualizations.best_zone_chart import best_zone_figure
 
 import ui_helpers
 import format_helpers
@@ -1574,7 +1575,94 @@ def pitcher_profile_server(input, output, session, app_state):
                         for r in type_rows
                     ]))
 
+            sections += _best_zone_children(db, pid, game_pitches)
             return ui.div(*sections)
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Best Zone (Oct 2026, Ryker sent Paradigm's "Miss Distance" thread:
+    # "build it") -- how far each pitch landed from the area where that
+    # pitch plays best, by batter hand. See analytics/best_zone.py.
+    # -------------------------------------------------------------------
+    def _bz_pct(v):
+        return "—" if v is None else f"{v:.0f}%"
+
+    def _best_zone_children(db, pid, game_pitches):
+        player = db.query(Player).filter(Player.player_id == pid).first()
+        if player is None or player.throws not in ("R", "L"):
+            return []
+        scored, maps = best_zone.score_for_pitcher(db, game_pitches, player.throws)
+        head = [ui.hr(), ui.p(ui.strong("Best Zone (distance from where each pitch plays best)"))]
+        if not scored:
+            return head + [ui.p("No located pitches with a known batter hand yet (locations come from video review).",
+                                class_="text-muted small")]
+        any_team = any(r["source"] == "team" for r in scored)
+        type_rows = best_zone.summary_by_type(scored)
+        table = [{
+            "Pitch Type": r["label"], "#": r["n"],
+            "In best zone": _bz_pct(r["inside_pct"]), "Within 3\"": _bz_pct(r["near_pct"]),
+            "6\"+ away": _bz_pct(r["far_pct"]), "Avg distance": f'{r["avg_dist"]:.1f}"',
+            "Best zone": r["where"],
+        } for r in type_rows]
+        band_rows = [{
+            "Distance": b["band"], "Pitches": b["n"], "Strike %": _bz_pct(b["strike_pct"]),
+            "Swing %": _bz_pct(b["swing_pct"]), "Whiff / swing": _bz_pct(b["whiff_pct"]),
+            "Hits / ball in play": _bz_pct(b["hit_pct_bip"]),
+            "Run value / 100": "—" if b["rv100"] is None else f'{b["rv100"]:+.1f}',
+        } for b in best_zone.results_by_band(scored) if b["n"]]
+        return head + [
+            ui.p(
+                "Each pitch has an area where it plays best (four-seams up, breaking balls down and glove side, "
+                "changeups down and arm side, adjusted by batter hand). This measures how far every pitch landed "
+                "from that whole area -- not from the called spot -- in Paradigm's bands. "
+                + ("Some areas are drawn from our own run values (enough games logged); the rest are starting maps. "
+                   if any_team else
+                   "Areas are educated starting maps for now; they switch to our own run-value data as games add up. ")
+                + "Results by distance are small-sample and use run value and hits on balls in play (no exit velo, "
+                "so no xwOBA).",
+                class_="text-muted small",
+            ),
+            ui_helpers.render_dict_table(table),
+            ui.p(ui.strong("Results by distance"), class_="mt-2 mb-1"),
+            ui_helpers.render_dict_table(band_rows),
+            ui.p("Run value / 100 is from the hitter's side: lower (more negative) is better for the pitcher.",
+                 class_="text-muted small"),
+            output_widget("pp_best_zone_chart"),
+        ]
+
+    @render_plotly
+    def pp_best_zone_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "zone":
+            return None
+        req("pp_zone_hand" in input)
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            player = db.query(Player).filter(Player.player_id == pid).first() if pid else None
+            if player is None or player.throws not in ("R", "L"):
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"], game_id=f["game_id"],
+            )
+            game_pitches = _zone_hand_filtered(db, game_pitches, input.pp_zone_hand())
+            scored, maps = best_zone.score_for_pitcher(db, game_pitches, player.throws)
+            if not scored:
+                return None
+            choice = input.pp_zone_hand()
+            if choice == "vs RHH":
+                hand = "R"
+            elif choice == "vs LHH":
+                hand = "L"
+            else:
+                same = sum(1 for r in scored if r["matchup"] == "same")
+                hand = player.throws if same >= len(scored) - same else ("L" if player.throws == "R" else "R")
+            return best_zone_figure(scored, maps, player.throws, hand)
         finally:
             db.close()
 

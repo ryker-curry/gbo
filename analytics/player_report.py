@@ -50,7 +50,7 @@ from analytics.pitcher_game_report import (
     _compute_header_stats, _fps_stat, _secondary_strike_stat, _pitcher_id,
     STRIKE_OUTCOMES, SWING_OUTCOMES, FPS_GOAL_PCT, SECONDARY_STRIKE_GOAL_PCT,
 )
-from analytics import command_metrics
+from analytics import command_metrics, best_zone
 from analytics.rapsodo_goal_metrics import rapsodo_field_for_test_name, average_rapsodo_metric
 
 MIN_SAMPLE = 5
@@ -225,6 +225,8 @@ def pitch_mix(db, pitches, throws):
     by_type = defaultdict(list)
     for p in pitches:
         by_type[command_metrics.pitch_type_label(p)].append(p)
+    bz_scored, _maps = best_zone.score_for_pitcher(db, pitches, throws) if throws in ("R", "L") else ([], None)
+    bz_by_type = {r["label"]: r for r in best_zone.summary_by_type(bz_scored)}
     rows = []
     for label, ps in sorted(by_type.items(), key=lambda kv: -len(kv[1])):
         n = len(ps)
@@ -247,6 +249,9 @@ def pitch_mix(db, pitches, throws):
             "located": len(located), "h_lean": h_lean, "v_lean": v_lean,
             "lean": _lean_text(h_lean, v_lean) if located else None,
             "is_fastball": label in FASTBALL_TYPES,
+            "bz_pct": bz_by_type[label]["inside_pct"] if label in bz_by_type else None,
+            "bz_n": bz_by_type[label]["n"] if label in bz_by_type else 0,
+            "bz_where": bz_by_type[label]["where"] if label in bz_by_type else None,
         })
     return rows
 
@@ -364,6 +369,14 @@ def takeaways(rows, mix, total_pitches):
             bad.append((1.5 + (55 - worst["strike_pct"]) / 10,
                         f"Your {worst['pitch'].lower()} was a strike only {worst['strike_pct']:.0f}% of the time "
                         f"({worst['n']} thrown). Make it a pitch you can land when you need to."))
+    for p in mix:
+        if p.get("bz_n", 0) >= MIN_PITCHES_FOR_PITCH_NOTE and p["bz_pct"] is not None:
+            if p["bz_pct"] >= 60:
+                good.append((1.1 + (p["bz_pct"] - 60) / 20, f"Your {p['pitch'].lower()} landed in its best zone "
+                                                              f"{p['bz_pct']:.0f}% of the time ({p['bz_where']})."))
+            elif p["bz_pct"] <= 35:
+                bad.append((1.2 + (35 - p["bz_pct"]) / 20, f"Your {p['pitch'].lower()} landed in its best zone only "
+                                                            f"{p['bz_pct']:.0f}% of the time. Aim it {p['bz_where']}."))
     for p in mix:
         if p["located"] >= 6 and p["h_lean"] is not None:
             big = max(abs(p["h_lean"]), abs(p["v_lean"]))
