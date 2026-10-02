@@ -42,7 +42,7 @@ from pitch_location_stats import compute_command_precision, compute_attack_zones
 # Command Precision/Attack Zones above are untouched, computed the way
 # they always have been -- this is a new, additional section, not a
 # replacement.
-from analytics import command_metrics, profile_queries
+from analytics import command_metrics, profile_queries, approach_angles
 from analytics.pitcher_game_report import compute_staff_game_totals, FPS_GOAL_PCT, SECONDARY_STRIKE_GOAL_PCT
 from analytics.pitch_grading import stuff_plus, arsenal_summary, location_plus, MIN_BASELINE_PITCHES
 # Sept 2026, Ryker: "add a results section to game report as well"
@@ -269,7 +269,18 @@ def _pitch_type_breakdown_view(rows_with_stuff):
     )
 
 
-def _pitch_shape_rows(pitches, rap_by_gp, stuff_baselines, pitcher):
+def _approach_avg(raps, pitcher, model, key):
+    if not raps or model is None or pitcher is None:
+        return None
+    vals = [r[key] for r in approach_angles.score_pitches(raps, pitcher.throws, model) if r[key] is not None]
+    return sum(vals) / len(vals) if vals else None
+
+
+def _signed_deg(v):
+    return f"{v:+.1f}°" if v is not None else "—"
+
+
+def _pitch_shape_rows(pitches, rap_by_gp, stuff_baselines, pitcher, approach_model=None):
     """Physical pitch-shape table for the Pitch Shape (Rapsodo) section
     (Ryker's Pitch Profiler-style reference, Sept 2026): Velocity/Spin
     Rate/IVB/HB/VAA/HAA/vRel/hRel/Ext/Arm deg, plus Stuff+ and Whiff %,
@@ -344,6 +355,10 @@ def _pitch_shape_rows(pitches, rap_by_gp, stuff_baselines, pitcher):
             "HB": _d(_avg_field(raps, "hb_trajectory"), '"'),
             "VAA": _d(_avg_pitch_level([_pitch_level_vaa(r)["value_degrees"] for r in raps])[0], "° (est.)"),
             "HAA": _d(_avg_pitch_level([_pitch_level_haa(r)["value_degrees"] for r in raps])[0], "° (est.)"),
+            # Oct 2026 (VAAA/HAAAA, analytics/approach_angles.py): angle
+            # minus what its plate location (and release side) predicts.
+            "VAAA": _signed_deg(_approach_avg(raps, pitcher, approach_model, "vaaa")),
+            "HAAAA": _signed_deg(_approach_avg(raps, pitcher, approach_model, "haaaa")),
             "vRel": _d(_avg_field(raps, "release_height"), "'"),
             "hRel": _d(_avg_field(raps, "release_side"), "'"),
             "Ext": _d(_avg_field(raps, "release_extension"), "'"),
@@ -2015,7 +2030,11 @@ def pitcher_game_report_server(input, output, session, app_state):
                 return None
             rap_by_gp = profile_queries.rapsodo_by_game_pitch_id(db, [p.game_pitch_id for p in pitches])
             stuff_baselines = profile_queries.team_stuff_plus_baselines(db)
-            rows = _pitch_shape_rows(pitches, rap_by_gp, stuff_baselines, pitcher)
+            try:
+                approach_model = approach_angles.get_model(db)
+            except Exception:
+                approach_model = None
+            rows = _pitch_shape_rows(pitches, rap_by_gp, stuff_baselines, pitcher, approach_model)
             if not rows:
                 return None
             return ui.div(
@@ -2024,6 +2043,12 @@ def pitcher_game_report_server(input, output, session, app_state):
                     "VAA/HAA are estimated from release point, release angle, extension, and actual plate-crossing "
                     "location (not a direct Rapsodo measurement -- Rapsodo's own exported VAA/HAA columns are blank "
                     "in these files), same approach as the Bullpen Dashboard's arm-angle/VAA/HAA estimates.",
+                    class_="text-muted small",
+                ),
+                ui.p(
+                    "VAAA / HAAAA: the angle minus what this pitch's location (and, for HAAAA, release side) predicts, "
+                    "from lines fit on all of our Rapsodo readings. VAAA + = flatter than expected, − = steeper. "
+                    "HAAAA + = sharper toward a right-handed hitter, − = toward a lefty (Paradigm's convention).",
                     class_="text-muted small",
                 ),
                 ui.p(
