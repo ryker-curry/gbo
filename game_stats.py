@@ -206,7 +206,10 @@ def get_batter_hands(session, pitches):
             player = our_players.get(batter_id)
             if player is not None:
                 raw_bats = player.bats
-        if raw_bats is None and p.opponent_player_id is not None:
+        # Oct 2026: when WE bat, opponent_player_id now holds THEIR PITCHER
+        # (Advance Scouting's "Their pitcher" picker) -- never read his
+        # bats as the batter's.
+        if raw_bats is None and p.opponent_player_id is not None and not p.is_our_team_batting:
             opp = opp_players.get(p.opponent_player_id)
             if opp is not None:
                 raw_bats = opp.bats

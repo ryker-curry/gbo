@@ -360,6 +360,7 @@ from database import get_session
 from format_helpers import opponent_display_name as _opponent_display_name
 import strike_zone
 import field_location
+from sqlalchemy import func
 from models import (
     Player, Position, PitchType, Game, GameLineupSlot, GamePitch, RunExpectancy,
     OpponentTeam, OpponentPlayer, Season, PitchingChange, PlayerPitchArsenal, OpponentLineupSlot,
@@ -498,6 +499,20 @@ def compute_re_and_rv(re_lookup, outs_before, bases_before, balls_before, strike
         run_value = round((re_after + runs_scored) - re_before, 3)
 
     return re_before, re_after, run_value
+
+
+def _their_current_pitcher(db, game, pitches):
+    """(opponent_player_id, hand) for the "Their pitcher" default when we
+    bat vs an external opponent (Oct 2026, Advance Scouting): whoever
+    threw our last batting pitch in this game, else their listed starter."""
+    for p in reversed(pitches or []):
+        if p.is_our_team_batting and p.opponent_player_id is not None:
+            op = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == p.opponent_player_id).first()
+            return p.opponent_player_id, (op.throws if op and op.throws in ("R", "L") else p.opponent_hand)
+    if getattr(game, "opponent_starting_pitcher_id", None):
+        op = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == game.opponent_starting_pitcher_id).first()
+        return game.opponent_starting_pitcher_id, (op.throws if op and op.throws in ("R", "L") else None)
+    return None, None
 
 
 def get_current_pitcher_id(game):
@@ -3744,7 +3759,23 @@ def game_tracking_server(input, output, session, app_state):
                     # since we usually don't have a reliable
                     # Player.throws for them.
                     if not game.is_intrasquad:
-                        children.append(ui.input_radio_buttons("opp_pitcher_hand_radio", "Opposing pitcher's hand", choices=["R", "L"], selected="R", inline=True))
+                        # Oct 2026 (Advance Scouting): record WHICH of their
+                        # pitchers is throwing, so scouting reports can split
+                        # by pitcher. Defaults to whoever threw to us last in
+                        # this game, else their listed starter. Hand follows
+                        # the picked pitcher when his throws is on file.
+                        default_pid, default_hand = _their_current_pitcher(db, game, pitches)
+                        if game.opponent_team_id:
+                            roster = (db.query(OpponentPlayer).filter(OpponentPlayer.team_id == game.opponent_team_id)
+                                      .order_by(OpponentPlayer.player_name).all())
+                            choices = {"": "Unknown"}
+                            choices.update({str(op.opponent_player_id): f"{op.player_name}" + (f" #{op.jersey_number}" if op.jersey_number else "")
+                                            + (f" ({op.throws}HP)" if op.throws else "") for op in roster})
+                            children.append(ui.input_select("opp_their_pitcher_select", "Their pitcher", choices=choices,
+                                                            selected=str(default_pid) if default_pid else ""))
+                            children.append(ui.input_text("opp_new_pitcher_name", None, placeholder="...or new pitcher's name (adds him to their roster)"))
+                        children.append(ui.input_radio_buttons("opp_pitcher_hand_radio", "Opposing pitcher's hand", choices=["R", "L"],
+                                                               selected=default_hand or "R", inline=True))
                 else:
                     # Sept 2026 (Ryker: "why does opposing batter's
                     # hand show up ... it should not be there" for an
@@ -4553,6 +4584,26 @@ def game_tracking_server(input, output, session, app_state):
         finally:
             db.close()
 
+    def _resolve_their_pitcher(db, game, hand):
+        """Their pitcher from the "Their pitcher" picker / new-name box
+        (Oct 2026, Advance Scouting). A typed new name is added to their
+        roster (position P, the picked hand). None = unknown."""
+        if not game.opponent_team_id:
+            return None
+        new_name = (input.opp_new_pitcher_name() or "").strip() if "opp_new_pitcher_name" in input else ""
+        if new_name:
+            existing = (db.query(OpponentPlayer)
+                        .filter(OpponentPlayer.team_id == game.opponent_team_id,
+                                func.lower(OpponentPlayer.player_name) == new_name.lower()).first())
+            if existing is not None:
+                return existing.opponent_player_id
+            op = OpponentPlayer(team_id=game.opponent_team_id, player_name=new_name, throws=hand, position="P")
+            db.add(op)
+            db.flush()
+            return op.opponent_player_id
+        raw = input.opp_their_pitcher_select() if "opp_their_pitcher_select" in input else ""
+        return int(raw) if raw else None
+
     def _do_record_pitch():
         game_id = _active_game_id()
         if game_id is None:
@@ -4620,6 +4671,12 @@ def game_tracking_server(input, output, session, app_state):
                         opp_hand_choice = pitcher_for_hand.throws if pitcher_for_hand and pitcher_for_hand.throws else "R"
                     else:
                         opp_hand_choice = input.opp_pitcher_hand_radio() if "opp_pitcher_hand_radio" in input else "R"
+                        # Oct 2026 (Advance Scouting): their pitcher, if picked/typed.
+                        opp_player_choice = _resolve_their_pitcher(db, game, opp_hand_choice)
+                        if opp_player_choice is not None:
+                            picked = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == opp_player_choice).first()
+                            if picked is not None and picked.throws in ("R", "L"):
+                                opp_hand_choice = picked.throws
                 else:
                     our_player_choice = get_current_pitcher_id(game)
                     if our_player_choice is None:
@@ -4757,7 +4814,9 @@ def game_tracking_server(input, output, session, app_state):
                 our_player_id=our_player_choice,
                 opponent_hand=opp_hand_choice,
                 opponent_batting_order=opp_batting_order_choice if not state["is_our_batting"] else None,
-                opponent_player_id=opp_player_choice if not state["is_our_batting"] else None,
+                # Their batter when we pitch; THEIR PITCHER when we bat
+                # (Oct 2026, Advance Scouting) -- intrasquad batting stays None.
+                opponent_player_id=opp_player_choice if (not state["is_our_batting"] or not game.is_intrasquad) else None,
                 opponent_our_player_id=opp_our_player_choice,
                 batting_slot_id=batting_slot_id,
                 batting_squad=batting_squad,
