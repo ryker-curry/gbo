@@ -115,6 +115,7 @@ from pitch_type_config import get_pitch_color, FASTBALL_TYPES
 from analytics import fastball_shape
 from services.pitch_type_switch import apply_switches, undo_switches
 from models import PitchTypeChange
+from analytics import approach_angles
 
 import ui_helpers
 import format_helpers
@@ -704,6 +705,116 @@ def pitcher_profile_server(input, output, session, app_state):
         finally:
             db.close()
 
+    # -------------------------------------------------------------------
+    # VAAA / HAAAA (Oct 2026, Ryker sent Paradigm's HAAAA thread: "build
+    # both"). Approach angles minus what the pitch's context predicts --
+    # see analytics/approach_angles.py for the model and sign conventions.
+    # -------------------------------------------------------------------
+    def _fmt_deg(v, signed=True):
+        if v is None:
+            return "—"
+        return f"{v:+.1f}°" if signed else f"{v:.1f}°"
+
+    def _approach_children(db, player, rapsodo_pitches):
+        try:
+            model = approach_angles.get_model(db)
+            scored = approach_angles.score_pitches(rapsodo_pitches, player.throws, model)
+        except Exception:
+            return []
+        rows = approach_angles.summary_by_type(scored, player.throws, FASTBALL_TYPES)
+        if not rows or all(r["n_vaaa"] == 0 and r["n_haaaa"] == 0 for r in rows):
+            return [ui.hr(), ui.p(ui.strong("Approach Angles Above Expected (VAAA / HAAAA)")),
+                    ui.p("Not enough Rapsodo readings with plate location yet to build the expected-angle model.",
+                         class_="text-muted small")]
+        table = [{
+            "Pitch Type": r["label"] + (" *" if r["rough"] else ""), "#": r["n"],
+            "VAA": _fmt_deg(r["vaa"], signed=False), "VAAA": _fmt_deg(r["vaaa"]), "Vertical read": r["vaaa_text"],
+            "HAA": _fmt_deg(r["haa"]), "HAAAA": _fmt_deg(r["haaaa"]), "Horizontal read": r["haaaa_text"],
+        } for r in rows]
+        # Fit quality of the per-pitch-type lines actually used here
+        # (the pooled fallback line is always weaker -- it ignores type).
+        labels = {r["label"] for r in rows}
+        v_r2 = [model["vaa"][l]["r2"] for l in labels if l in model["vaa"]]
+        h_r2 = [model["haa"][l]["r2"] for l in labels if l in model["haa"]]
+        fit_note = []
+        if v_r2:
+            fit_note.append(f"VAA lines R² {min(v_r2):.2f}–{max(v_r2):.2f}" if len(v_r2) > 1 else f"VAA line R² {v_r2[0]:.2f}")
+        if h_r2:
+            fit_note.append(f"HAA lines R² {min(h_r2):.2f}–{max(h_r2):.2f}" if len(h_r2) > 1 else f"HAA line R² {h_r2[0]:.2f}")
+        return [
+            ui.hr(),
+            ui.p(ui.strong("Approach Angles Above Expected (VAAA / HAAAA)")),
+            ui.p(
+                "Raw approach angles mostly reflect where a pitch crossed the plate and where it was released. These "
+                "subtract what that context predicts, leaving what's unusual about the pitch itself. "
+                "VAAA: + = flatter than expected for its height (fastballs up), − = steeper (breaking balls). "
+                "HAAAA (Paradigm's convention): + = sharper toward a right-handed hitter than expected, − = toward a "
+                "lefty. Expected angles come from lines fit on all of our Rapsodo readings"
+                + (f" ({', '.join(fit_note)})" if fit_note else "") + ". * = rougher estimate (too few team readings of "
+                "that pitch type yet, so a pooled line was used). Built on estimated VAA/HAA.",
+                class_="text-muted small",
+            ),
+            ui_helpers.render_dict_table(table),
+            ui_helpers.card(
+                *[ui.div(
+                    ui.strong(r["label"]),
+                    ui.tags.ul(*[ui.tags.li(t) for t in approach_angles.usage_tips(r, player.throws)],
+                               style="margin:2px 0 8px; padding-left:18px;"),
+                ) for r in rows],
+                ui.p("Starting points, not proven on our own games yet: side-to-side lines follow Paradigm's 2026 D1 "
+                     "swing/whiff findings, up-and-down lines follow the standard VAA patterns.",
+                     class_="text-muted small", style="margin:0;"),
+                title="How to use it",
+            ),
+            ui.input_switch("pp_aa_show_chart", "Show advanced chart (every pitch's VAAA vs. HAAAA)", value=False),
+            output_widget("pp_approach_chart"),
+        ]
+
+    @render_plotly
+    def pp_approach_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "metrics":
+            return None
+        if "pp_aa_show_chart" not in input or not input.pp_aa_show_chart():
+            return None
+        db = get_session()
+        try:
+            player, rapsodo_pitches = _physical_target(db)
+            if player is None or not rapsodo_pitches:
+                return None
+            model = approach_angles.get_model(db)
+            scored = [r for r in approach_angles.score_pitches(rapsodo_pitches, player.throws, model)
+                      if r["vaaa"] is not None and r["haaaa"] is not None]
+            if not scored:
+                return None
+            fig = go.Figure()
+            by_type = {}
+            for r in scored:
+                by_type.setdefault(r["label"], []).append(r)
+            for label, rs in sorted(by_type.items(), key=lambda kv: -len(kv[1])):
+                fig.add_trace(go.Scatter(
+                    x=[r["haaaa"] for r in rs], y=[r["vaaa"] for r in rs], mode="markers", name=label,
+                    marker=dict(color=get_pitch_color(label), size=8, opacity=0.75, line=dict(width=0.5, color="#1E1E1E")),
+                    hovertemplate=f"{label}<br>HAAAA %{{x:+.1f}}°<br>VAAA %{{y:+.1f}}°<extra></extra>",
+                ))
+                mx = sum(r["haaaa"] for r in rs) / len(rs)
+                my = sum(r["vaaa"] for r in rs) / len(rs)
+                fig.add_trace(go.Scatter(
+                    x=[mx], y=[my], mode="markers", showlegend=False,
+                    marker=dict(color=get_pitch_color(label), size=16, symbol="diamond", line=dict(width=2, color="#FFFDE5")),
+                    hovertemplate=f"{label} average<br>HAAAA {mx:+.1f}°<br>VAAA {my:+.1f}°<extra></extra>",
+                ))
+            fig.add_hline(y=0, line=dict(color="#6b7280", width=1))
+            fig.add_vline(x=0, line=dict(color="#6b7280", width=1))
+            return apply_gbo_theme(
+                fig, title="Approach angles vs. expected (diamond = pitch average)", height=430,
+                x_title="HAAAA (°)  ← toward LHH · toward RHH →", y_title="VAAA (°)  ↓ steeper · flatter ↑",
+            )
+        finally:
+            db.close()
+
     @render.ui
     def pp_metrics_section():
         """Sept 2026 rebuild -- see module docstring. Header + per-
@@ -849,6 +960,7 @@ def pitcher_profile_server(input, output, session, app_state):
                 ),
                 ui_helpers.render_dict_table(table_rows),
                 *trajectory_children,
+                *_approach_children(db, player, rapsodo_pitches),
                 ui.hr(),
                 *graphic_children,
                 ui.hr(),
