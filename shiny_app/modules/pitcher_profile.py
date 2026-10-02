@@ -114,8 +114,10 @@ import glossary_content
 from pitch_type_config import get_pitch_color, FASTBALL_TYPES
 from analytics import fastball_shape
 from services.pitch_type_switch import apply_switches, undo_switches
-from models import PitchTypeChange
-from analytics import approach_angles, best_zone
+from models import PitchTypeChange, ArsenalTarget
+from analytics import approach_angles, best_zone, arsenal_plan
+from analytics.bullpen_metrics import average_estimated_arm_angle
+from visualizations.arsenal_plan_chart import plan_movement_figure, progress_figure
 from visualizations.best_zone_chart import best_zone_figure
 
 import ui_helpers
@@ -252,6 +254,7 @@ def pitcher_profile_ui():
         ui.output_ui("pp_arsenal_section"),
         ui.output_ui("pp_count_leverage_section"),
         ui.output_ui("pp_fastball_shape_section"),
+        ui.output_ui("pp_arsenal_plan_section"),
         ui_helpers.page_footer(),
     )
 
@@ -448,6 +451,7 @@ def pitcher_profile_server(input, output, session, app_state):
                 "command": "Command & Execution",
                 "arsenal": "Arsenal",
                 "count_leverage": "Count Leverage",
+                "arsenal_plan": "Arsenal Plan",
             }
             # Oct 2026, Ryker: "i don't want guys to see it" -- the
             # Fastball Shape Check is a staff-only data-cleanup tool.
@@ -2550,6 +2554,245 @@ def pitcher_profile_server(input, output, session, app_state):
         if not plan:
             return None
         return command_charts.pitch_targeting_chart(plan)
+
+    # -------------------------------------------------------------------
+    # Arsenal Plan (Oct 2026, Ryker sent Paradigm's REAPER thread: "build
+    # it"). Keep / tune / add, built off his own fastball and arm slot --
+    # see analytics/arsenal_plan.py for the rules and their limits.
+    # Players see it; FS_SWITCH_ROLES can save their own target shapes.
+    # -------------------------------------------------------------------
+    _ap_tick = reactive.Value(0)
+
+    def _ap_overrides(db, pid):
+        try:
+            rows = db.query(ArsenalTarget).filter(ArsenalTarget.player_id == pid).all()
+        except Exception:
+            db.rollback()
+            return {}
+        return {r.family: {"velo": float(r.velo) if r.velo is not None else None, "ivb": float(r.ivb),
+                           "run": float(r.run), "note": r.note} for r in rows}
+
+    def _ap_data(db):
+        pid = _current_player_id(db)
+        if pid is None:
+            return None, None, None
+        player = db.query(Player).filter(Player.player_id == pid).first()
+        if player is None:
+            return None, None, None
+        f = _current_filters()
+        games_only = ("pp_ap_source" in input) and input.pp_ap_source() == "games"
+        raps = profile_queries.get_pitcher_rapsodo_pitches(
+            db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+            game_scope=f["game_scope"], game_id=f["game_id"], game_linked_only=games_only,
+        )
+        fb_like = [p for p in raps if pitch_type_label(p) in arsenal_plan.FASTBALLS]
+        arm, _n = average_estimated_arm_angle(fb_like or raps, player)
+        heights = [float(p.release_height) for p in (fb_like or raps) if p.release_height is not None]
+        rel_h = sum(heights) / len(heights) if heights else None
+        overrides = _ap_overrides(db, pid)
+        plan = arsenal_plan.build_plan(raps, player.throws or "R", arm, rel_h, overrides=overrides, label_of=pitch_type_label)
+        return player, plan, raps
+
+    @render.ui
+    def pp_arsenal_plan_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "arsenal_plan":
+            return None
+        _ap_tick()
+        db = get_session()
+        try:
+            player, plan, raps = _ap_data(db)
+            source = input.pp_ap_source() if "pp_ap_source" in input else "all"
+            controls = ui.input_radio_buttons(
+                "pp_ap_source", "Rapsodo readings",
+                {"all": "Games + bullpens", "games": "Games only"}, selected=source, inline=True,
+            )
+            head = [
+                ui.hr(),
+                ui.h5("Arsenal Plan", class_="gbo-section-title"),
+                ui.p("What to keep, what to tune, and what to add -- built off his own fastball shape and arm slot, "
+                     "using established pitch-design rules (not a trained model like Paradigm's REAPER). Treat targets "
+                     "as starting points; coaches can save their own. Uses this page's date range.",
+                     class_="text-muted small"),
+                controls,
+            ]
+            if player is None or plan is None:
+                return ui.div(*head, ui.p("Needs at least 5 Rapsodo fastball readings in this range.",
+                                          class_="text-muted small"))
+            fb = plan["fb"]
+            slot_txt = {"high": "high slot", "low": "low slot", "mid": "three-quarter slot"}[plan["slot"]]
+            arm_txt = f" (est. arm angle {plan['arm_angle']:.0f}°)" if plan.get("arm_angle") is not None else ""
+            kind_txt = {"ride": "a riding fastball profile -- builds around vertical separation",
+                        "run": "a running/sinking profile -- builds around horizontal separation",
+                        "mid": "an in-between profile"}[plan["kind"]]
+            summary = ui.p(
+                ui.strong(f"{plan['primary']}: "),
+                f"{fb['velo']:.1f} mph, {fb['ivb']:.1f}\" ride, {fb['run']:.1f}\" arm-side run · {slot_txt}{arm_txt} · "
+                f"{kind_txt}.", class_="small",
+            )
+
+            def fmt_shape(sh):
+                v = f"{sh['velo']:.1f} mph · " if sh.get("velo") is not None else ""
+                return f"{v}{sh['ivb']:.1f}\" ride · {sh['run']:+.1f}\" run"
+
+            keeps = [r for r in plan["rows"] if r["status"] in ("keep", "anchor")]
+            tunes = [r for r in plan["rows"] if r["status"] == "tune"]
+
+            def item(title, lines, color):
+                return ui.div(ui.strong(title, style=f"color:{color};"),
+                              *[ui.div(l, class_="small") for l in lines],
+                              style="margin-bottom:10px;")
+
+            keep_card = ui_helpers.card(*[
+                item(r["label"], [f"Now: {fmt_shape(r['cur'])}", r["text"]], get_pitch_color(r["label"])) for r in keeps
+            ] or [ui.p("Nothing at its target yet.", class_="text-muted small")], title="Keep")
+            tune_card = ui_helpers.card(*[
+                item(r["label"] + (f" → {arsenal_plan.NAMES[r['family']]} target" if arsenal_plan.NAMES.get(r["family"]) != r["label"] else ""),
+                     [f"Now: {fmt_shape(r['cur'])}",
+                      f"Target{' (coach)' if r.get('source') == 'coach' else ''}: {fmt_shape(r['target'])} · {r['dist']:.1f}\" away",
+                      r["text"]], get_pitch_color(r["label"])) for r in tunes
+            ] or [ui.p("Nothing to tune.", class_="text-muted small")], title="Tune")
+            add_card = ui_helpers.card(*[
+                item(f"+ {a['label']}" + ("" if a["core"] else " (option)"),
+                     [f"Target{' (coach)' if a.get('source') == 'coach' else ''}: {fmt_shape(a['target'])}", a["why"]],
+                     get_pitch_color(a["label"])) for a in plan["adds"]
+            ] or [ui.p("Nothing missing for his profile.", class_="text-muted small")], title="Add")
+
+            children = head + [summary,
+                ui.layout_columns(keep_card, tune_card, add_card, col_widths=[4, 4, 4]),
+                output_widget("pp_ap_movement"),
+                ui.p("Progress: how far each pitch's shape was from its target in each session (all readings that day).",
+                     class_="text-muted small mt-2"),
+                output_widget("pp_ap_progress"),
+            ]
+            if app_state.role_name() in FS_SWITCH_ROLES:
+                fam_choices = {k: v for k, v in arsenal_plan.NAMES.items()}
+                children.append(ui_helpers.card(
+                    ui.layout_columns(
+                        ui.input_select("pp_ap_family", "Pitch", choices=fam_choices,
+                                        selected=input.pp_ap_family() if "pp_ap_family" in input else "changeup"),
+                        ui.output_ui("pp_ap_fields"),
+                        col_widths=[3, 9],
+                    ),
+                    ui.div(
+                        ui.input_action_button("pp_ap_save", "Save target", class_="btn-sm btn-primary"),
+                        ui.input_action_button("pp_ap_reset", "Reset to rule", class_="btn-sm btn-outline-light",
+                                               style="margin-left:8px;"),
+                    ),
+                    ui.p("Ride = induced vertical break; run is + toward his arm side, - toward his glove side (inches).",
+                         class_="text-muted small", style="margin-top:6px;"),
+                    title="Set a target (coaches)",
+                ))
+            return ui.div(*children)
+        finally:
+            db.close()
+
+    @render.ui
+    def pp_ap_fields():
+        if app_state.role_name() not in FS_SWITCH_ROLES:
+            return None
+        req("pp_ap_family" in input)
+        fam = input.pp_ap_family()
+        _ap_tick()
+        db = get_session()
+        try:
+            _player, plan, _raps = _ap_data(db)
+            t = (plan or {}).get("targets", {}).get(fam) or {"velo": None, "ivb": 0.0, "run": 0.0}
+            return ui.layout_columns(
+                ui.input_numeric("pp_ap_velo", "Velo (mph)", value=t.get("velo"), step=0.5),
+                ui.input_numeric("pp_ap_ivb", "Ride (in)", value=t["ivb"], step=0.5),
+                ui.input_numeric("pp_ap_run", "Run (in)", value=t["run"], step=0.5),
+                ui.input_text("pp_ap_note", "Note", value=""),
+                col_widths=[2, 2, 2, 6],
+            )
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.pp_ap_save)
+    def _pp_ap_save():
+        if app_state.role_name() not in FS_SWITCH_ROLES:
+            return
+        ivb, run = input.pp_ap_ivb(), input.pp_ap_run()
+        if ivb is None or run is None:
+            ui.notification_show("Enter ride and run.", type="warning", duration=5)
+            return
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            fam = input.pp_ap_family()
+            row = db.query(ArsenalTarget).filter(ArsenalTarget.player_id == pid, ArsenalTarget.family == fam).first()
+            if row is None:
+                row = ArsenalTarget(player_id=pid, family=fam)
+                db.add(row)
+            row.velo = input.pp_ap_velo()
+            row.ivb, row.run = ivb, run
+            row.note = (input.pp_ap_note() or "").strip() or None
+            row.updated_by_user_id = app_state.user_id()
+            db.commit()
+            ui.notification_show(f"Saved {arsenal_plan.NAMES.get(fam, fam)} target.", type="message", duration=5)
+        except Exception as e:
+            db.rollback()
+            ui.notification_show(f"Couldn't save -- has migrate_arsenal_targets been run? ({e})", type="error", duration=10)
+        finally:
+            db.close()
+        _ap_tick.set(_ap_tick() + 1)
+
+    @reactive.effect
+    @reactive.event(input.pp_ap_reset)
+    def _pp_ap_reset():
+        if app_state.role_name() not in FS_SWITCH_ROLES:
+            return
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            db.query(ArsenalTarget).filter(ArsenalTarget.player_id == pid,
+                                           ArsenalTarget.family == input.pp_ap_family()).delete()
+            db.commit()
+            ui.notification_show("Back to the rule-based target.", type="message", duration=5)
+        except Exception as e:
+            db.rollback()
+            ui.notification_show(f"Couldn't reset ({e})", type="error", duration=10)
+        finally:
+            db.close()
+        _ap_tick.set(_ap_tick() + 1)
+
+    @render_plotly
+    def pp_ap_movement():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "arsenal_plan":
+            return None
+        _ap_tick()
+        db = get_session()
+        try:
+            _player, plan, _raps = _ap_data(db)
+            return plan_movement_figure(plan) if plan else None
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_ap_progress():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "arsenal_plan":
+            return None
+        _ap_tick()
+        db = get_session()
+        try:
+            player, plan, raps = _ap_data(db)
+            if not plan:
+                return None
+            return progress_figure(arsenal_plan.progress(raps, player.throws or "R", plan, label_of=pitch_type_label))
+        finally:
+            db.close()
 
     # -------------------------------------------------------------------
     # Fastball Shape Check (Oct 2026, Ryker: "build this into the
