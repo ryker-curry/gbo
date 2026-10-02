@@ -1877,3 +1877,33 @@ class ArsenalTarget(Base):
     note = Column(Text, nullable=True)
     updated_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class WeeklyReportNote(Base):
+    """Coach's optional note on a pitcher's Weekly Progress Report (Oct
+    2026). week_start = the Monday of the week the report covers. Goes
+    out with Monday's report either way (Ryker's call)."""
+    __tablename__ = "weekly_report_notes"
+    __table_args__ = (UniqueConstraint("player_id", "week_start", name="uq_weekly_note_player_week"),)
+
+    note_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    week_start = Column(Date, nullable=False)
+    note = Column(Text, nullable=True)
+    updated_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class WeeklyReportSend(Base):
+    """One row per weekly-report email attempt (scripts/send_weekly_reports.py)
+    -- so a re-run never double-sends, and staff can see who got theirs."""
+    __tablename__ = "weekly_report_sends"
+    __table_args__ = (UniqueConstraint("player_id", "week_start", name="uq_weekly_send_player_week"),)
+
+    send_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    week_start = Column(Date, nullable=False)
+    email = Column(String(150), nullable=True)
+    status = Column(String(20), nullable=False)  # "sent" / "failed" / "no_email"
+    detail = Column(Text, nullable=True)
+    sent_at = Column(DateTime, default=datetime.utcnow, nullable=False)

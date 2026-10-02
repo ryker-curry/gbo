@@ -118,6 +118,8 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             # self-scoped by role, same pattern as player_profile.py.
             NavPage("pitcher_profile", "Pitcher Profile", "graph-up-arrow"),
             NavPage("hitter_profile", "Hitter Profile", "graph-up-arrow"),
+            # Oct 2026: automated weekly progress report (pitchers for now).
+            NavPage("weekly_report", "Weekly Reports", "calendar-week"),
             # Sept 2026, Ryker: "create a pitching staff leaderboard with
             # both coaches and players can see" -- roster-wide, sortable
             # by any stat, coach/player-configurable columns. Also added
@@ -174,6 +176,7 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             # roster-wide picker.
             my_dev_pages.append(NavPage("pitcher_game_report", "My Game Report", "file-text"))
             my_dev_pages.append(NavPage("pitcher_meeting_report", "My Meeting Report", "printer"))
+            my_dev_pages.append(NavPage("weekly_report", "My Weekly Report", "calendar-week"))
         else:
             my_dev_pages.append(NavPage("player_hitting", "My Hitting", "trophy"))
             my_dev_pages.append(NavPage("hitter_profile", "My Hitter Profile", "graph-up-arrow"))
