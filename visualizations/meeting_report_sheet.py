@@ -183,6 +183,17 @@ def _mix_table(r):
     return f'<table>{head}{"".join(rows)}</table>{note}'
 
 
+def _stuff_why(r):
+    lines = r.get("stuff_why") or []
+    if not lines:
+        return ""
+    scope = f' <span class="small">({_e(r["stuff_why_scope"])})</span>' if r.get("stuff_why_scope") else ""
+    return (f'<div class="sec"><h2>Why your stuff grades what it does{scope}</h2><ul>'
+            + "".join(f"<li>{_e(t)}</li>" for t in lines)
+            + '</ul><div class="small">Stuff+: 100 = team average for that pitch. Numbers in () are Stuff+ points '
+              'each trait adds or costs.</div></div>')
+
+
 def _goals_html(goals):
     if not goals:
         return '<div class="small">No active development goals in GBO. Set them on Development Plans.</div>'
@@ -252,6 +263,7 @@ def render_sheet(r, notes=None, team_name="Pitt State Baseball"):
     <div class="well"><h2 style="color:#1e8a4c;border-color:#1e8a4c">What went well</h2><ul>{"".join(f"<li>{_e(t)}</li>" for t in r["good"])}</ul></div>
     <div class="work"><h2 style="color:#c0392b;border-color:#c0392b">What to work on</h2><ul>{"".join(f"<li>{_e(t)}</li>" for t in r["bad"])}</ul></div>
   </div>
+  {_stuff_why(r)}
   {log_block}
   <div class="row">
     {goals_block}

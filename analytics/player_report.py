@@ -401,6 +401,36 @@ def _pitch_type_names(db):
     return {pt.pitch_type_id: pt.type_name for pt in db.query(PitchType).all()}
 
 
+def stuff_why(db, pitches, limit=3):
+    """Oct 2026 (Kyle Bland-style Stuff+ breakdown): one plain-English
+    "why it grades what it grades" line per pitch type, most-thrown first,
+    from the Rapsodo readings linked to these game pitches. Types with
+    fewer than stuff_breakdown.MIN_PITCHES_FOR_BREAKDOWN readings are
+    skipped -- a one-page sheet shouldn't carry a 3-pitch read."""
+    from analytics import stuff_breakdown
+    ids = [p.game_pitch_id for p in pitches]
+    if not ids:
+        return []
+    try:
+        raps = (db.query(RapsodoPitch).options(joinedload(RapsodoPitch.pitch_type))
+                .filter(RapsodoPitch.game_pitch_id.in_(ids)).all())
+        if not raps:
+            return []
+        breakdown, outcomes = stuff_breakdown.get_for_pitcher(db, raps, pitches)
+    except Exception:
+        return []
+    lines = []
+    for e in breakdown:
+        if not e.get("features") or not e.get("enough"):
+            continue
+        line = stuff_breakdown.why_line(e, outcomes)
+        if line:
+            lines.append(line)
+        if len(lines) >= limit:
+            break
+    return lines
+
+
 def game_report(db, player_id, game_id):
     player = db.query(Player).filter(Player.player_id == player_id).first()
     game = db.query(Game).options(joinedload(Game.opponent_team)).filter(Game.game_id == game_id).first()
@@ -423,6 +453,7 @@ def game_report(db, player_id, game_id):
         "you": you, "mine": mine, "team": team, "mine_label": "Your season", "rows": rows,
         "mix": mix, "locations": locations(mine_game), "good": good, "bad": bad,
         "goals": idp_goals(db, player_id), "game_log": None,
+        "stuff_why": stuff_why(db, mine_game + season_pitches), "stuff_why_scope": "season to date",
     }
 
 
@@ -456,4 +487,5 @@ def season_report(db, player_id, season_id):
         "you": you, "mine": last3, "team": team, "mine_label": "Last 3 games", "rows": rows,
         "mix": mix, "locations": locations(pitches), "good": good, "bad": bad,
         "goals": idp_goals(db, player_id), "game_log": log,
+        "stuff_why": stuff_why(db, pitches), "stuff_why_scope": None,
     }
