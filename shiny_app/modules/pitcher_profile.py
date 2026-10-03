@@ -115,7 +115,8 @@ from pitch_type_config import get_pitch_color, FASTBALL_TYPES
 from analytics import fastball_shape
 from services.pitch_type_switch import apply_switches, undo_switches
 from models import PitchTypeChange, ArsenalTarget
-from analytics import approach_angles, best_zone, arsenal_plan
+from analytics import approach_angles, best_zone, arsenal_plan, stuff_breakdown
+from visualizations.stuff_breakdown_chart import waterfall_figure, percentile_figure, outcome_figure
 from analytics.bullpen_metrics import average_estimated_arm_angle
 from visualizations.arsenal_plan_chart import plan_movement_figure, progress_figure
 from visualizations.best_zone_chart import best_zone_figure
@@ -1750,6 +1751,27 @@ def pitcher_profile_server(input, output, session, app_state):
                     for row in bundle["arsenal_rows"]
                 ]))
 
+            sb = _sb_data()
+            if sb and any(e["features"] for e in sb["breakdown"]):
+                sb_types = {e["label"]: f"{e['label']} ({e['stuff_plus']:.0f})" for e in sb["breakdown"] if e["features"]}
+                sections.append(ui.hr())
+                sections.append(ui.p(ui.strong("Stuff+ Breakdown -- why it grades what it grades")))
+                sections.append(ui.p(
+                    "Each bar is how many Stuff+ points one trait adds or costs compared with the team's average "
+                    "pitch of the same type (team average = 100). Percentile = where his average sits among every "
+                    "team pitch of that type. The last chart checks whether game results match the stuff.",
+                    class_="text-muted small",
+                ))
+                sections.append(ui.input_select("pp_sb_type", "Pitch", choices=sb_types, width="280px"))
+                sections.append(ui.output_ui("pp_sb_summary"))
+                sections.append(ui.layout_columns(
+                    output_widget("pp_sb_waterfall"),
+                    output_widget("pp_sb_percentiles"),
+                    col_widths=[6, 6],
+                ))
+                sections.append(output_widget("pp_sb_outcomes"))
+                sections.append(ui.output_ui("pp_sb_outcome_note"))
+
             if game_pitches:
                 sections.append(ui.hr())
                 sections.append(ui.p(ui.strong("Pitch Type Breakdown")))
@@ -1786,6 +1808,101 @@ def pitcher_profile_server(input, output, session, app_state):
             return ui.div(*sections)
         finally:
             db.close()
+
+    # -------------------------------------------------------------------
+    # Stuff+ Breakdown (Oct 2026, Ryker, after Kyle Bland's "Why doesn't
+    # he get whiffs if he has good Stuff?" thread). Lives in the Arsenal
+    # view; staff + player. Math in analytics/stuff_breakdown.py.
+    # -------------------------------------------------------------------
+
+    @reactive.calc
+    def _sb_data():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "arsenal":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"], game_id=f["game_id"],
+            )
+            rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
+                game_scope=f["game_scope"], game_id=f["game_id"], game_linked_only=True,
+            )
+            if not rapsodo_pitches:
+                return None
+            breakdown, outcomes = stuff_breakdown.get_for_pitcher(db, rapsodo_pitches, game_pitches)
+            return {"breakdown": breakdown, "outcomes": outcomes}
+        finally:
+            db.close()
+
+    def _sb_entry():
+        data = _sb_data()
+        if not data:
+            return None, None
+        req("pp_sb_type" in input)
+        label = input.pp_sb_type()
+        entry = next((e for e in data["breakdown"] if e["label"] == label), None)
+        return entry, data["outcomes"].get(label)
+
+    @render.ui
+    def pp_sb_summary():
+        entry, o = _sb_entry()
+        if entry is None:
+            return None
+        line = stuff_breakdown.why_line(entry, {entry["label"]: o} if o else None)
+        kids = [ui.p(line, style="font-weight:600;margin:6px 0;")] if line else []
+        if not entry.get("enough"):
+            kids.append(ui.p(f"Only {entry['n']} Rapsodo readings on this pitch -- read the bars loosely.",
+                             class_="text-muted small"))
+        tips = []
+        for f in entry["features"]:
+            if f["contrib"] <= -2.0 and f["name"] in stuff_breakdown.FEATURE_TIPS:
+                want = stuff_breakdown.FEATURE_TIPS[f["name"]] if f["weight"] > 0 else "less of: " + f["label"].lower()
+                tips.append(f"{f['label']}: costing {f['contrib']:.0f} -- the model rewards {want}.")
+        if tips:
+            kids.append(ui.tags.ul(*[ui.tags.li(t) for t in tips[:3]], class_="small"))
+        return ui.div(*kids)
+
+    @render_plotly
+    def pp_sb_waterfall():
+        entry, _o = _sb_entry()
+        req(entry is not None and entry["features"])
+        return waterfall_figure(entry)
+
+    @render_plotly
+    def pp_sb_percentiles():
+        entry, _o = _sb_entry()
+        req(entry is not None and entry["features"])
+        return percentile_figure(entry)
+
+    @render_plotly
+    def pp_sb_outcomes():
+        entry, o = _sb_entry()
+        req(entry is not None and o is not None)
+        return outcome_figure(entry["label"], o)
+
+    @render.ui
+    def pp_sb_outcome_note():
+        entry, o = _sb_entry()
+        if entry is None:
+            return None
+        if o is None:
+            return ui.p("No game pitches with run value for this pitch yet.", class_="text-muted small")
+        sign = "better" if o["gap"] >= 0 else "worse"
+        msg = (f"In games he's {abs(o['gap']):.2f} runs per 100 pitches {sign} than the team on this pitch. "
+               "Bars show where that comes from -- e.g. a red Balls bar means more costly balls than teammates.")
+        if not o["enough"]:
+            msg += (f" Only {o['n']} game pitches so far (greyed until {stuff_breakdown.MIN_PITCHES_FOR_OUTCOMES}) "
+                    "-- outcome splits are noisy at this size.")
+        return ui.p(msg, class_="text-muted small")
 
     # -------------------------------------------------------------------
     # Count Leverage (Sept 2026, Ryker: "create a count leverage chart in
