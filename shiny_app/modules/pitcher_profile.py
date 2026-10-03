@@ -1329,19 +1329,18 @@ def pitcher_profile_server(input, output, session, app_state):
                     "play, Whiff % of swings, Chase % of pitches out of the zone).",
                     class_="text-muted small",
                 ),
+                # Oct 2026, Ryker: see Pitch Results vs both hands, RHH, or
+                # LHH -- same "Batters" dropdown pattern as Damage by Zone.
+                # Chart + table are their own renders so switching hands
+                # doesn't rebuild this section (or reset the dropdown).
+                ui.input_select(
+                    "pp_results_hand", "Batters",
+                    choices={"all": "Both (All Batters)", "R": "vs RHH", "L": "vs LHH"},
+                    selected=_current_results_hand(),
+                    width="220px",
+                ),
                 output_widget("pp_results_chart"),
-                ui_helpers.render_dict_table([
-                    {
-                        "Pitch Type": r["Pitch Type"], "% Thrown": _fmt_pct(r["Pitch Usage %"]), "BIP": r["Balls in Play"],
-                        "Weak %": _fmt_pct(r["Weak %"]), "Jammed %": _fmt_pct(r["Jammed %"]),
-                        "Off the End %": _fmt_pct(r["Off the End %"]), "Clipped %": _fmt_pct(r["Clipped %"]),
-                        "Solid %": _fmt_pct(r["Solid Contact %"]), "Barreled %": _fmt_pct(r["Barreled %"]),
-                        "Hard Hit %": _fmt_pct(r["Hard Hit %"]), "Whiff %": _fmt_pct(r["Whiff %"]),
-                        "SwStr %": _fmt_pct(r["SwStr %"]), "Chase %": _fmt_pct(r["Chase %"]),
-                        "RV/100": r["RV/100"] if r["RV/100"] is not None else "—",
-                    }
-                    for r in type_rows
-                ]),
+                ui.output_ui("pp_results_table"),
                 ui.hr(),
                 ui.p(ui.strong("Damage by Zone"), style="margin-bottom:0;"),
                 ui.p(
@@ -1391,10 +1390,76 @@ def pitcher_profile_server(input, output, session, app_state):
                 pitch_type=f["pitch_type"], game_scope=f["game_scope"],
                 game_id=f["game_id"],
             )
-            if not game_pitches:
-                return None
+            game_pitches = _results_hand_pitches(db, game_pitches)
+            req(game_pitches)
             rows = compute_pitch_type_breakdown(game_pitches)
             return pitch_results_chart(rows)
+        finally:
+            db.close()
+
+    def _current_results_hand():
+        with reactive.isolate():
+            try:
+                choice = input.pp_results_hand() if "pp_results_hand" in input else "all"
+            except Exception:
+                choice = "all"
+        return choice if choice in ("all", "R", "L") else "all"
+
+    def _results_hand_pitches(db, game_pitches):
+        """Filter to the batter hand picked in Results' "Batters" dropdown
+        (get_batter_hands -- switch-hitter aware, never raw opponent_hand)."""
+        choice = input.pp_results_hand() if "pp_results_hand" in input else "all"
+        if choice not in ("R", "L"):
+            return game_pitches
+        hands = get_batter_hands(db, game_pitches)
+        return [p for p in game_pitches if hands.get(p.game_pitch_id) == choice]
+
+    @render.ui
+    def pp_results_table():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "results":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            game_pitches = _results_hand_pitches(db, game_pitches)
+            hand = input.pp_results_hand() if "pp_results_hand" in input else "all"
+            who = {"R": "right-handed", "L": "left-handed"}.get(hand)
+            if not game_pitches:
+                return ui.p(f"No pitches vs {who} hitters in this range yet." if who else "No game pitches in this range yet.",
+                            class_="text-muted small")
+            rows = compute_pitch_type_breakdown(game_pitches)
+            type_rows = [
+                r for r in rows
+                if r["Pitch Type"] != "Total" and ((r["Balls in Play"] or 0) > 0 or (r["Total Swings"] or 0) > 0)
+            ]
+            if not type_rows:
+                return ui.p(f"No swings vs {who} hitters in this range yet." if who else "No swings in this range yet.",
+                            class_="text-muted small")
+            note = ui.p(f"Only pitches to {who} hitters ({len(game_pitches)} pitches). % Thrown is out of those pitches.",
+                        class_="text-muted small") if who else None
+            return ui.div(note, ui_helpers.render_dict_table([
+                {
+                    "Pitch Type": r["Pitch Type"], "% Thrown": _fmt_pct(r["Pitch Usage %"]), "BIP": r["Balls in Play"],
+                    "Weak %": _fmt_pct(r["Weak %"]), "Jammed %": _fmt_pct(r["Jammed %"]),
+                    "Off the End %": _fmt_pct(r["Off the End %"]), "Clipped %": _fmt_pct(r["Clipped %"]),
+                    "Solid %": _fmt_pct(r["Solid Contact %"]), "Barreled %": _fmt_pct(r["Barreled %"]),
+                    "Hard Hit %": _fmt_pct(r["Hard Hit %"]), "Whiff %": _fmt_pct(r["Whiff %"]),
+                    "SwStr %": _fmt_pct(r["SwStr %"]), "Chase %": _fmt_pct(r["Chase %"]),
+                    "RV/100": r["RV/100"] if r["RV/100"] is not None else "—",
+                }
+                for r in type_rows
+            ]))
         finally:
             db.close()
 
