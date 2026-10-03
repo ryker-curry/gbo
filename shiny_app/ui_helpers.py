@@ -140,6 +140,8 @@ def metric_bar(name: str, value_text: str, pct, status: str = None, percentile_t
     track, optional caption. pct is the fill 0-100 (None -> 0)."""
     st = status or status_from_percentile(pct)
     width = max(0, min(100, float(pct or 0)))
+    if pct is not None:
+        width = max(width, 4)  # Oct 2026: never an empty gray track for a real result
     raw = [value_text]
     if unit:
         raw.append(ui.span(unit, class_="unit"))
