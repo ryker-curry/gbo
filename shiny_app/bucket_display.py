@@ -439,6 +439,10 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark", is_pitcher=None):
         raw_percentile = d["percentile"]
         pct = raw_percentile if raw_percentile is not None else 0
         pct = max(0, min(100, pct))
+        # Oct 2026: a bottom-of-the-team result still shows a sliver of its
+        # (red) color instead of an empty gray track.
+        if raw_percentile is not None:
+            pct = max(pct, 4)
         raw_label = f"{d['raw']:.2f}{d['unit'] or ''}"
         # Sept 2026 (Ryker: "I would also like to have top speed from
         # the 20/10 fly to be the time itself as well as in mph") --

@@ -857,6 +857,18 @@ def compute_percentile(value, team_values, direction):
     lower-is-better metric)."""
     if not team_values or value is None:
         return None
+    # Oct 2026 fix: the ratio formula only works when every value is
+    # positive. GIRD (non-throwing IR minus throwing IR) can be zero or
+    # negative, which turned every positive GIRD into a NEGATIVE
+    # "percentile" -- an empty bar that read as plain gray. When the
+    # pool has a zero/negative value, scale across the team's range
+    # instead (best = 100, worst = 0).
+    if min(team_values) <= 0 or value <= 0:
+        lo, hi = min(team_values), max(team_values)
+        if hi == lo:
+            return 100
+        frac = (value - lo) / (hi - lo) if direction == "higher" else (hi - value) / (hi - lo)
+        return round(max(0.0, min(1.0, frac)) * 100)
     if direction == "higher":
         team_max = max(team_values)
         if team_max == 0:

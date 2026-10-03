@@ -788,18 +788,26 @@ MOTION_JS = r"""
   }
   function prepBars(root){
     root.querySelectorAll('.gbo-metric-bar-fill:not([data-gbo-done]), .gbo-at .b > div:not([data-gbo-done]), .gbo-stack-bar > div:not([data-gbo-done])').forEach(function(el){
-      el.setAttribute('data-gbo-done','1'); var w = el.style.width; if (!w) return;
+      // Oct 2026 fix: remember the REAL width the first time. Re-running on a
+      // tab switch used to read the 0% this script itself had set (bars in a
+      // tab that wasn't visible yet never got to animate), so those bars
+      // stayed empty -- just the gray track -- forever.
+      el.setAttribute('data-gbo-done','1'); var w = el.getAttribute('data-gbo-w') || el.style.width; if (!w) return;
+      el.setAttribute('data-gbo-w', w);
       el.__gboKind = 'bar'; el.__gboW = w; el.style.transition = 'none'; el.style.width = '0%'; io.observe(el);
     });
     root.querySelectorAll('.gbo-col-track > div:not([data-gbo-done])').forEach(function(el){
-      el.setAttribute('data-gbo-done','1'); var h = el.style.height; if (!h) return;
+      el.setAttribute('data-gbo-done','1'); var h = el.getAttribute('data-gbo-h') || el.style.height; if (!h) return;
+      el.setAttribute('data-gbo-h', h);
       el.__gboKind = 'col'; el.__gboH = h; el.style.transition = 'none'; el.style.height = '3%'; io.observe(el);
     });
   }
   function prepRings(root){
     root.querySelectorAll('.gbo-ring:not([data-gbo-done])').forEach(function(el){
       el.setAttribute('data-gbo-done','1');
-      var target = parseFloat(getComputedStyle(el).getPropertyValue('--gbo-ring-pct')); if (isNaN(target)) return;
+      var saved = el.getAttribute('data-gbo-pct');
+      var target = saved !== null ? parseFloat(saved) : parseFloat(getComputedStyle(el).getPropertyValue('--gbo-ring-pct')); if (isNaN(target)) return;
+      el.setAttribute('data-gbo-pct', String(target));
       el.__gboKind = 'ring'; el.__gboPct = target; el.style.setProperty('--gbo-ring-pct', '0'); io.observe(el);
     });
   }
@@ -807,7 +815,7 @@ MOTION_JS = r"""
     root.querySelectorAll('.gbo-kpi-accent:not([data-gbo-done]), .gbo-ring-value:not([data-gbo-done]), .gbo-show-ovr:not([data-gbo-done]), .gbo-bucket-score:not([data-gbo-done])').forEach(function(el){
       el.setAttribute('data-gbo-done','1');
       var node = null; for (var i = 0; i < el.childNodes.length; i++) { if (el.childNodes[i].nodeType === 3 && el.childNodes[i].textContent.trim()) { node = el.childNodes[i]; break; } }
-      if (!node) return; var txt = node.textContent.trim(); var m = txt.match(/^([^0-9]*)([0-9][0-9,]*\.?[0-9]*)(.*)$/); if (!m) return;
+      if (!node) return; var txt = el.getAttribute('data-gbo-txt') || node.textContent.trim(); el.setAttribute('data-gbo-txt', txt); var m = txt.match(/^([^0-9]*)([0-9][0-9,]*\.?[0-9]*)(.*)$/); if (!m) return;
       var target = parseFloat(m[2].replace(/,/g,'')); if (isNaN(target) || target === 0) return;
       el.__gboKind = 'num'; el.__gboNode = node; el.__gboTxt = txt; el.__gboM = m; el.__gboTarget = target;
       var dec = (m[2].split('.')[1] || '').length; node.textContent = m[1] + (0).toFixed(dec) + m[3]; io.observe(el);
