@@ -129,8 +129,13 @@ def stuff_breakdown(rapsodo_pitches, models, training_by_type):
             for n in names:
                 if f.get(n) is not None:
                     his_vals[n].append(f[n])
+        # Same pitch type ONLY: the comparison pool is the team's game
+        # pitches whose own Rapsodo pitch type is exactly this label
+        # (2-Seam vs 2-Seam, never 2-Seam vs 4-Seam) -- the same pool
+        # this type's Stuff+ model was built from.
+        pool = [trp for trp, _rv in training_by_type.get(label, []) if _type_name(trp) == label]
         team_vals = {n: [] for n in names}
-        for trp, _rv in training_by_type.get(label, []):
+        for trp in pool:
             f = _stuff_plus_features(trp, pv_map.get(trp.player_id))
             for n in names:
                 if f.get(n) is not None:
@@ -153,6 +158,7 @@ def stuff_breakdown(rapsodo_pitches, models, training_by_type):
             "stuff_plus": base + sum(d["contrib"] for d in feats),
             "features": feats, "team_values": team_vals, "his_values": his_vals,
             "enough": len(per_pitch) >= MIN_PITCHES_FOR_BREAKDOWN, "reason": None,
+            "team_n": len(pool), "team_pitchers": len({trp.player_id for trp in pool}),
         })
     return out
 

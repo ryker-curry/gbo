@@ -116,7 +116,19 @@ from analytics import fastball_shape
 from services.pitch_type_switch import apply_switches, undo_switches
 from models import PitchTypeChange, ArsenalTarget
 from analytics import approach_angles, best_zone, arsenal_plan, stuff_breakdown
-from visualizations.stuff_breakdown_chart import waterfall_figure, percentile_figure, outcome_figure
+from visualizations.stuff_breakdown_chart import trait_impact_figure, strip_figure, outcome_figure, ordinal, fmt_value
+
+# Stuff+ Breakdown styling (hide the plotly toolbar -- it sat on the titles).
+_SB_CSS = """
+.gbo-sb .modebar-container{display:none!important}
+.gbo-sb .gbo-sb-why{font-weight:600;font-size:15px;margin:12px 0 4px}
+.gbo-sb .gbo-sb-tips{margin:4px 0 6px;font-size:13.5px}
+.gbo-sb .gbo-sb-val{font-size:20px;font-weight:700}
+.gbo-sb .gbo-sb-pct{font-weight:700;font-size:13px;padding:2px 8px;border-radius:10px}
+.gbo-sb .gbo-sb-pct.up{color:#3FB27F;background:rgba(63,178,127,.12)}
+.gbo-sb .gbo-sb-pct.down{color:#D64545;background:rgba(214,69,69,.12)}
+.gbo-sb .gbo-section-title-row .form-group{margin-bottom:0}
+"""
 from analytics.bullpen_metrics import average_estimated_arm_angle
 from visualizations.arsenal_plan_chart import plan_movement_figure, progress_figure
 from visualizations.best_zone_chart import best_zone_figure
@@ -1753,24 +1765,25 @@ def pitcher_profile_server(input, output, session, app_state):
 
             sb = _sb_data()
             if sb and any(e["features"] for e in sb["breakdown"]):
-                sb_types = {e["label"]: f"{e['label']} ({e['stuff_plus']:.0f})" for e in sb["breakdown"] if e["features"]}
+                sb_types = {e["label"]: f"{e['label']}  ·  {e['stuff_plus']:.0f}" for e in sb["breakdown"] if e["features"]}
                 sections.append(ui.hr())
-                sections.append(ui.p(ui.strong("Stuff+ Breakdown -- why it grades what it grades")))
-                sections.append(ui.p(
-                    "Each bar is how many Stuff+ points one trait adds or costs compared with the team's average "
-                    "pitch of the same type (team average = 100). Percentile = where his average sits among every "
-                    "team pitch of that type. The last chart checks whether game results match the stuff.",
-                    class_="text-muted small",
+                sections.append(ui.div(
+                    ui.tags.style(_SB_CSS),
+                    ui_helpers.section_title("Stuff+ Breakdown",
+                                             ui.input_select("pp_sb_type", None, choices=sb_types, width="260px")),
+                    ui.output_ui("pp_sb_header"),
+                    ui.layout_columns(
+                        ui_helpers.card(output_widget("pp_sb_traits"),
+                                        ui.output_ui("pp_sb_traits_note"),
+                                        title="What's driving the grade"),
+                        ui_helpers.card(output_widget("pp_sb_outcomes"),
+                                        ui.output_ui("pp_sb_outcome_note"),
+                                        title="Do game results match?"),
+                        col_widths=[6, 6],
+                    ),
+                    ui.output_ui("pp_sb_strip_titles"),
+                    class_="gbo-sb",
                 ))
-                sections.append(ui.input_select("pp_sb_type", "Pitch", choices=sb_types, width="280px"))
-                sections.append(ui.output_ui("pp_sb_summary"))
-                sections.append(ui.layout_columns(
-                    output_widget("pp_sb_waterfall"),
-                    output_widget("pp_sb_percentiles"),
-                    col_widths=[6, 6],
-                ))
-                sections.append(output_widget("pp_sb_outcomes"))
-                sections.append(ui.output_ui("pp_sb_outcome_note"))
 
             if game_pitches:
                 sections.append(ui.hr())
@@ -1852,36 +1865,102 @@ def pitcher_profile_server(input, output, session, app_state):
         entry = next((e for e in data["breakdown"] if e["label"] == label), None)
         return entry, data["outcomes"].get(label)
 
+    def _sb_top_features(entry, k=3):
+        return [f for f in entry["features"] if entry["team_values"].get(f["name"])][:k]
+
     @render.ui
-    def pp_sb_summary():
+    def pp_sb_header():
         entry, o = _sb_entry()
         if entry is None:
             return None
+        sp = entry["stuff_plus"]
+        cards = [
+            {"label": f"{entry['label']} Stuff+", "value": f"{sp:.0f}",
+             "delta": f"{sp - 100:+.0f} vs team avg", "delta_positive": sp >= 100},
+            {"label": "Rapsodo readings", "value": str(entry["n"])},
+            {"label": f"Team {entry['label']}s compared ({entry.get('team_pitchers', '—')} pitchers)",
+             "value": str(entry.get("team_n", "—"))},
+        ]
+        if o is not None:
+            cards.append({"label": "Game results vs team", "value": f"{o['gap']:+.2f}",
+                          "delta": "runs saved / 100 pitches" + ("" if o["enough"] else " · small sample"),
+                          "delta_positive": o["gap"] >= 0})
         line = stuff_breakdown.why_line(entry, {entry["label"]: o} if o else None)
-        kids = [ui.p(line, style="font-weight:600;margin:6px 0;")] if line else []
-        if not entry.get("enough"):
-            kids.append(ui.p(f"Only {entry['n']} Rapsodo readings on this pitch -- read the bars loosely.",
-                             class_="text-muted small"))
         tips = []
         for f in entry["features"]:
             if f["contrib"] <= -2.0 and f["name"] in stuff_breakdown.FEATURE_TIPS:
-                want = stuff_breakdown.FEATURE_TIPS[f["name"]] if f["weight"] > 0 else "less of: " + f["label"].lower()
-                tips.append(f"{f['label']}: costing {f['contrib']:.0f} -- the model rewards {want}.")
+                want = stuff_breakdown.FEATURE_TIPS[f["name"]] if f["weight"] > 0 else "less " + f["label"].lower()
+                tips.append(ui.tags.li(ui.strong(f["label"]), f" is costing {abs(f['contrib']):.0f} points -- the model rewards {want}."))
+        kids = [ui_helpers.render_kpi_cards(cards)]
+        if line:
+            kids.append(ui.p(line, class_="gbo-sb-why"))
         if tips:
-            kids.append(ui.tags.ul(*[ui.tags.li(t) for t in tips[:3]], class_="small"))
+            kids.append(ui.tags.ul(*tips[:3], class_="gbo-sb-tips"))
+        kids.append(ui.p(
+            f"Compared only against team {entry['label']}s -- never other pitch types. 100 = the team's average "
+            f"{entry['label']}; each trait's bar is how many points it adds or costs.",
+            class_="text-muted small",
+        ))
+        if not entry.get("enough"):
+            kids.append(ui.p(f"Only {entry['n']} readings on this pitch -- read the bars loosely.", class_="text-muted small"))
         return ui.div(*kids)
 
     @render_plotly
-    def pp_sb_waterfall():
+    def pp_sb_traits():
         entry, _o = _sb_entry()
         req(entry is not None and entry["features"])
-        return waterfall_figure(entry)
+        return trait_impact_figure(entry)
+
+    @render.ui
+    def pp_sb_traits_note():
+        entry, _o = _sb_entry()
+        if entry is None:
+            return None
+        return ui.p("Hover a bar for his average, the team average and his percentile.", class_="text-muted small")
+
+    @render.ui
+    def pp_sb_strip_titles():
+        entry, _o = _sb_entry()
+        if entry is None:
+            return None
+        feats = _sb_top_features(entry)
+        if not feats:
+            return None
+        cards = []
+        for i, f in enumerate(feats):
+            tone = "up" if f["contrib"] >= 0 else "down"
+            right = ui.span(f"{ordinal(f['pct'])} pct", class_=f"gbo-sb-pct {tone}")
+            cards.append(ui_helpers.card(
+                ui.div(ui.span(fmt_value(f), class_="gbo-sb-val"),
+                       ui.span(f"  team {fmt_value(f, f['team_avg'])}  ·  {f['contrib']:+.1f} Stuff+", class_="text-muted small")),
+                output_widget(f"pp_sb_strip_{i}"),
+                title=f["label"], right=right, small=True,
+            ))
+        return ui.div(
+            ui.p(ui.strong("Where he ranks on the traits that matter most"),
+                 ui.span(f"  ·  grey = every team {entry['label']}, color = his", class_="text-muted small"),
+                 style="margin:14px 0 6px;"),
+            ui.layout_columns(*cards, col_widths=[12 // len(cards)] * len(cards)),
+        )
+
+    def _sb_strip(i):
+        entry, _o = _sb_entry()
+        req(entry is not None)
+        feats = _sb_top_features(entry)
+        req(len(feats) > i)
+        return strip_figure(entry, feats[i]["name"])
 
     @render_plotly
-    def pp_sb_percentiles():
-        entry, _o = _sb_entry()
-        req(entry is not None and entry["features"])
-        return percentile_figure(entry)
+    def pp_sb_strip_0():
+        return _sb_strip(0)
+
+    @render_plotly
+    def pp_sb_strip_1():
+        return _sb_strip(1)
+
+    @render_plotly
+    def pp_sb_strip_2():
+        return _sb_strip(2)
 
     @render_plotly
     def pp_sb_outcomes():
@@ -1897,11 +1976,10 @@ def pitcher_profile_server(input, output, session, app_state):
         if o is None:
             return ui.p("No game pitches with run value for this pitch yet.", class_="text-muted small")
         sign = "better" if o["gap"] >= 0 else "worse"
-        msg = (f"In games he's {abs(o['gap']):.2f} runs per 100 pitches {sign} than the team on this pitch. "
-               "Bars show where that comes from -- e.g. a red Balls bar means more costly balls than teammates.")
+        msg = (f"{abs(o['gap']):.2f} runs per 100 pitches {sign} than team {entry['label']}s (n={o['n']}). "
+               "A red Balls bar = more costly balls than teammates; red Balls in play = more damage on contact.")
         if not o["enough"]:
-            msg += (f" Only {o['n']} game pitches so far (greyed until {stuff_breakdown.MIN_PITCHES_FOR_OUTCOMES}) "
-                    "-- outcome splits are noisy at this size.")
+            msg += f" Greyed until {stuff_breakdown.MIN_PITCHES_FOR_OUTCOMES} game pitches -- noisy at this size."
         return ui.p(msg, class_="text-muted small")
 
     # -------------------------------------------------------------------
