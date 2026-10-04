@@ -50,7 +50,7 @@ from analytics.pitcher_game_report import (
     _compute_header_stats, _fps_stat, _secondary_strike_stat, _pitcher_id,
     STRIKE_OUTCOMES, SWING_OUTCOMES, FPS_GOAL_PCT, SECONDARY_STRIKE_GOAL_PCT,
 )
-from analytics import command_metrics, best_zone
+from analytics import command_metrics, best_zone, league_baselines
 from analytics.rapsodo_goal_metrics import rapsodo_field_for_test_name, average_rapsodo_metric
 
 MIN_SAMPLE = 5
@@ -310,11 +310,13 @@ def idp_goals(db, player_id, limit=3):
 # Comparison rows + went well / work on
 # ---------------------------------------------------------------------------
 
-def _mark(m, you, n, team):
-    """('good'|'ok'|'bad'|None, diff in scale units vs goal-or-team)."""
+def _mark(m, you, n, team, d2=None):
+    """('good'|'ok'|'bad'|None, diff in scale units vs goal, else the D2
+    average (Oct 2026, Ryker: grade against D2 wherever D2 exists), else
+    the team average)."""
     if you is None or n is None or n < MIN_SAMPLE:
         return None, None
-    ref = m.get("goal") if m.get("goal") is not None else team
+    ref = m.get("goal") if m.get("goal") is not None else (d2 if d2 is not None else team)
     if ref is None:
         return None, None
     diff = (you - ref) / m["scale"]
@@ -329,9 +331,10 @@ def key_rows(you, mine, team):
         y = you.get(m["key"]) if you else None
         n = you.get(m["n"]) if you else None
         t = team.get(m["key"]) if team else None
-        mark, diff = _mark(m, y, n, t)
+        d2, miaa = league_baselines.pitching(m["key"], "D2"), league_baselines.pitching(m["key"], "MIAA")
+        mark, diff = _mark(m, y, n, t, d2)
         rows.append({**m, "you": y, "sample": n, "mine": mine.get(m["key"]) if mine else None,
-                     "team": t, "mark": mark, "diff": diff})
+                     "team": t, "d2": d2, "miaa": miaa, "mark": mark, "diff": diff})
     return rows
 
 

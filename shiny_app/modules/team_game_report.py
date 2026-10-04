@@ -23,7 +23,7 @@ from sqlalchemy.orm import joinedload
 
 from database import get_session
 from models import Game, Season
-from analytics import team_report, player_report, hitter_report
+from analytics import team_report, player_report, hitter_report, league_baselines as lb
 from visualizations.meeting_report_sheet import render_sheet as render_pitcher_sheet
 from visualizations.hitter_report_sheet import render_sheet as render_hitter_sheet
 
@@ -194,7 +194,13 @@ def team_game_report_server(input, output, session, app_state):
             {"label": "Strike %", "value": _p(t["strike_pct"]), "delta": f"{t['pitches']} pitches"},
             {"label": "First-pitch strike %", "value": _p(t["fps_pct"])},
             {"label": "Whiff %", "value": _p(t["whiff_pct"])},
-            {"label": "K % / BB %", "value": f"{_p(t['k_pct'])} / {_p(t['bb_pct'])}", "delta": f"{t['bf']} batters"},
+            {"label": "K % / BB %", "value": f"{_p(t['k_pct'])} / {_p(t['bb_pct'])}",
+             "delta": f"D2 {lb.pitching('k_pct'):.0f}% / {lb.pitching('bb_pct'):.0f}% · {t['bf']} batters",
+             "delta_positive": (t["k_pct"] or 0) - (t["bb_pct"] or 0) >= lb.pitching("k_pct") - lb.pitching("bb_pct")},
+            {"label": "ERA* / WHIP", "value": ("—" if t["era"] is None else f"{t['era']:.2f}") + " / "
+                                              + ("—" if t["whip"] is None else f"{t['whip']:.2f}"),
+             "delta": f"D2 {lb.pitching('era'):.2f} / {lb.pitching('whip'):.2f} · MIAA {lb.pitching('era', 'MIAA'):.2f} / {lb.pitching('whip', 'MIAA'):.2f}",
+             "delta_positive": None if t["era"] is None else t["era"] <= lb.pitching("era")},
             {"label": "Hit-the-spot %", "value": _p(t["execution_pct"]), "delta": "needs video review"},
             {"label": "Pitches / inning", "value": "—" if t["pitches_per_inning"] is None else f"{t['pitches_per_inning']:.1f}"},
         ])
@@ -248,8 +254,11 @@ def team_game_report_server(input, output, session, app_state):
         t, sd, fp = h["team"], h["sd"], h["fp"]
         cards = ui_helpers.render_kpi_cards([
             {"label": "AVG / OBP / SLG", "value": f"{_a(t['AVG'])} / {_a(t['OBP'])} / {_a(t['SLG'])}",
-             "delta": f"{t['PA']} PA · {t['H']} H · {t['2B']} 2B · {t['HR']} HR"},
-            {"label": "K % / BB %", "value": f"{_p(t['K%'])} / {_p(t['BB%'])}"},
+             "delta": f"D2 {_a(lb.hitting('AVG'))} / {_a(lb.hitting('OBP'))} / {_a(lb.hitting('SLG'))} · "
+                      f"MIAA {_a(lb.hitting('AVG', 'MIAA'))} / {_a(lb.hitting('OBP', 'MIAA'))} / {_a(lb.hitting('SLG', 'MIAA'))}",
+             "delta_positive": None if t["OBP"] is None else (t["OBP"] + t["SLG"]) >= lb.hitting("OBP") + lb.hitting("SLG")},
+            {"label": "K % / BB %", "value": f"{_p(t['K%'])} / {_p(t['BB%'])}",
+             "delta": f"D2 {lb.hitting('K%'):.0f}% / {lb.hitting('BB%'):.0f}% · {t['PA']} PA"},
             {"label": "Swing decisions", "value": _p(t["Swing Decision %"]),
              "delta": f"{sd['counts']['Chase']} chases · {sd['counts']['Taken strike']} hittable strikes taken"},
             {"label": "Chase %", "value": _p(t["Chase %"])},

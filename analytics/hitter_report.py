@@ -16,7 +16,7 @@ from sqlalchemy import or_, and_
 from sqlalchemy.orm import joinedload
 
 from models import Game, GamePitch, Player, Season
-from analytics import hitter_insights as hi, hitter_hot_zones as hz
+from analytics import hitter_insights as hi, hitter_hot_zones as hz, league_baselines
 from analytics.player_report import idp_goals
 from game_stats import get_pitcher_hands
 
@@ -93,10 +93,13 @@ def team_average(team_by_player):
     return out
 
 
-def _mark(you, team, hib, scale, pa):
-    if you is None or team is None or (pa or 0) < MIN_PA:
+def _mark(you, team, hib, scale, pa, d2=None):
+    """Graded against the D2 average where one exists (Oct 2026, Ryker),
+    otherwise against our team average."""
+    ref = d2 if d2 is not None else team
+    if you is None or ref is None or (pa or 0) < MIN_PA:
         return None
-    diff = (you - team) / scale
+    diff = (you - ref) / scale
     if not hib:
         diff = -diff
     return "good" if diff >= 1 else "bad" if diff <= -1 else "ok"
@@ -106,10 +109,12 @@ def key_rows(you, ref, team):
     rows = []
     for key, label, means, hib, scale, kind in METRICS:
         y = you.get(key)
+        d2, miaa = league_baselines.hitting(key, "D2"), league_baselines.hitting(key, "MIAA")
+        base = d2 if d2 is not None else team.get(key)
         rows.append({"key": key, "label": label, "means": means, "kind": kind, "you": y,
-                     "ref": ref.get(key) if ref else None, "team": team.get(key),
-                     "mark": _mark(y, team.get(key), hib, scale, you.get("PA")),
-                     "diff": None if y is None or team.get(key) is None else ((y - team[key]) / scale) * (1 if hib else -1)})
+                     "ref": ref.get(key) if ref else None, "team": team.get(key), "d2": d2, "miaa": miaa,
+                     "mark": _mark(y, team.get(key), hib, scale, you.get("PA"), d2),
+                     "diff": None if y is None or base is None else ((y - base) / scale) * (1 if hib else -1)})
     return rows
 
 
@@ -127,7 +132,9 @@ def _fmtv(kind, v):
 def takeaways(rows, pt_res, sd, pa):
     good, bad = [], []
     for r in sorted([r for r in rows if r["mark"] in ("good", "bad")], key=lambda r: -abs(r["diff"] or 0)):
-        txt = f"{r['label']}: {_fmtv(r['kind'], r['you'])} (team {_fmtv(r['kind'], r['team'])})"
+        cmp_ = (f"D2 avg {_fmtv(r['kind'], r['d2'])}" if r.get("d2") is not None
+                else f"team {_fmtv(r['kind'], r['team'])}")
+        txt = f"{r['label']}: {_fmtv(r['kind'], r['you'])} ({cmp_})"
         if r["mark"] == "good" and len(good) < 3:
             good.append(txt + " -- keep doing that.")
         elif r["mark"] == "bad" and len(bad) < 3:
