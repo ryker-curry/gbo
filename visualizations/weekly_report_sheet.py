@@ -9,6 +9,7 @@ coach note, link to the full report) that survives Gmail/Outlook.
 from html import escape
 
 from pitch_type_config import get_pitch_color
+from analytics import league_baselines as lb
 
 CSS = """
 .gbo-wk{--ink:#1b1f24;--muted:#5d6670;--line:#d6dbe0;--soft:#f3f5f7;--brand:#7a1f2b;--good:#1e8a4c;--bad:#c0392b;--warn:#b7860b;
@@ -112,13 +113,17 @@ def _game_table(rep):
         s = (g["season"] or {}).get(key)
         if t is None and l is None:
             continue
+        d2 = lb.pitching(key)
         rows.append(f'<tr><td>{label}</td><td><b>{_num(t, 0, "%")}</b>{_delta(t, l, d=0, higher_better=hib, unit="")}</td>'
-                    f'<td>{_num(l, 0, "%")}</td><td class="muted">{_num(s, 0, "%")}</td></tr>')
+                    f'<td>{_num(l, 0, "%")}</td><td class="muted">{_num(s, 0, "%")}</td>'
+                    f'<td class="muted">{_num(d2, 0, "%") if d2 is not None else "—"}</td></tr>')
     line = g["this"]
     head = (f'<div class="muted" style="margin-bottom:3px">{line["ip_display"]} IP · {line["bf"]} batters · '
             f'{line["hits"]} H · {line["bb"]} BB · {line["ks"]} K</div>')
-    return ('<h2>In games</h2>' + head + '<table><tr><th>Stat</th><th>This week</th><th>Last week</th><th>Season</th></tr>'
-            + "".join(rows) + "</table>")
+    return ('<h2>In games</h2>' + head + '<table><tr><th>Stat</th><th>This week</th><th>Last week</th><th>Season</th>'
+            '<th>D2 avg</th></tr>' + "".join(rows) + "</table>"
+            '<div class="muted" style="font-size:9.5px;margin-top:3px">D2 avg = 2026 Division II average; no public D2 '
+            'number exists for strike %, first-pitch strike %, whiff % or hit-the-spot %.</div>')
 
 
 def _arsenal(rep):
@@ -170,10 +175,11 @@ def _hitter_body(rep):
         delta = _delta(tv, lv, d=d, higher_better=hib, min_show=(0.001 if kind == "avg" else 0.5 if kind == "%" else 0.05))
         if kind == "avg":
             delta = delta.replace("0.", ".")
+        d2 = lb.hitting(key)
         rows.append(f'<tr><td>{label}</td><td><b>{_hv(kind, tv)}</b>{delta}</td><td>{_hv(kind, lv)}</td>'
-                    f'<td class="muted">{_hv(kind, sv)}</td></tr>')
-    table = ('<h2>At the plate</h2>' + head + '<table><tr><th>Stat</th><th>This week</th><th>Last week</th><th>Season</th></tr>'
-             + "".join(rows) + "</table>")
+                    f'<td class="muted">{_hv(kind, sv)}</td><td class="muted">{_hv(kind, d2)}</td></tr>')
+    table = ('<h2>At the plate</h2>' + head + '<table><tr><th>Stat</th><th>This week</th><th>Last week</th><th>Season</th>'
+             '<th>D2 avg</th></tr>' + "".join(rows) + "</table>")
     pt = ""
     if rep.get("pt"):
         prow = []

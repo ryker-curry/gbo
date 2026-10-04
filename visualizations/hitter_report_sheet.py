@@ -144,7 +144,7 @@ def _line_strip(r):
 
 def _key_table(r):
     head = (f'<tr><th>Key numbers</th><th>{"This game" if r["kind"] == "game" else "Season"}</th>'
-            f'<th>{_e(r["ref_label"])}</th><th>Team avg</th><th>vs team</th></tr>')
+            f'<th>{_e(r["ref_label"])}</th><th>Team avg</th><th>D2 / MIAA</th><th>vs D2 / team</th></tr>')
     body = []
     for row in r["rows"]:
         mk = ""
@@ -155,7 +155,9 @@ def _key_table(r):
             mk = '<span class="na">small sample</span>'
         body.append(f'<tr><td><b>{_e(row["label"])}</b><span class="means">{_e(row["means"])}</span></td>'
                     f'<td class="you">{_fmtv(row["kind"], row["you"])}</td><td>{_fmtv(row["kind"], row["ref"])}</td>'
-                    f'<td>{_fmtv(row["kind"], row["team"])}</td><td class="mk">{mk}</td></tr>')
+                    f'<td>{_fmtv(row["kind"], row["team"])}</td>'
+                    f'<td>{(_fmtv(row["kind"], row.get("d2")) + " / " + _fmtv(row["kind"], row.get("miaa"))) if row.get("d2") is not None else "<span class=na>—</span>"}</td>'
+                    f'<td class="mk">{mk}</td></tr>')
     return f'<table>{head}{"".join(body)}</table>'
 
 
@@ -255,7 +257,7 @@ def render_sheet(r, notes=None, team_name="Pitt State Baseball"):
     <div class="sec"><h2>Development goals</h2>{_goals_html(r["goals"])}</div>
     <div class="sec"><h2>Coach's focus</h2>{notes_html}</div>
   </div>
-  <div class="foot"><span class="good">&#9650;</span> better than the team average · <span class="ok">&#9679;</span> about the same ·
+  <div class="foot"><span class="good">&#9650;</span> better than the D2 average (team average where there's no D2 number) · <span class="ok">&#9679;</span> about the same ·
     <span class="bad">&#9660;</span> below it · "small sample" = fewer than 4 plate appearances. Swing decisions: swing at
     the heart, take pitches off the plate, protect the edges with two strikes.</div>
 </div>"""

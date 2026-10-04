@@ -141,10 +141,29 @@ def _line_strip(r):
     return '<div class="line">' + "".join(f"<div><b>{_e(v)}</b><span>{_e(k)}</span></div>" for k, v in cells) + "</div>"
 
 
+def _league(m):
+    d2, mi = m.get("d2"), m.get("miaa")
+    if d2 is None and mi is None:
+        return '<span class="na">—</span>'
+    return f'{_f(m, d2)} / {_f(m, mi)}'
+
+
+def _rate_line(r):
+    """ERA / WHIP vs D2 and MIAA (Oct 2026) -- only once there are 3+ IP."""
+    from analytics import league_baselines as lb
+    y = r["you"]
+    if (y.get("outs") or 0) < 9 or y.get("era") is None:
+        return ""
+    bits = [f'ERA* <b>{y["era"]:.2f}</b> (D2 {lb.pitching("era"):.2f} · MIAA {lb.pitching("era", "MIAA"):.2f})']
+    if y.get("whip") is not None:
+        bits.append(f'WHIP <b>{y["whip"]:.2f}</b> (D2 {lb.pitching("whip"):.2f} · MIAA {lb.pitching("whip", "MIAA"):.2f})')
+    return f'<div class="small" style="margin-top:3px">{" &nbsp;·&nbsp; ".join(bits)} &nbsp;<span class="na">D2/MIAA = 2026 league ERA; ERA* here counts every run, so it reads a little high next to them</span></div>'
+
+
 def _key_table(r):
     you_h = "This game" if r["kind"] == "game" else "Season"
     head = (f'<tr><th>Key numbers</th><th>{you_h}</th><th>{_e(r["mine_label"])}</th>'
-            '<th>Team avg</th><th>Goal</th><th style="text-align:center">vs goal / team</th></tr>')
+            '<th>Team avg</th><th>D2 / MIAA</th><th>Goal</th><th style="text-align:center">vs goal / D2 / team</th></tr>')
     body = []
     for m in r["rows"]:
         if m["you"] is None and m["team"] is None:
@@ -159,8 +178,8 @@ def _key_table(r):
         body.append(
             f'<tr><td><b>{_e(m["label"])}</b><span class="means">{_e(m["means"])}</span></td>'
             f'<td class="you">{_f(m, m["you"])}{sample}</td><td>{_f(m, m["mine"])}</td><td>{_f(m, m["team"])}</td>'
-            f'<td>{goal}</td><td class="mk">{mk}</td></tr>')
-    return f'<table>{head}{"".join(body)}</table>'
+            f'<td>{_league(m)}</td><td>{goal}</td><td class="mk">{mk}</td></tr>')
+    return f'<table>{head}{"".join(body)}</table>{_rate_line(r)}'
 
 
 def _mix_table(r):
@@ -269,7 +288,7 @@ def render_sheet(r, notes=None, team_name="Pitt State Baseball"):
     {goals_block}
     <div class="sec"><h2>Coach's focus</h2>{notes_html}</div>
   </div>
-  <div class="foot"><span class="good">&#9650;</span> better than the goal (or team average if there's no goal) ·
+  <div class="foot"><span class="good">&#9650;</span> better than the goal (or the D2 average, or team average when neither exists) ·
     <span class="ok">&#9679;</span> about the same · <span class="bad">&#9660;</span> below it · "small sample" = too few chances to judge.
     Numbers in ( ) are how many chances.{era_note}</div>
 </div>"""

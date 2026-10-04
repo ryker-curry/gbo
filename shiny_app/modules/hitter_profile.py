@@ -756,6 +756,11 @@ def hitter_profile_server(input, output, session, app_state):
     def _fmtp(v):
         return f"{v:.0f}%" if v is not None else "—"
 
+    def hitter_insights_league(key):
+        """'D2 avg .296 · MIAA .292' for stats with a league number (Oct 2026)."""
+        from analytics import league_baselines as lb
+        return lb.short(key, "hitting")
+
     def _rank_bars(ranks):
         rows = [ui.div(
             ui.div("", class_="gbo-pctbar-label"),
@@ -770,7 +775,9 @@ def hitter_profile_server(input, output, session, app_state):
             v = r["value"]
             raw = "—" if v is None else (_fmt3(v) if key in ("AVG", "OBP", "SLG") else
                                          (f"{v:.1f}" if key == "Pitches/PA" else f"{v:.0f}%"))
-            lab = ui.div(ui.div(label), ui.div(desc, class_="text-muted", style="font-size:.7rem;font-weight:400;"),
+            lg = hitter_insights_league(key)
+            lab = ui.div(ui.div(label), ui.div(desc + (f" · {lg}" if lg else ""), class_="text-muted",
+                                               style="font-size:.7rem;font-weight:400;"),
                          class_="gbo-pctbar-label")
             if r["pct"] is None:
                 rows.append(ui.div(lab, ui.div("Not enough data yet", class_="gbo-pctbar-empty"),
