@@ -34,12 +34,17 @@ PITCHER_METRICS = [
 ]
 HITTER_METRICS = [
     ("h_swing_dec", "Swing decision %", "%", True, None),
+    ("h_qab", "Quality at-bat %", "%", True, None),
     ("h_chase", "Chase %", "%", False, None),
     ("h_whiff", "Whiff %", "%", False, None),
     ("h_hard", "Hard contact %", "%", True, None),
     ("h_k", "Strikeout %", "%", False, lb.hitting("K%")),
     ("h_ops_plus", "OPS+ (vs D2)", "", True, 100),
 ]
+
+
+# Non-league reference lines: Brian Cain's QAB goal (54% per game).
+BENCHMARKS = {"h_qab": (54.0, "Cain QAB goal")}
 
 
 def _bucket_key(d, by):
@@ -98,6 +103,7 @@ def build(db, pitches, team_pitches, is_pitcher, by="game", rolling=5):
         series[key]["mine"] = game_goals.value(db, key, pitches, None, names)
         series[key]["team"] = game_goals.value(db, key, team_pitches, None, names) if team_pitches else None
         series[key]["summary"] = _summary(db, key, groups, 5 if by == "game" else 2, names)
+        series[key]["bench"] = BENCHMARKS.get(key)
     return {"groups": [(k, l) for k, l, _ps in groups], "series": series, "by": by, "rolling": rolling}
 
 

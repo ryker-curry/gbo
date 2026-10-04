@@ -262,6 +262,7 @@ HIT_MOVES = {  # key: (label, higher_is_better, move worth calling out, kind)
     "Whiff %": ("Whiff %", False, 6.0, "%"),
     "K%": ("Strikeout %", False, 8.0, "%"),
     "Hard contact %": ("Hard contact %", True, 10.0, "%"),
+    "QAB%": ("Quality at-bat %", True, 10.0, "%"),
 }
 HIT_MIN_PA = 3
 

@@ -150,7 +150,8 @@ _HIT_ROWS = (("AVG", "AVG", True, "avg"), ("OBP", "OBP", True, "avg"), ("SLG", "
              ("Swing Decision %", "Swing decisions", True, "%"), ("Chase %", "Chase %", False, "%"),
              ("Zone Swing %", "Zone swing %", True, "%"), ("Whiff %", "Whiff % (per swing)", False, "%"),
              ("K%", "Strikeout %", False, "%"), ("BB%", "Walk %", True, "%"),
-             ("Hard contact %", "Hard contact %", True, "%"), ("Pitches/PA", "Pitches per PA", True, "num"))
+             ("Hard contact %", "Hard contact %", True, "%"), ("Pitches/PA", "Pitches per PA", True, "num"),
+             ("QAB%", "Quality at-bat %", True, "%"))
 
 
 def _hv(kind, v):

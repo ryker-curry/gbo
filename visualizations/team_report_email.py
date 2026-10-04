@@ -66,9 +66,11 @@ def render_email(rep, game, app_url=None):
         parts.append(f'<p style="margin:10px 0 2px;font-weight:bold">Hitting · {th["H"]}-for-{th["AB"]}, {th["BB"]} BB, {th["K"]} K · '
                      f'{_a(th["AVG"])}/{_a(th["OBP"])}/{_a(th["SLG"])}</p><p style="margin:0;font-size:12px;color:#5d6670">'
                      f'Swing decisions {_p(th["Swing Decision %"])} · chase {_p(th["Chase %"])} · '
-                     f'{sd["counts"]["Taken strike"]} hittable strikes taken · hard contact {_p(th["Hard contact %"])}</p>')
-        parts.append(_table(["Hitter", "PA", "AB", "H", "BB", "K", "Swing dec."],
-                            [[r["name"], r["pa"], r["ab"], r["h"], r["bb"], r["k"], _p(r["sd"])] for r in rep["hitting"]["rows"]]))
+                     f'{sd["counts"]["Taken strike"]} hittable strikes taken · hard contact {_p(th["Hard contact %"])} · '
+                     f'QAB {_p(th["QAB%"])}</p>')
+        parts.append(_table(["Hitter", "PA", "AB", "H", "BB", "K", "QAB", "Swing dec."],
+                            [[r["name"], r["pa"], r["ab"], r["h"], r["bb"], r["k"], f'{r["qab"]}/{r["pa"]}', _p(r["sd"])]
+                             for r in rep["hitting"]["rows"]]))
     if app_url:
         parts.append(f'<p style="margin:16px 0"><a href="{_e(app_url)}" style="background:#7a1f2b;color:#fff;padding:10px 16px;'
                      f'text-decoration:none;border-radius:4px;font-weight:bold">Open the full team report in GBO</a></p>')
