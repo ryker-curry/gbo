@@ -60,6 +60,8 @@ from models import Player, User, PitchType, StaffPlayerAssignment
 from game_stats import compute_batting_line, compute_batted_ball_profile, ops_plus
 from plate_discipline import compute_hitter_discipline, compute_zone_tier_discipline
 from analytics import performance_score, profile_queries
+from analytics import hitter_hot_zones
+from visualizations.hitter_hot_zone_chart import hot_zone_figure
 from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_figure, CONTACT_QUALITY_SCORE
 from visualizations.spray_chart import hit_spray_chart, infield_slice_chart
 
@@ -111,6 +113,7 @@ def hitter_profile_ui():
         ui.output_ui("hp_discipline_section"),
         ui.output_ui("hp_batted_ball_section"),
         ui.output_ui("hp_situational_section"),
+        ui.output_ui("hp_hot_zones_section"),
         ui.output_ui("hp_contact_section"),
         ui.output_ui("hp_spray_chart_section"),
         ui_helpers.page_footer(),
@@ -237,6 +240,7 @@ def hitter_profile_server(input, output, session, app_state):
                         "discipline": "Plate Discipline",
                         "batted_ball": "Batted Ball",
                         "situational": "Situational & Count Leverage",
+                        "hot_zones": "Hot Zones",
                         "contact_zone": "Contact Quality by Zone",
                         "spray_chart": "Spray Chart",
                     },
@@ -622,6 +626,96 @@ def hitter_profile_server(input, output, session, app_state):
     @reactive.event(input.hp_glossary_spray)
     def _hp_show_glossary_spray():
         ui.modal_show(ui_helpers.glossary_modal("Spray Chart Glossary", glossary_content.HITTING_SPRAY))
+
+    # -------------------------------------------------------------------
+    # Hot Zones (Oct 2026, Ryker: "add heat maps for hitters based on vs
+    # rhp, lhp and just one altogether. want hitters to know where their
+    # hot zone is"). AVG/SLG on balls in play, 13 zones, three panels
+    # side by side. Math in analytics/hitter_hot_zones.py.
+    # -------------------------------------------------------------------
+    _ZONE_WORDS = {1: "up and to the left", 2: "up the middle", 3: "up and to the right",
+                   4: "middle-left", 5: "middle-middle", 6: "middle-right",
+                   7: "down and to the left", 8: "down the middle", 9: "down and to the right",
+                   "OUL": "up and off the plate to the left", "OUR": "up and off the plate to the right",
+                   "ODL": "down and off the plate to the left", "ODR": "down and off the plate to the right"}
+
+    @render.ui
+    def hp_hot_zones_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("hp_view" in input)
+        if input.hp_view() != "hot_zones":
+            return None
+        return ui.div(
+            ui.p(ui.strong("Hot Zones"), style="margin-bottom:0;"),
+            ui.p(
+                "Where you do damage when you put the ball in play -- every ball in play from your game at-bats "
+                f"in this range, by where the pitch was (catcher's view). Red = hot, blue = cold. Zones with fewer "
+                f"than {hitter_hot_zones.MIN_BIP} balls in play are gray. The 4 outer boxes are pitches off the plate.",
+                class_="text-muted small",
+            ),
+            ui.input_radio_buttons("hp_hot_metric", None, choices={"avg": "AVG", "slg": "SLG"},
+                                   selected="avg", inline=True),
+            output_widget("hp_hot_zones_chart"),
+            ui.output_ui("hp_hot_zones_notes"),
+        )
+
+    def _hot_panels(db):
+        _pid, pitches = _current_pitches(db)
+        if not pitches:
+            return None
+        return hitter_hot_zones.panels(db, pitches)
+
+    @render_plotly
+    def hp_hot_zones_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("hp_view" in input)
+        if input.hp_view() != "hot_zones":
+            return None
+        metric = input.hp_hot_metric() if "hp_hot_metric" in input else "avg"
+        db = get_session()
+        try:
+            panels = _hot_panels(db)
+            req(panels and panels[0][2]["bip"])
+            return hot_zone_figure(panels, metric)
+        finally:
+            db.close()
+
+    @render.ui
+    def hp_hot_zones_notes():
+        if not app_state.is_authenticated():
+            return None
+        req("hp_view" in input)
+        if input.hp_view() != "hot_zones":
+            return None
+        metric = input.hp_hot_metric() if "hp_hot_metric" in input else "avg"
+        db = get_session()
+        try:
+            panels = _hot_panels(db)
+            if not panels or not panels[0][2]["bip"]:
+                return ui.p("No located balls in play in this range yet (pitch locations come from Video Review).",
+                            class_="text-muted small")
+            lines = []
+            for label, cells, t in panels:
+                best = hitter_hot_zones.hottest(cells, metric)
+                if best is None:
+                    lines.append(ui.tags.li(f"{label}: not enough balls in play yet ({t['bip']})."))
+                    continue
+                z, c = best
+                val = f"{c[metric]:.3f}".lstrip("0")
+                lines.append(ui.tags.li(ui.strong(f"{label}: "),
+                                        f"hottest {self_word(z)} -- {metric.upper()} {val} on {c['bip']} balls in play."))
+            return ui.div(ui.tags.ul(*lines, style="margin-top:6px;"),
+                          ui.p("Catcher's view: left on the chart = third-base side, right = first-base side.", class_="text-muted small"))
+        finally:
+            db.close()
+
+    def self_word(z):
+        return _ZONE_WORDS.get(z, str(z))
 
     @render.ui
     def hp_contact_section():
