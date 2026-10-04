@@ -34,7 +34,7 @@ w.document.close();w.focus();setTimeout(function(){w.print();},300);})();
 @module.ui
 def weekly_report_ui():
     return ui.div(
-        ui_helpers.page_header("Weekly Progress Report", "Every pitcher's week: velo, shapes, game numbers and Arsenal Plan progress."),
+        ui_helpers.page_header("Weekly Progress Report", "Every player's week -- pitchers: velo, shapes, game numbers, Arsenal Plan; hitters: at-bats, swing decisions, by pitch type."),
         ui.div(
             ui.output_ui("week_picker"),
             ui.output_ui("pitcher_picker"),
@@ -92,9 +92,14 @@ def weekly_report_server(input, output, session, app_state):
                               style="display:none;")
             if not _staff():
                 return ui.p("You don't have access to this page.", class_="text-danger")
-            ps = (db.query(Player).filter(Player.is_pitcher.is_(True), Player.active.is_(True))
+            ps = (db.query(Player).filter(Player.active.is_(True))
                   .order_by(Player.last_name, Player.first_name).all())
-            return ui.input_select("pitcher", "Pitcher", {str(p.player_id): f"{p.last_name}, {p.first_name}" for p in ps})
+            # Oct 2026: hitters too (grouped so the dropdown stays easy to scan).
+            groups = {
+                "Pitchers": {str(p.player_id): f"{p.last_name}, {p.first_name}" for p in ps if p.is_pitcher},
+                "Hitters": {str(p.player_id): f"{p.last_name}, {p.first_name}" for p in ps if not p.is_pitcher},
+            }
+            return ui.input_select("pitcher", "Player", {k: v for k, v in groups.items() if v})
         finally:
             db.close()
 
@@ -136,8 +141,28 @@ def weekly_report_server(input, output, session, app_state):
                     "Coach note": "✓" if p.player_id in notes else "—",
                     "Email": (s.status if s else ("not yet" if (raps.get(p.player_id) or gp.get(p.player_id)) else "no activity")),
                 })
-            return ui_helpers.card(ui_helpers.render_dict_table(rows), title="Team this week",
-                                   right="pitchers with no tracked throwing don't get an email")
+            # Hitters (Oct 2026): plate appearances this week.
+            from analytics.hitter_insights import plate_appearances
+            hs = db.query(Player).filter(Player.is_pitcher.is_(False), Player.active.is_(True)).order_by(Player.last_name).all()
+            bat = {}
+            for gp_row in (db.query(GamePitch).join(Game, GamePitch.game_id == Game.game_id)
+                           .filter(Game.game_date >= w0, Game.game_date < w1).all()):
+                bid = gp_row.our_player_id if gp_row.is_our_team_batting else gp_row.opponent_our_player_id
+                if bid is not None:
+                    bat.setdefault(bid, []).append(gp_row)
+            hrows = []
+            for p in hs:
+                s = sends.get(p.player_id)
+                pa = len(plate_appearances(bat.get(p.player_id, [])))
+                hrows.append({
+                    "Hitter": f"{p.last_name}, {p.first_name}", "Plate appearances": pa,
+                    "Coach note": "✓" if p.player_id in notes else "—",
+                    "Email": (s.status if s else ("not yet" if pa else "no activity")),
+                })
+            return ui_helpers.card(
+                ui.navset_tab(ui.nav_panel("Pitchers", ui_helpers.render_dict_table(rows)),
+                              ui.nav_panel("Hitters", ui_helpers.render_dict_table(hrows))),
+                title="Team this week", right="players with nothing tracked this week don't get an email")
         finally:
             db.close()
 
@@ -200,11 +225,13 @@ def weekly_report_server(input, output, session, app_state):
         try:
             if _role() == "Player" and _my_pid(db) != pid:
                 return None
-            rep = weekly_report.build(db, pid, w0)
+            rep = weekly_report.build_any(db, pid, w0)
             if rep is None:
                 return None
             if not rep["active"]:
-                return ui_helpers.empty_state("No tracked throwing this week (no Rapsodo readings or game pitches).")
+                return ui_helpers.empty_state(
+                    "No at-bats tracked this week." if rep.get("kind") == "hitter"
+                    else "No tracked throwing this week (no Rapsodo readings or game pitches).")
             return ui.div(ui.HTML(render_sheet(rep, _note(db, pid, w0))), style="padding:8px 0 24px;overflow-x:auto;")
         finally:
             db.close()

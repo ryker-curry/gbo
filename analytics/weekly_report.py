@@ -244,3 +244,93 @@ def _highlights(rep):
     good = [t for _s, t in sorted(good, key=lambda x: -x[0])][:3]
     bad = [t for _s, t in sorted(bad, key=lambda x: -x[0])][:1]
     return good, bad
+
+
+# ---------------------------------------------------------------------------
+# Hitters (Oct 2026, Ryker: "build 4-7" -> #6). Same week windows, same
+# email/page; built from game at-bats (no Blast/HitTrax yet), using the
+# hitter_insights math so every number matches Hitter Profile.
+# ---------------------------------------------------------------------------
+
+HIT_MOVES = {  # key: (label, higher_is_better, move worth calling out, kind)
+    "AVG": ("AVG", True, 0.060, "avg"),
+    "OBP": ("OBP", True, 0.060, "avg"),
+    "SLG": ("SLG", True, 0.100, "avg"),
+    "Swing Decision %": ("Swing decisions", True, 6.0, "%"),
+    "Chase %": ("Chase %", False, 6.0, "%"),
+    "Whiff %": ("Whiff %", False, 6.0, "%"),
+    "K%": ("Strikeout %", False, 8.0, "%"),
+    "Hard contact %": ("Hard contact %", True, 10.0, "%"),
+}
+HIT_MIN_PA = 3
+
+
+def _batting_pitches(db, pid, d0, d1):
+    from sqlalchemy import or_, and_
+    return (db.query(GamePitch).join(Game, GamePitch.game_id == Game.game_id)
+            .options(joinedload(GamePitch.pitch_type))
+            .filter(or_(and_(GamePitch.is_our_team_batting.is_(True), GamePitch.our_player_id == pid),
+                        and_(GamePitch.is_our_team_batting.is_(False), GamePitch.opponent_our_player_id == pid)),
+                    Game.game_date >= d0, Game.game_date < d1)
+            .order_by(Game.game_date, GamePitch.pitch_sequence).all())
+
+
+def _hfmt(kind, v):
+    if v is None:
+        return "—"
+    if kind == "avg":
+        s = f"{v:.3f}"
+        return s[1:] if s.startswith("0") else s
+    return f"{v:.0f}%"
+
+
+def build_hitter(db, player_id, week_start):
+    from analytics import hitter_insights as hi
+    player = db.query(Player).filter(Player.player_id == player_id).first()
+    if player is None:
+        return None
+    w0, w1 = week_start, week_start + timedelta(days=7)
+    p0 = week_start - timedelta(days=7)
+    s0 = min(season_start(), p0)
+    season = _batting_pitches(db, player_id, s0, w1)
+    this = [p for p in season if w0 <= p.game.game_date < w1]
+    prev = [p for p in season if p0 <= p.game.game_date < w0]
+    game_ids = sorted({p.game_id for p in this})
+    games = db.query(Game).options(joinedload(Game.opponent_team)).filter(Game.game_id.in_(game_ids)).all() if game_ids else []
+    t, l, s = hi.core_metrics(this), hi.core_metrics(prev) if prev else None, hi.core_metrics(season) if season else None
+    good, bad = [], []
+    if t["PA"] >= HIT_MIN_PA:
+        if t["H"]:
+            good.append((0.8, f"{t['H']}-for-{t['AB']} this week" + (f" with {t['BB']} walk{'s' if t['BB'] != 1 else ''}." if t["BB"] else ".")))
+        if l and l["PA"] >= HIT_MIN_PA:
+            for key, (label, hib, move, kind) in HIT_MOVES.items():
+                tv, lv = t.get(key), l.get(key)
+                if tv is None or lv is None:
+                    continue
+                d = (tv - lv) if hib else (lv - tv)
+                if d >= move:
+                    good.append((d / move, f"{label} {'up' if tv > lv else 'down'} to {_hfmt(kind, tv)} (from {_hfmt(kind, lv)})."))
+                elif d <= -move * 1.5:
+                    bad.append((-d / move, f"{label} {'up' if tv > lv else 'down'} to {_hfmt(kind, tv)} (from {_hfmt(kind, lv)})."))
+        if s and t.get("Swing Decision %") is not None and s.get("Swing Decision %") is not None \
+                and t["Swing Decision %"] >= s["Swing Decision %"] + 5:
+            good.append((1.2, f"Best swing decisions in a while: {t['Swing Decision %']:.0f}% (season {s['Swing Decision %']:.0f}%)."))
+    sd = hi.swing_decisions(this)
+    rep = {
+        "kind": "hitter", "player": player, "week_start": w0, "week_end": w1 - timedelta(days=1),
+        "bullpen_days": [], "games": games, "game_pitch_count": len(this), "rapsodo_count": 0,
+        "this": t, "last": l, "season": s, "sd": sd,
+        "pt": hi.pitch_type_results(db, this) if this else None,
+        "highlights": [x for _s, x in sorted(good, key=lambda z: -z[0])][:3],
+        "watch": [x for _s, x in sorted(bad, key=lambda z: -z[0])][:1],
+        "active": bool(this),
+    }
+    return rep
+
+
+def build_any(db, player_id, week_start, stuff_models=None):
+    """Pitchers -> build(); everyone else -> build_hitter()."""
+    p = db.query(Player).filter(Player.player_id == player_id).first()
+    if p is None:
+        return None
+    return build(db, player_id, week_start, stuff_models=stuff_models) if p.is_pitcher else build_hitter(db, player_id, week_start)

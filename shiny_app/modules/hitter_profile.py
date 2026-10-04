@@ -57,10 +57,11 @@ from shinywidgets import output_widget, render_plotly
 
 from database import get_session
 from models import Player, User, PitchType, StaffPlayerAssignment
-from game_stats import compute_batting_line, compute_batted_ball_profile, ops_plus
+from game_stats import get_pitcher_hands, compute_batting_line, compute_batted_ball_profile, ops_plus
 from plate_discipline import compute_hitter_discipline, compute_zone_tier_discipline
 from analytics import performance_score, profile_queries
-from analytics import hitter_hot_zones
+from analytics import hitter_hot_zones, hitter_insights
+from visualizations import hitter_insight_charts as hic
 from visualizations.hitter_hot_zone_chart import hot_zone_figure
 from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_figure, CONTACT_QUALITY_SCORE
 from visualizations.spray_chart import hit_spray_chart, infield_slice_chart
@@ -114,6 +115,7 @@ def hitter_profile_ui():
         ui.output_ui("hp_batted_ball_section"),
         ui.output_ui("hp_situational_section"),
         ui.output_ui("hp_hot_zones_section"),
+        ui.output_ui("hp_insights_section"),
         ui.output_ui("hp_contact_section"),
         ui.output_ui("hp_spray_chart_section"),
         ui_helpers.page_footer(),
@@ -241,6 +243,11 @@ def hitter_profile_server(input, output, session, app_state):
                         "batted_ball": "Batted Ball",
                         "situational": "Situational & Count Leverage",
                         "hot_zones": "Hot Zones",
+                        "swing_decisions": "Swing Decisions",
+                        "attack": "How Pitchers Attack Me",
+                        "pitch_type": "Results by Pitch Type",
+                        "fp_two": "First Pitch & Two Strikes",
+                        "ranks": "Team Percentile Ranks",
                         "contact_zone": "Contact Quality by Zone",
                         "spray_chart": "Spray Chart",
                     },
@@ -716,6 +723,338 @@ def hitter_profile_server(input, output, session, app_state):
 
     def self_word(z):
         return _ZONE_WORDS.get(z, str(z))
+
+    # -------------------------------------------------------------------
+    # Hitter insight views (Oct 2026, Ryker: "build 1-3. once those are
+    # complete build 4-7"): Swing Decisions, How Pitchers Attack Me,
+    # Results by Pitch Type, First Pitch & Two Strikes, Team Percentile
+    # Ranks. One section output switches on the view; each chart is its
+    # own render_plotly. Math in analytics/hitter_insights.py.
+    # -------------------------------------------------------------------
+    _INSIGHT_VIEWS = ("swing_decisions", "attack", "pitch_type", "fp_two", "ranks")
+    _HAND_CHOICES = {"all": "All pitchers", "R": "vs RHP", "L": "vs LHP"}
+
+    def _insight_gate(view):
+        if not app_state.is_authenticated():
+            return False
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return False
+        req("hp_view" in input)
+        return input.hp_view() == view
+
+    def _hand_pitches(db, pitches, input_id):
+        choice = input[input_id]() if input_id in input else "all"
+        if choice not in ("R", "L"):
+            return pitches
+        hands = get_pitcher_hands(db, pitches)
+        return [p for p in pitches if hands.get(p.game_pitch_id) == choice]
+
+    def _fmt3(v):
+        return f"{v:.3f}".replace("0.", ".", 1) if v is not None else "—"
+
+    def _fmtp(v):
+        return f"{v:.0f}%" if v is not None else "—"
+
+    def _rank_bars(ranks):
+        rows = [ui.div(
+            ui.div("", class_="gbo-pctbar-label"),
+            ui.div("Rank on the team", class_="gbo-pctbar-header-pct"),
+            ui.div("You", class_="gbo-pctbar-header-raw"),
+            class_="gbo-pctbar-row gbo-pctbar-header",
+        )]
+        for key, label, _hib, desc in hitter_insights.PERCENTILE_METRICS:
+            r = ranks.get(key)
+            if r is None:
+                continue
+            v = r["value"]
+            raw = "—" if v is None else (_fmt3(v) if key in ("AVG", "OBP", "SLG") else
+                                         (f"{v:.1f}" if key == "Pitches/PA" else f"{v:.0f}%"))
+            lab = ui.div(ui.div(label), ui.div(desc, class_="text-muted", style="font-size:.7rem;font-weight:400;"),
+                         class_="gbo-pctbar-label")
+            if r["pct"] is None:
+                rows.append(ui.div(lab, ui.div("Not enough data yet", class_="gbo-pctbar-empty"),
+                                   ui.div(raw, class_="gbo-pctbar-raw"), class_="gbo-pctbar-row"))
+                continue
+            pct = r["pct"]
+            fill_hex, text_hex = ui_helpers.percentile_color(pct)
+            rows.append(ui.div(
+                lab,
+                ui.div(
+                    ui.div(class_="gbo-pctbar-fill", style=f"width:{max(pct, 3)}%; background:{fill_hex};"),
+                    ui.div(str(pct), class_="gbo-pctbar-badge", style=f"left:{pct}%; background:{fill_hex}; color:{text_hex};"),
+                    class_="gbo-pctbar-track",
+                ),
+                ui.div(raw, class_="gbo-pctbar-raw"),
+                class_="gbo-pctbar-row",
+            ))
+        return ui.div(*rows, class_="gbo-pctbar-group")
+
+    @render.ui
+    def hp_insights_section():
+        if not app_state.is_authenticated():
+            return None
+        req("hp_view" in input)
+        view = input.hp_view()
+        if view not in _INSIGHT_VIEWS:
+            return None
+        if not _insight_gate(view):
+            return None
+        hand_select = lambda iid: ui.input_radio_buttons(iid, None, choices=_HAND_CHOICES, selected="all", inline=True)
+        if view == "swing_decisions":
+            return ui.div(
+                ui.p(ui.strong("Swing Decisions"), style="margin-bottom:0;"),
+                ui.p("Every located pitch graded on the decision, not the result. Heart of the plate: swing. Way off the "
+                     "plate: take. The edges are your call -- except with two strikes, when you protect. "
+                     "Catcher's view (left = third-base side).", class_="text-muted small"),
+                hand_select("hp_sd_hand"),
+                ui.output_ui("hp_sd_summary"),
+                ui.layout_columns(output_widget("hp_sd_chart"), ui.output_ui("hp_sd_table"), col_widths=[7, 5]),
+            )
+        if view == "attack":
+            return ui.div(
+                ui.p(ui.strong("How Pitchers Attack Me"), style="margin-bottom:0;"),
+                ui.p("What pitchers throw you in each count and where they put it -- so you can walk up with a plan. "
+                     "Inside/away is from your side of the plate. Locations are catcher's view.", class_="text-muted small"),
+                hand_select("hp_atk_hand"),
+                ui.output_ui("hp_atk_notes"),
+                ui.p(ui.strong("What they throw by count"), style="margin:10px 0 0;"),
+                output_widget("hp_atk_mix"),
+                ui.p(ui.strong("Where they throw it"), style="margin:10px 0 0;"),
+                output_widget("hp_atk_loc"),
+            )
+        if view == "pitch_type":
+            return ui.div(
+                ui.p(ui.strong("Results by Pitch Type"), style="margin-bottom:0;"),
+                ui.p("Fastballs (4-seam, 2-seam, sinker, cutter), breaking balls (slider, curveball) and offspeed "
+                     "(changeup, splitter), split by pitcher hand. AVG/SLG count the at-bats that ended on that pitch.",
+                     class_="text-muted small"),
+                ui.output_ui("hp_pt_body"),
+            )
+        if view == "fp_two":
+            return ui.div(
+                ui.p(ui.strong("First Pitch & Two Strikes"), style="margin-bottom:0;"),
+                ui.p("How you handle the first pitch, and how you battle once you have two strikes.", class_="text-muted small"),
+                hand_select("hp_fp_hand"),
+                ui.output_ui("hp_fp_body"),
+            )
+        return ui.div(
+            ui.p(ui.strong("Team Percentile Ranks"), style="margin-bottom:0;"),
+            ui.p(f"Where you rank among active hitters with {hitter_insights.MIN_PA_FOR_RANK}+ plate appearances in the "
+                 "same date range and filters. 100 = best on the team, 0 = last. Red = better, blue = worse "
+                 "(for stats where lower is better, like Chase % and K %, the rank is already flipped).",
+                 class_="text-muted small"),
+            ui.output_ui("hp_ranks_body"),
+        )
+
+    # ---- 1. Swing decisions ----
+    def _sd_data(db):
+        _pid, pitches = _current_pitches(db)
+        if not pitches:
+            return None
+        return hitter_insights.swing_decisions(_hand_pitches(db, pitches, "hp_sd_hand"))
+
+    @render.ui
+    def hp_sd_summary():
+        if not _insight_gate("swing_decisions"):
+            return None
+        db = get_session()
+        try:
+            sd = _sd_data(db)
+            if not sd or not sd["graded"]:
+                return ui.p("No located pitches yet (locations come from Video Review).", class_="text-muted small")
+            c = sd["counts"]
+            return ui_helpers.render_kpi_cards([
+                {"label": "Swing decision %", "value": _fmtp(sd["score"]),
+                 "delta": f"{c['Good swing'] + c['Good take']} good of {sd['scored']} graded"},
+                {"label": "Chase %", "value": _fmtp(sd["chase_pct"]), "delta": f"{c['Chase']} chases",
+                 "delta_positive": (sd["chase_pct"] or 0) < 25},
+                {"label": "Took a hittable strike", "value": _fmtp(sd["heart_take_pct"]),
+                 "delta": f"{c['Taken strike']} taken", "delta_positive": (sd["heart_take_pct"] or 0) < 20},
+                {"label": "Borderline pitches", "value": str(c["Borderline"]), "delta": "your call -- not graded"},
+            ])
+        finally:
+            db.close()
+
+    @render_plotly
+    def hp_sd_chart():
+        req(_insight_gate("swing_decisions"))
+        db = get_session()
+        try:
+            sd = _sd_data(db)
+            req(sd and sd["graded"])
+            return hic.swing_decision_chart(sd["graded"])
+        finally:
+            db.close()
+
+    @render.ui
+    def hp_sd_table():
+        if not _insight_gate("swing_decisions"):
+            return None
+        db = get_session()
+        try:
+            sd = _sd_data(db)
+            if not sd or not sd["graded"]:
+                return None
+            rows = [{"Zone": t["Zone"], "Pitches": t["Pitches"], "Swing %": _fmtp(t["Swing %"]),
+                     "Whiff %": _fmtp(t["Whiff %"]), "Ideal": t["Ideal"]} for t in sd["tiers"]]
+            return ui.div(
+                ui_helpers.render_dict_table(rows),
+                ui.p("Heart = middle of the zone. Shadow = the edges (just in or just off). Chase = a ball off the "
+                     "plate. Waste = nowhere close. The dotted boxes on the chart are Heart and Shadow.",
+                     class_="text-muted small", style="margin-top:6px;"),
+            )
+        finally:
+            db.close()
+
+    # ---- 2. How pitchers attack me ----
+    def _atk_data(db):
+        _pid, pitches = _current_pitches(db)
+        if not pitches:
+            return None
+        choice = input.hp_atk_hand() if "hp_atk_hand" in input else "all"
+        return hitter_insights.attack_profile(db, pitches, None if choice not in ("R", "L") else choice)
+
+    @render.ui
+    def hp_atk_notes():
+        if not _insight_gate("attack"):
+            return None
+        db = get_session()
+        try:
+            prof = _atk_data(db)
+            if not prof or not prof["n"]:
+                return ui.p("No pitches seen in this range.", class_="text-muted small")
+            s, h = prof["sides"], prof["heights"]
+            cards = [
+                {"label": "Pitches seen", "value": str(prof["n"]), "delta": f"{prof['located']} located"},
+                {"label": "Inside / Middle / Away", "value": f"{_fmtp(s['In'])} / {_fmtp(s['Middle'])} / {_fmtp(s['Away'])}"},
+                {"label": "Up / Middle / Down", "value": f"{_fmtp(h['Up'])} / {_fmtp(h['Middle'])} / {_fmtp(h['Down'])}"},
+            ]
+            lines = hitter_insights.attack_takeaways(prof)
+            return ui.div(ui_helpers.render_kpi_cards(cards),
+                          ui.tags.ul(*[ui.tags.li(l) for l in lines], style="margin-top:8px;") if lines else None)
+        finally:
+            db.close()
+
+    @render_plotly
+    def hp_atk_mix():
+        req(_insight_gate("attack"))
+        db = get_session()
+        try:
+            prof = _atk_data(db)
+            req(prof and prof["n"])
+            return hic.count_mix_chart(prof["mix"])
+        finally:
+            db.close()
+
+    @render_plotly
+    def hp_atk_loc():
+        req(_insight_gate("attack"))
+        db = get_session()
+        try:
+            prof = _atk_data(db)
+            req(prof and prof["located"])
+            return hic.attack_location_chart(prof["by_family_loc"])
+        finally:
+            db.close()
+
+    # ---- 3. Results by pitch type ----
+    @render.ui
+    def hp_pt_body():
+        if not _insight_gate("pitch_type"):
+            return None
+        db = get_session()
+        try:
+            _pid, pitches = _current_pitches(db)
+            if not pitches:
+                return ui.p("No pitches seen in this range.", class_="text-muted small")
+            res = hitter_insights.pitch_type_results(db, pitches)
+            lines = hitter_insights.pitch_type_takeaways(res)
+            tabs = []
+            for split in ("All", "vs RHP", "vs LHP"):
+                rows = [{"Pitch": r["Pitch"], "Seen": r["Seen"], "Swing %": _fmtp(r["Swing %"]),
+                         "Whiff %": _fmtp(r["Whiff %"]), "Chase %": _fmtp(r["Chase %"]), "AB": r["AB"],
+                         "AVG": _fmt3(r["AVG"]), "SLG": _fmt3(r["SLG"]), "Hard contact %": _fmtp(r["Hard contact %"]),
+                         "K": r["K"]} for r in res[split]]
+                tabs.append(ui.nav_panel(split, ui_helpers.render_dict_table(rows)))
+            return ui.div(
+                ui.tags.ul(*[ui.tags.li(l) for l in lines]) if lines else
+                ui.p("Not enough pitches yet to call out a strength or weakness (15+ of a type per hand).",
+                     class_="text-muted small"),
+                ui.navset_tab(*tabs),
+                ui.p("Hard contact % = barreled or solid contact per ball in play. Chase % = swings at pitches out of "
+                     "the zone.", class_="text-muted small", style="margin-top:6px;"),
+            )
+        finally:
+            db.close()
+
+    # ---- 4. First pitch & two strikes ----
+    @render.ui
+    def hp_fp_body():
+        if not _insight_gate("fp_two"):
+            return None
+        db = get_session()
+        try:
+            _pid, pitches = _current_pitches(db)
+            if not pitches:
+                return ui.p("No pitches seen in this range.", class_="text-muted small")
+            d = hitter_insights.first_pitch_two_strike(_hand_pitches(db, pitches, "hp_fp_hand"))
+            f, t = d["first"], d["two"]
+            a1, a0 = f["After 0-1"], f["After 1-0"]
+            first_cards = ui_helpers.render_kpi_cards([
+                {"label": "First-pitch swing %", "value": _fmtp(f["Swing %"]), "delta": f"{f['PAs']} PAs"},
+                {"label": "First pitch was a strike", "value": _fmtp(f["Strike seen %"])},
+                {"label": "Took strike one", "value": _fmtp(f["Took a strike %"])},
+                {"label": "First pitch put in play", "value": f"{_fmt3(f['AVG in play'])} AVG",
+                 "delta": f"{f['In play']} times · {_fmt3(f['SLG in play'])} SLG"},
+            ])
+            split_rows = [
+                {"After": "Strike one (0-1)", "PA": a1["PA"], "AVG": _fmt3(a1["AVG"]), "OBP": _fmt3(a1["OBP"]),
+                 "SLG": _fmt3(a1["SLG"]), "K %": _fmtp(a1["K%"])},
+                {"After": "Ball one (1-0)", "PA": a0["PA"], "AVG": _fmt3(a0["AVG"]), "OBP": _fmt3(a0["OBP"]),
+                 "SLG": _fmt3(a0["SLG"]), "K %": _fmtp(a0["K%"])},
+            ]
+            two_cards = ui_helpers.render_kpi_cards([
+                {"label": "2-strike PAs", "value": str(t["PAs"]), "delta": f"{_fmt3(t['AVG'])} AVG · {_fmt3(t['SLG'])} SLG"},
+                {"label": "Strikeout %", "value": _fmtp(t["K %"]), "delta": f"{t['Looking Ks']} looking",
+                 "delta_positive": (t["K %"] or 0) < 40},
+                {"label": "2-strike chase %", "value": _fmtp(t["Chase %"]), "delta_positive": (t["Chase %"] or 0) < 30,
+                 "delta": "swings off the plate"},
+                {"label": "Foul-offs per PA", "value": f"{t['Foul-offs per PA']}" if t["Foul-offs per PA"] is not None else "—",
+                 "delta": f"{t['Pitches per PA']} pitches per PA" if t["Pitches per PA"] is not None else None},
+            ])
+            return ui.div(
+                ui.p(ui.strong("First pitch"), style="margin:8px 0 4px;"), first_cards,
+                ui.p(ui.strong("How the at-bat goes after pitch one"), style="margin:12px 0 4px;"),
+                ui_helpers.render_dict_table(split_rows),
+                ui.p(ui.strong("Two strikes"), style="margin:16px 0 4px;"), two_cards,
+                ui.p(f"With two strikes: {_fmtp(t['Contact %'])} contact on swings, {_fmtp(t['Whiff %'])} whiffs.",
+                     class_="text-muted small", style="margin-top:6px;"),
+            )
+        finally:
+            db.close()
+
+    # ---- 7. Team percentile ranks ----
+    @render.ui
+    def hp_ranks_body():
+        if not _insight_gate("ranks"):
+            return None
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            f = _current_filters()
+            team = profile_queries.get_team_hitting_pitches(db, f["date_from"], f["date_to"], f["pitch_type"], f["game_scope"])
+            _pid, mine = _current_pitches(db)
+            team[pid] = mine or []
+            ranks = hitter_insights.team_percentiles(team, pid)
+            if not ranks:
+                return ui.p("No at-bats in this range yet.", class_="text-muted small")
+            n = max((r["n_players"] for r in ranks.values()), default=0)
+            return ui.div(ui.p(f"Compared against {n} hitters.", class_="text-muted small"), _rank_bars(ranks))
+        finally:
+            db.close()
 
     @render.ui
     def hp_contact_section():

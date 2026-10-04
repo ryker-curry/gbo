@@ -66,10 +66,16 @@ def _activity(rep):
         opp = g.opponent_team.team_name if getattr(g, "opponent_team", None) else (g.opponent_name or "game")
         bits.append(f"game vs {opp} ({g.game_date.strftime('%b %d')})")
     if rep["game_pitch_count"]:
-        bits.append(f"{rep['game_pitch_count']} game pitches")
+        if rep.get("kind") == "hitter":
+            pa = (rep.get("this") or {}).get("PA") or 0
+            bits.append(f"{pa} plate appearance{'s' if pa != 1 else ''}, {rep['game_pitch_count']} pitches seen")
+        else:
+            bits.append(f"{rep['game_pitch_count']} game pitches")
     if rep["rapsodo_count"]:
         bits.append(f"{rep['rapsodo_count']} Rapsodo-tracked pitches")
-    return " · ".join(bits) if bits else "No tracked throwing this week."
+    if not bits:
+        return "No at-bats tracked this week." if rep.get("kind") == "hitter" else "No tracked throwing this week."
+    return " · ".join(bits)
 
 
 def _pitch_table(rep):
@@ -135,8 +141,76 @@ def _arsenal(rep):
             'Inches between this week\'s shape (ride + run) and the target on Pitcher Profile → Arsenal Plan. 3" or less = at target.</div>')
 
 
+_HIT_ROWS = (("AVG", "AVG", True, "avg"), ("OBP", "OBP", True, "avg"), ("SLG", "SLG", True, "avg"),
+             ("Swing Decision %", "Swing decisions", True, "%"), ("Chase %", "Chase %", False, "%"),
+             ("Zone Swing %", "Zone swing %", True, "%"), ("Whiff %", "Whiff % (per swing)", False, "%"),
+             ("K%", "Strikeout %", False, "%"), ("BB%", "Walk %", True, "%"),
+             ("Hard contact %", "Hard contact %", True, "%"), ("Pitches/PA", "Pitches per PA", True, "num"))
+
+
+def _hv(kind, v):
+    if v is None:
+        return "—"
+    if kind == "avg":
+        x = f"{v:.3f}"
+        return x[1:] if x.startswith("0") else x
+    return f"{v:.0f}%" if kind == "%" else f"{v:.1f}"
+
+
+def _hitter_body(rep):
+    t, l, s = rep["this"], rep["last"] or {}, rep["season"] or {}
+    head = (f'<div class="muted" style="margin-bottom:3px">{t["PA"]} PA · {t["H"]}-for-{t["AB"]} · {t["BB"]} BB · '
+            f'{t["K"]} K</div>')
+    rows = []
+    for key, label, hib, kind in _HIT_ROWS:
+        tv, lv, sv = t.get(key), l.get(key), s.get(key)
+        if tv is None and lv is None:
+            continue
+        d = 3 if kind == "avg" else (1 if kind == "num" else 0)
+        delta = _delta(tv, lv, d=d, higher_better=hib, min_show=(0.001 if kind == "avg" else 0.5 if kind == "%" else 0.05))
+        if kind == "avg":
+            delta = delta.replace("0.", ".")
+        rows.append(f'<tr><td>{label}</td><td><b>{_hv(kind, tv)}</b>{delta}</td><td>{_hv(kind, lv)}</td>'
+                    f'<td class="muted">{_hv(kind, sv)}</td></tr>')
+    table = ('<h2>At the plate</h2>' + head + '<table><tr><th>Stat</th><th>This week</th><th>Last week</th><th>Season</th></tr>'
+             + "".join(rows) + "</table>")
+    pt = ""
+    if rep.get("pt"):
+        prow = []
+        for r in rep["pt"]["All"]:
+            if not r["Seen"]:
+                continue
+            prow.append(f'<tr><td>{_e(r["Pitch"])}</td><td>{r["Seen"]}</td><td>{_hv("%", r["Swing %"])}</td>'
+                        f'<td>{_hv("%", r["Whiff %"])}</td><td>{_hv("%", r["Chase %"])}</td><td>{_hv("avg", r["AVG"])}</td></tr>')
+        if prow:
+            pt = ('<h2>By pitch type this week</h2><table><tr><th>Pitch</th><th>Seen</th><th>Swing</th><th>Whiff</th>'
+                  '<th>Chase</th><th>AVG</th></tr>' + "".join(prow) + "</table>")
+    c = rep["sd"]["counts"]
+    sd = (f'<h2>Swing decisions this week</h2><div>{c["Good swing"]} good swings · {c["Good take"]} good takes · '
+          f'<span class="down">{c["Chase"]} chases</span> · <span class="down">{c["Taken strike"]} hittable strikes taken</span>'
+          f'</div><div class="muted" style="font-size:9.5px;margin-top:3px">Swing at the heart of the plate, take pitches '
+          f'off it, protect the edges with two strikes. Full chart: Hitter Profile → Swing Decisions.</div>')
+    return table + sd + pt
+
+
 def render_sheet(rep, note=None, team_name="Pitt State Baseball"):
     p = rep["player"]
+    if rep.get("kind") == "hitter":
+        wk = f'{rep["week_start"].strftime("%b %d")} – {rep["week_end"].strftime("%b %d, %Y")}'
+        hl = "".join(f'<div class="hl">{_e(t)}</div>' for t in rep["highlights"]) or '<div class="muted">No big moves this week.</div>'
+        watch = "".join(f'<div class="wt">{_e(t)}</div>' for t in rep["watch"])
+        note_html = f'<h2>Coach\'s note</h2><div class="note">{_e(note.strip())}</div>' if note and note.strip() else ""
+        return f"""
+<div class="gbo-wk" id="gbo-weekly-sheet"><style>{CSS}</style>
+  <div class="top"><div class="kicker">{_e(team_name)} · Weekly progress report</div>
+    <h1>{_e(p.first_name)} {_e(p.last_name)}</h1>
+    <div class="sub">Week of {wk}</div>
+    <div class="sub">{_e(_activity(rep))}</div></div>
+  <h2>This week</h2>{hl}{watch}
+  {note_html}
+  {_hitter_body(rep)}
+  <div class="foot">Built automatically from GBO every Monday from your charted game at-bats. Season = this season to date.</div>
+</div>"""
     wk = f'{rep["week_start"].strftime("%b %d")} – {rep["week_end"].strftime("%b %d, %Y")}'
     hl = "".join(f'<div class="hl">{_e(t)}</div>' for t in rep["highlights"]) or '<div class="muted">No big moves this week.</div>'
     watch = "".join(f'<div class="wt">{_e(t)}</div>' for t in rep["watch"])

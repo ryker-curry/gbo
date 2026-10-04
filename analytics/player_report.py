@@ -489,3 +489,39 @@ def season_report(db, player_id, season_id):
         "goals": idp_goals(db, player_id), "game_log": log,
         "stuff_why": stuff_why(db, pitches), "stuff_why_scope": None,
     }
+
+
+def range_report(db, player_id, game_ids, label):
+    """Oct 2026 (Team Game Report): the season-style sheet for any set of
+    games -- a series or a custom date range. Same shape as season_report
+    (kind "season", season_name = label) so render_sheet needs no change;
+    the comparison column is his whole season, the team column is the
+    staff over these same games."""
+    player = db.query(Player).filter(Player.player_id == player_id).first()
+    if player is None or not game_ids:
+        return None
+    ids = set(game_ids)
+    names = _pitch_type_names(db)
+    pitches = [p for p in pitcher_pitches(db, player_id) if p.game_id in ids]
+    if not pitches:
+        return None
+    you = stat_bundle(pitches, names)
+    season_id = next((g.season_id for g in db.query(Game).filter(Game.game_id.in_(ids)).all() if g.season_id), None)
+    season_all = pitcher_pitches(db, player_id, season_id=season_id) if season_id is not None else None
+    mine = stat_bundle(season_all, names) if season_all else None
+    team = stat_bundle([p for p in team_pitches(db, None) if p.game_id in ids], names)
+    mix = pitch_mix(db, pitches, player.throws)
+    rows = key_rows(you, mine, team)
+    good, bad = takeaways(rows, mix, you["pitches"])
+    games = [g for g in pitcher_games(db, player_id) if g.game_id in ids]
+    by_game = defaultdict(list)
+    for p in pitches:
+        by_game[p.game_id].append(p)
+    log = [{"game": g, **stat_bundle(by_game[g.game_id], names)} for g in games[:6]]
+    return {
+        "kind": "season", "player": player, "game": None, "season_id": season_id,
+        "season_name": label, "you": you, "mine": mine, "team": team, "mine_label": "His season",
+        "rows": rows, "mix": mix, "locations": locations(pitches), "good": good, "bad": bad,
+        "goals": idp_goals(db, player_id), "game_log": log,
+        "stuff_why": stuff_why(db, pitches), "stuff_why_scope": None,
+    }

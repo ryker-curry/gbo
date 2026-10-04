@@ -68,9 +68,11 @@ def run(week=None, dry_run=False, resend=False, only=None, preview_dir="weekly_r
             stuff = profile_queries.team_stuff_plus_baselines(db)
         except Exception:
             stuff = {}
-        pitchers = (db.query(Player).filter(Player.is_pitcher.is_(True), Player.active.is_(True))
-                    .order_by(Player.last_name).all())
-        for p in pitchers:
+        # Oct 2026: hitters too (analytics/weekly_report.build_any picks the
+        # pitcher or hitter report for each player).
+        players = (db.query(Player).filter(Player.active.is_(True))
+                   .order_by(Player.last_name).all())
+        for p in players:
             name = f"{p.first_name} {p.last_name}"
             if only and only.lower() not in name.lower():
                 continue
@@ -79,7 +81,7 @@ def run(week=None, dry_run=False, resend=False, only=None, preview_dir="weekly_r
             if already and already.status == "sent" and not resend and not dry_run:
                 counts["skipped"] += 1
                 continue
-            rep = weekly_report.build(db, p.player_id, week, stuff_models=stuff)
+            rep = weekly_report.build_any(db, p.player_id, week, stuff_models=stuff)
             if rep is None or not rep["active"]:
                 counts["no_activity"] += 1
                 continue
@@ -134,7 +136,7 @@ if __name__ == "__main__":
     ap.add_argument("--week", help="Monday of the week to send (YYYY-MM-DD). Default: last completed week.")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--resend", action="store_true")
-    ap.add_argument("--only", help="Only pitchers whose name contains this text.")
+    ap.add_argument("--only", help="Only players whose name contains this text.")
     a = ap.parse_args()
     wk = datetime.fromisoformat(a.week).date() if a.week else None
     if wk and wk.weekday() != 0:
