@@ -13,6 +13,8 @@ from database import get_session
 from models import Player, User, IDPGoal, IDPActionStep
 
 import ui_helpers
+from analytics import game_goals
+from modules import game_goal_form
 
 
 @module.ui
@@ -20,6 +22,8 @@ def player_development_ui():
     return ui.div(
         ui_helpers.page_header("My Development"),
         ui.output_ui("body"),
+        # Oct 2026, Ryker: players can set their own game-stat goals too.
+        game_goal_form.game_goal_form_ui("my_game_goal"),
         ui_helpers.page_footer(),
     )
 
@@ -27,6 +31,21 @@ def player_development_ui():
 @module.server
 def player_development_server(input, output, session, app_state):
     _refresh_tick = reactive.Value(0)
+
+    def _my_pid():
+        if not app_state.is_authenticated() or app_state.role_name() != "Player":
+            return None
+        db = get_session()
+        try:
+            me = db.query(User).filter(User.user_id == app_state.user_id()).first()
+            return me.player_id if me else None
+        finally:
+            db.close()
+
+    game_goal_form.game_goal_form_server(
+        "my_game_goal", app_state, _my_pid,
+        lambda: app_state.is_authenticated() and app_state.role_name() == "Player" and _my_pid() is not None,
+        lambda: _refresh_tick.set(_refresh_tick() + 1))
 
     @render.ui
     def body():
@@ -59,8 +78,9 @@ def player_development_server(input, output, session, app_state):
                 .order_by(IDPGoal.created_at.desc())
                 .all()
             )
+            game_info = game_goals.goal_info(db, [g.goal_id for g in my_goals])
             if not my_goals:
-                sections.append(ui_helpers.empty_state("No development goals set yet -- check with your coach."))
+                sections.append(ui_helpers.empty_state("No development goals set yet -- add a game-stat goal below, or check with your coach."))
             else:
                 panels = []
                 for goal in my_goals:
@@ -68,6 +88,10 @@ def player_development_server(input, output, session, app_state):
                     title = f"{goal.category.category_name if goal.category else '—'} — {goal.description[:60]}{'...' if len(goal.description) > 60 else ''} · {status_label}"
 
                     panel_children = [ui.p(goal.description)]
+                    gp = game_goals.progress(db, goal, game_info.get(goal.goal_id)) if goal.goal_id in game_info else None
+                    if gp is not None:
+                        panel_children.append(ui.div(ui_helpers.status_chip(gp["tone"], gp["status"]),
+                                                     ui.span(" " + gp["line"], class_="small"), style="margin:4px 0 8px;"))
                     if goal.target_test_type:
                         unit = f" {goal.target_test_type.unit}" if goal.target_test_type.unit else ""
                         target_line = f"Target: {goal.target_test_type.test_name} — "

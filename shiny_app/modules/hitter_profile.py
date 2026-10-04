@@ -60,7 +60,8 @@ from models import Player, User, PitchType, StaffPlayerAssignment
 from game_stats import get_pitcher_hands, compute_batting_line, compute_batted_ball_profile, ops_plus
 from plate_discipline import compute_hitter_discipline, compute_zone_tier_discipline
 from analytics import performance_score, profile_queries
-from analytics import hitter_hot_zones, hitter_insights, league_baselines
+from analytics import hitter_hot_zones, hitter_insights, league_baselines, trends
+from visualizations import trend_charts
 from visualizations import hitter_insight_charts as hic
 from visualizations.hitter_hot_zone_chart import hot_zone_figure
 from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_figure, CONTACT_QUALITY_SCORE
@@ -248,6 +249,7 @@ def hitter_profile_server(input, output, session, app_state):
                         "pitch_type": "Results by Pitch Type",
                         "fp_two": "First Pitch & Two Strikes",
                         "ranks": "Team Percentile Ranks",
+                        "trends": "Trends",
                         "contact_zone": "Contact Quality by Zone",
                         "spray_chart": "Spray Chart",
                     },
@@ -728,7 +730,7 @@ def hitter_profile_server(input, output, session, app_state):
     # Ranks. One section output switches on the view; each chart is its
     # own render_plotly. Math in analytics/hitter_insights.py.
     # -------------------------------------------------------------------
-    _INSIGHT_VIEWS = ("swing_decisions", "attack", "pitch_type", "fp_two", "ranks")
+    _INSIGHT_VIEWS = ("swing_decisions", "attack", "pitch_type", "fp_two", "ranks", "trends")
     _HAND_CHOICES = {"all": "All pitchers", "R": "vs RHP", "L": "vs LHP"}
 
     def _insight_gate(view):
@@ -861,6 +863,21 @@ def hitter_profile_server(input, output, session, app_state):
                 ui.p("How you handle the first pitch, and how you battle once you have two strikes.", class_="text-muted small"),
                 hand_select("hp_fp_hand"),
                 ui.output_ui("hp_fp_body"),
+            )
+        if view == "trends":
+            return ui.div(
+                ui.p(ui.strong("Trends"), style="margin-bottom:0;"),
+                ui.p("Is he getting better? Dots = each game (or week), red line = rolling average (pools the "
+                     "pitches, so one 1-PA game doesn't swing it). Dotted = his average over this range, gray dashed = "
+                     "team, gold dashed = D2. Uses the date range above.", class_="text-muted small"),
+                ui.layout_columns(
+                    ui.input_radio_buttons("hp_trend_by", "Each point is", {"game": "A game", "week": "A week"},
+                                           selected="game", inline=True),
+                    ui.input_radio_buttons("hp_trend_roll", "Rolling line over", {"3": "3", "5": "5", "10": "10"},
+                                           selected="5", inline=True),
+                    col_widths=[6, 6],
+                ),
+                output_widget("hp_trend_metrics"),
             )
         return ui.div(
             ui.p(ui.strong("Team Percentile Ranks"), style="margin-bottom:0;"),
@@ -1146,6 +1163,22 @@ def hitter_profile_server(input, output, session, app_state):
                 ui.p(f"With two strikes: {_fmtp(t['Contact %'])} contact on swings, {_fmtp(t['Whiff %'])} whiffs.",
                      class_="text-muted small", style="margin-top:6px;"),
             )
+        finally:
+            db.close()
+
+    # ---- Trends (Oct 2026) ----
+    @render_plotly
+    def hp_trend_metrics():
+        req(_insight_gate("trends"))
+        f = _current_filters()
+        db = get_session()
+        try:
+            _pid, pitches = _current_pitches(db)
+            req(pitches)
+            team = trends.team_pitches_in_range(db, f["date_from"], f["date_to"], pitching=False)
+            by = input.hp_trend_by() if "hp_trend_by" in input else "game"
+            roll = int(input.hp_trend_roll()) if "hp_trend_roll" in input else 5
+            return trend_charts.metrics_figure(trends.build(db, pitches, team, False, by, roll))
         finally:
             db.close()
 

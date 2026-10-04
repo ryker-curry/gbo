@@ -122,6 +122,8 @@ from modules.roster import _flag_for
 import bucket_display
 
 import ui_helpers
+from analytics import game_goals
+from modules import game_goal_form
 
 FULL_EDIT_ROLES = ("Administrator", "Head Coach", "Coach", "Strength Coach")
 
@@ -303,6 +305,8 @@ def idp_ui():
         ui.div(ui.output_ui("player_picker"), class_="gbo-filter"),
         ui.output_ui("player_flags_panel"),
         ui.output_ui("goals_section"),
+        # Oct 2026: goals on game stats (chase %, strike %, OPS+, ...).
+        game_goal_form.game_goal_form_ui("game_goal"),
         ui_helpers.card(
             ui.output_ui("new_goal_category_picker"),
             ui.output_ui("new_goal_metric_picker"),
@@ -328,6 +332,13 @@ def idp_server(input, output, session, app_state):
 
     def _can_add_progress_notes():
         return app_state.role_name() in FULL_EDIT_ROLES + ("Athletic Trainer",)
+
+    def _selected_pid():
+        if "player_select" not in input or not input.player_select():
+            return None
+        return int(input.player_select())
+
+    game_goal_form.game_goal_form_server("game_goal", app_state, _selected_pid, _can_create_goals, _bump_refresh)
 
     def _visible_players(db):
         query = db.query(Player).filter(Player.active.is_(True))
@@ -485,6 +496,7 @@ def idp_server(input, output, session, app_state):
                 .all()
             )
 
+            game_info = game_goals.goal_info(db, [g.goal_id for g in goals])
             header = [ui_helpers.section_title(f"Goals — {selected_player.first_name} {selected_player.last_name}", right=f"{len(goals)} goal(s)" if goals else None)]
             if not goals:
                 return ui.div(*header, ui_helpers.empty_state("No development goals yet for this player."))
@@ -500,6 +512,12 @@ def idp_server(input, output, session, app_state):
                 )
 
                 body = [ui.p(goal.description)]
+
+                gp = game_goals.progress(db, goal, game_info.get(goal.goal_id)) if goal.goal_id in game_info else None
+                if gp is not None:
+                    body.append(ui.div(ui_helpers.status_chip(gp["tone"], gp["status"]),
+                                       ui.span(" " + gp["line"], class_="small"),
+                                       style="margin:4px 0 8px;"))
 
                 if goal.target_test_type:
                     unit = f" {goal.target_test_type.unit}" if goal.target_test_type.unit else ""

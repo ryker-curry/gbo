@@ -199,6 +199,17 @@ def _hitter_body(rep):
     return table + sd + pt
 
 
+def _goals(rep):
+    """Oct 2026: open game-stat goals with live status."""
+    gl = rep.get("goals") or []
+    if not gl:
+        return ""
+    cls = {"good": "up", "watch": "flat", "flag": "down", "neutral": "muted"}
+    items = "".join(f'<li><span class="{cls.get(g["tone"], "muted")}"><b>{_e(g["status"])}</b></span> -- {_e(g["line"])}</li>'
+                    for g in gl)
+    return f"<h2>Your goals</h2><ul>{items}</ul>"
+
+
 def render_sheet(rep, note=None, team_name="Pitt State Baseball"):
     p = rep["player"]
     if rep.get("kind") == "hitter":
@@ -214,6 +225,7 @@ def render_sheet(rep, note=None, team_name="Pitt State Baseball"):
     <div class="sub">{_e(_activity(rep))}</div></div>
   <h2>This week</h2>{hl}{watch}
   {note_html}
+  {_goals(rep)}
   {_hitter_body(rep)}
   <div class="foot">Built automatically from GBO every Monday from your charted game at-bats. Season = this season to date.</div>
 </div>"""
@@ -229,6 +241,7 @@ def render_sheet(rep, note=None, team_name="Pitt State Baseball"):
     <div class="sub">{_e(_activity(rep))}</div></div>
   <h2>This week</h2>{hl}{watch}
   {note_html}
+  {_goals(rep)}
   <h2>Your pitches (Rapsodo, bullpens + games)</h2>{_pitch_table(rep)}
   {_game_table(rep)}
   {_arsenal(rep)}

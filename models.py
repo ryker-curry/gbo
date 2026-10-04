@@ -25,7 +25,7 @@ from sqlalchemy import (
     Column, Integer, String, Text, Boolean, Date, DateTime,
     ForeignKey, Numeric, UniqueConstraint, JSON
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, deferred
 
 from database import Base
 
@@ -396,6 +396,15 @@ class IDPGoal(Base):
     target_date = Column(Date, nullable=True)
     description = Column(Text, nullable=False)
     status_id = Column(Integer, ForeignKey("idp_statuses.status_id"), nullable=False)
+    # Oct 2026: game-stat goals (analytics/game_goals.py) -- game_metric is a
+    # GAME_METRICS key (e.g. "h_chase"), metric_window "last5"/"last10"/
+    # "season". NULL = a classic assessment/Rapsodo goal.
+    # (python3 -m migrations.migrate_idp_game_goals)
+    # deferred() so every existing IDPGoal query keeps working even before
+    # the migration runs -- the columns are only read when game-goal code
+    # touches them (and that code catches the error and says to migrate).
+    game_metric = deferred(Column(String(40), nullable=True))
+    metric_window = deferred(Column(String(12), nullable=True))
     created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
