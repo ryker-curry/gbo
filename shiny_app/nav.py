@@ -73,6 +73,9 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
         )
         if show_bullpen_pages:
             pd_pages.insert(2, NavPage("rapsodo_import", "Import Rapsodo Data", "upload"))
+        if show_bullpen_pages or role_name in ("Sports Scientist", "Data Analyst", "Athletic Trainer", "Strength Coach"):
+            # Oct 2026: who can throw today (staff only).
+            pd_pages.append(NavPage("arm_care", "Arm Care & Availability", "heart"))
         if show_bullpen_pages or role_name in ("Sports Scientist", "Data Analyst"):
             pd_pages.extend([
                 NavPage("bullpen_tracking", "Bullpen Tracking", "trophy"),
@@ -100,7 +103,11 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
     # (a page-level override inside those two pages once migrated, not
     # a nav-level concern). Sports Scientist stays read-only.
     if role_name in ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator"):
-        sections.append(NavSection("Game Operations", [NavPage("game_tracking", "Game Tracking", "clipboard-data")]))
+        sections.append(NavSection("Game Operations", [
+            NavPage("game_tracking", "Game Tracking", "clipboard-data"),
+            # Oct 2026: charting completeness checks per game.
+            NavPage("data_health", "Data Health", "activity"),
+        ]))
         sections.append(NavSection("Scouting", [
             # Oct 2026: series advance reports from our own charting.
             NavPage("advance_scouting", "Advance Scouting", "binoculars"),

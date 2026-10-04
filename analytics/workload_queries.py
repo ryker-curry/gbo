@@ -30,6 +30,7 @@ def _game_pitch_dates(session, player_id, start_date=None, end_date=None):
     GamePitch/pitch_type objects)."""
     query = (
         session.query(Game.game_date)
+        .select_from(GamePitch)
         .join(Game, GamePitch.game_id == Game.game_id)
         .filter(
             ((GamePitch.is_our_team_batting.is_(False)) & (GamePitch.our_player_id == player_id))

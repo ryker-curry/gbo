@@ -1909,6 +1909,32 @@ class WeeklyReportSend(Base):
     sent_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class PitcherAvailability(Base):
+    """Arm Care & Availability board entries (Oct 2026, Ryker approved; staff
+    only). Two kinds:
+      kind="status": a coach override -- status "Available" / "Limited" /
+                     "Hold", start_date..end_date (end NULL = until cleared).
+                     Always wins over the automatic rest/workload status.
+      kind="plan":   a planned outing -- plan_type "Start" / "Relief" /
+                     "Bullpen" on planned_date; the board warns if he won't
+                     be rested by then.
+    cleared=True keeps history instead of deleting."""
+    __tablename__ = "pitcher_availability"
+
+    availability_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    kind = Column(String(10), nullable=False)          # "status" / "plan"
+    status = Column(String(12), nullable=True)         # Available / Limited / Hold
+    plan_type = Column(String(12), nullable=True)      # Start / Relief / Bullpen
+    start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
+    planned_date = Column(Date, nullable=True)
+    note = Column(Text, nullable=True)
+    cleared = Column(Boolean, default=False, nullable=False)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class TeamReportSend(Base):
     """One row per Team Game Report email attempt (Oct 2026,
     scripts/send_team_game_reports.py) -- one per (game, coach), so the
