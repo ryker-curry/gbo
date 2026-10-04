@@ -815,3 +815,29 @@ def team_batting_line_for_seasons(db, season_ids):
     if not pitches:
         return None
     return compute_batting_line(pitches)
+
+
+def get_team_hitting_pitches(db, date_from=None, date_to=None, pitch_type=None, game_scope="all"):
+    """{player_id: [GamePitch, ...]} -- every pitch each ACTIVE non-pitcher
+    on our roster saw as a batter, same filters as
+    get_hitter_profile_pitches (Oct 2026, team percentile ranks for
+    Hitter Profile / weekly hitter reports)."""
+    from models import Player
+    hitter_ids = [pid for (pid,) in db.query(Player.player_id).filter(Player.active.is_(True), Player.is_pitcher.is_(False)).all()]
+    if not hitter_ids:
+        return {}
+    query = (
+        db.query(GamePitch)
+        .join(Game, GamePitch.game_id == Game.game_id)
+        .options(joinedload(GamePitch.pitch_type))
+        .filter(
+            ((GamePitch.is_our_team_batting.is_(True)) & (GamePitch.our_player_id.in_(hitter_ids)))
+            | ((GamePitch.is_our_team_batting.is_(False)) & (GamePitch.opponent_our_player_id.in_(hitter_ids)))
+        )
+    )
+    query = _apply_filters(query, date_from, date_to, pitch_type, game_scope, None)
+    out = {}
+    for p in query.order_by(Game.game_date, GamePitch.pitch_sequence).all():
+        pid = p.our_player_id if p.is_our_team_batting else p.opponent_our_player_id
+        out.setdefault(pid, []).append(p)
+    return out

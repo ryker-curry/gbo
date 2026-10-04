@@ -1909,6 +1909,22 @@ class WeeklyReportSend(Base):
     sent_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class TeamReportSend(Base):
+    """One row per Team Game Report email attempt (Oct 2026,
+    scripts/send_team_game_reports.py) -- one per (game, coach), so the
+    hourly job never double-sends."""
+    __tablename__ = "team_report_sends"
+    __table_args__ = (UniqueConstraint("game_id", "user_id", name="uq_team_report_send_game_user"),)
+
+    send_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    email = Column(String(150), nullable=True)
+    status = Column(String(20), nullable=False)  # "sent" / "failed"
+    detail = Column(Text, nullable=True)
+    sent_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class AdvanceReport(Base):
     """An advance scouting report for a series vs one opponent (Oct 2026).
     Numbers are computed live from our charting (analytics/

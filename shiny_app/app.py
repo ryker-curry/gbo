@@ -72,7 +72,7 @@ from modules import (  # noqa: E402
     user_management, staff_assignments, hitter_tracking,
     opponent_teams, bullpen_scripts, training_routines, idp, bullpen_tracking,
     game_tracking, command_tracker, roster, player_profile, guest_demo,
-    pitcher_meeting_report, weekly_report, advance_scouting,
+    pitcher_meeting_report, weekly_report, advance_scouting, hitter_meeting_report, team_game_report,
 )
 
 # Registry of page keys (see nav.NavPage.key) that have a real Shiny
@@ -99,6 +99,8 @@ MODULE_UI = {
     "analytics": lambda: analytics.analytics_ui("analytics"),
     "pitcher_game_report": lambda: pitcher_game_report.pitcher_game_report_ui("pitcher_game_report"),
     "pitcher_meeting_report": lambda: pitcher_meeting_report.pitcher_meeting_report_ui("pitcher_meeting_report"),
+    "hitter_meeting_report": lambda: hitter_meeting_report.hitter_meeting_report_ui("hitter_meeting_report"),
+    "team_game_report": lambda: team_game_report.team_game_report_ui("team_game_report"),
     "weekly_report": lambda: weekly_report.weekly_report_ui("weekly_report"),
     "advance_scouting": lambda: advance_scouting.advance_scouting_ui("advance_scouting"),
     "hitter_game_report": lambda: hitter_game_report.hitter_game_report_ui("hitter_game_report"),
@@ -368,6 +370,8 @@ def server(input, output, session):
     analytics.analytics_server("analytics", app_state)
     pitcher_game_report.pitcher_game_report_server("pitcher_game_report", app_state)
     pitcher_meeting_report.pitcher_meeting_report_server("pitcher_meeting_report", app_state)
+    hitter_meeting_report.hitter_meeting_report_server("hitter_meeting_report", app_state)
+    team_game_report.team_game_report_server("team_game_report", app_state)
     weekly_report.weekly_report_server("weekly_report", app_state)
     advance_scouting.advance_scouting_server("advance_scouting", app_state)
     hitter_game_report.hitter_game_report_server("hitter_game_report", app_state)
@@ -861,7 +865,7 @@ _NAV_GROUPS = [
     # just out of the visible sidebar) -- see nav.py's matching comments.
     ("Pitching", ["bullpen_dashboard", "bullpen_tracking", "rapsodo_import"]),
     ("Hitting", ["hitter_tracking"]),
-    ("Games", ["game_tracking", "pitcher_game_report", "pitcher_meeting_report", "hitter_game_report"]),
+    ("Games", ["game_tracking", "team_game_report", "pitcher_game_report", "pitcher_meeting_report", "hitter_game_report", "hitter_meeting_report"]),
     # Sept 2026, Ryker: "pitcher profile, hitter profile, player stats
     # should be under analytics rather than games" -- moved out of
     # "Games" above into their own group; Pitcher/Hitter Game Report
@@ -869,7 +873,7 @@ _NAV_GROUPS = [
     ("Analytics", ["analytics", "pitcher_profile", "weekly_report", "hitter_profile", "pitching_leaderboard"]),
     ("Scouting", ["advance_scouting", "opponent_teams"]),
     ("Admin", ["user_management", "staff_assignments", "video_import"]),
-    ("Me", ["player_profile", "player_schedule", "player_development", "player_stats", "player_game_stats", "player_hitting", "player_video", "player_bullpens", "pitcher_profile", "pitcher_meeting_report", "weekly_report", "advance_scouting", "hitter_profile", "pitching_leaderboard"]),
+    ("Me", ["player_profile", "player_schedule", "player_development", "player_stats", "player_game_stats", "player_hitting", "player_video", "player_bullpens", "pitcher_profile", "pitcher_meeting_report", "weekly_report", "advance_scouting", "hitter_profile", "hitter_meeting_report", "pitching_leaderboard"]),
 ]
 _NAV_LABELS = {
     "players": "Player setup", "roster": "Players", "idp": "Development plans", "rapsodo_import": "Import Rapsodo",
@@ -900,6 +904,8 @@ _ICONS = {
     "advance_scouting": '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4M8 11h6M11 8v6"/>',
     "weekly_report": '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4M7 17l3-3 3 2 4-4"/>',
     "pitcher_meeting_report": '<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7"/><path d="M3 9h3M3 13h3"/>',
+    "hitter_meeting_report": '<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7"/><path d="M3 9h3M3 13h3"/>',
+    "team_game_report": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M8 15h2M14 15h2M8 4v16M16 4v16"/>',
     "analytics": '<path d="M3 17l6-6 4 4 8-8M14 7h7v7"/>',
     "pitcher_profile": '<path d="M3 17l6-6 4 4 8-8M14 7h7v7"/><circle cx="12" cy="12" r="9"/>',
     "hitter_profile": '<path d="M3 17l6-6 4 4 8-8M14 7h7v7"/><circle cx="12" cy="12" r="9"/>',
