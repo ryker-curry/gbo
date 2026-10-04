@@ -195,7 +195,8 @@ def build(db, games, names=None):
                             "2b": ends.count("2B"), "3b": ends.count("3B"), "hr": ends.count("HR"),
                             "avg": m["AVG"], "obp": m["OBP"], "slg": m["SLG"],
                             "sd": m["Swing Decision %"], "chase": m["Chase %"], "whiff": m["Whiff %"],
-                            "hard": m["Hard contact %"], "ppa": m["Pitches/PA"]})
+                            "hard": m["Hard contact %"], "ppa": m["Pitches/PA"],
+                            "qab": m["QAB"], "qab_pct": m["QAB%"]})
     hitter_rows.sort(key=lambda r: (-r["pa"], r["name"]))
     if team_h is not None:
         ends = [pa[-1].ab_outcome for pa in hi.plate_appearances(hp) if pa[-1].ends_plate_appearance]

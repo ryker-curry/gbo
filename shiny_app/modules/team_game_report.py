@@ -268,12 +268,14 @@ def team_game_report_server(input, output, session, app_state):
              "delta": f"{sd['counts']['Chase']} chases · {sd['counts']['Taken strike']} hittable strikes taken"},
             {"label": "Chase %", "value": _p(t["Chase %"])},
             {"label": "Hard contact %", "value": _p(t["Hard contact %"])},
+            {"label": "Quality at-bats", "value": _p(t["QAB%"]), "delta": f"{t['QAB']} of {t['PA']} PA · goal 54%",
+             "delta_positive": None if t["QAB%"] is None else t["QAB%"] >= 54},
             {"label": "2-strike K %", "value": _p(fp["two"]["K %"]), "delta": f"{fp['two']['PAs']} two-strike PAs"},
         ])
         rows = [{"Hitter": r["name"], "PA": r["pa"], "AB": r["ab"], "H": r["h"], "2B": r["2b"], "HR": r["hr"],
                  "BB": r["bb"], "K": r["k"], "AVG": _a(r["avg"]), "OBP": _a(r["obp"]), "SLG": _a(r["slg"]),
                  "Swing dec.": _p(r["sd"]), "Chase %": _p(r["chase"]), "Whiff %": _p(r["whiff"]),
-                 "Hard contact %": _p(r["hard"])}
+                 "Hard contact %": _p(r["hard"]), "QAB %": _p(r["qab_pct"])}
                 for r in h["rows"]]
         pt_tabs = []
         for split in ("All", "vs RHP", "vs LHP"):

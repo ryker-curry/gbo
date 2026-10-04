@@ -63,14 +63,18 @@ def metrics_figure(trend):
         fig.add_trace(go.Scatter(x=xs, y=rs, mode="lines", line=dict(color=ROLL, width=3), name=roll_name,
                                  showlegend=(i == 0), connectgaps=True,
                                  hovertemplate="%{x}: %{y:.0f} rolling<extra></extra>"), row=r, col=c)
-        for val, name, dash, color in ((s["mine"], "His average", "dot", LINE), (s["team"], "Team", "dash", MUTED_GRAY),
-                                       (s["d2"], "D2 average", "dash", GOLD)):
+        bench = s.get("bench")
+        refs = ((s["mine"], "His average", "dot", LINE), (s["team"], "Team", "dash", MUTED_GRAY),
+                (s["d2"], "D2 average", "dash", GOLD),
+                (bench[0] if bench else None, bench[1] if bench else "", "dashdot", "#3FB27F"))
+        for val, name, dash, color in refs:
             if val is None:
                 continue
+            first_d2 = name == "D2 average" and not any(trend["series"][kk]["d2"] is not None for kk in keys[:i])
             fig.add_trace(go.Scatter(x=[xs[0], xs[-1]], y=[val, val], mode="lines",
                                      line=dict(color=color, dash=dash, width=1.5), name=name,
-                                     showlegend=(i == 0 or (name == "D2 average" and not any(
-                                         trend["series"][kk]["d2"] is not None for kk in keys[:i]))),
+                                     showlegend=(name in ("His average", "Team") and i == 0) or first_d2
+                                     or (bench is not None and name == bench[1]),
                                      hovertemplate=f"{name}: {_fmt(s['unit'], val)}<extra></extra>"), row=r, col=c)
         fig.update_xaxes(showticklabels=len(xs) <= 14, tickangle=-35, tickfont=dict(size=9), gridcolor=GRID_GRAY,
                          row=r, col=c)

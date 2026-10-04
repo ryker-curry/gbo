@@ -360,7 +360,13 @@ def core_metrics(pitches):
     bip = [p for p in pitches if p.pitch_outcome == "In Play"]
     hard = [p for p in bip if (p.contact_quality or "") in HARD_CONTACT]
     fp = first_pitch_two_strike(pitches)
+    # Oct 2026: Quality at-bats (Brian Cain's definition, game_stats.
+    # _is_quality_at_bat -- the same check Hitter Game Report uses).
+    from game_stats import _is_quality_at_bat
+    done = [pa for pa in pas if pa[-1].ends_plate_appearance and pa[-1].ab_outcome not in (None, "No Result")]
+    qab = sum(1 for pa in done if _is_quality_at_bat(pa))
     return {
+        "QAB": qab, "QAB%": _pct(qab, len(done)),
         "pitches": len(pitches), "PA": line["PA"], "AVG": line["AVG"], "OBP": line["OBP"], "SLG": line["SLG"],
         "K%": line["K%"], "BB%": line["BB%"], "H": line["H"], "AB": line["AB"], "K": line["K"], "BB": line["BB"],
         "Swing Decision %": sd["score"], "Chase %": sd["chase_pct"],
@@ -385,6 +391,7 @@ PERCENTILE_METRICS = [
     ("BB%", "BB %", True, "Walks per plate appearance"),
     ("Hard contact %", "Hard contact %", True, "Barreled or solid contact per ball in play"),
     ("Pitches/PA", "Pitches per PA", True, "Makes the pitcher work"),
+    ("QAB%", "Quality at-bat %", True, "Brian Cain QABs per PA (goal: 54% a game, .500 season)"),
 ]
 MIN_PA_FOR_RANK = 10
 

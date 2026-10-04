@@ -40,6 +40,7 @@ GAME_METRICS = {
     "h_hard": ("Hard contact %", "hit", True, "%", "barreled/solid per ball in play"),
     "h_ops_plus": ("OPS+ (vs D2)", "hit", True, "", "100 = D2 average"),
     "h_two_k": ("2-strike K %", "hit", False, "%", "strikeouts once at two strikes"),
+    "h_qab": ("Quality at-bat %", "hit", True, "%", "Brian Cain QABs per PA (benchmark 54% a game)"),
     # pitchers
     "p_strike": ("Strike %", "pitch", True, "%", "share of pitches that were strikes"),
     "p_fps": ("First-pitch strike %", "pitch", True, "%", "started hitters 0-1"),
@@ -101,6 +102,8 @@ def value(db, key, pitches, pitch_type_id=None, names=None):
             return m["Hard contact %"]
         if key == "h_two_k":
             return m["2-strike K %"]
+        if key == "h_qab":
+            return m["QAB%"]
         if key == "h_ops_plus":
             if m["OBP"] is None or m["SLG"] is None:
                 return None

@@ -34,6 +34,7 @@ METRICS = [
     ("BB%", "Walk %", "Walks per plate appearance", True, 3.0, "%"),
     ("Hard contact %", "Hard contact %", "Barreled/solid per ball in play", True, 8.0, "%"),
     ("Pitches/PA", "Pitches per PA", "Makes the pitcher work", True, 0.3, "num"),
+    ("QAB%", "Quality at-bat %", "Cain QABs per PA -- goal 54% a game", True, 6.0, "%"),
 ]
 
 
