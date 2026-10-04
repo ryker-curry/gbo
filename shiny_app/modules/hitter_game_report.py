@@ -45,6 +45,7 @@ from visualizations.hitter_pitch_chart import at_bat_pitch_locations_chart
 from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_figure, CONTACT_QUALITY_SCORE
 
 import ui_helpers
+from analytics import league_baselines
 import format_helpers
 import chart_helpers
 import glossary_content
@@ -203,12 +204,9 @@ def hitter_game_report_server(input, output, session, app_state):
                 return ui_helpers.empty_state("No pitches for this batter in this game.")
 
             line = compute_batting_line(pitches)
-            season_baseline = profile_queries.team_batting_line_for_seasons(db, [game.season_id] if game.season_id else [])
-            player_ops_plus = ops_plus(
-                line["OBP"], line["SLG"],
-                season_baseline["OBP"] if season_baseline else None,
-                season_baseline["SLG"] if season_baseline else None,
-            )
+            # Oct 2026: OPS+ (and the other "+" stats below) vs the 2026 D2 average.
+            player_ops_plus = ops_plus(line["OBP"], line["SLG"])
+            plus = league_baselines.hitting_plus(line)
             sections = [ui.h5(f"{batter.first_name} {batter.last_name} — {_game_label(game)}", class_="gbo-section-title")]
 
             sections.append(ui.p(ui.strong("Line")))
@@ -236,12 +234,13 @@ def hitter_game_report_server(input, output, session, app_state):
                 {"label": "wOBA*", "value": _fmt(line["wOBA"])},
             ]))
             sections.append(ui.p(
-                "*wOBA uses generic linear weights, not a season/league-specific set -- a relative read within your own games, not MLB-exact. "
-                "OPS+ is against this team's own season average (100 = team average) -- see the glossary." if season_baseline else
-                "*wOBA uses generic linear weights, not a season/league-specific set -- a relative read within your own games, not MLB-exact. "
-                "OPS+ isn't shown -- no team baseline yet for this game's season.",
+                "*wOBA uses generic linear weights, a relative read within your own games, not MLB-exact. "
+                "OPS+ is vs the 2026 D2 average (100 = D2 average).",
                 class_="text-muted small",
             ))
+            sections.append(ui.p(ui.strong("Plus stats vs D2 (2026)")))
+            sections.append(ui_helpers.plus_stat_cards(plus, league_baselines.HITTING_PLUS_ORDER))
+            sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
 
             sections.append(ui.p(ui.strong("Plate Discipline")))
             sections.append(ui_helpers.render_kpi_cards([

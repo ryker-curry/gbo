@@ -134,6 +134,7 @@ from visualizations.arsenal_plan_chart import plan_movement_figure, progress_fig
 from visualizations.best_zone_chart import best_zone_figure
 
 import ui_helpers
+from analytics import league_baselines
 import format_helpers
 from analytics.bullpen_metrics import (
     pitch_type_summary, average_estimated_arm_angle, pitch_type_label,
@@ -583,6 +584,10 @@ def pitcher_profile_server(input, output, session, app_state):
                     {"label": "wOBA*", "value": _fmt(line["wOBA"], 3)},
                 ]))
                 sections.append(ui.p("*wOBA uses generic linear weights, a relative read within your own games, not MLB-exact.", class_="text-muted small"))
+
+                sections.append(ui.p(ui.strong("Plus stats vs D2 (2026)")))
+                sections.append(ui_helpers.plus_stat_cards(league_baselines.pitching_plus(line), league_baselines.PITCHING_PLUS_ORDER))
+                sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
 
             sections.append(ui.hr())
             sections.append(ui.p(ui.strong("Overview")))

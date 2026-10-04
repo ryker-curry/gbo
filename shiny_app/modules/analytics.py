@@ -43,6 +43,7 @@ from pitch_location_stats import compute_command_precision, compute_attack_zones
 from bucket_display import build_percentage_rings
 
 import ui_helpers
+from analytics import league_baselines
 import chart_helpers
 import format_helpers
 from format_helpers import (
@@ -151,6 +152,10 @@ def analytics_server(input, output, session, app_state):
                         {"label": "wOBA*", "value": _fmt_num(batting_line["wOBA"], 3)},
                     ]))
                     sections.append(ui.p("*wOBA uses generic linear weights, not a season/league-specific set -- a relative read within your own games, not MLB-exact.", class_="text-muted small"))
+
+                    sections.append(ui.p(ui.strong("Plus stats vs D2 (2026)")))
+                    sections.append(ui_helpers.plus_stat_cards(league_baselines.hitting_plus(batting_line), league_baselines.HITTING_PLUS_ORDER))
+                    sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
 
                     sections.append(ui_helpers.render_kpi_cards([
                         {"label": "BB %", "value": _fmt_pct1(batting_line["BB %"])},
@@ -265,6 +270,10 @@ def analytics_server(input, output, session, app_state):
                         {"label": "FIP", "value": _fmt_num(pitching_line["FIP"])},
                         {"label": "Zone Execution %", "value": _fmt_pct1(pitching_line["Zone Execution %"])},
                     ]))
+
+                    sections.append(ui.p(ui.strong("Plus stats vs D2 (2026)")))
+                    sections.append(ui_helpers.plus_stat_cards(league_baselines.pitching_plus(pitching_line), league_baselines.PITCHING_PLUS_ORDER))
+                    sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
                     sections.append(ui.p(
                         f"Total RV Allowed: {pitching_line['Total RV Allowed']} · Avg RV Allowed/Pitch: {pitching_line['Avg RV Allowed/Pitch']}",
                         class_="text-muted small",

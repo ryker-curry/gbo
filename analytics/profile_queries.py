@@ -730,6 +730,8 @@ def pitching_staff_leaderboard_rows(db, date_from=None, date_to=None, game_scope
             "Stuff+": bundle["stuff_plus_value"], "Location+": bundle["location_plus_value"],
             "Pitching+": bundle["pitching_plus_value"], "Command+": command_plus_value,
             "Arsenal": arsenal_pitching_value, "Results": results_score, "Performance": performance_value,
+            # Oct 2026: "+" stats vs the 2026 D2 average (100 = D2 average).
+            **_lb_pitching_plus(line),
         })
 
     return rows
@@ -841,3 +843,8 @@ def get_team_hitting_pitches(db, date_from=None, date_to=None, pitch_type=None, 
         pid = p.our_player_id if p.is_our_team_batting else p.opponent_our_player_id
         out.setdefault(pid, []).append(p)
     return out
+
+
+def _lb_pitching_plus(line):
+    from analytics.league_baselines import pitching_plus
+    return pitching_plus(line)

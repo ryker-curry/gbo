@@ -137,6 +137,10 @@ def _line_strip(r):
     y = r["you"]
     cells = [("PA", y["PA"]), ("AB", y["AB"]), ("H", y["H"]), ("BB", y["BB"]), ("K", y["K"]),
              ("AVG", _avg(y["AVG"])), ("OBP", _avg(y["OBP"])), ("SLG", _avg(y["SLG"]))]
+    from game_stats import ops_plus
+    op = ops_plus(y["OBP"], y["SLG"])
+    if op is not None:
+        cells.append(("OPS+ vs D2", op))
     if r["kind"] == "season":
         cells.insert(0, ("G", r.get("games")))
     return '<div class="line">' + "".join(f"<div><b>{_e(v if v is not None else '—')}</b><span>{k}</span></div>" for k, v in cells) + "</div>"

@@ -714,3 +714,20 @@ def rating_breakdown(rc):
         class_="text-muted small",
     ))
     return ui.div(*blocks)
+
+
+
+def plus_stat_cards(values, order):
+    """Oct 2026: one KPI card per "+" stat (100 = 2026 D2 average, higher is
+    always better -- analytics/league_baselines.py). values: {name: int|None}."""
+    cards = []
+    for name in order:
+        v = values.get(name)
+        if v is None:
+            cards.append({"label": name, "value": "—"})
+            continue
+        diff = v - 100
+        cards.append({"label": name, "value": str(v),
+                      "delta": ("D2 average" if abs(diff) < 3 else f"{abs(diff)}% {'above' if diff > 0 else 'below'} D2"),
+                      "delta_positive": None if abs(diff) < 3 else diff > 0})
+    return render_kpi_cards(cards)

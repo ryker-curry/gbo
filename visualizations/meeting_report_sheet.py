@@ -154,7 +154,9 @@ def _rate_line(r):
     y = r["you"]
     if (y.get("outs") or 0) < 9 or y.get("era") is None:
         return ""
-    bits = [f'ERA* <b>{y["era"]:.2f}</b> (D2 {lb.pitching("era"):.2f} · MIAA {lb.pitching("era", "MIAA"):.2f})']
+    eplus = round(100 * lb.pitching("era") / y["era"]) if y["era"] else None
+    bits = [f'ERA* <b>{y["era"]:.2f}</b> (D2 {lb.pitching("era"):.2f} · MIAA {lb.pitching("era", "MIAA"):.2f})'
+            + (f' · ERA+ <b>{eplus}</b>' if eplus is not None else "")]
     if y.get("whip") is not None:
         bits.append(f'WHIP <b>{y["whip"]:.2f}</b> (D2 {lb.pitching("whip"):.2f} · MIAA {lb.pitching("whip", "MIAA"):.2f})')
     return f'<div class="small" style="margin-top:3px">{" &nbsp;·&nbsp; ".join(bits)} &nbsp;<span class="na">D2/MIAA = 2026 league ERA; ERA* here counts every run, so it reads a little high next to them</span></div>'

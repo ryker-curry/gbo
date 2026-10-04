@@ -63,6 +63,14 @@ STAFF_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data
 # way a rate stat does).
 STAT_META = [
     ("ERA", "ERA", False, 2),
+    # Oct 2026: "+" stats vs the 2026 D2 average -- 100 = D2 average,
+    # higher is always better (analytics/league_baselines.py).
+    ("ERA+", "ERA+", True, 0),
+    ("FIP+", "FIP+", True, 0),
+    ("WHIP+", "WHIP+", True, 0),
+    ("K%+", "K%+", True, 0),
+    ("BB%+", "BB%+", True, 0),
+    ("K-BB%+", "K-BB%+", True, 0),
     ("WHIP", "WHIP", False, 2),
     ("FIP", "FIP", False, 2),
     ("K/9", "K/9", True, 2),
@@ -92,7 +100,7 @@ STAT_LABELS = {key: label for key, label, *_rest in STAT_META}
 STAT_HIGHER_BETTER = {key: hib for key, _label, hib, _dec in STAT_META}
 STAT_DECIMALS = {key: dec for key, _label, _hib, dec in STAT_META}
 
-DEFAULT_COLUMNS = ["ERA", "WHIP", "K/9", "BB/9", "K %", "FIP", "Command+", "Performance"]
+DEFAULT_COLUMNS = ["ERA", "ERA+", "WHIP", "K/9", "BB/9", "K %", "FIP", "K-BB%+", "Command+", "Performance"]
 DEFAULT_SORT = "ERA"
 
 
