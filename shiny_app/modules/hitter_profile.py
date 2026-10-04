@@ -60,7 +60,7 @@ from models import Player, User, PitchType, StaffPlayerAssignment
 from game_stats import get_pitcher_hands, compute_batting_line, compute_batted_ball_profile, ops_plus
 from plate_discipline import compute_hitter_discipline, compute_zone_tier_discipline
 from analytics import performance_score, profile_queries
-from analytics import hitter_hot_zones, hitter_insights
+from analytics import hitter_hot_zones, hitter_insights, league_baselines
 from visualizations import hitter_insight_charts as hic
 from visualizations.hitter_hot_zone_chart import hot_zone_figure
 from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_figure, CONTACT_QUALITY_SCORE
