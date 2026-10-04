@@ -414,3 +414,153 @@ def team_percentiles(pitches_by_player, player_id):
         pct = round(100.0 * (below + 0.5 * ties) / (len(vals) - 1)) if len(vals) > 1 else None
         out[key] = {"value": v, "pct": pct, "label": label, "desc": desc, "n_players": len(vals)}
     return out
+
+
+# ---------------------------------------------------------------------------
+# 2b. Count-by-count attack plan (Oct 2026, Ryker: "show the different count
+# states and the percentage of pitches thrown ... a trend of what location
+# pitchers tend to throw pitches in certain counts. like do they try to go
+# fastballs hard in late or go away?")
+#
+# Locations are from the HITTER's side of the plate: In / Middle / Away
+# (inner third / middle third / outer third, extended past the plate) and
+# Up / Middle / Down (thirds of the zone, extended above/below it).
+# ---------------------------------------------------------------------------
+
+COUNTS = ("0-0", "1-0", "0-1", "2-0", "1-1", "0-2", "3-0", "2-1", "1-2", "3-1", "2-2", "3-2")
+COUNT_GROUPS = {
+    "Hitter's counts": ("1-0", "2-0", "3-0", "2-1", "3-1"),
+    "Even": ("0-0", "1-1", "2-2"),
+    "Pitcher's counts": ("0-1", "0-2", "1-2"),
+    "Two strikes": ("0-2", "1-2", "2-2", "3-2"),
+}
+H_CELLS = ("In", "Middle", "Away")
+V_CELLS = ("Up", "Middle", "Down")
+MIN_TENDENCY = 6          # located pitches of a family in a count before calling a tendency
+TENDENCY_PCT = 40.0       # a cell (or half) has to hold this share to be called out
+
+
+def count_of(p):
+    if p.balls_before is None or p.strikes_before is None:
+        return None
+    return f"{min(p.balls_before, 3)}-{min(p.strikes_before, 2)}"
+
+
+def _vert(z):
+    third = (3.5 - 1.5) / 3
+    return "Up" if z > 3.5 - third else ("Down" if z < 1.5 + third else "Middle")
+
+
+def _cell(p, bat_hand):
+    loc = _loc(p)
+    side = _side(p, bat_hand)
+    if loc is None or side is None:
+        return None
+    return side, _vert(loc[1])
+
+
+def count_table(db, pitches, hand=None):
+    """One row per count: pitches seen there, share of all pitches he saw,
+    and the mix by pitch TYPE (columns = every type he saw, most common
+    first) plus fastball/breaking/offspeed and in-zone %."""
+    phands = get_pitcher_hands(db, pitches)
+    ps = [p for p in pitches if hand is None or phands.get(p.game_pitch_id) == hand]
+    total = len(ps)
+    type_counts = defaultdict(int)
+    for p in ps:
+        if p.pitch_type:
+            type_counts[p.pitch_type.type_name] += 1
+    types = [t for t, _n in sorted(type_counts.items(), key=lambda kv: -kv[1])]
+    rows = []
+    for c in COUNTS:
+        cp = [p for p in ps if count_of(p) == c]
+        n = len(cp)
+        if not n:
+            continue
+        by_t = defaultdict(int)
+        by_f = defaultdict(int)
+        for p in cp:
+            if p.pitch_type:
+                by_t[p.pitch_type.type_name] += 1
+            f = family(p)
+            if f:
+                by_f[f] += 1
+        located = [p for p in cp if _loc(p)]
+        inz = sum(1 for p in located if is_in_zone(*_loc(p)))
+        rows.append({"Count": c, "Seen": n, "% of pitches": _pct(n, total),
+                     "types": {t: _pct(by_t[t], n) for t in types},
+                     "families": {f: _pct(by_f[f], n) for f in FAMILIES},
+                     "In zone %": _pct(inz, len(located)), "located": len(located)})
+    return {"rows": rows, "types": types, "total": total}
+
+
+def location_grid(db, pitches, counts=None, fam=None, hand=None, _hands=None):
+    """3x3 share of located pitches by (Up/Middle/Down) x (In/Middle/Away),
+    hitter's side. counts: iterable of 'B-S' strings (None = all)."""
+    phands, bhands = _hands or (get_pitcher_hands(db, pitches), get_batter_hands(db, pitches))
+    grid = {(v, h): 0 for v in V_CELLS for h in H_CELLS}
+    n = 0
+    for p in pitches:
+        if hand is not None and phands.get(p.game_pitch_id) != hand:
+            continue
+        if counts is not None and count_of(p) not in counts:
+            continue
+        if fam is not None and family(p) != fam:
+            continue
+        cell = _cell(p, bhands.get(p.game_pitch_id))
+        if cell is None:
+            continue
+        side, vert = cell
+        grid[(vert, side)] += 1
+        n += 1
+    return {"n": n, "pct": {k: _pct(v, n) for k, v in grid.items()}, "counts": grid}
+
+
+_WORDS = {("Up", "In"): "up and in", ("Up", "Middle"): "up", ("Up", "Away"): "up and away",
+          ("Middle", "In"): "in", ("Middle", "Middle"): "middle-middle", ("Middle", "Away"): "away",
+          ("Down", "In"): "down and in", ("Down", "Middle"): "down", ("Down", "Away"): "down and away"}
+
+
+def _describe(grid):
+    """Plain-English tendency from a location_grid result, or None."""
+    n = grid["n"]
+    if n < MIN_TENDENCY:
+        return None
+    c = grid["counts"]
+    cell, k = max(c.items(), key=lambda kv: kv[1])
+    if 100.0 * k / n >= TENDENCY_PCT:
+        return _WORDS[cell], round(100.0 * k / n), k
+    halves = {
+        "in": sum(c[(v, "In")] for v in V_CELLS), "away": sum(c[(v, "Away")] for v in V_CELLS),
+        "up": sum(c[("Up", h)] for h in H_CELLS), "down": sum(c[("Down", h)] for h in H_CELLS),
+    }
+    word, k = max(halves.items(), key=lambda kv: kv[1])
+    if 100.0 * k / n >= 55:
+        return word, round(100.0 * k / n), k
+    return None
+
+
+def count_tendencies(db, pitches, hand=None):
+    """Lines like '0-2 -- fastballs: up and in (45%, 9 of 20)' for every
+    count (and count group) where a pitch family shows a clear location
+    habit, plus how often they throw that family there."""
+    out = []
+    groups = [(c, (c,)) for c in COUNTS] + list(COUNT_GROUPS.items())
+    table = {r["Count"]: r for r in count_table(db, pitches, hand)["rows"]}
+    hands = (get_pitcher_hands(db, pitches), get_batter_hands(db, pitches))
+    for label, cs in groups:
+        for fam in FAMILIES:
+            g = location_grid(db, pitches, cs, fam, hand, _hands=hands)
+            d = _describe(g)
+            if d is None:
+                continue
+            where, pct, k = d
+            share = ""
+            if len(cs) == 1 and label in table:
+                share = f" -- {table[label]['families'].get(fam) or 0:.0f}% of pitches in this count are {fam.lower()}s"
+            word = {"Fastball": "fastballs", "Breaking": "breaking balls", "Offspeed": "offspeed"}[fam]
+            share = share.replace(f"{fam.lower()}s", word)
+            out.append({"count": label, "family": fam, "where": where, "pct": pct, "k": k, "n": g["n"],
+                        "group": len(cs) > 1,
+                        "text": f"{label}: {word} {where} ({pct}%, {k} of {g['n']}){share}"})
+    return out

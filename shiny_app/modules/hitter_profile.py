@@ -819,12 +819,32 @@ def hitter_profile_server(input, output, session, app_state):
             return ui.div(
                 ui.p(ui.strong("How Pitchers Attack Me"), style="margin-bottom:0;"),
                 ui.p("What pitchers throw you in each count and where they put it -- so you can walk up with a plan. "
-                     "Inside/away is from your side of the plate. Locations are catcher's view.", class_="text-muted small"),
+                     "Inside/away is from your side of the plate.", class_="text-muted small"),
                 hand_select("hp_atk_hand"),
                 ui.output_ui("hp_atk_notes"),
-                ui.p(ui.strong("What they throw by count"), style="margin:10px 0 0;"),
+                # Oct 2026, Ryker: every count state, the share of pitches
+                # thrown in each, and location habits by count.
+                ui.p(ui.strong("Every count: how often you see it and what's thrown"), style="margin:14px 0 2px;"),
+                ui.p("% of pitches = how much of what you see comes in that count. The pitch columns are the mix "
+                     "within that count.", class_="text-muted small"),
+                ui.output_ui("hp_atk_count_table"),
+                ui.p(ui.strong("Pitch mix by count"), style="margin:14px 0 0;"),
                 output_widget("hp_atk_mix"),
-                ui.p(ui.strong("Where they throw it"), style="margin:10px 0 0;"),
+                ui.p(ui.strong("Where they throw it, by count"), style="margin:14px 0 2px;"),
+                ui.p("From your side of the plate (in = inner third or inside, away = outer third or off the plate). "
+                     "Pick a count and a pitch.", class_="text-muted small"),
+                ui.layout_columns(
+                    ui.input_select("hp_atk_count", "Count", choices={
+                        "all": "All counts",
+                        **{f"g:{k}": k for k in hitter_insights.COUNT_GROUPS},
+                        **{f"c:{c}": c for c in hitter_insights.COUNTS},
+                    }),
+                    ui.input_select("hp_atk_fam", "Pitch", choices={"all": "All pitches", "Fastball": "Fastballs",
+                                                                     "Breaking": "Breaking balls", "Offspeed": "Offspeed"}),
+                    col_widths=[3, 3],
+                ),
+                ui.layout_columns(output_widget("hp_atk_grid"), ui.output_ui("hp_atk_tendencies"), col_widths=[5, 7]),
+                ui.p(ui.strong("Where they throw it (all counts, by pitch)"), style="margin:14px 0 0;"),
                 output_widget("hp_atk_loc"),
             )
         if view == "pitch_type":
@@ -940,14 +960,105 @@ def hitter_profile_server(input, output, session, app_state):
         finally:
             db.close()
 
+    def _atk_hand():
+        choice = input.hp_atk_hand() if "hp_atk_hand" in input else "all"
+        return None if choice not in ("R", "L") else choice
+
+    @render.ui
+    def hp_atk_count_table():
+        if not _insight_gate("attack"):
+            return None
+        db = get_session()
+        try:
+            _pid, pitches = _current_pitches(db)
+            if not pitches:
+                return None
+            ct = hitter_insights.count_table(db, pitches, _atk_hand())
+            if not ct["rows"]:
+                return ui.p("No pitches with a recorded count.", class_="text-muted small")
+            types = ct["types"][:6]
+            rows = []
+            for r in ct["rows"]:
+                row = {"Count": r["Count"], "Seen": r["Seen"], "% of pitches": _fmtp(r["% of pitches"])}
+                for t in types:
+                    row[t] = _fmtp(r["types"].get(t)) if r["types"].get(t) else "—"
+                row["In zone"] = _fmtp(r["In zone %"])
+                rows.append(row)
+            return ui_helpers.render_dict_table(rows)
+        finally:
+            db.close()
+
     @render_plotly
     def hp_atk_mix():
         req(_insight_gate("attack"))
         db = get_session()
         try:
-            prof = _atk_data(db)
-            req(prof and prof["n"])
-            return hic.count_mix_chart(prof["mix"])
+            _pid, pitches = _current_pitches(db)
+            req(pitches)
+            ct = hitter_insights.count_table(db, pitches, _atk_hand())
+            mix = [{"Count": r["Count"], "Pitches": r["Seen"], **r["families"]} for r in ct["rows"]]
+            req(mix)
+            return hic.count_mix_chart(mix)
+        finally:
+            db.close()
+
+    def _atk_grid_args():
+        c = input.hp_atk_count() if "hp_atk_count" in input else "all"
+        f = input.hp_atk_fam() if "hp_atk_fam" in input else "all"
+        counts = None
+        label = "All counts"
+        if c.startswith("g:"):
+            label = c[2:]
+            counts = hitter_insights.COUNT_GROUPS[label]
+        elif c.startswith("c:"):
+            label = c[2:]
+            counts = (label,)
+        fam = None if f == "all" else f
+        return counts, fam, label
+
+    @render_plotly
+    def hp_atk_grid():
+        req(_insight_gate("attack"))
+        db = get_session()
+        try:
+            _pid, pitches = _current_pitches(db)
+            req(pitches)
+            counts, fam, label = _atk_grid_args()
+            g = hitter_insights.location_grid(db, pitches, counts, fam, _atk_hand())
+            req(g["n"])
+            fam_word = {"Fastball": "fastballs", "Breaking": "breaking balls", "Offspeed": "offspeed"}.get(fam, "all pitches")
+            return hic.location_grid_figure(g, f"{label} · {fam_word} · {g['n']} located")
+        finally:
+            db.close()
+
+    @render.ui
+    def hp_atk_tendencies():
+        if not _insight_gate("attack"):
+            return None
+        db = get_session()
+        try:
+            _pid, pitches = _current_pitches(db)
+            if not pitches:
+                return None
+            counts, fam, label = _atk_grid_args()
+            g = hitter_insights.location_grid(db, pitches, counts, fam, _atk_hand())
+            lines = hitter_insights.count_tendencies(db, pitches, _atk_hand())
+            groups = [l for l in lines if l["group"]]
+            singles = [l for l in lines if not l["group"]]
+            kids = []
+            if g["n"] and g["n"] < hitter_insights.MIN_TENDENCY:
+                kids.append(ui.p(f"Only {g['n']} located pitches for this pick -- read it loosely.", class_="text-muted small"))
+            if groups:
+                kids.append(ui.p(ui.strong("Clear habits by count type"), style="margin:0 0 2px;"))
+                kids.append(ui.tags.ul(*[ui.tags.li(l["text"]) for l in groups]))
+            if singles:
+                kids.append(ui.p(ui.strong("Clear habits in specific counts"), style="margin:6px 0 2px;"))
+                kids.append(ui.tags.ul(*[ui.tags.li(l["text"]) for l in singles]))
+            if not groups and not singles:
+                kids.append(ui.p(f"No clear location habit yet -- a pitch needs {hitter_insights.MIN_TENDENCY}+ located "
+                                 f"pitches in a count and {hitter_insights.TENDENCY_PCT:.0f}%+ in one spot to show here.",
+                                 class_="text-muted small"))
+            return ui.div(*kids, style="font-size:.9rem;")
         finally:
             db.close()
 
