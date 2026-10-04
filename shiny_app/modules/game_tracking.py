@@ -1509,17 +1509,33 @@ def _insert_missed_pitch_at(db, game_id, anchor_seq, field_values):
     return new_pitch, coincident_anchor_labels
 
 
-def _current_pa_pitches(pitches):
+def _current_pa_pitches(pitches, state=None):
     """Trailing pitches of the still-open plate appearance -- everything
     after the last pitch that ended a PA (sorted ascending, same order
     as the `pitches` argument). Naturally empty right when a PA just
     ended (compute_current_state's `new_pa` is True then, since the
     very last pitch itself has ends_plate_appearance=True and the walk
     below stops immediately), non-empty mid-PA. Used by
-    live_pitch_sequence_display."""
+    live_pitch_sequence_display.
+
+    Oct 2026 fix (Ryker, 9/17 game): an inning that ends on a caught
+    stealing / pickoff (or a forced end) leaves the batter's partial PA
+    with no ends_plate_appearance row, so the old walk kept showing
+    those pitches as "This At-Bat" for the NEXT half-inning's hitter.
+    Now: if compute_current_state says a new PA is starting, there are
+    no current-PA pitches, and the walk also stops at a half-inning
+    change."""
+    if state is not None and state.get("new_pa"):
+        return []
     current = []
+    half = None
     for p in reversed(pitches):
         if p.ends_plate_appearance:
+            break
+        key = (p.inning, bool(p.is_our_team_batting))
+        if half is None:
+            half = key
+        elif key != half:
             break
         current.append(p)
     return list(reversed(current))
@@ -3923,7 +3939,7 @@ def game_tracking_server(input, output, session, app_state):
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
             if game.status != "In Progress":
                 return None
-            current_pa_pitches = _current_pa_pitches(pitches)
+            current_pa_pitches = _current_pa_pitches(pitches, state)
             if not current_pa_pitches:
                 return ui.div(ui.h6("This At-Bat", class_="gbo-section-title"), ui.p("New plate appearance -- no pitches yet.", class_="text-muted small"))
             pitch_type_names = {pt.pitch_type_id: pt.type_name for pt in db.query(PitchType).all()}
