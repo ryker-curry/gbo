@@ -274,10 +274,26 @@ def idp_goals(db, player_id, limit=3):
         .filter(IDPGoal.player_id == player_id).order_by(IDPGoal.created_at.desc()).all()
     )
     out = []
+    from analytics import game_goals
+    ginfo = game_goals.goal_info(db, [g.goal_id for g in goals])
     for g in goals:
         status = g.status.status_name if g.status else ""
         if status.lower() in ("completed", "complete", "achieved", "cancelled", "canceled"):
             continue
+        if g.goal_id in ginfo:
+            # Oct 2026: game-stat goal -- live progress from game_goals.
+            gp = game_goals.progress(db, g, ginfo[g.goal_id])
+            if gp is not None:
+                out.append({
+                    "description": g.description, "status": f"{status} · {gp['status']}" if status else gp["status"],
+                    "metric": gp["label"] + f" ({game_goals.WINDOWS[gp['window']][0].lower()})", "pitch": None,
+                    "baseline": gp["baseline"], "target": gp["target"],
+                    "current": round(gp["current"], 1) if gp["current"] is not None else None,
+                    "target_date": g.target_date,
+                })
+                if len(out) >= limit:
+                    break
+                continue
         current = None
         if g.target_test_type is not None:
             field = rapsodo_field_for_test_name(g.target_test_type.test_name)

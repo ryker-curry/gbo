@@ -208,6 +208,7 @@ def build(db, player_id, week_start, stuff_models=None):
     }
     rep["highlights"], rep["watch"] = _highlights(rep)
     rep["active"] = bool(this_raps or this_games)
+    rep["goals"] = goal_lines(db, player_id)
     return rep
 
 
@@ -324,6 +325,7 @@ def build_hitter(db, player_id, week_start):
         "highlights": [x for _s, x in sorted(good, key=lambda z: -z[0])][:3],
         "watch": [x for _s, x in sorted(bad, key=lambda z: -z[0])][:1],
         "active": bool(this),
+        "goals": goal_lines(db, player_id),
     }
     return rep
 
@@ -334,3 +336,25 @@ def build_any(db, player_id, week_start, stuff_models=None):
     if p is None:
         return None
     return build(db, player_id, week_start, stuff_models=stuff_models) if p.is_pitcher else build_hitter(db, player_id, week_start)
+
+
+
+def goal_lines(db, player_id):
+    """Oct 2026: one line per open game-stat goal for the weekly report."""
+    from models import IDPGoal, IDPStatus
+    from analytics import game_goals
+    try:
+        goals = (db.query(IDPGoal).join(IDPStatus, IDPGoal.status_id == IDPStatus.status_id)
+                 .filter(IDPGoal.player_id == player_id, IDPStatus.status_name != "Completed").all())
+    except Exception:
+        db.rollback()
+        return []
+    info = game_goals.goal_info(db, [g.goal_id for g in goals])
+    out = []
+    for g in goals:
+        if g.goal_id not in info:
+            continue
+        gp = game_goals.progress(db, g, info[g.goal_id])
+        if gp is not None:
+            out.append({"line": gp["line"], "tone": gp["tone"], "status": gp["status"]})
+    return out

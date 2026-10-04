@@ -115,7 +115,8 @@ from pitch_type_config import get_pitch_color, FASTBALL_TYPES
 from analytics import fastball_shape
 from services.pitch_type_switch import apply_switches, undo_switches
 from models import PitchTypeChange, ArsenalTarget
-from analytics import approach_angles, best_zone, arsenal_plan, stuff_breakdown
+from analytics import approach_angles, best_zone, arsenal_plan, stuff_breakdown, trends
+from visualizations import trend_charts
 from visualizations.stuff_breakdown_chart import trait_impact_figure, strip_figure, outcome_figure, ordinal, fmt_value
 
 # Stuff+ Breakdown styling (hide the plotly toolbar -- it sat on the titles).
@@ -266,6 +267,7 @@ def pitcher_profile_ui():
         ui.output_ui("pp_zone_section"),
         ui.output_ui("pp_command_section"),
         ui.output_ui("pp_arsenal_section"),
+        ui.output_ui("pp_trends_section"),
         ui.output_ui("pp_count_leverage_section"),
         ui.output_ui("pp_fastball_shape_section"),
         ui.output_ui("pp_arsenal_plan_section"),
@@ -466,6 +468,7 @@ def pitcher_profile_server(input, output, session, app_state):
                 "arsenal": "Arsenal",
                 "count_leverage": "Count Leverage",
                 "arsenal_plan": "Arsenal Plan",
+                "trends": "Trends",
             }
             # Oct 2026, Ryker: "i don't want guys to see it" -- the
             # Fastball Shape Check is a staff-only data-cleanup tool.
@@ -1889,6 +1892,74 @@ def pitcher_profile_server(input, output, session, app_state):
             if not sections:
                 return ui.p("Nothing to show for the Arsenal view yet in this range.", class_="text-muted small")
             return ui.div(*sections)
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Trends (Oct 2026, Ryker approved). One point per game (or week), a
+    # rolling line, and his / team / D2 reference lines. Math:
+    # analytics/trends.py, charts: visualizations/trend_charts.py.
+    # -------------------------------------------------------------------
+    def _trend_gate():
+        if not app_state.is_authenticated():
+            return False
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return False
+        req("pp_view" in input)
+        return input.pp_view() == "trends"
+
+    @render.ui
+    def pp_trends_section():
+        if not _trend_gate():
+            return None
+        return ui.div(
+            ui.p(ui.strong("Trends"), style="margin-bottom:0;"),
+            ui.p("Is he getting better? Dots = each game (or week), red line = rolling average (pools the pitches, "
+                 "so one short outing doesn't swing it). Dotted = his average over this range, gray dashed = team, "
+                 "gold dashed = D2. Uses the date range above.", class_="text-muted small"),
+            ui.layout_columns(
+                    ui.input_radio_buttons("pp_trend_by", "Each point is", {"game": "A game", "week": "A week"},
+                                           selected="game", inline=True),
+                    ui.input_radio_buttons("pp_trend_roll", "Rolling line over", {"3": "3", "5": "5", "10": "10"},
+                                           selected="5", inline=True),
+                    col_widths=[6, 6],
+                ),
+            output_widget("pp_trend_metrics"),
+            ui.p(ui.strong("Velo and Stuff+ by pitch (Rapsodo: bullpens + games)"), style="margin:14px 0 0;"),
+            output_widget("pp_trend_velo"),
+        )
+
+    @render_plotly
+    def pp_trend_metrics():
+        req(_trend_gate())
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            req(pid)
+            ps = profile_queries.get_pitcher_profile_pitches(db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                                                             pitch_type=f["pitch_type"], game_scope=f["game_scope"])
+            req(ps)
+            team = trends.team_pitches_in_range(db, f["date_from"], f["date_to"], pitching=True)
+            by = input.pp_trend_by() if "pp_trend_by" in input else "game"
+            roll = int(input.pp_trend_roll()) if "pp_trend_roll" in input else 5
+            return trend_charts.metrics_figure(trends.build(db, ps, team, True, by, roll))
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_trend_velo():
+        req(_trend_gate())
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            req(pid)
+            by = input.pp_trend_by() if "pp_trend_by" in input else "game"
+            vs = trends.velo_stuff(db, pid, f["date_from"], f["date_to"], by)
+            req(vs)
+            return trend_charts.velo_stuff_figure(vs)
         finally:
             db.close()
 
