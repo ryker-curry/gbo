@@ -114,3 +114,26 @@ def count_mix_chart(mix):
     fig.update_xaxes(range=[0, 100], ticksuffix="%", gridcolor=GRID_GRAY, fixedrange=True)
     fig.update_yaxes(autorange="reversed", tickfont=dict(size=13, color="#E9ECF1"), fixedrange=True, automargin=True)
     return fig
+
+
+def location_grid_figure(grid, title=None):
+    """3x3 hitter's-side location grid (Oct 2026): columns In / Middle /
+    Away from HIS side of the plate, rows Up / Middle / Down. Cell = share
+    of located pitches (and the count)."""
+    from analytics.hitter_insights import H_CELLS, V_CELLS
+    if not grid or not grid["n"]:
+        return None
+    z, text = [], []
+    for v in V_CELLS:
+        z.append([grid["pct"][(v, h)] or 0 for h in H_CELLS])
+        text.append([f"<b>{(grid['pct'][(v, h)] or 0):.0f}%</b><br>{grid['counts'][(v, h)]}" for h in H_CELLS])
+    fig = go.Figure(go.Heatmap(
+        z=z, x=list(H_CELLS), y=list(V_CELLS), text=text, texttemplate="%{text}", textfont=dict(size=14),
+        colorscale=[[0, "#1E2530"], [0.35, "#5B6E8F"], [1, "#D64545"]], zmin=0, zmax=max(50, max(max(r) for r in z)),
+        showscale=False, xgap=3, ygap=3, hovertemplate="%{y} / %{x}: %{z:.0f}%<extra></extra>",
+    ))
+    apply_gbo_theme(fig, title=title, height=340, margin=dict(t=40 if title else 10, b=40, l=70, r=10))
+    fig.update_xaxes(side="bottom", title=dict(text="← inside      (his side of the plate)      away →",
+                                               font=dict(size=11, color=MUTED_GRAY)), fixedrange=True)
+    fig.update_yaxes(autorange="reversed", fixedrange=True)
+    return fig
