@@ -288,13 +288,9 @@ def hitter_profile_server(input, output, session, app_state):
             f = _current_filters()
 
             line = compute_batting_line(pitches)
-            season_ids = {p.game.season_id for p in pitches if p.game is not None and p.game.season_id is not None}
-            season_baseline = profile_queries.team_batting_line_for_seasons(db, season_ids)
-            player_ops_plus = ops_plus(
-                line["OBP"], line["SLG"],
-                season_baseline["OBP"] if season_baseline else None,
-                season_baseline["SLG"] if season_baseline else None,
-            )
+            # Oct 2026: OPS+ (and the other "+" stats below) vs the 2026 D2 average.
+            player_ops_plus = ops_plus(line["OBP"], line["SLG"])
+            plus = league_baselines.hitting_plus(line)
             sections = [ui.div(
                 ui.h5(f"{player.first_name} {player.last_name}", class_="gbo-section-title", style="margin-bottom:0;"),
                 ui_helpers.glossary_link("hp_glossary_overview", "Overview Glossary"),
@@ -327,11 +323,12 @@ def hitter_profile_server(input, output, session, app_state):
             ]))
             sections.append(ui.p(
                 "*wOBA uses generic linear weights, a relative read within your own games, not MLB-exact. "
-                "OPS+ is against this team's own season average (100 = team average) -- see the glossary." if season_baseline else
-                "*wOBA uses generic linear weights, a relative read within your own games, not MLB-exact. "
-                "OPS+ isn't shown -- no team baseline yet for this window's season(s).",
+                "OPS+ is vs the 2026 D2 average (100 = D2 average).",
                 class_="text-muted small",
             ))
+            sections.append(ui.p(ui.strong("Plus stats vs D2 (2026)")))
+            sections.append(ui_helpers.plus_stat_cards(plus, league_baselines.HITTING_PLUS_ORDER))
+            sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
 
             # Performance: results-based composite (Aug 31 2026 design
             # call with Ryker -- see analytics/performance_score.py's

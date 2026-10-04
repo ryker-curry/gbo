@@ -66,6 +66,7 @@ from visualizations.hitter_graphic import home_plate_shape, hitter_images
 import strike_zone
 import chart_helpers
 import ui_helpers
+from analytics import league_baselines
 import format_helpers
 from format_helpers import (
     format_pct as _fmt_pct,
@@ -926,6 +927,10 @@ def pitcher_game_report_server(input, output, session, app_state):
                 {"label": "FIP", "value": _fmt(line["FIP"])},
                 {"label": "Command Execution %", "value": _cmd_fmt(cmd_scorecard["execution_pct"], "%")},
             ]))
+
+            sections.append(ui.p(ui.strong("Plus stats vs D2 (2026)")))
+            sections.append(ui_helpers.plus_stat_cards(league_baselines.pitching_plus(line), league_baselines.PITCHING_PLUS_ORDER))
+            sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
             # Count Control/Situational/Against tucked behind one
             # collapsed-by-default accordion panel -- Sept 2026, Ryker:
             # "too much information ... want to track all of it but

@@ -560,7 +560,7 @@ def _batting_slice(completed_pas):
     }
 
 
-def ops_plus(obp, slg, baseline_obp, baseline_slg):
+def ops_plus(obp, slg, baseline_obp=None, baseline_slg=None):
     """OPS+ (Sept 2026 addition, Ryker: "add ops+ ... for hitters",
     baseline confirmed as "Team average, same season"). Standard
     Baseball-Reference-style formula: 100 * (OBP/league_OBP +
@@ -580,6 +580,12 @@ def ops_plus(obp, slg, baseline_obp, baseline_slg):
     an empty baseline) rather than raising or returning a nonsense
     number -- same "don't guess" convention as every rate stat in this
     module (see _rate())."""
+    # Oct 2026 (Ryker): OPS+ is now vs the 2026 D2 average, not our own
+    # team -- baseline_obp/baseline_slg default to D2 (analytics/
+    # league_baselines.py). Callers that still pass a baseline override it.
+    if baseline_obp is None or baseline_slg is None:
+        from analytics import league_baselines as _lb
+        baseline_obp, baseline_slg = _lb.hitting("OBP"), _lb.hitting("SLG")
     if obp is None or slg is None or not baseline_obp or not baseline_slg:
         return None
     return round(100 * (obp / baseline_obp + slg / baseline_slg - 1))
@@ -664,7 +670,7 @@ def compute_batting_line(pitches):
 
     return {
         "PA": pa, "AB": ab, "H": base["H"], "1B": singles, "2B": doubles, "3B": triples, "HR": hr,
-        "BB": bb, "HBP": hbp, "K": k,
+        "BB": bb, "HBP": hbp, "K": k, "SF": sf,
         "AVG": base["AVG"],
         "Total RV": round(sum(rv_values), 3) if rv_values else None,
         "Avg RV/PA": round(sum(rv_values) / len(rv_values), 3) if rv_values else None,
@@ -785,7 +791,14 @@ WOBA_WEIGHTS = {"uBB": 0.69, "HBP": 0.72, "1B": 0.89, "2B": 1.27, "3B": 1.62, "H
 # touch higher than FIP for a league-average pitcher whenever a team
 # has any unearned runs -- that's expected, not a bug, since the two
 # keys are deliberately measuring different things now.
-FIP_CONSTANT = 4.47
+# Oct 2026 (Ryker: "can we base ops+, era+ etc off these 2026 d2 season
+# stats?"): re-centered on D2 instead of the MIAA. Same formula, from
+# spring 2026 totals for 136 D2 teams across 11 conferences (see
+# analytics/league_baselines.py): D2 ERA 6.73 over 55,676 IP, 30,925 BB,
+# 46,808 K, with HR and HBP from the same teams' batting totals (HR 2.37%,
+# HBP ~1.9% of PA) -- so a D2-average pitcher's FIP = D2 ERA (6.73), which
+# is what FIP+ is measured against. The MIAA-only value was 4.47.
+FIP_CONSTANT = 4.72
 
 
 def _innings_pitched(pa_pitches, extra_outs=0):

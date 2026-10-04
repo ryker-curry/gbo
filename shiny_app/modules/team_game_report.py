@@ -201,6 +201,8 @@ def team_game_report_server(input, output, session, app_state):
                                               + ("—" if t["whip"] is None else f"{t['whip']:.2f}"),
              "delta": f"D2 {lb.pitching('era'):.2f} / {lb.pitching('whip'):.2f} · MIAA {lb.pitching('era', 'MIAA'):.2f} / {lb.pitching('whip', 'MIAA'):.2f}",
              "delta_positive": None if t["era"] is None else t["era"] <= lb.pitching("era")},
+            {"label": "ERA+ (vs D2)", "value": "—" if not t["era"] else str(round(100 * lb.pitching("era") / t["era"])),
+             "delta": "100 = D2 average"},
             {"label": "Hit-the-spot %", "value": _p(t["execution_pct"]), "delta": "needs video review"},
             {"label": "Pitches / inning", "value": "—" if t["pitches_per_inning"] is None else f"{t['pitches_per_inning']:.1f}"},
         ])
@@ -259,6 +261,9 @@ def team_game_report_server(input, output, session, app_state):
              "delta_positive": None if t["OBP"] is None else (t["OBP"] + t["SLG"]) >= lb.hitting("OBP") + lb.hitting("SLG")},
             {"label": "K % / BB %", "value": f"{_p(t['K%'])} / {_p(t['BB%'])}",
              "delta": f"D2 {lb.hitting('K%'):.0f}% / {lb.hitting('BB%'):.0f}% · {t['PA']} PA"},
+            {"label": "OPS+ (vs D2)", "value": "—" if t["OBP"] is None else
+                str(round(100 * (t["OBP"] / lb.hitting("OBP") + t["SLG"] / lb.hitting("SLG") - 1))),
+             "delta": "100 = D2 average"},
             {"label": "Swing decisions", "value": _p(t["Swing Decision %"]),
              "delta": f"{sd['counts']['Chase']} chases · {sd['counts']['Taken strike']} hittable strikes taken"},
             {"label": "Chase %", "value": _p(t["Chase %"])},

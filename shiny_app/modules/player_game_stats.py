@@ -27,6 +27,7 @@ from plate_discipline import compute_hitter_discipline, compute_pitcher_command,
 from pitch_location_stats import compute_command_precision, compute_attack_zones
 
 import ui_helpers
+from analytics import league_baselines
 import format_helpers
 from format_helpers import (
     format_pct as _fmt_pct1,
@@ -137,6 +138,10 @@ def player_game_stats_server(input, output, session, app_state):
                     ]))
                     sections.append(ui.p("*wOBA uses generic linear weights, not a season/league-specific set.", class_="text-muted small"))
 
+                    sections.append(ui.p(ui.strong("Plus stats vs D2 (2026)")))
+                    sections.append(ui_helpers.plus_stat_cards(league_baselines.hitting_plus(bl), league_baselines.HITTING_PLUS_ORDER))
+                    sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
+
                     sections.append(ui_helpers.render_kpi_cards([
                         {"label": "BB %", "value": _fmt_pct1(bl["BB %"])},
                         {"label": "K %", "value": _fmt_pct1(bl["K %"])},
@@ -234,6 +239,10 @@ def player_game_stats_server(input, output, session, app_state):
                         {"label": "FIP", "value": _fmt_num(pl["FIP"])},
                         {"label": "Zone Execution %", "value": _fmt_pct1(pl["Zone Execution %"])},
                     ]))
+
+                    sections.append(ui.p(ui.strong("Plus stats vs D2 (2026)")))
+                    sections.append(ui_helpers.plus_stat_cards(league_baselines.pitching_plus(pl), league_baselines.PITCHING_PLUS_ORDER))
+                    sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
                     sections.append(ui.p(
                         f"Total RV Allowed: {pl['Total RV Allowed']} · Avg RV Allowed/Pitch: {pl['Avg RV Allowed/Pitch']}",
                         class_="text-muted small",
