@@ -1884,6 +1884,7 @@ def game_tracking_server(input, output, session, app_state):
     @render.ui
     def game_picker():
         _refresh_tick()
+        app_state.deep_link_game_id()  # re-render when Data Health sends us a game
         if not _access_ok():
             return None
         req("season_filter_select" in input)
@@ -1897,7 +1898,18 @@ def game_tracking_server(input, output, session, app_state):
             choices = {"": "-- Start a new game --"}
             for g in games:
                 choices[str(g.game_id)] = _game_label(g)
-            active_id = _active_game_id()
+            # Oct 2026: Data Health's "Fix in Game Tracking" deep link --
+            # read once (isolated so clearing it doesn't loop), then cleared.
+            with reactive.isolate():
+                deep = app_state.deep_link_game_id()
+            if deep is not None and str(deep) not in choices:
+                g = db.query(Game).options(joinedload(Game.opponent_team)).filter(Game.game_id == deep).first()
+                if g is not None:
+                    choices[str(g.game_id)] = _game_label(g)
+            active_id = deep if deep is not None else _active_game_id()
+            if deep is not None:
+                _active_game_id.set(deep)
+                app_state.deep_link_game_id.set(None)
             selected = str(active_id) if active_id is not None and str(active_id) in choices else ""
             return ui.input_select("game_select", "Game", choices=choices, selected=selected)
         finally:

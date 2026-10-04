@@ -73,6 +73,7 @@ from modules import (  # noqa: E402
     opponent_teams, bullpen_scripts, training_routines, idp, bullpen_tracking,
     game_tracking, command_tracker, roster, player_profile, guest_demo,
     pitcher_meeting_report, weekly_report, advance_scouting, hitter_meeting_report, team_game_report,
+    data_health, arm_care,
 )
 
 # Registry of page keys (see nav.NavPage.key) that have a real Shiny
@@ -101,6 +102,8 @@ MODULE_UI = {
     "pitcher_meeting_report": lambda: pitcher_meeting_report.pitcher_meeting_report_ui("pitcher_meeting_report"),
     "hitter_meeting_report": lambda: hitter_meeting_report.hitter_meeting_report_ui("hitter_meeting_report"),
     "team_game_report": lambda: team_game_report.team_game_report_ui("team_game_report"),
+    "data_health": lambda: data_health.data_health_ui("data_health"),
+    "arm_care": lambda: arm_care.arm_care_ui("arm_care"),
     "weekly_report": lambda: weekly_report.weekly_report_ui("weekly_report"),
     "advance_scouting": lambda: advance_scouting.advance_scouting_ui("advance_scouting"),
     "hitter_game_report": lambda: hitter_game_report.hitter_game_report_ui("hitter_game_report"),
@@ -372,6 +375,8 @@ def server(input, output, session):
     pitcher_meeting_report.pitcher_meeting_report_server("pitcher_meeting_report", app_state)
     hitter_meeting_report.hitter_meeting_report_server("hitter_meeting_report", app_state)
     team_game_report.team_game_report_server("team_game_report", app_state)
+    data_health.data_health_server("data_health", app_state)
+    arm_care.arm_care_server("arm_care", app_state)
     weekly_report.weekly_report_server("weekly_report", app_state)
     advance_scouting.advance_scouting_server("advance_scouting", app_state)
     hitter_game_report.hitter_game_report_server("hitter_game_report", app_state)
@@ -863,9 +868,9 @@ _NAV_GROUPS = [
     # at_appointments/bullpen_scripts intentionally omitted from every group
     # below (Aug 31 2026 -- Ryker's call, kept in the codebase/MODULE_UI,
     # just out of the visible sidebar) -- see nav.py's matching comments.
-    ("Pitching", ["bullpen_dashboard", "bullpen_tracking", "rapsodo_import"]),
+    ("Pitching", ["arm_care", "bullpen_dashboard", "bullpen_tracking", "rapsodo_import"]),
     ("Hitting", ["hitter_tracking"]),
-    ("Games", ["game_tracking", "team_game_report", "pitcher_game_report", "pitcher_meeting_report", "hitter_game_report", "hitter_meeting_report"]),
+    ("Games", ["game_tracking", "data_health", "team_game_report", "pitcher_game_report", "pitcher_meeting_report", "hitter_game_report", "hitter_meeting_report"]),
     # Sept 2026, Ryker: "pitcher profile, hitter profile, player stats
     # should be under analytics rather than games" -- moved out of
     # "Games" above into their own group; Pitcher/Hitter Game Report
@@ -893,6 +898,8 @@ _ICONS = {
     "player_assignments": '<path d="M5 5h14v14H5zM8 12l3 3 5-6"/>',
     "team_schedule": '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
     "at_appointments": '<path d="M12 4v16M4 12h16"/><rect x="3" y="3" width="18" height="18" rx="3"/>',
+    "data_health": '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+    "arm_care": '<path d="M12 21s-7-4.5-9-9.5C1.5 7 4.5 4 8 4c2 0 3.2 1 4 2.2C12.8 5 14 4 16 4c3.5 0 6.5 3 5 7.5-2 5-9 9.5-9 9.5z"/>',
     "bullpen_dashboard": '<path d="M4 20V9M10 20V4M16 20v-8M22 20H2"/>',
     "bullpen_tracking": '<circle cx="12" cy="12" r="8"/><path d="M8 8c2 2 2 6 0 8M16 8c-2 2-2 6 0 8"/>',
     "bullpen_scripts": '<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h6M9 17h6"/>',
