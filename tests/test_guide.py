@@ -49,3 +49,9 @@ def test_modal_builds():
     from modules import how_to_read
     for s in guide_content.GUIDE:
         assert how_to_read.modal(s["key"], _all_titles()) is not None
+
+
+def test_removed_pages_not_in_sidebar():
+    for r in ROLES + [("Administrator", None, False), ("Sports Scientist", None, False)]:
+        keys = {p.key for s in nav.build_nav_sections(*r) for p in s.pages}
+        assert "hitter_tracking" not in keys and "command_tracker" not in keys

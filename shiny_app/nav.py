@@ -85,17 +85,12 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
                 # out of the sidebar (Aug 31 2026 call -- Ryker doesn't
                 # expect it to see real use yet).
                 NavPage("bullpen_dashboard", "Bullpen Dashboard", "bar-chart"),
-                NavPage("command_tracker", "Command Tracker", "crosshair"),
+                # Command Tracker: kept in the codebase, removed from the
+                # sidebar (Oct 2026, Ryker).
             ])
 
-        # Hitter Tracking is hitting-side -- mirror-opposite exclusion
-        # from Bullpen Tracking: hidden from a Coach tagged Pitching.
-        # Same read-only visibility for Sports Scientist/Data Analyst.
-        show_hitter_tracking = role_name in ("Administrator", "Head Coach") or (
-            role_name == "Coach" and coach_specialty != "Pitching"
-        )
-        if show_hitter_tracking or role_name in ("Sports Scientist", "Data Analyst"):
-            pd_pages.append(NavPage("hitter_tracking", "Hitter Tracking", "trophy"))
+        # Hitter Tracking: kept in the codebase (MODULE_UI), removed from the
+        # sidebar for every role (Oct 2026, Ryker).
 
         sections.append(NavSection("Player Development", pd_pages))
 
