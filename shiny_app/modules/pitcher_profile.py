@@ -494,7 +494,19 @@ def pitcher_profile_server(input, output, session, app_state):
     @reactive.effect
     @reactive.event(input.pp_glossary_overview)
     def _pp_show_overview_glossary():
-        ui.modal_show(ui_helpers.glossary_modal("Overview Glossary", glossary_content.OVERVIEW))
+        # Oct 2026, Ryker: deeper dive -- how every grade is built and how
+        # much each ingredient counts (visualizations/grade_explainer.py),
+        # then the original term-by-term glossary underneath.
+        from visualizations.grade_explainer import render_html
+        ui.modal_show(ui.modal(
+            ui.HTML(render_html()),
+            ui.hr(),
+            ui.h5("Every term on this page", style="margin-bottom:10px;"),
+            *[ui.div(ui.p(t, style="font-weight:700;margin-bottom:2px;"), ui.p(d, class_="text-muted small"))
+              for t, d in glossary_content.OVERVIEW],
+            title="How your grades are built", easy_close=True, size="xl",
+            footer=ui.modal_button("Got it"),
+        ))
 
     @reactive.effect
     @reactive.event(input.pp_glossary_metrics)
@@ -558,7 +570,7 @@ def pitcher_profile_server(input, output, session, app_state):
 
             sections = [ui.div(
                 ui.h5(f"{player.first_name} {player.last_name}", class_="gbo-section-title", style="margin-bottom:0;"),
-                ui_helpers.glossary_link("pp_glossary_overview", "Overview Glossary"),
+                ui_helpers.glossary_link("pp_glossary_overview", "How your grades are built + Glossary"),
                 style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
             )]
 
@@ -1844,7 +1856,8 @@ def pitcher_profile_server(input, output, session, app_state):
                     ui.tags.style(_SB_CSS),
                     ui_helpers.section_title("Stuff+ Breakdown",
                                              ui.input_select("pp_sb_type", None, choices=sb_types, width="260px")),
-                    ui.div(ui_helpers.how_to_link("stuff_breakdown", "How to read the breakdown"), style="margin:-4px 0 6px;"),
+                    ui.div(ui_helpers.how_to_link("stuff_breakdown", "How to read the breakdown"), "  ·  ",
+                           ui_helpers.how_to_link("grades", "How Stuff+ is built"), style="margin:-4px 0 6px;"),
                     ui.output_ui("pp_sb_header"),
                     ui.layout_columns(
                         ui_helpers.card(output_widget("pp_sb_traits"),

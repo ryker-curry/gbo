@@ -70,6 +70,17 @@ GUIDE = [
         ],
     },
     {
+        "key": "grades", "title": "How the pitching grades are built (Stuff+, Location+, Command+ ...)",
+        "who": "pitchers", "pages": ["Pitcher Profile", "My Pitcher Profile"], "html": "grade_explainer",
+        "shows": "What goes into each grade and how much each ingredient counts, in plain words.",
+        "use": [
+            "Stuff+ has a different recipe for each pitch -- tap a pitch to see what matters most for it.",
+            "Use the biggest bars to decide what to train: they move your grade the most.",
+            "To see which ingredients helped or hurt YOUR pitch, open Pitcher Profile > Arsenal > Stuff+ Breakdown.",
+        ],
+        "good": ["100 is our team average. 110+ is clearly above it."],
+    },
+    {
         "key": "stuff_breakdown", "title": "Why your stuff grades what it does (Stuff+ breakdown)", "who": "pitchers",
         "pages": ["Pitcher Profile", "My Pitcher Profile"],
         "shows": "Stuff+ starts at a baseline and each trait (velo, vertical break, horizontal break, spin, "
