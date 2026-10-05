@@ -323,51 +323,170 @@ def get_runner_event_outs(session, player_id, season_id=None, game_id=None):
     return total
 
 
-def get_pitching_extras_for_pitches(session, player_id, pitches):
-    """(extra_earned_runs, extra_outs) for compute_pitching_line(), scoped
-    to exactly the games present in `pitches` -- forced-half-inning-end
-    runs (get_forced_half_inning_end_runs) and pickoff/caught-stealing
-    outs (get_runner_event_outs) for this pitcher, summed per game.
+# ---------------------------------------------------------------------------
+# Run charging -- Oct 2026 stat audit (Ryker approved). One replay of each
+# game decides which pitcher every run belongs to, the way an official
+# scorer would:
+#   - runs on a PA-ending play (runs_scored_on_play; unearned_runs_on_play
+#     marks how many of them were unearned)
+#   - runs that score on a runner event (to_base 4): wild pitch, steal of
+#     home, balk, defensive indifference = EARNED; passed ball, throwing
+#     error = UNEARNED. These used to be charged to nobody.
+#   - runners swept home by "End half-inning early" (GameForcedHalfInningEnd)
+#     -> its credited pitcher, earned (Ryker, Sept 2026)
+#   - INHERITED RUNNERS: a runner is charged to the pitcher who put him on
+#     base, not whoever is pitching when he scores. Runners are tracked by
+#     base from bases_before/bases_after; lead runners score first; on a
+#     fielder's choice the batter takes the place (and the charge) of the
+#     runner who was put out, as the scoring rules say.
+#   - pickoff / caught-stealing outs -> the pitcher on the mound (IP).
+# ---------------------------------------------------------------------------
+EARNED_RUNNER_EVENTS = {"Wild Pitch", "Stolen Base", "Balk", "Defensive Indifference"}
+REACH_OUTCOMES = {"1B", "2B", "3B", "BB", "HBP", "E", "FC"}
 
-    Oct 2026 bug fix: Pitch Game Report, Analytics and My Stats already
-    passed these extras in, but Pitcher Profile, Player Profile and the
-    Pitching Staff Leaderboard called compute_pitching_line(pitches)
-    bare -- so the same pitcher's IP/ERA/WHIP (and every rate stat
-    divided by IP) disagreed between pages whenever he'd had a
-    pickoff/caught stealing behind him or runners swept home by an
-    "End half-inning early." Scoping by the pitches' own game_ids (not a
-    season_id) keeps it correct for any date-range / game filter the
-    caller already applied."""
+
+def _pitcher_of(p):
+    return p.opponent_our_player_id if p.is_our_team_batting else p.our_player_id
+
+
+def _bases_set(bases):
+    b = bases or "000"
+    return {i + 1 for i, ch in enumerate(b[:3]) if ch == "1"}
+
+
+def game_run_charges(session, game_ids):
+    """{(game_id, pitcher_id): {"runs", "er", "outs", "own_runs", "own_er"}} --
+    runs/er charged to each pitcher by the replay above, the extra outs he
+    got from runner events, and the runs/er sitting on his own pitches
+    (so callers can turn the charge into an adjustment)."""
+    from collections import defaultdict
+    game_ids = list(game_ids)
+    out = defaultdict(lambda: {"runs": 0, "er": 0, "outs": 0, "own_runs": 0, "own_er": 0})
+    if not game_ids:
+        return out
+    pitches = (session.query(GamePitch).filter(GamePitch.game_id.in_(game_ids))
+               .order_by(GamePitch.game_id, GamePitch.pitch_sequence).all())
+    events = session.query(GameRunnerEvent).filter(GameRunnerEvent.game_id.in_(game_ids)).all()
+    forced = session.query(GameForcedHalfInningEnd).filter(GameForcedHalfInningEnd.game_id.in_(game_ids)).all()
+    ev_after = defaultdict(list)
+    for e in events:
+        ev_after[(e.game_id, e.pitch_sequence_after)].append(e)
+    for k in ev_after:
+        ev_after[k].sort(key=lambda e: (e.created_at or 0, e.runner_event_id or 0))
+    for f in forced:
+        out[(f.game_id, f.credited_player_id)]["runs"] += f.runs_scored or 0
+        out[(f.game_id, f.credited_player_id)]["er"] += f.runs_scored or 0
+
+    def charge(gid, pid, earned):
+        if pid is None:
+            return
+        out[(gid, pid)]["runs"] += 1
+        if earned:
+            out[(gid, pid)]["er"] += 1
+
+    by_game = defaultdict(list)
+    for p in pitches:
+        by_game[p.game_id].append(p)
+    for gid, ps in by_game.items():
+        runners = {}          # base -> responsible pitcher id
+        half = None
+        for p in ps:
+            key = (p.inning, bool(p.is_our_team_batting), p.batting_squad)
+            if key != half:
+                runners, half = {}, key
+            pid = _pitcher_of(p)
+            # what the scorer recorded on this pitch, for the adjustment math
+            rs = p.runs_scored_on_play or 0
+            ue = min(p.unearned_runs_on_play or 0, rs)
+            if pid is not None:
+                out[(gid, pid)]["own_runs"] += rs
+                out[(gid, pid)]["own_er"] += rs - ue
+            # make sure the runners we track match who's actually on base now
+            on_before = _bases_set(p.bases_before)
+            for b in list(runners):
+                if b not in on_before:
+                    runners.pop(b)
+            for b in on_before:
+                runners.setdefault(b, pid)
+            if p.ends_plate_appearance and p.ab_outcome not in (None, "No Result"):
+                lead_first = [runners[b] for b in sorted(runners, reverse=True)]
+                scored = lead_first[:rs]
+                remaining = lead_first[rs:]
+                extra_scorers = rs - len(scored)          # the batter (HR) and anyone we lost track of
+                charges = scored + [pid] * extra_scorers
+                for i, who in enumerate(charges):
+                    charge(gid, who, earned=i < len(charges) - ue)
+                new_on = sorted(_bases_set(p.bases_after), reverse=True)
+                if p.outs_after is not None and p.outs_after >= 3:
+                    new_on = []
+                carry = remaining + ([pid] if p.ab_outcome in REACH_OUTCOMES else [])
+                # more runners than bases now -> someone was put out; on a fielder's
+                # choice the batter keeps the earlier pitcher's charge (drop the newest)
+                carry = carry[:len(new_on)] if len(carry) >= len(new_on) else carry + [pid] * (len(new_on) - len(carry))
+                runners = dict(zip(new_on, carry))
+            for e in ev_after.get((gid, p.pitch_sequence), []):
+                who = runners.pop(e.from_base, None) if e.from_base else None
+                if who is None and runners:
+                    who = runners.pop(max(runners))
+                if e.is_out:
+                    if pid is not None:
+                        out[(gid, pid)]["outs"] += 1
+                elif e.to_base == 4:
+                    charge(gid, who if who is not None else pid, earned=e.event_type in EARNED_RUNNER_EVENTS)
+                elif e.to_base in (1, 2, 3):
+                    runners[e.to_base] = who if who is not None else pid
+    return out
+
+
+def get_pitching_extras_for_pitches(session, player_id, pitches):
+    """(extra_earned_runs, extra_outs, extra_unearned_runs) for
+    compute_pitching_line(), for exactly the games present in `pitches`:
+    the difference between what game_run_charges() charges this pitcher
+    and what's on his own pitches (runner-event runs, forced-end runs,
+    inherited runners moved to/from him), plus pickoff/caught-stealing
+    outs. Values can be negative (a reliever whose inherited runners
+    scored gets those runs taken back off him).
+
+    Oct 2026: every page now uses this one path, so a pitcher's IP / runs /
+    ERA match everywhere."""
     game_ids = {p.game_id for p in pitches if getattr(p, "game_id", None) is not None}
     if not game_ids:
-        return 0, 0
-    # Two queries total (not two per game) -- the leaderboard calls this
-    # once per pitcher. Same attribution rules as
-    # get_forced_half_inning_end_runs / get_runner_event_outs above.
-    extra_runs = sum(
-        row.runs_scored or 0 for row in session.query(GameForcedHalfInningEnd).filter(
-            GameForcedHalfInningEnd.credited_player_id == player_id,
-            GameForcedHalfInningEnd.game_id.in_(game_ids),
-        ).all()
-    )
-    extra_outs = 0
-    rows = (
-        session.query(GameRunnerEvent, GamePitch)
-        .outerjoin(
-            GamePitch,
-            (GamePitch.game_id == GameRunnerEvent.game_id)
-            & (GamePitch.pitch_sequence == GameRunnerEvent.pitch_sequence_after),
-        )
-        .filter(GameRunnerEvent.is_out.is_(True), GameRunnerEvent.game_id.in_(game_ids))
-        .all()
-    )
-    for _ev, anchor_pitch in rows:
-        if anchor_pitch is None:
+        return 0, 0, 0
+    charges = game_run_charges(session, game_ids)
+    runs = er = own_runs = own_er = outs = 0
+    for gid in game_ids:
+        c = charges.get((gid, player_id))
+        if not c:
             continue
-        pitcher_id = anchor_pitch.our_player_id if not anchor_pitch.is_our_team_batting else anchor_pitch.opponent_our_player_id
-        if pitcher_id == player_id:
-            extra_outs += 1
-    return extra_runs, extra_outs
+        runs += c["runs"]; er += c["er"]; own_runs += c["own_runs"]; own_er += c["own_er"]
+        outs += c["outs"]
+    extra_er = er - own_er
+    extra_unearned = (runs - er) - (own_runs - own_er)
+    return extra_er, outs, extra_unearned
+
+
+def extras_for_pitch_set(session, pitches):
+    """Same adjustment as get_pitching_extras_for_pitches, for ANY set of
+    pitches -- one pitcher, a staff, a team pool -- summed over every
+    (game, pitcher) pair present. Returns (extra_earned, extra_outs,
+    extra_unearned)."""
+    pairs = {(p.game_id, _pitcher_of(p)) for p in pitches if getattr(p, "game_id", None) is not None}
+    if not pairs:
+        return 0, 0, 0
+    charges = game_run_charges(session, {g for g, _pid in pairs})
+    runs = er = own_runs = own_er = outs = 0
+    for pair in pairs:
+        c = charges.get(pair)
+        if c:
+            runs += c["runs"]; er += c["er"]; own_runs += c["own_runs"]; own_er += c["own_er"]; outs += c["outs"]
+    return er - own_er, outs, (runs - er) - (own_runs - own_er)
+
+
+def pitching_line_for(session, player_id, pitches):
+    """compute_pitching_line() with every run/out adjustment applied -- the one
+    call every page should use for a pitcher's real line."""
+    xer, xouts, xue = get_pitching_extras_for_pitches(session, player_id, pitches)
+    return compute_pitching_line(pitches, extra_earned_runs=xer, extra_outs=xouts, extra_unearned_runs=xue)
 
 
 def get_pitches_thrown_to_opponent_batter(session, opponent_player_id, season_id=None, game_id=None):
@@ -673,7 +792,8 @@ def compute_batting_line(pitches):
         "BB": bb, "HBP": hbp, "K": k, "SF": sf,
         "AVG": base["AVG"],
         "Total RV": round(sum(rv_values), 3) if rv_values else None,
-        "Avg RV/PA": round(sum(rv_values) / len(rv_values), 3) if rv_values else None,
+        # Oct 2026 audit: was divided by PITCHES despite the label.
+        "Avg RV/PA": round(sum(rv_values) / pa, 3) if rv_values and pa else None,
         "pitch_count": len(pitches),
         # Slash line & rate stats
         "OBP": base["OBP"], "SLG": base["SLG"], "OPS": base["OPS"], "ISO": base["ISO"],
@@ -894,7 +1014,7 @@ def leadoff_pas(completed_pas):
 leadoff_pas_fn = leadoff_pas  # callers below have a local variable named leadoff_pas
 
 
-def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0):
+def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0, extra_unearned_runs=0):
     """The box-score-style header line for a pitcher -- either for a
     single game (pass pitches from get_pitching_pitches(..., game_id=))
     or aggregated across a season/all-time, same function either way.
@@ -948,7 +1068,7 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0):
     hits_allowed = sum(1 for p in pa_pitches if p.ab_outcome in HIT_OUTCOMES)
     hr_allowed = sum(1 for p in pa_pitches if p.ab_outcome == "HR")
     xbh_allowed = sum(1 for p in pa_pitches if p.ab_outcome in ("2B", "3B", "HR"))
-    runs_allowed = sum(p.runs_scored_on_play or 0 for p in pitches) + extra_earned_runs
+    runs_allowed = sum(p.runs_scored_on_play or 0 for p in pitches) + extra_earned_runs + extra_unearned_runs
     # Real earned runs, now that game_pitches.unearned_runs_on_play
     # exists (Aug 31 2026, manual per-play tagging -- see
     # models.GamePitch for why this is manual, not derived). Every row
@@ -1213,9 +1333,19 @@ def _group_into_plate_appearances(pitches):
     # splits, A3P) was wrong for any span longer than one game. Sort
     # within each game instead.
     sortable.sort(key=lambda p: (getattr(p, "game_id", None) or 0, p.pitch_sequence))
+    # Oct 2026 audit: also start a new PA at a new game or whenever a pitch
+    # is the first of its PA (pa_pitch_number 1) -- an inning that ends mid
+    # at-bat (caught stealing / pickoff) leaves that batter's partial PA with
+    # no ending pitch, and it used to get glued onto his next PA.
     pas, current = [], []
+    last_game = None
     for p in sortable:
+        game = getattr(p, "game_id", None)
+        if current and (game != last_game or getattr(p, "pa_pitch_number", None) == 1):
+            pas.append(current)
+            current = []
         current.append(p)
+        last_game = game
         if p.ends_plate_appearance:
             pas.append(current)
             current = []

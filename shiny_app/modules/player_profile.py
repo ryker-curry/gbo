@@ -252,7 +252,7 @@ def player_profile_server(input, output, session, app_state):
             season_start, season_end = season_date_range(season_label)
             game_date_to = (season_end - timedelta(days=1)) if season_end else None
             game_pitches = get_pitcher_profile_pitches(db, pid, date_from=season_start, date_to=game_date_to) if p.is_pitcher else []
-            game_pitching_extras = get_pitching_extras_for_pitches(db, pid, game_pitches) if game_pitches else (0, 0)
+            game_pitching_extras = get_pitching_extras_for_pitches(db, pid, game_pitches) if game_pitches else (0, 0, 0)
             game_pitch_ids = [gp.game_pitch_id for gp in game_pitches if gp.game_pitch_id is not None]
             game_rapsodo_by_id = rapsodo_by_game_pitch_id(db, game_pitch_ids)
             game_fastball_pitches = [rp for rp in game_rapsodo_by_id.values() if rp.pitch_type and rp.pitch_type.type_name in FASTBALL_TYPES]
@@ -276,7 +276,7 @@ def player_profile_server(input, output, session, app_state):
         finally:
             db.close()
 
-    def _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, game_season_label, game_pitching_extras=(0, 0)):
+    def _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, game_season_label, game_pitching_extras=(0, 0, 0)):
         pos = p.player_position.position_name if p.player_position else None
         cls = p.player_class.class_name if p.player_class else None
         meta = " · ".join(x for x in [f"#{p.jersey_number}" if p.jersey_number else None, pos, cls, f"{p.bats or '-'}/{p.throws or '-'}",
@@ -414,7 +414,7 @@ def player_profile_server(input, output, session, app_state):
         right = ui.div(rings, latest_pen, goals_card, class_="gbo-stack")
         return ui.div(left, right, class_="gbo-grid gbo-grid-2", style="align-items:start;")
 
-    def _pitching_tab(p, bullpen, pitches, summ, n_bullpens, game_pitches, game_season_label, game_pitching_extras=(0, 0)):
+    def _pitching_tab(p, bullpen, pitches, summ, n_bullpens, game_pitches, game_season_label, game_pitching_extras=(0, 0, 0)):
         if not p.is_pitcher and not pitches and not game_pitches:
             return ui_helpers.card(ui_helpers.empty_state("Not flagged as a pitcher. Mark the player as a pitcher in Player setup to track pitching here."))
 
@@ -431,8 +431,8 @@ def player_profile_server(input, output, session, app_state):
         # computed in body() for the hero card's game-outings VELO/SPIN,
         # so this is season-accurate for free and never double-queries.
         if game_pitches:
-            extra_runs, extra_outs = game_pitching_extras
-            line = compute_pitching_line(game_pitches, extra_earned_runs=extra_runs, extra_outs=extra_outs)
+            extra_runs, extra_outs, extra_unearned = game_pitching_extras
+            line = compute_pitching_line(game_pitches, extra_earned_runs=extra_runs, extra_outs=extra_outs, extra_unearned_runs=extra_unearned)
             results_kpis = ui.div(
                 ui_helpers.kpi_tile("IP", line["IP"]),
                 ui_helpers.kpi_tile("Pitches", line["Pitches"]),

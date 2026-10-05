@@ -369,7 +369,13 @@ def core_metrics(pitches):
         "QAB": qab, "QAB%": _pct(qab, len(done)),
         "pitches": len(pitches), "PA": line["PA"], "AVG": line["AVG"], "OBP": line["OBP"], "SLG": line["SLG"],
         "K%": line["K%"], "BB%": line["BB%"], "H": line["H"], "AB": line["AB"], "K": line["K"], "BB": line["BB"],
-        "Swing Decision %": sd["score"], "Chase %": sd["chase_pct"],
+        # Oct 2026 audit (Ryker): ONE Chase % everywhere -- the standard
+        # definition, any swing at a pitch outside the strike zone (same as
+        # Plate Discipline / FanGraphs O-Swing%). Swing Decisions' own
+        # "swung at a clear ball" rate is sd["chase_pct"], labelled differently.
+        "Swing Decision %": sd["score"],
+        "Chase %": _pct(sum(1 for p in located if not is_in_zone(*_loc(p)) and _swung(p)),
+                        sum(1 for p in located if not is_in_zone(*_loc(p)))),
         "Zone Swing %": _pct(sum(1 for p in inz if _swung(p)), len(inz)),
         "Whiff %": _pct(sum(1 for p in sw if p.pitch_outcome in WHIFF_OUTCOMES), len(sw)),
         "Hard contact %": _pct(len(hard), len(bip)),

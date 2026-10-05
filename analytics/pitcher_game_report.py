@@ -68,7 +68,7 @@ NON_AB_OUTCOMES = {"BB", "HBP", "Sac Bunt", "Sac Fly"}  # excluded from the stan
 # numbers) so they're easy to find and swap out later if Ryker gets a
 # real season-specific set from a source he trusts more.
 WOBA_WEIGHTS = {"uBB": 0.69, "HBP": 0.72, "1B": 0.89, "2B": 1.27, "3B": 1.62, "HR": 2.10}
-FIP_CONSTANT = 3.10  # commonly-cited recent-MLB-average value -- swap for your league's real constant once known
+from game_stats import FIP_CONSTANT  # Oct 2026 audit: was a separate MLB 3.10 here; one constant (4.72, D2) everywhere
 
 # Staff-totals goal thresholds (Ryker, Sept 2026) -- see
 # compute_staff_game_totals below. Only these two of the five staff-
@@ -179,7 +179,8 @@ def compute_pitcher_game_report(session, game_id, pitcher_player_id):
     # progress (e.g. report pulled mid-at-bat) has no ab_outcome yet.
     completed_pas = [pa for pa in pas if pa[-1].ends_plate_appearance and pa[-1].ab_outcome != "No Result"]
 
-    header = _compute_header_stats(all_pitches, completed_pas)
+    from game_stats import extras_for_pitch_set
+    header = _compute_header_stats(all_pitches, completed_pas, extras_for_pitch_set(session, all_pitches))
     breakdown_overall = _compute_pitch_type_breakdown(all_pitches, completed_pas, pitch_types)
     breakdown_rhh = _compute_pitch_type_breakdown(
         [p for p in all_pitches if batter_hands.get(p.game_pitch_id) == "R"],
@@ -200,7 +201,12 @@ def compute_pitcher_game_report(session, game_id, pitcher_player_id):
     }
 
 
-def _compute_header_stats(all_pitches, completed_pas):
+def _compute_header_stats(all_pitches, completed_pas, extras=None):
+    """extras: (extra_earned, extra_outs, extra_unearned) from
+    game_stats.extras_for_pitch_set -- Oct 2026 audit: pickoff/caught-
+    stealing outs, runner-event and forced-end runs, inherited runners.
+    Without it (no db handy) the line is pitch-only, as before."""
+    x_er, x_outs, x_ue = extras or (0, 0, 0)
     total_pitches = len(all_pitches)
     strikes = sum(1 for p in all_pitches if p.pitch_outcome in STRIKE_OUTCOMES)
     balls = sum(1 for p in all_pitches if p.pitch_outcome == "Ball")
@@ -214,7 +220,7 @@ def _compute_header_stats(all_pitches, completed_pas):
     total_outs = sum(
         (pa[-1].outs_after - pa[-1].outs_before) for pa in completed_pas
         if pa[-1].outs_after is not None and pa[-1].outs_before is not None
-    )
+    ) + x_outs
     ip_whole = total_outs // 3
     ip_partial = total_outs % 3
     ip_display = f"{ip_whole}.{ip_partial}"
@@ -227,7 +233,9 @@ def _compute_header_stats(all_pitches, completed_pas):
     bb = sum(1 for pa in completed_pas if pa[-1].ab_outcome == "BB")
     hbp = sum(1 for pa in completed_pas if pa[-1].ab_outcome == "HBP")
     ks = sum(1 for pa in completed_pas if pa[-1].ab_outcome in K_OUTCOMES)
-    runs = sum((pa[-1].runs_scored_on_play or 0) for pa in completed_pas)
+    runs = sum((pa[-1].runs_scored_on_play or 0) for pa in completed_pas) + x_er + x_ue
+    earned = sum((pa[-1].runs_scored_on_play or 0) - min(pa[-1].unearned_runs_on_play or 0, pa[-1].runs_scored_on_play or 0)
+                 for pa in completed_pas) + x_er
 
     leadoff_pas = _leadoff_pas(completed_pas)
     leadoff_outs = sum(1 for pa in leadoff_pas if pa[-1].ab_outcome in OUT_AB_OUTCOMES)
@@ -249,7 +257,7 @@ def _compute_header_stats(all_pitches, completed_pas):
     whip = round((bb + hits) / ip_decimal, 2) if ip_decimal else None
     k_bb = round(ks / bb, 2) if bb else None
     k_pct = round(ks / bf * 100, 1) if bf else None
-    era = round(runs * 9 / ip_decimal, 2) if ip_decimal else None  # "ERA" = runs-allowed average, ER not distinguished from R -- see module docstring
+    era = round(earned * 9 / ip_decimal, 2) if ip_decimal else None  # Oct 2026: real earned runs (was all runs)
     fip = round((13 * sum(1 for pa in completed_pas if pa[-1].ab_outcome == "HR") + 3 * (bb + hbp) - 2 * ks) / ip_decimal + FIP_CONSTANT, 2) if ip_decimal else None
     oba = round(hits / ab, 3) if ab else None  # Opponent Batting Average against -- Hits / AB, the standard AVG formula
     woba = _compute_woba(completed_pas, ab, bb, hbp)
@@ -260,7 +268,7 @@ def _compute_header_stats(all_pitches, completed_pas):
         "pitches_per_inning": round(total_pitches / ip_decimal, 1) if ip_decimal else None,
         "ip_display": ip_display, "ip_decimal": ip_decimal,
         "ab": ab, "bf": bf, "pitches_per_bf": round(total_pitches / bf, 1) if bf else None,
-        "runs": runs, "earned_runs_approx": runs,
+        "runs": runs, "earned_runs": earned, "earned_runs_approx": earned,
         "hits": hits, "xbh": xbh, "bb": bb, "hbp": hbp, "whip": whip, "ks": ks, "k_bb": k_bb, "k_pct": k_pct,
         "leadoff_pas": len(leadoff_pas), "leadoff_outs": leadoff_outs,
         "leadoff_out_pct": round(leadoff_outs / len(leadoff_pas) * 100, 1) if leadoff_pas else None,

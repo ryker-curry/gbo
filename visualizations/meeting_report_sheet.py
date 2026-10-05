@@ -146,7 +146,7 @@ def _line_strip(r):
     if y.get("hbp"):
         cells.append(("HBP", y["hbp"]))
     if r["kind"] == "season":
-        cells.append(("ERA*", _num(y["era"], 2)))
+        cells.append(("ERA", _num(y["era"], 2)))
     return '<div class="line">' + "".join(f"<div><b>{_e(v)}</b><span>{_e(k)}</span></div>" for k, v in cells) + "</div>"
 
 
@@ -164,11 +164,11 @@ def _rate_line(r):
     if (y.get("outs") or 0) < 9 or y.get("era") is None:
         return ""
     eplus = round(100 * lb.pitching("era") / y["era"]) if y["era"] else None
-    bits = [f'ERA* <b>{y["era"]:.2f}</b> (D2 {lb.pitching("era"):.2f} · MIAA {lb.pitching("era", "MIAA"):.2f})'
+    bits = [f'ERA <b>{y["era"]:.2f}</b> (D2 {lb.pitching("era"):.2f} · MIAA {lb.pitching("era", "MIAA"):.2f})'
             + (f' · ERA+ <b>{eplus}</b>' if eplus is not None else "")]
     if y.get("whip") is not None:
         bits.append(f'WHIP <b>{y["whip"]:.2f}</b> (D2 {lb.pitching("whip"):.2f} · MIAA {lb.pitching("whip", "MIAA"):.2f})')
-    return f'<div class="small" style="margin-top:3px">{" &nbsp;·&nbsp; ".join(bits)} &nbsp;<span class="na">D2/MIAA = 2026 league ERA; ERA* here counts every run, so it reads a little high next to them</span></div>'
+    return f'<div class="small" style="margin-top:3px">{" &nbsp;·&nbsp; ".join(bits)} &nbsp;<span class="na">D2/MIAA = 2026 league averages</span></div>'
 
 
 def _key_table(r):
@@ -274,7 +274,7 @@ def render_sheet(r, notes=None, team_name="Pitt State Baseball"):
 
     goals_block = f'<div class="sec"><h2>Development goals</h2>{_goals_html(r["goals"])}</div>'
     log_block = _game_log(r)
-    era_note = ' ERA* counts every run as earned.' if r["kind"] == "season" else ""
+    era_note = ""
 
     return f"""
 <div class="gbo-sheet" id="gbo-meeting-sheet"><style>{SHEET_CSS}</style>
