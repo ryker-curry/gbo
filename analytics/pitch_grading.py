@@ -681,67 +681,154 @@ def stuff_plus(rapsodo_pitch, model):
 # a separate Command/execution metric, not an input here).
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Location+ -- Oct 2026 rebuild (Ryker approved after an accuracy check on
+# 1,038 real game pitches). The original graded each pitch by ITS OWN run
+# value vs the team average for that (area, pitch type) cell -- so it was
+# really a results grade (r = -0.90 with the pitch's own outcome), it had no
+# consistency for a pitcher (split halves r = -0.19) and every pitcher sat
+# at 98-103. Now it grades the SPOT: each pitch gets the team's average run
+# value for that pitch type in that area (Heart / Shadow / Chase / Waste),
+# whatever happened on that one pitch -- the way public Location+ models
+# work. Checked on the same data: consistency 0.86, and better Location+
+# goes with fewer balls (-0.39) and fewer runs allowed (-0.47).
+# A finer split (by count, or a 5x5 grid) was tested and was noisier at our
+# data size -- revisit once there's more charting.
+#
+# Scale: per pitch, 100 + 10 x (that spot's value vs the average spot) /
+# spread of spot values. A pitcher's (or pitch type's) average is then put on
+# a PITCHER-level scale by location_plus_for_group(): pulled toward the staff
+# average when there are few pitches (LOCATION_SHRINK_PITCHES), and 10 points
+# = one step between pitchers -- same treatment as Command+.
+# ---------------------------------------------------------------------------
+LOCATION_CELL_SHRINK = 10          # pitches: a thin (area, type) cell leans on that pitch type's overall average
+LOCATION_SHRINK_PITCHES = 10       # pitches: "half trust" for a pitcher's own average (from split-half consistency)
+LOCATION_MIN_PITCHER_PITCHES = 20
+LOCATION_MIN_SCALE_PITCHERS = 5
+LOCATION_META = "__meta__"
+
+
+def _loc_label(p):
+    return p.pitch_type.type_name if getattr(p, "pitch_type", None) is not None else "Unspecified"
+
+
+def _loc_pitcher(p):
+    if getattr(p, "is_our_team_batting", False):
+        return getattr(p, "opponent_our_player_id", None)
+    return getattr(p, "our_player_id", None)
+
+
 def team_location_plus_baseline(game_pitches):
-    """Mean+stdev of GamePitch.run_value, grouped by (attack zone tier,
-    canonical pitch type) -- the cell a pitch's location is graded
-    against (plan doc: "bucket pitches into zone-region x pitch-type
-    cells, compute the average run_value for each cell across the team's
-    own history"). V1 simplification: no count-group split -- see module
-    docstring.
-
-    Caller supplies every already-loaded, already-located GamePitch in
-    whatever pool counts as "the team" (same team-scoping convention as
-    command_metrics.py's Command+: every located pitch from our own
-    pitchers across every game, intrasquad and real opponents alike, not
-    just bullpens -- bullpens have no run value to grade against).
-
-    Returns {(attack_zone, pitch_type_label): (mean, stdev, n)}."""
-    values_by_cell = {}
+    """Team baseline for Location+ (see the comment above). Returns
+    {(attack_zone, pitch_type_label): (mean_run_value, stdev, n), ...,
+     "__meta__": {"expected": {(zone, label): shrunk mean run value},
+                  "type_mean": {label: mean}, "mu": .., "sd": ..,
+                  "pitcher_scale": (center, spread) | None}}.
+    The per-cell (mean, stdev, n) tuples are unchanged from before, so
+    result_value() (and anything else reading cells) keeps working."""
+    values_by_cell, by_type, graded = {}, {}, []
     for pitch in game_pitches:
         if pitch.run_value is None or pitch.actual_plate_x is None or pitch.actual_plate_z is None:
             continue
         zone = classify_attack_zone(pitch.actual_plate_x, pitch.actual_plate_z)
-        label = pitch.pitch_type.type_name if pitch.pitch_type is not None else "Unspecified"
-        values_by_cell.setdefault((zone, label), []).append(float(pitch.run_value))
+        label = _loc_label(pitch)
+        rv = float(pitch.run_value)
+        values_by_cell.setdefault((zone, label), []).append(rv)
+        by_type.setdefault(label, []).append(rv)
+        graded.append((pitch, zone, label))
 
     baseline = {}
     for cell, values in values_by_cell.items():
         n = len(values)
         baseline[cell] = (round(mean(values), 4), round(stdev(values), 4), n) if n >= 2 else (None, None, n)
+    if not graded:
+        baseline[LOCATION_META] = None
+        return baseline
+
+    type_mean = {label: mean(v) for label, v in by_type.items()}
+    expected = {}
+    for (zone, label), values in values_by_cell.items():
+        k = LOCATION_CELL_SHRINK
+        expected[(zone, label)] = (sum(values) + k * type_mean[label]) / (len(values) + k)
+    spot = [-expected[(z, l)] for _p, z, l in graded]
+    mu = mean(spot)
+    sd = stdev(spot) if len(spot) > 1 else 0.0
+    meta = {"expected": expected, "type_mean": type_mean, "mu": mu, "sd": sd, "pitcher_scale": None}
+    baseline[LOCATION_META] = meta
+
+    if sd:
+        by_pitcher = {}
+        for (p, z, l), v in zip(graded, spot):
+            pid = _loc_pitcher(p)
+            if pid is not None:
+                by_pitcher.setdefault(pid, []).append((v - mu) / sd)
+        groups = [zs for zs in by_pitcher.values() if len(zs) >= LOCATION_MIN_PITCHER_PITCHES]
+        if len(groups) >= LOCATION_MIN_SCALE_PITCHERS:
+            raw = [mean(zs) for zs in groups]
+            center = mean(raw)
+            k = LOCATION_SHRINK_PITCHES
+            shrunk = [center + (mean(zs) - center) * len(zs) / (len(zs) + k) for zs in groups]
+            spread = stdev(shrunk)
+            if spread:
+                meta["pitcher_scale"] = (center, spread)
     return baseline
 
 
 def location_plus(game_pitch, baseline):
-    """One GamePitch -> Location+ against `baseline` (see
-    team_location_plus_baseline). LOWER run_value is BETTER for the
-    pitcher (a pitch that helped the batter scores a bigger run_value),
-    so the sign is flipped from the usual pattern -- same convention as
-    command_metrics.command_plus:
+    """One GamePitch -> Location+ for its SPOT (see the comment above): the
+    team's average run value for this pitch type in this area, flipped so
+    a better spot scores higher, on a per-pitch 100/10 scale. None if the
+    pitch has no location or the baseline has nothing to grade against.
+    (No longer needs the pitch's own run_value -- the result of this one
+    pitch doesn't change its Location+.)"""
+    if game_pitch.actual_plate_x is None or game_pitch.actual_plate_z is None:
+        return None
+    meta = baseline.get(LOCATION_META) if isinstance(baseline, dict) else None
+    if not meta or not meta["sd"]:
+        return None
+    zone = classify_attack_zone(game_pitch.actual_plate_x, game_pitch.actual_plate_z)
+    label = _loc_label(game_pitch)
+    exp = meta["expected"].get((zone, label), meta["type_mean"].get(label))
+    if exp is None:
+        return None
+    return round(100 + 10 * (-exp - meta["mu"]) / meta["sd"], 1)
 
-        location_plus = 100 + 10 * (baseline_mean - run_value) / baseline_stdev
 
-    None if the pitch has no actual location or run_value yet, or its
-    (zone, pitch type) cell doesn't have a usable (n>=2) baseline."""
+def location_plus_for_group(values, baseline):
+    """Average Location+ for a pitcher (or one of his pitch types) on the
+    PITCHER-level scale: per-pitch values in, one grade out -- pulled
+    toward the staff average with few pitches, 10 points = one step
+    between pitchers. Falls back to the plain average if the team doesn't
+    have enough pitchers yet to set the scale."""
+    vals = [v for v in values if v is not None]
+    if not vals:
+        return None
+    avg = mean(vals)
+    meta = baseline.get(LOCATION_META) if isinstance(baseline, dict) else None
+    scale = meta.get("pitcher_scale") if meta else None
+    if not scale:
+        return round(avg, 1)
+    center, spread = scale
+    z = (avg - 100) / 10
+    n = len(vals)
+    shrunk = center + (z - center) * n / (n + LOCATION_SHRINK_PITCHES)
+    return round(100 + 10 * (shrunk - center) / spread, 1)
+
+
+def result_value(game_pitch, baseline):
+    """The OLD per-pitch Location+ math, kept for charts that color each
+    pitch by how its RESULT compared to the team in the same spot (Pitcher
+    Game Report's "color by result"): 100 + 10 x (cell mean - this pitch's
+    run value) / cell stdev. Higher = better result for us."""
     if game_pitch.run_value is None or game_pitch.actual_plate_x is None or game_pitch.actual_plate_z is None:
         return None
     zone = classify_attack_zone(game_pitch.actual_plate_x, game_pitch.actual_plate_z)
-    label = game_pitch.pitch_type.type_name if game_pitch.pitch_type is not None else "Unspecified"
-    b_mean, b_sd, _b_n = baseline.get((zone, label), (None, None, 0))
+    b_mean, b_sd, _b_n = baseline.get((zone, _loc_label(game_pitch)), (None, None, 0))
     if b_mean is None or not b_sd:
         return None
     return round(100 + 10 * (b_mean - float(game_pitch.run_value)) / b_sd, 1)
 
 
-# ---------------------------------------------------------------------------
-# Pitching+ -- see module docstring for why this is a blend, not a third
-# model, at this sample size.
-# ---------------------------------------------------------------------------
-
-# Placeholder, not a validated number -- leans toward Stuff+ per the
-# FanGraphs primer's finding that Stuff+ drives most of the year-to-year
-# stability of real Pitching+. Revisit once there's enough of GBO's own
-# outcome data to check whether this weighting actually predicts
-# performance (plan doc section 7, Phase 2).
 PITCHING_PLUS_STUFF_WEIGHT = 0.6
 
 

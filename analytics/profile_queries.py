@@ -508,7 +508,7 @@ def compute_grading_bundle(db, game_pitches, rapsodo_pitches, stuff_baselines=No
     pitcher_profile.py page load still gets None here and fits them
     itself, unchanged behavior from before this was a parameter."""
     from strike_zone import classify_attack_zone
-    from analytics.pitch_grading import stuff_plus, location_plus, pitching_plus, arsenal_summary
+    from analytics.pitch_grading import stuff_plus, location_plus, pitching_plus, arsenal_summary, location_plus_for_group
 
     if stuff_baselines is None:
         stuff_baselines = team_stuff_plus_baselines(db)
@@ -583,6 +583,16 @@ def compute_grading_bundle(db, game_pitches, rapsodo_pitches, stuff_baselines=No
         grp["stuff_plus"].append(s_val)
 
     arsenal_rows = arsenal_summary(pitch_type_grades) if pitch_type_grades else []
+    # Oct 2026 (Location+ rebuild): each pitch type's Location+ goes on the
+    # pitcher-level scale (few pitches -> pulled toward 100; 10 points = one
+    # step between pitchers), and that type's Pitching+ is the same
+    # 60/40 blend of its Stuff+ and Location+ rows.
+    for row in arsenal_rows:
+        grp = pitch_type_grades.get(row["Pitch Type"]) or {}
+        if grp.get("location_plus"):
+            row["Location+"] = location_plus_for_group(grp["location_plus"], location_baseline)
+        if row.get("Stuff+") is not None and row.get("Location+") is not None:
+            row["Pitching+"] = pitching_plus(row["Stuff+"], row["Location+"])
     overview_stuff = [v for row in arsenal_rows for v in [row["Stuff+"]] if v is not None]
     overview_loc = [v for row in arsenal_rows for v in [row["Location+"]] if v is not None]
     overview_pitching = [v for row in arsenal_rows for v in [row["Pitching+"]] if v is not None]

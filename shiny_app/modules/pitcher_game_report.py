@@ -44,7 +44,7 @@ from pitch_location_stats import compute_command_precision, compute_attack_zones
 # replacement.
 from analytics import command_metrics, profile_queries, approach_angles, best_zone
 from analytics.pitcher_game_report import compute_staff_game_totals, FPS_GOAL_PCT, SECONDARY_STRIKE_GOAL_PCT
-from analytics.pitch_grading import stuff_plus, arsenal_summary, location_plus, MIN_BASELINE_PITCHES
+from analytics.pitch_grading import stuff_plus, arsenal_summary, location_plus, result_value, MIN_BASELINE_PITCHES
 # Sept 2026, Ryker: "add a results section to game report as well"
 # -- same run-value-by-zone heat map as Pitcher Profile's Results
 # tab, just scoped to this one outing (see analytics/
@@ -564,7 +564,7 @@ def _all_pitch_locations_figure(pitches, color_by, baseline, own_idx_map=None):
         ungraded_x, ungraded_y, ungraded_custom = [], [], []
         for p in pitches:
             label = p.pitch_type.type_name if p.pitch_type is not None else "Unspecified"
-            lp = location_plus(p, baseline)
+            lp = result_value(p, baseline)  # Oct 2026: result vs team in the same spot (old Location+ math)
             base_custom = [
                 own_idx_map.get(p.game_pitch_id, p.pitch_sequence) if own_idx_map else p.pitch_sequence,
                 label, p.pitch_outcome or "—",
@@ -587,21 +587,21 @@ def _all_pitch_locations_figure(pitches, color_by, baseline, own_idx_map=None):
                 customdata=ungraded_custom,
                 hovertemplate=(
                     "%{customdata[1]}<br>Pitch #%{customdata[0]}<br>Result: %{customdata[2]}<br>"
-                    "AB Outcome: %{customdata[3]}<br>No Location+ grade yet<extra></extra>"
+                    "AB Outcome: %{customdata[3]}<br>No result grade yet<extra></extra>"
                 ),
             ))
         if graded_x:
             fig.add_trace(go.Scatter(
-                x=graded_x, y=graded_y, mode="markers", name="Location+",
+                x=graded_x, y=graded_y, mode="markers", name="Result vs team",
                 marker=dict(
                     color=graded_vals, colorscale="RdYlGn", cmid=100, size=13, opacity=0.9,
                     line=dict(color="#1E1E1E", width=1),
-                    colorbar=dict(title="Location+", tickfont=dict(color=TEXT_CREAM), title_font=dict(color=TEXT_CREAM)),
+                    colorbar=dict(title="Result+", tickfont=dict(color=TEXT_CREAM), title_font=dict(color=TEXT_CREAM)),
                 ),
                 customdata=graded_custom,
                 hovertemplate=(
                     "%{customdata[1]}<br>Pitch #%{customdata[0]}<br>Result: %{customdata[2]}<br>"
-                    "AB Outcome: %{customdata[3]}<br>Location+: %{customdata[4]:.0f}<extra></extra>"
+                    "AB Outcome: %{customdata[3]}<br>Result vs team in this spot: %{customdata[4]:.0f}<extra></extra>"
                 ),
             ))
     else:
@@ -1570,7 +1570,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                 ui.p(ui.strong("Pitch Locations")),
                 ui.p(
                     "Every located pitch from this outing, plotted on the real strike zone. Filter by pitch "
-                    "type and/or batter handedness, and switch Color By to \"Result (Location+)\" to see whether "
+                    "type and/or batter handedness, and switch Color By to \"Result (vs team, same spot)\" to see whether "
                     "these locations have actually been getting good or poor results for this pitcher, graded "
                     "against your own team's history -- not an MLB comparison.",
                     class_="text-muted small",
@@ -1578,7 +1578,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                 ui.layout_columns(
                     ui.input_select("loc_pitch_type", "Pitch Type", choices=type_choices),
                     ui.input_select("loc_batter_hand", "Batters", choices={"all": "All Batters", "R": "vs RHH", "L": "vs LHH"}),
-                    ui.input_radio_buttons("loc_color_by", "Color By", choices={"type": "Pitch Type", "result": "Result (Location+)"}, inline=True),
+                    ui.input_radio_buttons("loc_color_by", "Color By", choices={"type": "Pitch Type", "result": "Result (vs team, same spot)"}, inline=True),
                     col_widths=[4, 4, 4],
                 ),
                 output_widget("pitch_locations_chart"),
