@@ -24,6 +24,7 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy import or_
 
 from models import GamePitch, Game, RapsodoPitch, RapsodoImport, BullpenSession, PitchType, Player
+from gbo_cache import cached
 
 
 def _base_pitching_query(db, player_id):
@@ -216,6 +217,7 @@ def bullpen_ids_for_player(db, player_id, date_from=None, date_to=None):
     return [bid for (bid,) in query.all()]
 
 
+@cached("stuff_training", {"rapsodo_pitches", "game_pitches", "pitch_types"})
 def team_stuff_plus_training_pitches(db):
     """{pitch_type_label: [(RapsodoPitch, run_value), ...]} -- every
     RapsodoPitch reading team-wide that IS linked to a real game outcome
@@ -243,6 +245,7 @@ def team_stuff_plus_training_pitches(db):
     return by_type
 
 
+@cached("fb_velo", {"rapsodo_pitches", "game_pitches", "pitch_types"})
 def team_pitcher_primary_fastball_velocity(db):
     """{player_id: average velocity (float)} of each pitcher's own
     PRIMARY fastball -- whichever of 4-Seam Fastball/2-Seam Fastball
@@ -295,6 +298,7 @@ def team_pitcher_primary_fastball_velocity(db):
     return result
 
 
+@cached("stuff_models", {"rapsodo_pitches", "game_pitches", "pitch_types"})
 def team_stuff_plus_baselines(db):
     """{pitch_type_label: model} across every canonical pitch type that
     has enough real-game training data -- see
@@ -334,6 +338,7 @@ def team_stuff_plus_baselines(db):
     return models
 
 
+@cached("location_baseline", {"game_pitches", "pitch_types"})
 def team_location_plus_baseline(db):
     """{(attack_zone, pitch_type_label): baseline} across every located,
     run-value-bearing GamePitch thrown by one of OUR OWN pitchers,

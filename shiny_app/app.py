@@ -54,6 +54,11 @@ for _p in (_REPO_ROOT, _THIS_DIR):
 from shiny import App, ui, render, reactive, req  # noqa: E402
 
 from state import new_app_state  # noqa: E402
+import error_log  # noqa: E402
+
+# Oct 2026: record every error a user hits (app_errors) and email Ryker on
+# bursts + a daily summary -- see error_log.py.
+error_log.install()
 from auth import do_login, do_logout  # noqa: E402
 import nav  # noqa: E402
 import ui_helpers  # noqa: E402
@@ -183,6 +188,8 @@ app_ui = ui.page_fluid(
 
 def server(input, output, session):
     app_state = new_app_state()
+    error_log.register_session(session, lambda: (
+        app_state.user_id(), app_state.role_name(), input.main_nav() if "main_nav" in input else None))
     # Sept 2026: which role (Coach vs Player) the interactive guest-mode
     # sidebar is currently showing -- see _guest_ui()/_GUEST_COACH_GROUPS/
     # _GUEST_PLAYER_GROUPS below. Only meaningful while app_state.is_guest()

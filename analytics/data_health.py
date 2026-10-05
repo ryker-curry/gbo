@@ -7,6 +7,8 @@ Hot Zones, Swing Decisions, Stuff+, splits, ERA, etc.
 check_game(db, game) -> {"game", "checks": [...], "score", "grade"}
 Each check: key, label, why, missing (count), total (denominator), weight.
 score = weighted % complete across checks that apply (total > 0).
+The "box" check only applies once an official box score is typed in
+(analytics/box_score.py); total = stats compared, missing = mismatches.
 grade: green >= 95, yellow >= 80, red below.
 Nothing here writes to the database.
 """
@@ -17,6 +19,7 @@ from datetime import timedelta
 from sqlalchemy.orm import joinedload
 
 from models import Game, GamePitch, RapsodoPitch, RapsodoImport, Player, OpponentPlayer
+from analytics import box_score
 
 GREEN, YELLOW = 95.0, 80.0
 
@@ -32,6 +35,7 @@ CHECKS = [
     ("rapsodo_unmatched", "Rapsodo readings not matched to a pitch", "No Stuff+ / velo for those game pitches.", 1.5),
     ("rapsodo_type", "Rapsodo type differs from charted type", "Likely a tagging mistake -- one of the two is wrong.", 1.0),
     ("unearned", "Runs on errors with no unearned runs tagged", "ERA (and ERA+) reads high for the pitcher.", 1.0),
+    ("box", "Charting doesn't match the official box score", "A missed pitch, PA or result -- every total built on this game is off.", 2.0),
 ]
 CHECK_META = {k: (label, why, w) for k, label, why, w in CHECKS}
 
@@ -94,6 +98,12 @@ def check_game(db, game, players=None, opp_players=None):
         "rapsodo_type": (type_mismatch, len(linked)),
         "unearned": (sum(1 for p in err_plays if not (p.unearned_runs_on_play or 0)), len(err_plays)),
     }
+    box_rows, has_box = [], False
+    if not game.is_intrasquad:
+        official = box_score.official_line(box_score.get_official(db, game.game_id))
+        has_box = official is not None
+        box_rows = box_score.compare(official, box_score.charted_line(db, game.game_id)) if has_box else []
+    raw["box"] = (sum(1 for r in box_rows if not r["ok"]), len(box_rows))
     if game.is_intrasquad:
         raw["their_pitcher"] = (0, 0)   # both sides are our own players
     checks, num, den = [], 0.0, 0.0
@@ -105,7 +115,8 @@ def check_game(db, game, players=None, opp_players=None):
         checks.append({"key": key, "label": label, "why": why, "missing": missing, "total": total, "weight": w})
     score = round(100 * num / den, 1) if den else 100.0
     grade = "green" if score >= GREEN else ("yellow" if score >= YELLOW else "red")
-    return {"game": game, "checks": checks, "score": score, "grade": grade, "pitches": n}
+    return {"game": game, "checks": checks, "score": score, "grade": grade, "pitches": n,
+            "box_rows": box_rows, "has_box": has_box}
 
 
 def check_range(db, date_from, date_to):

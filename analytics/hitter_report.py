@@ -19,6 +19,7 @@ from models import Game, GamePitch, Player, Season
 from analytics import hitter_insights as hi, hitter_hot_zones as hz, league_baselines
 from analytics.player_report import idp_goals
 from game_stats import get_pitcher_hands
+from gbo_cache import cached
 
 MIN_PA = 4
 
@@ -65,6 +66,7 @@ def hitter_games(db, player_id, season_id=None):
     return q.order_by(Game.game_date.desc(), Game.game_id.desc()).all()
 
 
+@cached("team_hitting", {"game_pitches", "games", "players", "pitch_types"})
 def team_hitting(db, season_id):
     """{player_id: pitches} for active non-pitchers in this season."""
     hitter_ids = [pid for (pid,) in db.query(Player.player_id)
@@ -72,7 +74,7 @@ def team_hitting(db, season_id):
     if not hitter_ids:
         return {}
     q = (db.query(GamePitch).join(Game, GamePitch.game_id == Game.game_id)
-         .options(joinedload(GamePitch.pitch_type))
+         .options(joinedload(GamePitch.pitch_type), joinedload(GamePitch.game).selectinload(Game.pitches))
          .filter(or_(and_(GamePitch.is_our_team_batting.is_(True), GamePitch.our_player_id.in_(hitter_ids)),
                      and_(GamePitch.is_our_team_batting.is_(False), GamePitch.opponent_our_player_id.in_(hitter_ids)))))
     if season_id is not None:
@@ -80,7 +82,7 @@ def team_hitting(db, season_id):
     out = defaultdict(list)
     for p in q.all():
         out[p.our_player_id if p.is_our_team_batting else p.opponent_our_player_id].append(p)
-    return out
+    return dict(out)
 
 
 def team_average(team_by_player):

@@ -1982,3 +1982,47 @@ class AdvanceReport(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     opponent_team = relationship("OpponentTeam")
+
+
+class GameBoxScore(Base):
+    """Official box score line typed in by staff (Oct 2026, Ryker: "type
+    it"), one row per game. Data Health compares it to what the charting
+    adds up to, so a missed pitch / wrong result shows up right away.
+    Box-score convention: each side's E = errors that side COMMITTED in
+    the field; BB / K = that side's hitters' walks / strikeouts."""
+    __tablename__ = "game_box_scores"
+
+    game_id = Column(Integer, ForeignKey("games.game_id", ondelete="CASCADE"), primary_key=True)
+    our_r = Column(Integer, nullable=True)
+    our_h = Column(Integer, nullable=True)
+    our_e = Column(Integer, nullable=True)
+    our_bb = Column(Integer, nullable=True)
+    our_k = Column(Integer, nullable=True)
+    opp_r = Column(Integer, nullable=True)
+    opp_h = Column(Integer, nullable=True)
+    opp_e = Column(Integer, nullable=True)
+    opp_bb = Column(Integer, nullable=True)
+    opp_k = Column(Integer, nullable=True)
+    entered_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class AppError(Base):
+    """One row per unhandled error a user hit in the app (Oct 2026, Ryker
+    approved error alerts -- see error_log.py). fingerprint groups the same
+    bug (error type + the GBO file/line it came from) so the daily summary
+    and the burst alert count repeats, not one-offs."""
+    __tablename__ = "app_errors"
+
+    error_id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    fingerprint = Column(String(64), nullable=False)
+    error_type = Column(String(120), nullable=True)
+    message = Column(Text, nullable=True)
+    location = Column(String(255), nullable=True)      # gbo file:line in function
+    output_name = Column(String(255), nullable=True)   # Shiny output / effect that failed
+    page = Column(String(120), nullable=True)          # sidebar page they were on
+    user_id = Column(Integer, nullable=True)
+    role_name = Column(String(60), nullable=True)
+    traceback_text = Column(Text, nullable=True)
+    alert_sent = Column(Boolean, default=False, nullable=False)
