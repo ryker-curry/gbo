@@ -31,8 +31,13 @@ def section_body(sec, allowed=None):
         if title:
             js = f"Shiny.setInputValue('sidebar_go', {json.dumps(title)}, {{priority: 'event'}})"
             go = ui.tags.a(f"Open {title} →", class_="go", onclick=js, role="button", tabindex="0")
+    extra = None
+    if sec.get("html") == "grade_explainer":
+        from visualizations.grade_explainer import render_html
+        extra = ui.HTML(render_html())
     return ui.div(
         ui.p(sec["shows"]),
+        extra,
         ui.div("How to use it", class_="lbl"), ui.tags.ul(*[ui.tags.li(x) for x in sec["use"]]),
         ui.div("What good looks like", class_="lbl"), ui.tags.ul(*[ui.tags.li(x) for x in sec["good"]]),
         ui.div(go, style="margin-top:8px;") if go is not None else None,
@@ -45,7 +50,7 @@ def modal(key, allowed=None):
     if sec is None:
         return None
     return ui.modal(ui.tags.style(CSS), section_body(sec, allowed), title=f"How to read: {sec['title']}",
-                    easy_close=True, footer=ui.modal_button("Got it"), size="l")
+                    easy_close=True, footer=ui.modal_button("Got it"), size="xl" if sec.get("html") else "l")
 
 
 def _order_for(role, is_pitcher):
