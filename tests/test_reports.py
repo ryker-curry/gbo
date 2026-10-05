@@ -75,3 +75,26 @@ def test_hitter_insights(db, pid):
     hi.location_grid(db, ps)
     hi.count_tendencies(db, ps)
     hitter_hot_zones.panels(db, ps)
+
+
+def test_hitting_leaderboard(db):
+    from analytics import hitting_leaderboard, hitter_insights, league_baselines
+    from modules import hitting_leaderboard as page
+    from models import GamePitch
+    rows = hitting_leaderboard.rows(db)
+    assert {r["player"].player_id for r in rows} == {11, 12, 13, 14}
+    jake = next(r for r in rows if r["player"].player_id == 11)
+    ps = db.query(GamePitch).filter(GamePitch.is_our_team_batting.is_(True), GamePitch.our_player_id == 11).all()
+    ps += db.query(GamePitch).filter(GamePitch.is_our_team_batting.is_(False), GamePitch.opponent_our_player_id == 11).all()
+    assert jake["Chase %"] == hitter_insights.core_metrics(ps)["Chase %"]
+    assert jake["OPS+"] == league_baselines.hitting_plus({"OBP": jake["OBP"], "SLG": jake["SLG"]})["OPS+"]
+    # every stat on the page exists on the rows
+    assert all(k in jake for k, *_r in page.STAT_META)
+    # min-PA: unqualified hitters sort last even with the best number
+    fake = [{"Hitter": "a", "PA": 3, "AVG": .667}, {"Hitter": "b", "PA": 40, "AVG": .300}, {"Hitter": "c", "PA": 40, "AVG": None}]
+    assert [r["Hitter"] for r in page.sort_rows(fake, "AVG", 10)] == ["b", "c", "a"]
+    assert [r["Hitter"] for r in page.sort_rows(fake, "AVG", 0)] == ["a", "b", "c"]
+    assert page.fmt_stat("AVG", .3) == ".300" and page.fmt_stat("OPS+", 89.0) == "89"
+    # date range narrows it
+    import datetime as dt
+    assert all(r["PA"] <= jake["PA"] for r in hitting_leaderboard.rows(db, dt.date(2026, 9, 19), dt.date(2026, 9, 30)))

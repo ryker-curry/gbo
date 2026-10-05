@@ -231,11 +231,15 @@ GUIDE = [
         "good": ["Every game green and every box score matching."],
     },
     {
-        "key": "leaderboard", "title": "Pitching Staff Leaderboard", "who": "all", "pages": ["Pitching Staff Leaderboard"],
-        "shows": "The whole staff side by side, sortable by any stat, with plus stats vs D2.",
-        "use": ["Click a column to sort. Pick the columns you care about.",
+        "key": "leaderboard", "title": "Pitching & Hitting Leaderboards", "who": "all",
+        "pages": ["Pitching Staff Leaderboard", "Hitting Leaderboard"],
+        "shows": "The whole staff or lineup side by side, sortable by any stat, with plus stats vs D2. Pick any "
+                 "dates (season to date by default).",
+        "use": ["Tick the columns you care about, then click a stat under the table to sort best to worst.",
+                "Hitting: hitters under the Min PA box drop to the bottom, grayed out -- a hot 2-for-2 doesn't top "
+                "the list.",
                 "Compare like with like -- starters and relievers pile up innings very differently."],
-        "good": ["Look at rate stats (K-BB %, strike %, Stuff+) as much as totals."],
+        "good": ["Look at rate stats (K-BB %, strike %, Stuff+, OPS+, QAB %, chase %) as much as totals."],
     },
 ]
 

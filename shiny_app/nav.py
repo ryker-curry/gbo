@@ -145,6 +145,8 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             # to My Development below (unconditionally, not just for
             # pitcher-flagged players) so a Player role sees it too.
             NavPage("pitching_leaderboard", "Pitching Staff Leaderboard", "trophy"),
+            # Oct 2026, Ryker: same board for hitters.
+            NavPage("hitting_leaderboard", "Hitting Leaderboard", "trophy"),
         ]))
 
     # Video Coordinator -- deliberately its own small section rather than
@@ -209,6 +211,7 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
         # is_pitcher_player, since any player (pitcher or hitter) might
         # want to see the whole staff's leaderboard, not just pitchers.
         my_dev_pages.append(NavPage("pitching_leaderboard", "Pitching Staff Leaderboard", "trophy"))
+        my_dev_pages.append(NavPage("hitting_leaderboard", "Hitting Leaderboard", "trophy"))
         sections.append(NavSection("My Development", my_dev_pages))
 
     return sections
