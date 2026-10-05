@@ -137,6 +137,59 @@ def pitching_plus(line):
     }
 
 
+def _f3(v):
+    if v is None:
+        return "—"
+    s = f"{v:.3f}"
+    return s[1:] if s.startswith("0.") else s
+
+
+def _pct1(v):
+    return "—" if v is None else f"{v:.1f}%"
+
+
+def hitting_actuals(line):
+    """Oct 2026, Ryker: show the real number under each "+" card.
+    {plus name: (stat label, player's value, D2 value)} for hitting_plus."""
+    lg = HITTING["D2"]
+    obp, slg = line.get("OBP"), line.get("SLG")
+    ops = (obp + slg) if obp is not None and slg is not None else None
+    ab, h, hr, k, sf = (line.get(x) for x in ("AB", "H", "HR", "K", "SF"))
+    den = (ab or 0) - (k or 0) - (hr or 0) + (sf or 0)
+    babip = ((h or 0) - (hr or 0)) / den if ab and den > 0 else None
+    return {
+        "OPS+": ("OPS", _f3(ops), _f3(lg["OBP"] + lg["SLG"])),
+        "wOBA+": ("wOBA", _f3(line.get("wOBA")), _f3(lg["wOBA"])),
+        "AVG+": ("AVG", _f3(line.get("AVG")), _f3(lg["AVG"])),
+        "OBP+": ("OBP", _f3(obp), _f3(lg["OBP"])),
+        "SLG+": ("SLG", _f3(slg), _f3(lg["SLG"])),
+        "ISO+": ("ISO", _f3(line.get("ISO")), _f3(lg["ISO"])),
+        "K%+": ("K%", _pct1(line.get("K %")), _pct1(lg["K%"])),
+        "BB%+": ("BB%", _pct1(line.get("BB %")), _pct1(lg["BB%"])),
+        "BABIP+": ("BABIP", _f3(babip), _f3(lg["BABIP"])),
+    }
+
+
+def pitching_actuals(line):
+    """{plus name: (stat label, pitcher's value, D2 value)} for pitching_plus."""
+    lg = PITCHING["D2"]
+    bf = line.get("Batters Faced") or 0
+    k_pct = 100 * line["K"] / bf if bf and line.get("K") is not None else None
+    bb_pct = 100 * line["BB"] / bf if bf and line.get("BB") is not None else None
+    kbb = (k_pct - bb_pct) if k_pct is not None and bb_pct is not None else None
+
+    def f2(v):
+        return "—" if v is None else f"{v:.2f}"
+    return {
+        "ERA+": ("ERA", f2(line.get("ERA")), f2(lg["era"])),
+        "FIP+": ("FIP", f2(line.get("FIP")), f2(lg["fip"])),
+        "WHIP+": ("WHIP", f2(line.get("WHIP")), f2(lg["whip"])),
+        "K%+": ("K%", _pct1(k_pct), _pct1(lg["k_pct"])),
+        "BB%+": ("BB%", _pct1(bb_pct), _pct1(lg["bb_pct"])),
+        "K-BB%+": ("K-BB%", _pct1(kbb), _pct1(lg["kbb_pct"])),
+    }
+
+
 HITTING_PLUS_ORDER = ("OPS+", "wOBA+", "AVG+", "OBP+", "SLG+", "ISO+", "K%+", "BB%+", "BABIP+")
 PITCHING_PLUS_ORDER = ("ERA+", "FIP+", "WHIP+", "K%+", "BB%+", "K-BB%+")
 PLUS_HELP = ("100 = 2026 D2 average. Higher is better on every one -- e.g. 120 = 20% better than a D2-average "
