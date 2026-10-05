@@ -78,7 +78,7 @@ from modules import (  # noqa: E402
     opponent_teams, bullpen_scripts, training_routines, idp, bullpen_tracking,
     game_tracking, command_tracker, roster, player_profile, guest_demo,
     pitcher_meeting_report, weekly_report, advance_scouting, hitter_meeting_report, team_game_report,
-    data_health, arm_care,
+    data_health, arm_care, how_to_read,
 )
 
 # Registry of page keys (see nav.NavPage.key) that have a real Shiny
@@ -87,6 +87,7 @@ from modules import (  # noqa: E402
 # in the same commit that adds a page's module.
 MODULE_UI = {
     "dashboard": lambda: dashboard.dashboard_ui("dashboard"),
+    "how_to_read": lambda: how_to_read.how_to_read_ui("how_to_read"),
     "player_schedule": lambda: player_schedule.player_schedule_ui("player_schedule"),
     "player_stats": lambda: player_stats.player_stats_ui("player_stats"),
     "players": lambda: players.players_ui("players"),
@@ -169,6 +170,7 @@ app_ui = ui.page_fluid(
     ui.tags.head(theme.fonts_link(), ui.tags.style(theme.GLOBAL_CSS)),
     ui.tags.script(_NO_WHEEL_SCROLL_JS),
     ui.tags.script(theme.MOTION_JS),
+    ui.tags.script(theme.PHONE_JS),
     # Shared click-to-place capture for every click_widgets.click_target()
     # widget app-wide (Command Tracker's intended/actual location, Game
     # Tracking's pitch/batted-ball/video-review location) -- see
@@ -203,6 +205,25 @@ def server(input, output, session):
     # with. Every other component reacts to the toggle purely via CSS
     # (see theme.py's [data-bs-theme] custom properties) -- no
     # server-side re-render needed for those. -----------------------
+    # Oct 2026 (Part 2): "How to read this" links (ui_helpers.how_to_link)
+    # open the matching guide section as a pop-up from any page.
+    @reactive.effect
+    @reactive.event(input.gbo_howto)
+    def _show_how_to():
+        allowed = {p.title for s in nav.build_nav_sections(app_state.role_name(), app_state.coach_specialty(),
+                                                           app_state.is_pitcher()) for p in s.pages} \
+            if app_state.is_authenticated() else set()
+        m = how_to_read.modal(input.gbo_howto(), allowed)
+        if m is not None:
+            ui.modal_show(m)
+
+    # Oct 2026 (Part 2): phone-width flag from the browser (theme.PHONE_JS)
+    # so a few charts can stack instead of sitting side by side.
+    @reactive.effect
+    @reactive.event(input.gbo_phone)
+    def _sync_phone():
+        app_state.is_phone.set(bool(input.gbo_phone()))
+
     @reactive.effect
     def _sync_dark_mode():
         mode = input.dark_mode()
@@ -385,6 +406,7 @@ def server(input, output, session):
     data_health.data_health_server("data_health", app_state)
     arm_care.arm_care_server("arm_care", app_state)
     weekly_report.weekly_report_server("weekly_report", app_state)
+    how_to_read.how_to_read_server("how_to_read", app_state)
     advance_scouting.advance_scouting_server("advance_scouting", app_state)
     hitter_game_report.hitter_game_report_server("hitter_game_report", app_state)
     pitcher_profile.pitcher_profile_server("pitcher_profile", app_state)
@@ -869,7 +891,7 @@ def _account_not_set_up_ui():
 # Regroup nav.py's role-gated pages into the design-system groups
 # (GBO-DESIGN-SYSTEM.md section 5). Unknown keys fall into "Other".
 _NAV_GROUPS = [
-    ("Overview", ["dashboard"]),
+    ("Overview", ["dashboard", "how_to_read"]),
     ("Roster", ["roster", "player_profile", "players"]),
     ("Development", ["assessments", "assessment_import", "idp", "training_routines", "player_assignments", "team_schedule"]),
     # at_appointments/bullpen_scripts intentionally omitted from every group
@@ -897,6 +919,7 @@ _ICONS = {
     "roster": '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0113 0M16 4a3.5 3.5 0 010 7M21.5 20a6.5 6.5 0 00-5-6.3"/>',
     "player_profile": '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/>',
     "dashboard": '<path d="M3 11l9-7 9 7v9a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z"/>',
+    "how_to_read": '<path d="M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2V5z"/><path d="M4 19a2 2 0 002 2h13"/><path d="M9 8h6M9 12h4"/>',
     "players": '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/>',
     "assessments": '<path d="M9 4h6v3H9zM7 6H5v15h14V6h-2M8 13l2 2 5-5"/>',
     "assessment_import": '<path d="M12 3v12M7 10l5 5 5-5M4 21h16"/>',

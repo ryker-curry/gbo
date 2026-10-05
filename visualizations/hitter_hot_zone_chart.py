@@ -57,8 +57,11 @@ def _color(value, metric):
     return sample_colorscale(SCALE, [t])[0]
 
 
-def hot_zone_figure(panels, metric="avg"):
-    fig = make_subplots(rows=1, cols=len(panels), horizontal_spacing=0.04,
+def hot_zone_figure(panels, metric="avg", stacked=False):
+    """stacked=True (phones, Oct 2026): one panel per row instead of side by side."""
+    n = len(panels)
+    fig = make_subplots(rows=n if stacked else 1, cols=1 if stacked else n,
+                        horizontal_spacing=0.04, vertical_spacing=0.06 if stacked else 0.3,
                         subplot_titles=[f"{label}  ·  {t['bip']} BIP  ·  {metric.upper()} {_fmt(t[metric])}"
                                         for label, _c, t in panels])
     mname = metric.upper()
@@ -104,11 +107,13 @@ def hot_zone_figure(panels, metric="avg"):
             plate = dict(plate, xref=xref, yref=yref)
             fig.add_shape(**plate)
         fig.add_trace(go.Scatter(x=hx, y=hy, mode="markers", marker=dict(size=28, opacity=0),
-                                 hovertext=htxt, hoverinfo="text", showlegend=False), row=1, col=i)
+                                 hovertext=htxt, hoverinfo="text", showlegend=False),
+                      row=i if stacked else 1, col=1 if stacked else i)
+        rc = dict(row=i, col=1) if stacked else dict(row=1, col=i)
         fig.update_xaxes(range=[-ZONE_HALF_WIDTH - PAD - 0.1, ZONE_HALF_WIDTH + PAD + 0.1], visible=False,
-                         fixedrange=True, row=1, col=i)
+                         fixedrange=True, **rc)
         fig.update_yaxes(range=[ZONE_BOTTOM - PAD - 0.6, ZONE_TOP + PAD + 0.1], visible=False, fixedrange=True,
-                         scaleanchor=xref, scaleratio=1, row=1, col=i)
-    apply_gbo_theme(fig, height=430, showlegend=False, margin=dict(t=40, b=10, l=10, r=10))
+                         scaleanchor=xref, scaleratio=1, **rc)
+    apply_gbo_theme(fig, height=(380 * n) if stacked else 430, showlegend=False, margin=dict(t=40, b=10, l=10, r=10))
     fig.update_annotations(selector=dict(xref="paper"), font=dict(size=12, color="#E9ECF1"))
     return fig

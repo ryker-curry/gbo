@@ -48,7 +48,7 @@ def _a(v):
 def team_game_report_ui():
     return ui.div(
         ui_helpers.page_header("Team Game Report",
-                               "How we played as a team -- pitching and hitting -- for a game, a series, a season, or any dates."),
+                               "How we played as a team -- pitching and hitting -- for a game, a series, a season, or any dates.", actions=ui_helpers.how_to_link("team_report")),
         ui.div(
             ui.input_radio_buttons("scope", "Show", choices={"game": "Game", "series": "Series", "season": "Season",
                                                              "dates": "Dates"}, selected="game", inline=True),

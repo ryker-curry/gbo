@@ -40,6 +40,7 @@ class AppState:
     # preference should survive login/logout, unlike every other field
     # here which is identity/role state tied to the authenticated user.
     dark_mode: reactive.Value
+    is_phone: reactive.Value          # bool -- browser narrower than 700px (Oct 2026, phone layouts)
 
     # int | None -- a one-shot "open this specific bullpen session" deep
     # link, e.g. from Import Rapsodo Data's "Open full Bullpen Dashboard"
@@ -99,6 +100,7 @@ def new_app_state() -> AppState:
         coach_specialty=reactive.Value(None),
         is_pitcher=reactive.Value(False),
         dark_mode=reactive.Value("dark"),
+        is_phone=reactive.Value(False),
         deep_link_bullpen_id=reactive.Value(None),
         deep_link_player_id=reactive.Value(None),
         deep_link_game_id=reactive.Value(None),

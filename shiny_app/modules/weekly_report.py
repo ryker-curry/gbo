@@ -34,7 +34,7 @@ w.document.close();w.focus();setTimeout(function(){w.print();},300);})();
 @module.ui
 def weekly_report_ui():
     return ui.div(
-        ui_helpers.page_header("Weekly Progress Report", "Every player's week -- pitchers: velo, shapes, game numbers, Arsenal Plan; hitters: at-bats, swing decisions, by pitch type."),
+        ui_helpers.page_header("Weekly Progress Report", "Every player's week -- pitchers: velo, shapes, game numbers, Arsenal Plan; hitters: at-bats, swing decisions, by pitch type.", actions=ui_helpers.how_to_link("weekly_report")),
         ui.div(
             ui.output_ui("week_picker"),
             ui.output_ui("pitcher_picker"),

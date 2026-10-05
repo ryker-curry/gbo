@@ -43,6 +43,13 @@ CSS = """
 .gbo-adv ol{margin:4px 0;padding-left:18px}.gbo-adv li{margin-bottom:4px}
 .gbo-adv .notes{background:var(--soft);border-radius:4px;padding:6px 8px;white-space:pre-wrap;margin-top:6px}
 .gbo-adv .foot{margin-top:10px;color:var(--muted);font-size:8.5px;border-top:1px solid var(--line);padding-top:4px}
+.gbo-adv h1,.gbo-adv h3,.gbo-adv h4{color:var(--ink)}
+@media screen and (max-width:700px){
+  .gbo-adv{padding:14px 12px}
+  .gbo-adv .cols{flex-direction:column}
+  .gbo-adv .bar .l{width:110px}
+  .gbo-adv table{display:block;overflow-x:auto;white-space:nowrap}
+}
 @media print{.gbo-adv{box-shadow:none;padding:0;max-width:none}}
 """
 

@@ -248,7 +248,7 @@ def _zone_hand_filtered(db, pitches, hand_choice):
 @module.ui
 def pitcher_profile_ui():
     return ui.div(
-        ui_helpers.page_header("Pitcher Profile"),
+        ui_helpers.page_header("Pitcher Profile", actions=ui_helpers.how_to_link("pitcher_profile")),
         ui.output_ui("pp_player_picker"),
         ui.output_ui("pp_filters"),
         # Sept 2026, Ryker: a "View" dropdown instead of every section
@@ -1844,6 +1844,7 @@ def pitcher_profile_server(input, output, session, app_state):
                     ui.tags.style(_SB_CSS),
                     ui_helpers.section_title("Stuff+ Breakdown",
                                              ui.input_select("pp_sb_type", None, choices=sb_types, width="260px")),
+                    ui.div(ui_helpers.how_to_link("stuff_breakdown", "How to read the breakdown"), style="margin:-4px 0 6px;"),
                     ui.output_ui("pp_sb_header"),
                     ui.layout_columns(
                         ui_helpers.card(output_widget("pp_sb_traits"),
@@ -1914,7 +1915,7 @@ def pitcher_profile_server(input, output, session, app_state):
         if not _trend_gate():
             return None
         return ui.div(
-            ui.p(ui.strong("Trends"), style="margin-bottom:0;"),
+            ui.p(ui.strong("Trends"), "  ", ui_helpers.how_to_link("trends"), style="margin-bottom:0;"),
             ui.p("Is he getting better? Dots = each game (or week), red line = rolling average (pools the pitches, "
                  "so one short outing doesn't swing it). Dotted = his average over this range, gray dashed = team, "
                  "gold dashed = D2. Uses the date range above.", class_="text-muted small"),

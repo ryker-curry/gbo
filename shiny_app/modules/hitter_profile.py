@@ -101,7 +101,7 @@ def _my_player(db, app_state):
 @module.ui
 def hitter_profile_ui():
     return ui.div(
-        ui_helpers.page_header("Hitter Profile"),
+        ui_helpers.page_header("Hitter Profile", actions=ui_helpers.how_to_link("hitter_profile")),
         ui.output_ui("hp_player_picker"),
         ui.output_ui("hp_filters"),
         # Sept 2026, Ryker: a "View" dropdown instead of every section
@@ -656,7 +656,7 @@ def hitter_profile_server(input, output, session, app_state):
         if input.hp_view() != "hot_zones":
             return None
         return ui.div(
-            ui.p(ui.strong("Hot Zones"), style="margin-bottom:0;"),
+            ui.p(ui.strong("Hot Zones"), "  ", ui_helpers.how_to_link("hot_zones"), style="margin-bottom:0;"),
             ui.p(
                 "Where you do damage when you put the ball in play -- every ball in play from your game at-bats "
                 f"in this range, by where the pitch was (catcher's view). Red = hot, blue = cold. Zones with fewer "
@@ -687,7 +687,7 @@ def hitter_profile_server(input, output, session, app_state):
         try:
             panels = _hot_panels(db)
             req(panels and panels[0][2]["bip"])
-            return hot_zone_figure(panels, metric)
+            return hot_zone_figure(panels, metric, stacked=app_state.is_phone())
         finally:
             db.close()
 
@@ -809,7 +809,7 @@ def hitter_profile_server(input, output, session, app_state):
         hand_select = lambda iid: ui.input_radio_buttons(iid, None, choices=_HAND_CHOICES, selected="all", inline=True)
         if view == "swing_decisions":
             return ui.div(
-                ui.p(ui.strong("Swing Decisions"), style="margin-bottom:0;"),
+                ui.p(ui.strong("Swing Decisions"), "  ", ui_helpers.how_to_link("swing_decisions"), style="margin-bottom:0;"),
                 ui.p("Every located pitch graded on the decision, not the result. Heart of the plate: swing. Way off the "
                      "plate: take. The edges are your call -- except with two strikes, when you protect. "
                      "Catcher's view (left = third-base side).", class_="text-muted small"),
@@ -819,7 +819,7 @@ def hitter_profile_server(input, output, session, app_state):
             )
         if view == "attack":
             return ui.div(
-                ui.p(ui.strong("How Pitchers Attack Me"), style="margin-bottom:0;"),
+                ui.p(ui.strong("How Pitchers Attack Me"), "  ", ui_helpers.how_to_link("attack"), style="margin-bottom:0;"),
                 ui.p("What pitchers throw you in each count and where they put it -- so you can walk up with a plan. "
                      "Inside/away is from your side of the plate.", class_="text-muted small"),
                 hand_select("hp_atk_hand"),
@@ -838,8 +838,8 @@ def hitter_profile_server(input, output, session, app_state):
                 ui.layout_columns(
                     ui.input_select("hp_atk_count", "Count", choices={
                         "all": "All counts",
-                        **{f"g:{k}": k for k in hitter_insights.COUNT_GROUPS},
                         **{f"c:{c}": c for c in hitter_insights.COUNTS},
+                        **{f"g:{k}": f"{', '.join(v)} ({k.lower()})" for k, v in hitter_insights.COUNT_GROUPS.items()},
                     }),
                     ui.input_select("hp_atk_fam", "Pitch", choices={"all": "All pitches", "Fastball": "Fastballs",
                                                                      "Breaking": "Breaking balls", "Offspeed": "Offspeed"}),
@@ -866,7 +866,7 @@ def hitter_profile_server(input, output, session, app_state):
             )
         if view == "trends":
             return ui.div(
-                ui.p(ui.strong("Trends"), style="margin-bottom:0;"),
+                ui.p(ui.strong("Trends"), "  ", ui_helpers.how_to_link("trends"), style="margin-bottom:0;"),
                 ui.p("Is he getting better? Dots = each game (or week), red line = rolling average (pools the "
                      "pitches, so one 1-PA game doesn't swing it). Dotted = his average over this range, gray dashed = "
                      "team, gold dashed = D2. Uses the date range above.", class_="text-muted small"),

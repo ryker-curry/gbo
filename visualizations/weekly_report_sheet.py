@@ -35,6 +35,11 @@ CSS = """
 .gbo-wk .wt{border-left:4px solid var(--warn);padding:2px 0 2px 9px;margin:4px 0}
 .gbo-wk .note{border:1px solid var(--line);border-radius:4px;padding:6px 9px;white-space:pre-wrap;background:var(--soft)}
 .gbo-wk .foot{margin-top:10px;color:var(--muted);font-size:9px;border-top:1px solid var(--line);padding-top:4px}
+.gbo-wk h1,.gbo-wk h3,.gbo-wk h4{color:var(--ink)}
+@media screen and (max-width:700px){
+  .gbo-wk{padding:14px 12px}
+  .gbo-wk table{display:block;overflow-x:auto;white-space:nowrap}
+}
 @media print{.gbo-wk{box-shadow:none;padding:0}}
 """
 

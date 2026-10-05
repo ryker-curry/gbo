@@ -69,6 +69,8 @@ from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
 
 from database import get_session
+from analytics import today as today_data
+import today_box
 from models import (
     Player, StaffPlayerAssignment, Assessment, AssessmentResult,
     AssessmentTestType, AssessmentCategory, IDPGoal, IDPStatus,
@@ -154,8 +156,9 @@ def dashboard_server(input, output, session, app_state):
 
         db = get_session()
         try:
+            allowed = today_box.allowed_titles(role_name, specialty, app_state.is_pitcher())
             if role_name == "Player":
-                return _player_dashboard_ui(db, current_user_id, mode)
+                return _player_dashboard_ui(db, current_user_id, mode, allowed)
 
             sections = [
                 ui_helpers.page_header(
@@ -183,6 +186,15 @@ def dashboard_server(input, output, session, app_state):
                 return ui.div(*sections)
 
             week_ago = date.today() - timedelta(days=7)
+
+            # Oct 2026 (Part 2): "Today" box -- who can throw, last game,
+            # charting to fix, goals off track -- see analytics/today.py.
+            try:
+                sections.append(today_box.coach_box(
+                    today_data.coach_today(db, None if can_view_all else player_ids,
+                                      pitching="Arm Care & Availability" in allowed), allowed))
+            except Exception as exc:  # never let it take the dashboard down
+                sections.append(ui_helpers.empty_state(f"Today box unavailable: {exc}"))
 
             # v2: team overview block (flags, attention list, today,
             # bucket status, coverage) ahead of the role-specific section --
@@ -237,7 +249,7 @@ def _staff_header_ui(db, current_user_id, first_name, last_name, role_name):
 # PLAYER -- profile header, score rings, "Today"
 # =============================================================================
 
-def _player_dashboard_ui(db, current_user_id, mode):
+def _player_dashboard_ui(db, current_user_id, mode, allowed=None):
     me = db.query(User).filter(User.user_id == current_user_id).first()
     if me is None or me.player_id is None:
         return ui.p(
@@ -252,6 +264,12 @@ def _player_dashboard_ui(db, current_user_id, mode):
         .first()
     )
     sections = [ui_helpers.render_player_profile_header(my_player)]
+    # Oct 2026 (Part 2): "Today" box -- my arm, my last game, my goals,
+    # my weekly report (analytics/today.py).
+    try:
+        sections.append(today_box.player_box(today_data.player_today(db, my_player.player_id), allowed or set()))
+    except Exception as exc:
+        sections.append(ui_helpers.empty_state(f"Today box unavailable: {exc}"))
 
     # --- Physical testing: the big overall scores, shown right up top
     # like the reference dashboard layout. Full breakdown by metric
@@ -284,7 +302,7 @@ def _player_dashboard_ui(db, current_user_id, mode):
 
     # --- Today: everything due today in one place, ahead of the weekly views ---
     sections.append(ui.hr())
-    sections.append(ui.h5("Today", class_="gbo-section-title"))
+    sections.append(ui.h5("On the schedule today", class_="gbo-section-title"))
 
     todays_events = (
         db.query(TeamScheduleEvent)

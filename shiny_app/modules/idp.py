@@ -301,7 +301,7 @@ def _lowest_hanging_fruit_view(pool, limit=6):
 @module.ui
 def idp_ui():
     return ui.div(
-        ui_helpers.page_header("Individual Development Plan", "Flags, priorities, and lowest-hanging fruit -- click a row below to start a goal for that metric."),
+        ui_helpers.page_header("Individual Development Plan", "Flags, priorities, and lowest-hanging fruit -- click a row below to start a goal for that metric.", actions=ui_helpers.how_to_link("goals")),
         ui.div(ui.output_ui("player_picker"), class_="gbo-filter"),
         ui.output_ui("player_flags_panel"),
         ui.output_ui("goals_section"),

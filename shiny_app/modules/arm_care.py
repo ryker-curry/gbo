@@ -35,7 +35,7 @@ def _pill(status):
 def arm_care_ui():
     return ui.div(
         ui_helpers.page_header("Arm Care & Availability",
-                               "Who can throw today -- rest, recent workload and coach holds in one place."),
+                               "Who can throw today -- rest, recent workload and coach holds in one place.", actions=ui_helpers.how_to_link("arm_care")),
         ui.output_ui("controls"),
         ui.output_ui("summary"),
         ui.output_ui("table"),

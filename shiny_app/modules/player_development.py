@@ -20,7 +20,7 @@ from modules import game_goal_form
 @module.ui
 def player_development_ui():
     return ui.div(
-        ui_helpers.page_header("My Development"),
+        ui_helpers.page_header("My Development", actions=ui_helpers.how_to_link("goals")),
         ui.output_ui("body"),
         # Oct 2026, Ryker: players can set their own game-stat goals too.
         game_goal_form.game_goal_form_ui("my_game_goal"),
