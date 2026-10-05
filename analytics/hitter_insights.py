@@ -569,5 +569,5 @@ def count_tendencies(db, pitches, hand=None):
             share = share.replace(f"{fam.lower()}s", word)
             out.append({"count": label, "family": fam, "where": where, "pct": pct, "k": k, "n": g["n"],
                         "group": len(cs) > 1,
-                        "text": f"{label}: {word} {where} ({pct}%, {k} of {g['n']}){share}"})
+                        "text": f"{', '.join(cs)}: {word} {where} ({pct}%, {k} of {g['n']}){share}"})
     return out

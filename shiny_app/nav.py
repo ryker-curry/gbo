@@ -40,7 +40,9 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
     required (callers should only reach this once AppState.is_authenticated()
     is True); coach_specialty/is_pitcher_player mirror the same two
     fields the original read off current_user."""
-    sections = [NavSection("Dashboard", [NavPage("dashboard", "Dashboard", "house")])]
+    sections = [NavSection("Dashboard", [NavPage("dashboard", "Dashboard", "house"),
+                                         # Oct 2026 (Part 2): plain-English guide to every page.
+                                         NavPage("how_to_read", "How to Read GBO", "book")])]
 
     if role_name in ("Administrator", "Head Coach", "Coach", "Strength Coach", "Athletic Trainer", "Sports Scientist", "Data Analyst"):
         pd_pages = [

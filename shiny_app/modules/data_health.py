@@ -23,7 +23,7 @@ GRADE_COLORS = {"green": "#2E9C62", "yellow": "#B58A22", "red": "#D94F3D"}
 def data_health_ui():
     return ui.div(
         ui_helpers.page_header("Data Health",
-                               "What's missing in the charting -- fix these and every report stays accurate."),
+                               "What's missing in the charting -- fix these and every report stays accurate.", actions=ui_helpers.how_to_link("data_health")),
         ui.output_ui("controls"),
         ui.output_ui("summary"),
         ui.output_ui("box_card"),

@@ -744,6 +744,33 @@ input, textarea, select { accent-color: var(--gbo-crimson); }
 /* disabled states stay legible but clearly off */
 .btn:disabled { opacity: .45; }
 .form-control:disabled, .form-select:disabled { opacity: .55; background-color: var(--gbo-bg-card); }
+
+/* ---- Phones (Oct 2026, Part 2: phone-friendly player pages) ---------- */
+@media (max-width: 700px) {
+  .gbo-content { padding-top: 16px; }
+  .gbo-content h1, .gbo-page-title { font-size: 1.6rem; }
+  /* filter strips: two fields per row instead of one long column */
+  .gbo-content .bslib-grid:has(> div > .shiny-input-container):not(:has(.html-widget, .shiny-plot-output, img, svg, table, .gbo-card, .gbo-kpi-card)) {
+    grid-template-columns: 1fr 1fr !important; gap: 0 10px !important; }
+  .gbo-content .bslib-grid:has(> div > .shiny-input-container):not(:has(.html-widget, .shiny-plot-output, img, svg, table, .gbo-card, .gbo-kpi-card)) > * {
+    grid-column: auto !important; }
+  .gbo-content div:not(.bslib-grid):not(.gbo-filter):has(> .shiny-input-container ~ .shiny-input-container) {
+    grid-template-columns: 1fr 1fr; gap: 0 10px; }
+  .gbo-content .shiny-input-radiogroup, .gbo-content .shiny-input-checkboxgroup,
+  .gbo-content .shiny-input-container:has(textarea) { grid-column: 1 / -1 !important; }
+  .gbo-content .shiny-html-output:has(.shiny-input-container):not(:has(.shiny-html-output .shiny-input-container)) {
+    padding: 12px 12px 4px; }
+  .gbo-content .shiny-input-container { margin-bottom: .5rem; }
+  .gbo-content .shiny-input-container > label, .gbo-content .control-label { font-size: .66rem; }
+  /* 16px text stops iPhone Safari from zooming in when a field is tapped */
+  .gbo-content .form-control, .gbo-content .form-select, .gbo-content select, .gbo-content input { font-size: 16px; }
+  .gbo-content .form-control, .gbo-content .form-select { padding: .38rem .55rem; }
+  /* wide tables scroll sideways inside their card instead of squashing */
+  .gbo-content table.table { display: block; overflow-x: auto; white-space: nowrap; }
+  .gbo-content .table-responsive table.table { display: table; }
+  .gbo-content .shiny-input-radiogroup .shiny-options-group { display: flex; flex-wrap: wrap; gap: 2px 12px; }
+  .gbo-content .gbo-card { padding: 12px; }
+}
 """.replace("{FONT_STACK}", FONT_STACK).replace("{DISPLAY_STACK}", DISPLAY_STACK).replace("{MONO_STACK}", MONO_STACK)
 
 
@@ -761,6 +788,17 @@ def logo_img(css_class: str = "gbo-navbar-logo"):
 # (Shiny re-renders outputs on navigation/tab change), so new content
 # animates without any page module knowing about it. Skipped entirely
 # when the OS asks for reduced motion.
+PHONE_JS = r"""
+// Oct 2026: tell the server when the screen is phone-width (< 700px) so a
+// few side-by-side charts can stack. Only sends when it changes.
+(function(){
+  var last = null;
+  function send(){ var p = window.innerWidth < 700; if (p !== last && window.Shiny && Shiny.setInputValue) { last = p; Shiny.setInputValue('gbo_phone', p); } }
+  if (window.jQuery) jQuery(document).on('shiny:connected', send); else document.addEventListener('DOMContentLoaded', function(){ setTimeout(send, 1500); });
+  window.addEventListener('resize', function(){ clearTimeout(window.__gboRs); window.__gboRs = setTimeout(send, 250); });
+})();
+"""
+
 MOTION_JS = r"""
 (function(){
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;

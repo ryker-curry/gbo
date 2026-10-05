@@ -56,6 +56,15 @@ SHEET_CSS = """
 .gbo-sheet .ruled{height:16px;border-bottom:1px solid var(--line)}
 .gbo-sheet .foot{margin-top:6px;color:var(--muted);font-size:8.5px;border-top:1px solid var(--line);padding-top:4px}
 .gbo-sheet .small{font-size:9px;color:var(--muted)}
+.gbo-sheet h1,.gbo-sheet h3,.gbo-sheet h4{color:var(--ink)}
+@media screen and (max-width:700px){
+  .gbo-sheet{padding:14px 12px;min-height:0;font-size:11px}
+  .gbo-sheet .top{flex-direction:column;align-items:flex-start;gap:8px}
+  .gbo-sheet .row{flex-direction:column;gap:10px}
+  .gbo-sheet .line{flex-wrap:wrap}
+  .gbo-sheet table{display:block;overflow-x:auto;white-space:nowrap}
+  .gbo-sheet .means{white-space:normal}
+}
 @media print{.gbo-sheet{box-shadow:none;width:auto;min-height:0;padding:0;margin:0}}
 """
 

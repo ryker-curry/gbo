@@ -113,6 +113,16 @@ def glossary_link(link_id: str, label: str = "Glossary"):
     return ui.input_action_link(link_id, f"\U0001F4D6 {label}", class_="small text-muted")
 
 
+def how_to_link(key: str, label: str = "How to read this"):
+    """Oct 2026 (Part 2): small link that opens the matching "How to Read
+    GBO" section (guide_content.py) in a pop-up. Handled globally in
+    app.py (_show_how_to) -- no per-page wiring needed."""
+    import json
+    js = f"Shiny.setInputValue('gbo_howto', {json.dumps(key)}, {{priority: 'event'}})"
+    return ui.tags.a(f"\u2753 {label}", class_="small text-muted gbo-howto-link", onclick=js, role="button",
+                     tabindex="0", style="cursor:pointer;text-decoration:none;")
+
+
 def glossary_modal(title: str, terms):
     """terms: list of (term, definition) string tuples -- see
     glossary_content.py for GBO's own per-tab term lists. Returns a
