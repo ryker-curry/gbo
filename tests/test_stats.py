@@ -141,3 +141,15 @@ def test_stuff_breakdown_for_pitcher_with_outcomes(db):
         assert breakdown
         for e in breakdown:
             sb.why_line(e, outcomes)
+
+
+def test_plus_actuals():
+    lg = league_baselines.HITTING["D2"]
+    a = league_baselines.hitting_actuals({"OBP": .400, "SLG": .500, "AVG": .310, "K %": 15.0})
+    assert a["OPS+"] == ("OPS", ".900", f"{lg['OBP'] + lg['SLG']:.3f}".lstrip("0"))
+    assert a["K%+"][1] == "15.0%" and a["BABIP+"][1] == "—"
+    p = league_baselines.pitching_actuals({"ERA": 3.5, "K": 20, "BB": 5, "Batters Faced": 100})
+    assert p["ERA+"] == ("ERA", "3.50", "6.73") and p["K-BB%+"][1] == "15.0%"
+    import ui_helpers
+    html = str(ui_helpers.plus_stat_cards({"ERA+": 192}, ["ERA+"], p))
+    assert "ERA 3.50" in html and "D2 6.73" in html

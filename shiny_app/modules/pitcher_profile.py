@@ -589,7 +589,7 @@ def pitcher_profile_server(input, output, session, app_state):
                 sections.append(ui.p("*wOBA uses generic linear weights, a relative read within your own games, not MLB-exact.", class_="text-muted small"))
 
                 sections.append(ui.p(ui.strong("Plus stats vs D2 (2026)")))
-                sections.append(ui_helpers.plus_stat_cards(league_baselines.pitching_plus(line), league_baselines.PITCHING_PLUS_ORDER))
+                sections.append(ui_helpers.plus_stat_cards(league_baselines.pitching_plus(line), league_baselines.PITCHING_PLUS_ORDER, league_baselines.pitching_actuals(line)))
                 sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
 
             sections.append(ui.hr())

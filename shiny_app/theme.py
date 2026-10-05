@@ -356,6 +356,7 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-kpi-delta { font-size: .78rem; font-weight: 600; margin-top: 6px; color: var(--gbo-text-muted); }
 .gbo-kpi-delta.positive { color: var(--gbo-status-good); }
 .gbo-kpi-delta.negative { color: var(--gbo-status-flag); }
+.gbo-kpi-sub { font-size: .8rem; color: var(--gbo-text-2); margin-top: 4px; font-variant-numeric: tabular-nums; }
 .gbo-kpi-card.flag .gbo-kpi-value { color: var(--gbo-status-flag); }
 .gbo-kpi-card.watch .gbo-kpi-value { color: var(--gbo-status-watch); }
 

@@ -139,7 +139,7 @@ def player_game_stats_server(input, output, session, app_state):
                     sections.append(ui.p("*wOBA uses generic linear weights, not a season/league-specific set.", class_="text-muted small"))
 
                     sections.append(ui.p(ui.strong("Plus stats vs D2 (2026)")))
-                    sections.append(ui_helpers.plus_stat_cards(league_baselines.hitting_plus(bl), league_baselines.HITTING_PLUS_ORDER))
+                    sections.append(ui_helpers.plus_stat_cards(league_baselines.hitting_plus(bl), league_baselines.HITTING_PLUS_ORDER, league_baselines.hitting_actuals(bl)))
                     sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
 
                     sections.append(ui_helpers.render_kpi_cards([
@@ -241,7 +241,7 @@ def player_game_stats_server(input, output, session, app_state):
                     ]))
 
                     sections.append(ui.p(ui.strong("Plus stats vs D2 (2026)")))
-                    sections.append(ui_helpers.plus_stat_cards(league_baselines.pitching_plus(pl), league_baselines.PITCHING_PLUS_ORDER))
+                    sections.append(ui_helpers.plus_stat_cards(league_baselines.pitching_plus(pl), league_baselines.PITCHING_PLUS_ORDER, league_baselines.pitching_actuals(pl)))
                     sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
                     sections.append(ui.p(
                         f"Total RV Allowed: {pl['Total RV Allowed']} · Avg RV Allowed/Pitch: {pl['Avg RV Allowed/Pitch']}",

@@ -154,7 +154,7 @@ def analytics_server(input, output, session, app_state):
                     sections.append(ui.p("*wOBA uses generic linear weights, not a season/league-specific set -- a relative read within your own games, not MLB-exact.", class_="text-muted small"))
 
                     sections.append(ui.p(ui.strong("Plus stats vs D2 (2026)")))
-                    sections.append(ui_helpers.plus_stat_cards(league_baselines.hitting_plus(batting_line), league_baselines.HITTING_PLUS_ORDER))
+                    sections.append(ui_helpers.plus_stat_cards(league_baselines.hitting_plus(batting_line), league_baselines.HITTING_PLUS_ORDER, league_baselines.hitting_actuals(batting_line)))
                     sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
 
                     sections.append(ui_helpers.render_kpi_cards([
@@ -272,7 +272,7 @@ def analytics_server(input, output, session, app_state):
                     ]))
 
                     sections.append(ui.p(ui.strong("Plus stats vs D2 (2026)")))
-                    sections.append(ui_helpers.plus_stat_cards(league_baselines.pitching_plus(pitching_line), league_baselines.PITCHING_PLUS_ORDER))
+                    sections.append(ui_helpers.plus_stat_cards(league_baselines.pitching_plus(pitching_line), league_baselines.PITCHING_PLUS_ORDER, league_baselines.pitching_actuals(pitching_line)))
                     sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
                     sections.append(ui.p(
                         f"Total RV Allowed: {pitching_line['Total RV Allowed']} · Avg RV Allowed/Pitch: {pitching_line['Avg RV Allowed/Pitch']}",

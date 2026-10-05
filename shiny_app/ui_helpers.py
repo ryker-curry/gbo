@@ -440,9 +440,13 @@ def render_kpi_cards(cards: list, accent: bool = True):
             ui.div(c["label"], class_="gbo-kpi-label"),
             ui.div(*value_children, class_="gbo-kpi-value"),
         ]
+        if c.get("sub"):
+            parts.append(ui.div(c["sub"], class_="gbo-kpi-sub"))
         if c.get("delta"):
-            arrow = "▲" if c.get("delta_positive", True) else "▼"
-            css_class = "positive" if c.get("delta_positive", True) else "negative"
+            pos = c.get("delta_positive", True)
+            # None = neutral (e.g. "D2 average") -- a dot, not a red down arrow
+            arrow = "●" if pos is None else ("▲" if pos else "▼")
+            css_class = "neutral" if pos is None else ("positive" if pos else "negative")
             parts.append(ui.div(f"{arrow} {c['delta']}", class_=f"gbo-kpi-delta {css_class}"))
         card_divs.append(ui.div(*parts, class_="gbo-kpi-card"))
 
@@ -727,17 +731,22 @@ def rating_breakdown(rc):
 
 
 
-def plus_stat_cards(values, order):
+def plus_stat_cards(values, order, actuals=None):
     """Oct 2026: one KPI card per "+" stat (100 = 2026 D2 average, higher is
-    always better -- analytics/league_baselines.py). values: {name: int|None}."""
+    always better -- analytics/league_baselines.py). values: {name: int|None}.
+    actuals: league_baselines.hitting_actuals(line) / pitching_actuals(line)
+    -> the real stat under each card, e.g. "OPS .828 · D2 .863" (Ryker)."""
+    actuals = actuals or {}
     cards = []
     for name in order:
         v = values.get(name)
+        a = actuals.get(name)
+        sub = f"{a[0]} {a[1]}  ·  D2 {a[2]}" if a else None
         if v is None:
-            cards.append({"label": name, "value": "—"})
+            cards.append({"label": name, "value": "—", "sub": sub})
             continue
         diff = v - 100
-        cards.append({"label": name, "value": str(v),
+        cards.append({"label": name, "value": str(v), "sub": sub,
                       "delta": ("D2 average" if abs(diff) < 3 else f"{abs(diff)}% {'above' if diff > 0 else 'below'} D2"),
                       "delta_positive": None if abs(diff) < 3 else diff > 0})
     return render_kpi_cards(cards)
