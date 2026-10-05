@@ -900,7 +900,7 @@ _NAV_GROUPS = [
     # below (Aug 31 2026 -- Ryker's call, kept in the codebase/MODULE_UI,
     # just out of the visible sidebar) -- see nav.py's matching comments.
     ("Pitching", ["arm_care", "bullpen_dashboard", "bullpen_tracking", "rapsodo_import"]),
-    ("Hitting", ["hitter_tracking"]),
+    # ("Hitting", ["hitter_tracking"]) -- removed from the sidebar Oct 2026 (Ryker)
     ("Games", ["game_tracking", "data_health", "team_game_report", "pitcher_game_report", "pitcher_meeting_report", "hitter_game_report", "hitter_meeting_report"]),
     # Sept 2026, Ryker: "pitcher profile, hitter profile, player stats
     # should be under analytics rather than games" -- moved out of
