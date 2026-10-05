@@ -278,6 +278,7 @@ class _GamePitchCommandView:
         "actual_x", "actual_z", "horizontal_miss", "vertical_miss",
         "miss_distance", "miss_direction",
         "within_precision_target", "within_command_target", "within_competitive_target",
+        "pitcher_id",
     )
 
     def __init__(self, game_pitch, throws, pitch_number):
@@ -288,6 +289,10 @@ class _GamePitchCommandView:
         self.intended_z = p.intended_plate_z
         self.actual_x = p.actual_plate_x
         self.actual_z = p.actual_plate_z
+        # Oct 2026: who threw it -- Command+'s pitcher-level scale groups the
+        # team population by pitcher (see team_command_plus_baselines).
+        self.pitcher_id = getattr(p, "opponent_our_player_id", None) if getattr(p, "is_our_team_batting", False) \
+            else getattr(p, "our_player_id", None)
         derived = compute_command_pitch_fields(p.intended_plate_x, p.intended_plate_z, p.actual_plate_x, p.actual_plate_z, throws)
         for field_name, field_value in derived.items():
             setattr(self, field_name, field_value)
@@ -341,19 +346,15 @@ def game_pitches_command_view(game_pitches, throws):
 # usable right now with the data already on hand).
 #
 #   danger_delta = center_dist_actual - center_dist_intended
-#   danger_adjusted_miss = miss_distance - danger_delta   (k=1, linear --
-#       Ryker's own picks from that conversation: a fixed zone-center
-#       reference since GBO doesn't track individual batter height/stance
-#       anywhere to derive a batter-specific center from, a linear rather
-#       than escalating-near-the-heart curve, and direction weighted
-#       equally with raw distance rather than lighter or heavier)
+#   danger_adjusted_miss = miss_distance + TOWARD_MIDDLE_PENALTY x max(0, -danger_delta)
 #
-# Bounded in [0, 2 x miss_distance] for k=1, by the reverse triangle
-# inequality (|center_dist_actual - center_dist_intended| <= miss_distance
-# always) -- 0 when the miss drifted directly away from center as far as
-# it possibly could have for that miss_distance, 2x miss_distance when it
-# drifted directly toward center as far as it possibly could have. No
-# separate floor/cap logic needed.
+# Oct 2026 change (Ryker approved): the original Aug 2026 rule was
+# miss_distance - danger_delta, i.e. it also SUBTRACTED drift away from the
+# middle. Checked on 1,038 real game pitches: catchers call nearly every
+# pitch on the edges, so misses that sailed off the plate (mostly balls)
+# graded as the best command, and Command+ correlated with MORE balls.
+# Now only drift toward the heart changes the number (adds half again);
+# drifting away is simply a miss.
 #
 # Computed fresh from intended_x/z + actual_x/z rather than stored on
 # CommandPitch -- same no-migration precedent as game_pitches_command_view
@@ -361,6 +362,10 @@ def game_pitches_command_view(game_pitches, throws):
 # CommandPitch row or a _GamePitchCommandView-adapted GamePitch, since
 # both already expose those same four attributes.
 # ---------------------------------------------------------------------------
+
+# Oct 2026: extra penalty per inch a miss drifts TOWARD the middle of the
+# zone (0.5 = half again). Drifting away from the middle is never rewarded.
+TOWARD_MIDDLE_PENALTY = 0.5
 
 ZONE_CENTER_X_FT = 0.0
 ZONE_CENTER_Z_FT = 2.5  # ft -- matches strike_zone.py's ZONE_BOTTOM/ZONE_TOP midpoint (1.5/3.5 ft). Restated here rather than imported to avoid a new cross-module dependency for two constants -- must stay in sync if strike_zone.py's zone ever changes.
@@ -388,7 +393,15 @@ def danger_adjusted_miss(pitch):
     if center_dist_intended is None or center_dist_actual is None:
         return None
     danger_delta = center_dist_actual - center_dist_intended
-    return round(float(pitch.miss_distance) - danger_delta, 2)
+    # Oct 2026 fix (Ryker approved after an accuracy check on 1,038 real
+    # game pitches): the old rule SUBTRACTED any drift away from the middle,
+    # so with catchers calling almost every pitch on the edges, a pitch
+    # that sailed way off the plate had most of its miss erased (Waste-area
+    # pitches graded as the BEST command, and higher Command+ went with MORE
+    # balls). Now a miss is just its distance from the called spot, plus
+    # TOWARD_MIDDLE_PENALTY x the part of it that drifted toward the heart.
+    toward_middle = max(0.0, -danger_delta)
+    return round(float(pitch.miss_distance) + TOWARD_MIDDLE_PENALTY * toward_middle, 2)
 
 
 # ---------------------------------------------------------------------------
@@ -478,6 +491,62 @@ def team_command_plus_baseline(pitches):
 # type-specific one, the same way it always did before this change).
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Pitcher-level scale -- Oct 2026 (Ryker approved). Averaging per-pitch
+# z-scores (10 points = one per-PITCH standard deviation) squeezed every
+# pitcher into roughly 97-103, so a 103 (one of our best) read as "average".
+# Now a pitcher's average z is (a) pulled toward the staff average when he
+# has few located pitches -- SHRINK_PITCHES is how many pitches count as
+# "half trust", estimated from split-half consistency on our own data --
+# and (b) divided by the spread BETWEEN pitchers, so 10 points = one step
+# between pitchers and the staff spreads out like the other "+" grades.
+# ---------------------------------------------------------------------------
+SHRINK_PITCHES = 55
+MIN_PITCHER_PITCHES = 20      # a pitcher needs this many located pitches to help set the spread
+MIN_SCALE_PITCHERS = 5        # and we need this many such pitchers to trust it
+DEFAULT_PITCHER_SD = 0.09      # fallback spread (z units) -- measured on Oct 2026 data
+
+
+def _pitch_z(p, baselines):
+    mean, stdev, _n = _baseline_for_pitch(p, baselines)
+    value = danger_adjusted_miss(p)
+    if value is None or mean is None or not stdev:
+        return None
+    return (mean - value) / stdev
+
+
+def _shrunk(zs, center):
+    n = len(zs)
+    m = sum(zs) / n
+    return center + (m - center) * n / (n + SHRINK_PITCHES)
+
+
+def _pitcher_scale(pitches, baselines):
+    """(center, spread) of pitchers' shrunk average z across the team
+    population -- None if pitches carry no pitcher_id or too few pitchers."""
+    by_pitcher = defaultdict(list)
+    for p in _located(pitches):
+        pid = getattr(p, "pitcher_id", None)
+        z = _pitch_z(p, baselines)
+        if pid is not None and z is not None:
+            by_pitcher[pid].append(z)
+    groups = [zs for zs in by_pitcher.values() if len(zs) >= MIN_PITCHER_PITCHES]
+    if len(groups) < MIN_SCALE_PITCHERS:
+        return None
+    raw_means = [sum(zs) / len(zs) for zs in groups]
+    center = sum(raw_means) / len(raw_means)
+    shrunk = [_shrunk(zs, center) for zs in groups]
+    spread = _sd(shrunk)
+    return (center, spread) if spread else None
+
+
+def _to_plus(zs, baselines):
+    if not zs:
+        return None
+    center, spread = baselines.get("pitcher_scale") or (0.0, DEFAULT_PITCHER_SD)
+    return round(100 + 10 * (_shrunk(zs, center) - center) / spread, 1)
+
+
 def team_command_plus_baselines(pitches):
     """Same population team_command_plus_baseline() above normalizes
     against, split by pitch type as well as pooled. Returns
@@ -491,10 +560,12 @@ def team_command_plus_baselines(pitches):
     by_type = defaultdict(list)
     for p in _located(pitches):
         by_type[pitch_type_label(p)].append(p)
-    return {
+    baselines = {
         "pooled": pooled,
         "by_type": {label: team_command_plus_baseline(group) for label, group in by_type.items()},
     }
+    baselines["pitcher_scale"] = _pitcher_scale(pitches, baselines)
+    return baselines
 
 
 def _baseline_for_pitch(pitch, baselines):
@@ -525,16 +596,8 @@ def session_command_plus(pitches, baselines):
     e.g. every located pitch of every applicable type/pool has an
     identical danger_adjusted_miss, or the pooled fallback itself has
     fewer than 2 located pitches team-wide)."""
-    z_scores = []
-    for p in _located(pitches):
-        mean, stdev, _n = _baseline_for_pitch(p, baselines)
-        value = danger_adjusted_miss(p)
-        if value is None or mean is None or not stdev:
-            continue
-        z_scores.append((mean - value) / stdev)
-    if not z_scores:
-        return None
-    return round(100 + 10 * (sum(z_scores) / len(z_scores)), 1)
+    z_scores = [z for z in (_pitch_z(p, baselines) for p in _located(pitches)) if z is not None]
+    return _to_plus(z_scores, baselines)
 
 
 def command_plus_by_pitch_type(pitches, baselines):
@@ -573,14 +636,8 @@ def command_plus_by_pitch_type(pitches, baselines):
         by_type[pitch_type_label(p)].append(p)
     result = {}
     for label, group in by_type.items():
-        z_scores = []
-        for p in group:
-            mean, stdev, _n = _baseline_for_pitch(p, baselines)
-            value = danger_adjusted_miss(p)
-            if value is None or mean is None or not stdev:
-                continue
-            z_scores.append((mean - value) / stdev)
-        result[label] = round(100 + 10 * (sum(z_scores) / len(z_scores)), 1) if z_scores else None
+        z_scores = [z for z in (_pitch_z(p, baselines) for p in group) if z is not None]
+        result[label] = _to_plus(z_scores, baselines)
     return result
 
 

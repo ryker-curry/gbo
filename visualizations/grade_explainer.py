@@ -16,6 +16,7 @@ from html import escape
 
 from analytics.pitch_grading import STUFF_PLUS_FIXED_WEIGHTS, PITCHING_PLUS_STUFF_WEIGHT
 from analytics.performance_score import PITCHER_RESULTS_METRICS
+from analytics.command_metrics import TOWARD_MIDDLE_PENALTY
 
 # feature -> (plain label, what it means)
 FEATURE_WORDS = {
@@ -137,22 +138,26 @@ Open the <b>Arsenal</b> view and look at the Stuff+ Breakdown.</p>
 
 <div class="card">
 <h4>Location+ -- did you put it in a good spot?</h4>
-<p class="what">Grades where each pitch ended up. GBO splits the plate into four areas: <b>Heart</b> (middle),
-<b>Shadow</b> (the edges), <b>Chase</b> (just off the plate) and <b>Waste</b> (way off). For every pitch it asks:
-for this pitch type in this area, did it turn out better or worse for us than our team usually does?</p>
-{_bar("What happened on the pitch", "vs our team's average for the same pitch type in the same area", 100)}
-<p class="recipe">"What happened" = how much the pitch changed the other team's chances of scoring (a strike or a
-weak out helps us; a ball or a hard hit helps them). Sliders at the edges score well; fastballs down the middle
-usually don't.</p>
+<p class="what">Grades the <b>spot</b> each pitch went to. GBO splits the plate into four areas: <b>Heart</b>
+(middle), <b>Shadow</b> (the edges), <b>Chase</b> (just off the plate) and <b>Waste</b> (way off). Every pitch gets
+how well our team usually does with <i>that pitch type</i> in <i>that area</i> -- not what happened on that one pitch,
+so a perfect slider on the edge still grades well even if the hitter got lucky.</p>
+{_bar("How good that spot is for that pitch", "our team's average result there", 100)}
+<p class="recipe">Sliders and changeups at the edges or just off the plate usually grade well; fastballs over the
+heart or pitches way off the plate (easy balls) usually don't. Your grade is your average spot compared to the rest
+of our staff -- 10 points is one step between pitchers, and with only a few pitches you stay close to 100.</p>
 </div>
 
 <div class="card">
 <h4>Command+ -- did you hit the target?</h4>
 <p class="what">Grades how close each pitch landed to where the catcher set up, compared to our team for the same
-pitch type.</p>
-{_bar("Distance from the target", "smaller miss = better grade", 100)}
-<p class="recipe"><b>The twist:</b> missing toward the middle of the plate counts extra against you, and missing
-away from the middle counts less -- because a miss over the heart gets hit, a miss off the edge usually doesn't.</p>
+pitch type. Then your average is compared to the rest of our staff.</p>
+{_bar("Distance from the target", "how far it missed the called spot", round(100 / (1 + TOWARD_MIDDLE_PENALTY)))}
+{_bar("Extra if it missed toward the middle", "a miss over the heart gets hit", round(100 * TOWARD_MIDDLE_PENALTY / (1 + TOWARD_MIDDLE_PENALTY)))}
+<p class="recipe"><b>How it works:</b> every inch you miss the spot counts. If the miss drifted toward the middle of
+the plate, that part counts half again, because a miss over the heart gets hit. Missing off the plate is still a
+miss -- it doesn't get you a better grade. With only a few pitches charted, your grade stays close to 100 until
+there's enough to trust it.</p>
 </div>
 
 <div class="card">
