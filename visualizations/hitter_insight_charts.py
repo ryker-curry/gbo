@@ -95,8 +95,11 @@ def attack_location_chart(by_family_loc):
 
 
 def count_mix_chart(mix):
-    rows = [m for m in mix if m["Pitches"]]
-    if not rows:
+    """Every row in `mix` is drawn -- a count with 0 pitches gets an empty
+    bar and a "none yet" note (Oct 2026: Ryker thought 3-2 was missing
+    when the hitter just hadn't been in a 3-2 count yet)."""
+    rows = list(mix)
+    if not any(m["Pitches"] for m in rows):
         return None
     fig = go.Figure()
     for f in FAMILIES:
@@ -111,6 +114,10 @@ def count_mix_chart(mix):
     apply_gbo_theme(fig, height=80 + 46 * len(rows), barmode="stack", bargap=0.3,
                     margin=dict(t=10, b=40, l=10, r=10),
                     legend=dict(orientation="h", y=-0.12, x=0, bgcolor="rgba(0,0,0,0)", traceorder="normal"))
+    for m in rows:
+        if not m["Pitches"]:
+            fig.add_annotation(x=1, y=f"{m['Count']} (0)", text="none yet", showarrow=False, xanchor="left",
+                               font=dict(size=12, color="#8A8F98"))
     fig.update_xaxes(range=[0, 100], ticksuffix="%", gridcolor=GRID_GRAY, fixedrange=True)
     fig.update_yaxes(autorange="reversed", tickfont=dict(size=13, color="#E9ECF1"), fixedrange=True, automargin=True)
     return fig

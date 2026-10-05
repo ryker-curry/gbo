@@ -98,3 +98,13 @@ def test_hitting_leaderboard(db):
     # date range narrows it
     import datetime as dt
     assert all(r["PA"] <= jake["PA"] for r in hitting_leaderboard.rows(db, dt.date(2026, 9, 19), dt.date(2026, 9, 30)))
+
+
+def test_count_mix_chart_shows_every_count():
+    from analytics.hitter_insights import COUNTS
+    from visualizations.hitter_insight_charts import count_mix_chart
+    mix = [{"Count": c, "Pitches": 0} for c in COUNTS]
+    mix[0] = {"Count": "0-0", "Pitches": 10, "Fastball": 60, "Breaking": 30, "Offspeed": 10}
+    fig = count_mix_chart(mix)
+    assert "3-2 (0)" in fig.data[0].y and len(fig.data[0].y) == 12
+    assert any(a.text == "none yet" for a in fig.layout.annotations)
