@@ -239,3 +239,21 @@ HITTING_SPRAY = [
     ('Infield Slice Chart', "The share of all batted balls with a projected distance of 200 ft or less from home plate that land in each of five equal 18-degree field wedges, left field line to right field line -- Baseball Savant's own definition and threshold for this chart. A higher share in a wedge means more weak/short contact hit that direction; wedges are raw field side (left/center/right), not adjusted for batter handedness, same as Savant's own non-mirrored treatment."),
     ('Why hits-only on the Spray Chart', 'Ryker\'s own call (Sept 2026), matching Savant\'s default BASE HITS view rather than plotting every ball in play -- outs would clutter the picture and this chart is meant to answer "where does this hitter get his hits," not "where does he hit the ball."'),
 ]
+
+
+# Oct 2026: Hitting Leaderboard (shiny_app/modules/hitting_leaderboard.py).
+# Traditional stats follow the standard FanGraphs / MLB.com definitions;
+# plate-discipline stats are GBO's own, from our charting.
+HITTING_LEADERBOARD = [
+    ("Plus stats (vs D2)", "OPS+, wOBA+, AVG+, OBP+, SLG+, ISO+, K%+, BB%+, BABIP+: each stat compared to the 2026 NCAA Division II average (AVG .300 / OBP .406 / SLG .457, K 17.1% / BB 11.6% of plate appearances). 100 = D2 average and higher is always better -- K%+ is flipped so striking out less scores higher. OPS+ uses the Baseball-Reference formula 100 x (OBP/D2 OBP + SLG/D2 SLG - 1)."),
+    ("PA / Min PA", "Plate appearances. Hitters under the Min PA box sort to the bottom, grayed out and unranked -- a few at-bats can make any rate stat look great or awful."),
+    ("AVG / OBP / SLG / OPS", "Batting average (hits per at-bat), on-base percentage (times on base -- hits, walks, HBP -- per plate appearance, sac flies counted), slugging (total bases per at-bat) and OPS (OBP + SLG). Higher is better."),
+    ("wOBA", "Weighted on-base average: every way of reaching base weighted by how much it's worth (a double counts more than a walk). GBO uses generic linear weights -- a relative read within our own games, not MLB-exact. Higher is better."),
+    ("ISO", "Isolated power: SLG minus AVG -- extra bases per at-bat, i.e. raw power apart from singles. Higher is better."),
+    ("BABIP", "Batting average on balls in play: (H - HR) / (AB - K - HR + SF). Very high or low numbers usually drift back toward normal over time. Higher is better."),
+    ("K% / BB% / BB/K", "Strikeouts and walks per plate appearance, and walks per strikeout. Lower K%, higher BB% and BB/K are better."),
+    ("QAB%", "Quality at-bats per plate appearance (Brian Cain's definition): hard-hit ball, walk/HBP, RBI, moving a runner 2nd to 3rd with no outs, sac bunt, bunt hit, 8+ pitch at-bat, or 4+ pitches after 0-2. Team goal: 54%."),
+    ("Swing Dec% / Chase% / Zone Swing%", "From our charting. Swing decisions = good swings at strikes + good takes of balls out of every graded pitch. Chase = swings at pitches off the plate. Zone swing = swings at pitches in the zone. Higher swing decisions and zone swing, lower chase are better."),
+    ("Whiff% / Hard Contact%", "Whiff = misses per swing (lower is better). Hard contact = barreled or solid contact per ball in play (higher is better)."),
+    ("P/PA / 2-Strike K%", "Pitches seen per plate appearance (making the pitcher work -- higher is better) and how often two-strike plate appearances end in a strikeout (lower is better)."),
+]

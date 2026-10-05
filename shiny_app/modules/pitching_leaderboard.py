@@ -43,10 +43,13 @@ stats, not something FanGraphs/MLB.com define). Same glossary_link/
 glossary_modal pattern every other page in this app already uses.
 """
 
+from datetime import date
+
 from shiny import module, ui, render, req, reactive
 
 from database import get_session
 from analytics import profile_queries
+from analytics.weekly_report import season_start
 import ui_helpers
 import glossary_content
 
@@ -139,10 +142,15 @@ def pitching_leaderboard_server(input, output, session, app_state):
     def lb_filters():
         if not app_state.is_authenticated():
             return None
-        return ui.input_select(
-            "lb_game_scope", "Games",
-            choices={"all": "All Games", "intrasquad": "Intrasquad Only", "external": "External Only"},
-            width="220px",
+        # Oct 2026 (Ryker approved): date range, season to date by default.
+        return ui.layout_columns(
+            ui.input_date("lb_from", "From", value=season_start()),
+            ui.input_date("lb_to", "To", value=date.today()),
+            ui.input_select(
+                "lb_game_scope", "Games",
+                choices={"all": "All Games", "intrasquad": "Intrasquad Only", "external": "External Only"},
+            ),
+            col_widths=[4, 4, 4],
         )
 
     @render.ui
@@ -192,7 +200,9 @@ def pitching_leaderboard_server(input, output, session, app_state):
 
         db = get_session()
         try:
-            rows = profile_queries.pitching_staff_leaderboard_rows(db, game_scope=game_scope)
+            d0 = input.lb_from() if "lb_from" in input else None
+            d1 = input.lb_to() if "lb_to" in input else None
+            rows = profile_queries.pitching_staff_leaderboard_rows(db, date_from=d0, date_to=d1, game_scope=game_scope)
         finally:
             db.close()
 
