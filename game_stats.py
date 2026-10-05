@@ -26,6 +26,7 @@ from models import GamePitch, Game, GameForcedHalfInningEnd, GameRunnerEvent, Pl
 from plate_discipline import SWING_OUTCOMES, WHIFF_OUTCOMES
 from strike_zone import is_in_zone, classify_attack_zone
 from field_location import classify_spray_direction
+from gbo_cache import cached
 
 
 def get_batting_pitches(session, player_id, season_id=None, game_id=None):
@@ -71,6 +72,15 @@ def get_pitching_pitches(session, player_id, season_id=None, game_id=None):
     return query.all()
 
 
+@cached("hand_roster", {"players", "opponent_players"})
+def _hand_roster(session):
+    """({player_id: Player}, {opponent_player_id: OpponentPlayer}) for the
+    whole roster + every opponent, cached (gbo_cache) -- only .throws /
+    .bats are read off them. Oct 2026: saves two lookups per chart."""
+    return ({p.player_id: p for p in session.query(Player).all()},
+            {o.opponent_player_id: o for o in session.query(OpponentPlayer).all()})
+
+
 def get_pitcher_hands(session, pitches):
     """{game_pitch_id: 'R'/'L'/None} for every pitch in `pitches' --
     the real PITCHER's hand, looked up fresh from the pitcher's own
@@ -105,14 +115,9 @@ def get_pitcher_hands(session, pitches):
     our_ids = {p.our_player_id for p in pitches if p.our_player_id is not None}
     our_ids |= {p.opponent_our_player_id for p in pitches if p.opponent_our_player_id is not None}
     opp_ids = {p.opponent_player_id for p in pitches if p.opponent_player_id is not None}
-    our_players = (
-        {pl.player_id: pl for pl in session.query(Player).filter(Player.player_id.in_(our_ids)).all()}
-        if our_ids else {}
-    )
-    opp_players = (
-        {pl.opponent_player_id: pl for pl in session.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id.in_(opp_ids)).all()}
-        if opp_ids else {}
-    )
+    roster, opp_roster = _hand_roster(session)
+    our_players = {i: roster[i] for i in our_ids if i in roster}
+    opp_players = {i: opp_roster[i] for i in opp_ids if i in opp_roster}
 
     hands = {}
     for p in pitches:
@@ -187,14 +192,9 @@ def get_batter_hands(session, pitches):
     our_ids = {p.our_player_id for p in pitches if p.is_our_team_batting and p.our_player_id is not None}
     our_ids |= {p.opponent_our_player_id for p in pitches if not p.is_our_team_batting and p.opponent_our_player_id is not None}
     opp_ids = {p.opponent_player_id for p in pitches if p.opponent_player_id is not None}
-    our_players = (
-        {pl.player_id: pl for pl in session.query(Player).filter(Player.player_id.in_(our_ids)).all()}
-        if our_ids else {}
-    )
-    opp_players = (
-        {pl.opponent_player_id: pl for pl in session.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id.in_(opp_ids)).all()}
-        if opp_ids else {}
-    )
+    roster, opp_roster = _hand_roster(session)
+    our_players = {i: roster[i] for i in our_ids if i in roster}
+    opp_players = {i: opp_roster[i] for i in opp_ids if i in opp_roster}
 
     switch_pitches = []
     raw_bats_by_id = {}

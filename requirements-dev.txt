@@ -1,0 +1,4 @@
+# Test-only tools (kept out of requirements.txt so Posit Connect doesn't install them).
+-r requirements.txt
+pytest>=8.0
+pyflakes>=3.0

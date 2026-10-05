@@ -1,0 +1,21 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      # Tests run on an in-memory SQLite fake season (tests/seed.py) --
+      # this dummy URL only satisfies database.py; nothing connects to it.
+      - run: python -m pytest
+        env:
+          DATABASE_URL: postgresql://u:p@localhost:1/db

@@ -51,6 +51,7 @@ from analytics.pitcher_game_report import (
     STRIKE_OUTCOMES, SWING_OUTCOMES, FPS_GOAL_PCT, SECONDARY_STRIKE_GOAL_PCT,
 )
 from analytics import command_metrics, best_zone, league_baselines
+from gbo_cache import cached
 from analytics.rapsodo_goal_metrics import rapsodo_field_for_test_name, average_rapsodo_metric
 
 MIN_SAMPLE = 5
@@ -171,11 +172,12 @@ def pitcher_pitches(db, player_id, season_id=None, game_id=None):
     return q.all()
 
 
+@cached("team_pitches", {"game_pitches", "games", "pitch_types"})
 def team_pitches(db, season_id):
     """Every pitch thrown by one of OUR pitchers in this season (our side
     of real games; both sides of intrasquads)."""
     q = (db.query(GamePitch).join(Game, GamePitch.game_id == Game.game_id)
-         .options(joinedload(GamePitch.pitch_type))
+         .options(joinedload(GamePitch.pitch_type), joinedload(GamePitch.game).selectinload(Game.pitches))
          .filter(or_(GamePitch.is_our_team_batting.is_(False),
                      and_(GamePitch.is_our_team_batting.is_(True), GamePitch.opponent_our_player_id.isnot(None)))))
     if season_id is not None:
