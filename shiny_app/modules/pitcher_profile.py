@@ -82,7 +82,7 @@ from shinywidgets import output_widget, render_plotly
 from sqlalchemy.orm import joinedload
 from database import get_session
 from models import Player, User, PitchType, PlayerPitchArsenal, StaffPlayerAssignment, Game, GamePitch, RapsodoPitch
-from game_stats import compute_pitching_line, compute_pitch_type_breakdown, get_batter_hands, compute_pitch_mix_by_count, get_pitching_extras_for_pitches
+from game_stats import compute_pitching_line, compute_pitch_type_breakdown, get_batter_hands, compute_pitch_mix_by_count, pitching_line_for
 from strike_zone import classify_attack_zone
 import command_config
 from analytics import command_metrics, performance_score, profile_queries
@@ -581,8 +581,7 @@ def pitcher_profile_server(input, output, session, app_state):
                 if f["pitch_type"]:
                     line = compute_pitching_line(game_pitches)
                 else:
-                    extra_runs, extra_outs = get_pitching_extras_for_pitches(db, pid, game_pitches)
-                    line = compute_pitching_line(game_pitches, extra_earned_runs=extra_runs, extra_outs=extra_outs)
+                    line = pitching_line_for(db, pid, game_pitches)
                 sections.append(ui.p(ui.strong("Line")))
                 sections.append(ui_helpers.render_kpi_cards([
                     {"label": "IP", "value": str(line["IP"])},

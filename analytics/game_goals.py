@@ -116,7 +116,7 @@ def value(db, key, pitches, pitch_type_id=None, names=None):
             RapsodoPitch.game_pitch_id.in_(ids), RapsodoPitch.velocity.isnot(None)).all()]
         return round(sum(vs) / len(vs), 1) if vs else None
     names = names or {pt.pitch_type_id: pt.type_name for pt in db.query(PitchType).all()}
-    b = stat_bundle(pitches, names)
+    b = stat_bundle(pitches, names, db)
     if b is None:
         return None
     if key == "p_strike":

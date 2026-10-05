@@ -197,7 +197,7 @@ def team_game_report_server(input, output, session, app_state):
             {"label": "K % / BB %", "value": f"{_p(t['k_pct'])} / {_p(t['bb_pct'])}",
              "delta": f"D2 {lb.pitching('k_pct'):.0f}% / {lb.pitching('bb_pct'):.0f}% · {t['bf']} batters",
              "delta_positive": (t["k_pct"] or 0) - (t["bb_pct"] or 0) >= lb.pitching("k_pct") - lb.pitching("bb_pct")},
-            {"label": "ERA* / WHIP", "value": ("—" if t["era"] is None else f"{t['era']:.2f}") + " / "
+            {"label": "ERA / WHIP", "value": ("—" if t["era"] is None else f"{t['era']:.2f}") + " / "
                                               + ("—" if t["whip"] is None else f"{t['whip']:.2f}"),
              "delta": f"D2 {lb.pitching('era'):.2f} / {lb.pitching('whip'):.2f} · MIAA {lb.pitching('era', 'MIAA'):.2f} / {lb.pitching('whip', 'MIAA'):.2f}",
              "delta_positive": None if t["era"] is None else t["era"] <= lb.pitching("era")},

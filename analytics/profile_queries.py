@@ -399,7 +399,7 @@ def team_pitching_lines_by_player(db, date_from=None, date_to=None, game_scope="
     player_id instead of thrown away, so a caller that needs to know
     WHICH pitcher a line belongs to (pitching_staff_leaderboard_rows)
     doesn't have to re-run this same query a second time."""
-    from game_stats import compute_pitching_line, get_pitching_extras_for_pitches
+    from game_stats import pitching_line_for
     from analytics.performance_score import csw_pct
     pitches = _pitching_staff_query(db, date_from, date_to, game_scope).all()
     by_player = {}
@@ -410,8 +410,7 @@ def team_pitching_lines_by_player(db, date_from=None, date_to=None, game_scope="
         by_player.setdefault(pid, []).append(p)
     lines = {}
     for pid, ps in by_player.items():
-        extra_runs, extra_outs = get_pitching_extras_for_pitches(db, pid, ps)
-        line = compute_pitching_line(ps, extra_earned_runs=extra_runs, extra_outs=extra_outs)
+        line = pitching_line_for(db, pid, ps)
         line["CSW %"] = csw_pct(ps)
         lines[pid] = line
     return lines

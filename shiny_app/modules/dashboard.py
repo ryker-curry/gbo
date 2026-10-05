@@ -80,7 +80,7 @@ from models import (
 )
 from game_stats import (
     get_pitching_pitches, get_batting_pitches, compute_pitching_line, compute_batting_line,
-    get_forced_half_inning_end_runs, get_runner_event_outs,
+    get_forced_half_inning_end_runs, get_runner_event_outs, pitching_line_for, extras_for_pitch_set,
 )
 from models import GameForcedHalfInningEnd
 from models import GamePitch, GameRunnerEvent
@@ -889,19 +889,15 @@ def _pitching_staff_section(db, players, window):
 
     per_pitcher = []
     all_pitches = []
-    total_extra_earned_runs = 0
-    total_extra_outs = 0
     for p in players:
         pitches = _pitching_pitches_for_window(db, p.player_id, window, season, recent_game_ids)
-        extra_earned_runs = _forced_end_runs_for_window(db, p.player_id, window, season, recent_game_ids)
-        extra_outs = _runner_event_outs_for_window(db, p.player_id, window, season, recent_game_ids)
-        if not pitches and not extra_earned_runs and not extra_outs:
+        if not pitches:
             continue
-        line = compute_pitching_line(pitches, extra_earned_runs=extra_earned_runs, extra_outs=extra_outs)
+        # Oct 2026 audit: one shared path for runs/outs adjustments
+        # (runner-event runs, forced-end runs, inherited runners, pickoffs).
+        line = pitching_line_for(db, p.player_id, pitches)
         per_pitcher.append((p, line))
         all_pitches.extend(pitches)
-        total_extra_earned_runs += extra_earned_runs
-        total_extra_outs += extra_outs
 
     per_pitcher.sort(key=lambda row: row[1]["IP (decimal)"] or 0, reverse=True)
 
@@ -913,11 +909,12 @@ def _pitching_staff_section(db, players, window):
         ))
         return ui.div(*sections)
 
-    team_line = compute_pitching_line(all_pitches, extra_earned_runs=total_extra_earned_runs, extra_outs=total_extra_outs)
+    x_er, x_outs, x_ue = extras_for_pitch_set(db, all_pitches)
+    team_line = compute_pitching_line(all_pitches, extra_earned_runs=x_er, extra_outs=x_outs, extra_unearned_runs=x_ue)
     era_key = "ERA"
 
     sections.append(ui_helpers.render_kpi_cards([
-        {"label": "Team ERA*", "value": str(team_line[era_key]) if team_line[era_key] is not None else "—"},
+        {"label": "Team ERA", "value": str(team_line[era_key]) if team_line[era_key] is not None else "—"},
         {"label": "WHIP", "value": str(team_line["WHIP"]) if team_line["WHIP"] is not None else "—"},
         {"label": "K %", "value": f'{team_line["K %"]}%' if team_line["K %"] is not None else "—"},
         {"label": "K/BB", "value": str(team_line["K/BB"]) if team_line["K/BB"] is not None else "—"},
@@ -935,7 +932,7 @@ def _pitching_staff_section(db, players, window):
             {
                 "Pitcher": f"{p.first_name} {p.last_name}",
                 "IP": line["IP"],
-                "ERA*": line[era_key] if line[era_key] is not None else "—",
+                "ERA": line[era_key] if line[era_key] is not None else "—",
                 "WHIP": line["WHIP"] if line["WHIP"] is not None else "—",
                 "K": line["K"], "BB": line["BB"],
                 "K %": line["K %"] if line["K %"] is not None else "—",

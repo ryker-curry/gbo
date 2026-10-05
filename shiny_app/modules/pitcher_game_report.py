@@ -29,7 +29,7 @@ from database import get_session
 from models import Player, Game, GamePitch, RapsodoPitch, User, OpponentPlayer
 from game_stats import (
     get_pitching_pitches, compute_pitching_line, compute_pitch_type_breakdown,
-    get_forced_half_inning_end_runs, get_runner_event_outs, get_batter_hands,
+    get_forced_half_inning_end_runs, get_runner_event_outs, get_batter_hands, pitching_line_for,
 )
 from pitch_location_stats import compute_command_precision, compute_attack_zones
 # Target-radius bands (Precision/Command/Competitive/Major Miss) and the
@@ -891,9 +891,10 @@ def pitcher_game_report_server(input, output, session, app_state):
             # (see models.GameForcedHalfInningEnd) count as this
             # pitcher's earned runs even though they never landed on a
             # GamePitch row -- fold them into Runs Allowed/ERA here too.
-            extra_earned_runs = get_forced_half_inning_end_runs(db, selected_pitcher_id, game_id=selected_game_id)
-            extra_outs = get_runner_event_outs(db, selected_pitcher_id, game_id=selected_game_id)
-            line = compute_pitching_line(pitches, extra_earned_runs=extra_earned_runs, extra_outs=extra_outs)
+            # Oct 2026 audit: one shared path (pitching_line_for) for every
+            # run/out adjustment -- forced-end runs, runner-event runs,
+            # inherited runners, pickoff / caught-stealing outs.
+            line = pitching_line_for(db, selected_pitcher_id, pitches)
             # Sept 2026, Ryker: wants Command Execution % (the graded
             # 0/1/2 distance-from-called-target score, see Command &
             # Execution section / analytics/command_metrics.py) in the

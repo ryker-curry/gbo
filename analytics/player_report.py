@@ -121,13 +121,20 @@ def _pct(a, b):
     return round(a / b * 100, 1) if b else None
 
 
-def stat_bundle(pitches, pitch_types):
-    """Every key number on the sheet, plus each one's sample size."""
+def stat_bundle(pitches, pitch_types, db=None):
+    """Every key number on the sheet, plus each one's sample size.
+    db (Oct 2026 audit): pass it so IP / runs / ERA include pickoff &
+    caught-stealing outs, runner-event and forced-end runs and inherited
+    runners -- the same line Pitcher Profile shows."""
     if not pitches:
         return None
     pitches = sorted(pitches, key=lambda p: (p.game_id, p.pitch_sequence))
     pas = _completed_pas(pitches)
-    h = _compute_header_stats(pitches, pas)
+    extras = None
+    if db is not None:
+        from game_stats import extras_for_pitch_set
+        extras = extras_for_pitch_set(db, pitches)
+    h = _compute_header_stats(pitches, pas, extras)
     fps = _fps_stat(pas)
     sec = _secondary_strike_stat(pitches, pitch_types)
     swings = sum(1 for p in pitches if p.pitch_outcome in SWING_OUTCOMES)
@@ -137,7 +144,7 @@ def stat_bundle(pitches, pitch_types):
     games = len({p.game_id for p in pitches})
     return {
         "games": games, "pitches": h["pitches"], "bf": bf, "ip_display": h["ip_display"], "outs": outs,
-        "hits": h["hits"], "runs": h["runs"], "bb": h["bb"], "hbp": h["hbp"], "ks": h["ks"], "xbh": h["xbh"],
+        "hits": h["hits"], "runs": h["runs"], "er": h["earned_runs"], "bb": h["bb"], "hbp": h["hbp"], "ks": h["ks"], "xbh": h["xbh"],
         "era": h["era"], "whip": h["whip"],
         "strike_pct": h["strike_pct"],
         "fps_pct": fps["fps_pct"], "fps_opportunities": fps["fps_opportunities"],
@@ -461,11 +468,11 @@ def game_report(db, player_id, game_id):
     mine_game = pitcher_pitches(db, player_id, game_id=game_id)
     if not mine_game:
         return None
-    you = stat_bundle(mine_game, names)
+    you = stat_bundle(mine_game, names, db)
     season_pitches = [p for p in pitcher_pitches(db, player_id, season_id=game.season_id) if p.game_id != game_id] \
         if game.season_id is not None else []
-    mine = stat_bundle(season_pitches, names) if season_pitches else None
-    team = stat_bundle(team_pitches(db, game.season_id), names)
+    mine = stat_bundle(season_pitches, names, db) if season_pitches else None
+    team = stat_bundle(team_pitches(db, game.season_id), names, db)
     mix = pitch_mix(db, mine_game, player.throws)
     rows = key_rows(you, mine, team)
     good, bad = takeaways(rows, mix, you["pitches"])
@@ -486,11 +493,11 @@ def season_report(db, player_id, season_id):
     pitches = pitcher_pitches(db, player_id, season_id=season_id)
     if not pitches:
         return None
-    you = stat_bundle(pitches, names)
+    you = stat_bundle(pitches, names, db)
     games = pitcher_games(db, player_id, season_id=season_id)
     last3_ids = {g.game_id for g in games[:3]}
-    last3 = stat_bundle([p for p in pitches if p.game_id in last3_ids], names) if len(games) > 3 else None
-    team = stat_bundle(team_pitches(db, season_id), names)
+    last3 = stat_bundle([p for p in pitches if p.game_id in last3_ids], names, db) if len(games) > 3 else None
+    team = stat_bundle(team_pitches(db, season_id), names, db)
     mix = pitch_mix(db, pitches, player.throws)
     rows = key_rows(you, last3, team)
     good, bad = takeaways(rows, mix, you["pitches"])
@@ -499,7 +506,7 @@ def season_report(db, player_id, season_id):
         by_game[p.game_id].append(p)
     log = []
     for g in games[:6]:
-        b = stat_bundle(by_game[g.game_id], names)
+        b = stat_bundle(by_game[g.game_id], names, db)
         log.append({"game": g, **b})
     season = db.query(Season).filter(Season.season_id == season_id).first() if season_id is not None else None
     return {
@@ -526,11 +533,11 @@ def range_report(db, player_id, game_ids, label):
     pitches = [p for p in pitcher_pitches(db, player_id) if p.game_id in ids]
     if not pitches:
         return None
-    you = stat_bundle(pitches, names)
+    you = stat_bundle(pitches, names, db)
     season_id = next((g.season_id for g in db.query(Game).filter(Game.game_id.in_(ids)).all() if g.season_id), None)
     season_all = pitcher_pitches(db, player_id, season_id=season_id) if season_id is not None else None
-    mine = stat_bundle(season_all, names) if season_all else None
-    team = stat_bundle([p for p in team_pitches(db, None) if p.game_id in ids], names)
+    mine = stat_bundle(season_all, names, db) if season_all else None
+    team = stat_bundle([p for p in team_pitches(db, None) if p.game_id in ids], names, db)
     mix = pitch_mix(db, pitches, player.throws)
     rows = key_rows(you, mine, team)
     good, bad = takeaways(rows, mix, you["pitches"])
@@ -538,7 +545,7 @@ def range_report(db, player_id, game_ids, label):
     by_game = defaultdict(list)
     for p in pitches:
         by_game[p.game_id].append(p)
-    log = [{"game": g, **stat_bundle(by_game[g.game_id], names)} for g in games[:6]]
+    log = [{"game": g, **stat_bundle(by_game[g.game_id], names, db)} for g in games[:6]]
     return {
         "kind": "season", "player": player, "game": None, "season_id": season_id,
         "season_name": label, "you": you, "mine": mine, "team": team, "mine_label": "His season",

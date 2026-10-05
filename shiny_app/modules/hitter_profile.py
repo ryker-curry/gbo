@@ -908,7 +908,7 @@ def hitter_profile_server(input, output, session, app_state):
             return ui_helpers.render_kpi_cards([
                 {"label": "Swing decision %", "value": _fmtp(sd["score"]),
                  "delta": f"{c['Good swing'] + c['Good take']} good of {sd['scored']} graded"},
-                {"label": "Chase %", "value": _fmtp(sd["chase_pct"]), "delta": f"{c['Chase']} chases",
+                {"label": "Chased clear balls", "value": _fmtp(sd["chase_pct"]), "delta": f"{c['Chase']} chases (way off the plate)",
                  "delta_positive": (sd["chase_pct"] or 0) < 25},
                 {"label": "Took a hittable strike", "value": _fmtp(sd["heart_take_pct"]),
                  "delta": f"{c['Taken strike']} taken", "delta_positive": (sd["heart_take_pct"] or 0) < 20},

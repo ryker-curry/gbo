@@ -114,7 +114,7 @@ def _pitching_game(db, player_id, today):
     if not games:
         return None
     g = games[0]
-    line = game_stats.compute_pitching_line(pitcher_pitches(db, player_id, game_id=g.game_id))
+    line = game_stats.pitching_line_for(db, player_id, pitcher_pitches(db, player_id, game_id=g.game_id))
     stats = [("IP", line.get("IP")), ("H", line.get("H Allowed")), ("R", line.get("Runs Allowed")),
              ("BB", line.get("BB")), ("K", line.get("K")), ("Pitches", line.get("Pitches")),
              ("Strike %", line.get("Strike %"))]

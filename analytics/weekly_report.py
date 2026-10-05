@@ -161,9 +161,9 @@ def build(db, player_id, week_start, stuff_models=None):
     game = None
     if this_games:
         game = {
-            "this": player_report.stat_bundle(this_games, names),
-            "last": player_report.stat_bundle(prev_games, names) if prev_games else None,
-            "season": player_report.stat_bundle(season_games, names) if season_games else None,
+            "this": player_report.stat_bundle(this_games, names, db),
+            "last": player_report.stat_bundle(prev_games, names, db) if prev_games else None,
+            "season": player_report.stat_bundle(season_games, names, db) if season_games else None,
         }
 
     # --- arsenal progress ---

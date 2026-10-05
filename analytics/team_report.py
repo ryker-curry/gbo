@@ -159,7 +159,7 @@ def build(db, games, names=None):
 
     # ---- pitching ----
     pp = pitching_pitches(db, game_ids)
-    team_p = stat_bundle(pp, names) if pp else None
+    team_p = stat_bundle(pp, names, db) if pp else None
     by_pitcher = defaultdict(list)
     for p in pp:
         by_pitcher[_pitcher_id(p)].append(p)
@@ -167,7 +167,7 @@ def build(db, games, names=None):
     for pid, ps in by_pitcher.items():
         if pid is None:
             continue
-        b = stat_bundle(ps, names)
+        b = stat_bundle(ps, names, db)
         pl = players.get(pid)
         pitcher_rows.append({"player_id": pid, "name": f"{pl.last_name}, {pl.first_name}" if pl else f"#{pid}",
                              "games": b["games"], "ip": b["ip_display"], "outs": b["outs"], "pitches": b["pitches"],
