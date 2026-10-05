@@ -995,7 +995,14 @@ def hitter_profile_server(input, output, session, app_state):
                 return ui.p("No pitches with a recorded count.", class_="text-muted small")
             types = ct["types"][:6]
             rows = []
-            for r in ct["rows"]:
+            by_count = {r["Count"]: r for r in ct["rows"]}
+            # Oct 2026, Ryker: every count always listed (3-2 "missing" was a
+            # count this hitter hasn't been in yet) -- 0 seen shows as "—".
+            for c in hitter_insights.COUNTS:
+                r = by_count.get(c)
+                if r is None:
+                    rows.append({"Count": c, "Seen": 0, "% of pitches": "—", **{t: "—" for t in types}, "In zone": "—"})
+                    continue
                 row = {"Count": r["Count"], "Seen": r["Seen"], "% of pitches": _fmtp(r["% of pitches"])}
                 for t in types:
                     row[t] = _fmtp(r["types"].get(t)) if r["types"].get(t) else "—"
@@ -1013,8 +1020,10 @@ def hitter_profile_server(input, output, session, app_state):
             _pid, pitches = _current_pitches(db)
             req(pitches)
             ct = hitter_insights.count_table(db, pitches, _atk_hand())
-            mix = [{"Count": r["Count"], "Pitches": r["Seen"], **r["families"]} for r in ct["rows"]]
-            req(mix)
+            by_count = {r["Count"]: r for r in ct["rows"]}
+            req(by_count)
+            mix = [{"Count": c, "Pitches": by_count[c]["Seen"], **by_count[c]["families"]} if c in by_count
+                   else {"Count": c, "Pitches": 0} for c in hitter_insights.COUNTS]
             return hic.count_mix_chart(mix)
         finally:
             db.close()
