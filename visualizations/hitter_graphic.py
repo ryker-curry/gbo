@@ -103,16 +103,41 @@ def _image_data_uri(filename):
     return _DATA_URI_CACHE[filename]
 
 
-def hitter_images(center_x, facing="right", height_ft=4.2, ground_y=0.0):
+# Oct 2026, Ryker: "it looks like hitters in the left handed batters box
+# are right handed because their hands look to be in front of their
+# body ... need separate ones, a left handed graphic and a right handed
+# graphic". Every hand-specific chart here is drawn from the CATCHER's
+# view, so the hitter should be seen from behind (back to us, hands up
+# by the back shoulder) -- the front-view photo above is only right for
+# the decorative pitcher-view pair (command_charts). Source: Ryker's
+# behind-the-plate photo of a right-handed hitter, cut out (rembg),
+# smoothed and recolored to match; the lefty file is its mirror, which
+# for a view from directly behind IS a left-handed stance.
+_BACK_VIEW_BY_HAND = {"R": "hitter_rhb_back.png", "L": "hitter_lhb_back.png"}
+
+
+def _aspect(filename):
+    import struct
+    head = (_ASSETS_DIR / filename).read_bytes()[16:24]
+    w, h = struct.unpack(">II", head)       # PNG IHDR width/height
+    return w / h
+
+
+def hitter_images(center_x, facing="right", height_ft=4.2, ground_y=0.0, batter_hand=None):
     """One generic hitter image, anchored by its feet. facing="right"
     plants the hitter with the bat swinging up toward +x (the RIGHT-
     side hitter); facing="left" uses the pre-mirrored image (the LEFT-
     side hitter) so the bat swings up toward -x instead -- both bats
     point OUTWARD, away from the plate/zone in the middle. Returns a
     single-item list of a dict for fig.add_layout_image(**d)."""
-    width_ft = height_ft * _IMAGE_ASPECT
+    if batter_hand in _BACK_VIEW_BY_HAND:        # catcher-view chart: hitter seen from behind
+        filename = _BACK_VIEW_BY_HAND[batter_hand]
+        width_ft = height_ft * _aspect(filename)
+    else:
+        filename = _SOURCE_FILE_BY_FACING[facing]
+        width_ft = height_ft * _IMAGE_ASPECT
     return [dict(
-        source=_image_data_uri(_SOURCE_FILE_BY_FACING[facing]),
+        source=_image_data_uri(filename),
         xref="x", yref="y",
         x=center_x, y=ground_y,
         xanchor="center", yanchor="bottom",

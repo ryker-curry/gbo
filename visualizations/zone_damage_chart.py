@@ -236,7 +236,7 @@ def _draw_panel(fig, pieces, *, row, col, showscale, zmin, zmax, hand=None):
         # determines it.
         center_x = -HITTER_CENTER_X if hand == "R" else HITTER_CENTER_X
         facing = "right" if center_x > 0 else "left"
-        for img in hitter_images(center_x=center_x, facing=facing, height_ft=HITTER_HEIGHT_FT, ground_y=Z_MIN - HITTER_FEET_BACK_FT):
+        for img in hitter_images(center_x=center_x, facing=facing, height_ft=HITTER_HEIGHT_FT, ground_y=Z_MIN - HITTER_FEET_BACK_FT, batter_hand=hand):
             fig.add_layout_image(**img, row=row, col=col)
     plate = {k: v for k, v in home_plate_shape(half_width_ft=ZONE_HALF_WIDTH, ground_y=Z_MIN, view="catcher").items()
              if k not in ("xref", "yref")}
