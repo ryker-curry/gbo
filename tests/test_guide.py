@@ -55,3 +55,13 @@ def test_removed_pages_not_in_sidebar():
     for r in ROLES + [("Administrator", None, False), ("Sports Scientist", None, False)]:
         keys = {p.key for s in nav.build_nav_sections(*r) for p in s.pages}
         assert "hitter_tracking" not in keys and "command_tracker" not in keys
+
+
+def test_leaderboards_by_side():
+    def keys(*r):
+        return {p.key for s in nav.build_nav_sections(*r) for p in s.pages}
+    pitcher, hitter = keys("Player", None, True), keys("Player", None, False)
+    assert "pitching_leaderboard" in pitcher and "hitting_leaderboard" not in pitcher
+    assert "hitting_leaderboard" in hitter and "pitching_leaderboard" not in hitter
+    for r in [("Head Coach", None, False), ("Coach", "Pitching", False), ("Coach", "Hitting", False)]:
+        assert {"pitching_leaderboard", "hitting_leaderboard"} <= keys(*r)
