@@ -28,7 +28,7 @@ def test_player_today_pitcher_and_hitter(db):
     assert p["arm"]["status"] in ("Available", "Limited", "Down", "Hold")
     assert p["last_game"]["stats"][0][0] == "IP"
     html = str(today_box.player_box(p, today_box.allowed_titles("Player", None, True)))
-    assert "My arm today" in html and "My Meeting Report" in html
+    assert "My arm today" in html and "Pitcher Report" in html
     h = today.player_today(db, 11, today=DAY)
     assert h["arm"] is None and h["last_game"]["stats"][0][0] == "H-AB"
     assert "My arm" not in str(today_box.player_box(h, today_box.allowed_titles("Player", None, False)))

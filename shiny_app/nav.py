@@ -119,10 +119,10 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             NavPage("pitcher_game_report", "Pitcher Game Report", "file-text"),
             # Oct 2026, Ryker: one-page, printable report to go through
             # with a pitcher in a meeting (game or season).
-            NavPage("pitcher_meeting_report", "Pitcher Meeting Report", "printer"),
+            NavPage("pitcher_meeting_report", "Pitcher Report", "printer"),
             NavPage("hitter_game_report", "Hitter Game Report", "trophy"),
             # Oct 2026: one-page printable report for hitters (game or season).
-            NavPage("hitter_meeting_report", "Hitter Meeting Report", "printer"),
+            NavPage("hitter_meeting_report", "Hitter Report", "printer"),
             # Filterable per-player deep dive (Aug 2026, Stat Lab plan) --
             # Stuff+/Location+/Pitching+ grading, physical charts, Command
             # Target Zones, all filterable by date range/pitch type/
@@ -191,13 +191,13 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             # pickers to this player's own outings instead of showing a
             # roster-wide picker.
             my_dev_pages.append(NavPage("pitcher_game_report", "My Game Report", "file-text"))
-            my_dev_pages.append(NavPage("pitcher_meeting_report", "My Meeting Report", "printer"))
+            my_dev_pages.append(NavPage("pitcher_meeting_report", "Pitcher Report", "printer"))  # Oct 2026, Ryker: renamed from Meeting Report, no "My"
             my_dev_pages.append(NavPage("weekly_report", "My Weekly Report", "calendar-week"))
         else:
             my_dev_pages.append(NavPage("player_hitting", "My Hitting", "trophy"))
             my_dev_pages.append(NavPage("hitter_profile", "My Hitter Profile", "graph-up-arrow"))
             my_dev_pages.append(NavPage("hitter_game_report", "My Game Report", "file-text"))
-            my_dev_pages.append(NavPage("hitter_meeting_report", "My Meeting Report", "printer"))
+            my_dev_pages.append(NavPage("hitter_meeting_report", "Hitter Report", "printer"))
             my_dev_pages.append(NavPage("weekly_report", "My Weekly Report", "calendar-week"))
             # Oct 2026: published advance scouting reports, read-only.
             my_dev_pages.append(NavPage("advance_scouting", "Scouting Reports", "binoculars"))
