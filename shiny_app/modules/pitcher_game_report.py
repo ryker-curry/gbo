@@ -44,6 +44,8 @@ from pitch_location_stats import compute_command_precision, compute_attack_zones
 # they always have been -- this is a new, additional section, not a
 # replacement.
 from analytics import command_metrics, profile_queries, approach_angles, best_zone
+import velo_fade_display
+from analytics import velo_fade
 from analytics.pitcher_game_report import compute_staff_game_totals, FPS_GOAL_PCT, SECONDARY_STRIKE_GOAL_PCT
 from analytics.pitch_grading import stuff_plus, arsenal_summary, location_plus, result_value, MIN_BASELINE_PITCHES
 # Sept 2026, Ryker: "add a results section to game report as well"
@@ -1880,6 +1882,10 @@ def pitcher_game_report_server(input, output, session, app_state):
                 # clipping). Full width gives every bar's label room.
                 output_widget("rapsodo_pitch_frequency_chart"),
                 ui.output_ui("rapsodo_pitch_shape_table"),
+                ui.hr(),
+                velo_fade_display.outing_block(
+                    velo_fade.fade(velo_fade.points_from_rapsodo(pitches, pitch_type_label)),
+                    title="Velo fade (fastball velo through the outing)"),
             )
         finally:
             db.close()

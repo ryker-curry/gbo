@@ -113,9 +113,11 @@ from visualizations.chart_theme import apply_gbo_theme
 import glossary_content
 from pitch_type_config import get_pitch_color, FASTBALL_TYPES
 from analytics import fastball_shape, pitch_class
+import velo_fade_display
+from analytics import velo_fade
 from services.pitch_type_switch import apply_switches, undo_switches
 from models import PitchTypeChange, ArsenalTarget
-from analytics import approach_angles, best_zone, arsenal_plan, stuff_breakdown, trends
+from analytics import approach_angles, best_zone, arsenal_plan, stuff_breakdown, trends, ivb_expected, slider_fit, sequencing
 from visualizations import trend_charts
 from visualizations.stuff_breakdown_chart import trait_impact_figure, strip_figure, outcome_figure, ordinal, fmt_value
 
@@ -269,6 +271,7 @@ def pitcher_profile_ui():
         ui.output_ui("pp_arsenal_section"),
         ui.output_ui("pp_trends_section"),
         ui.output_ui("pp_count_leverage_section"),
+        ui.output_ui("pp_sequencing_section"),
         ui.output_ui("pp_fastball_shape_section"),
         ui.output_ui("pp_pitch_type_check_section"),
         ui.output_ui("pp_arsenal_plan_section"),
@@ -468,6 +471,7 @@ def pitcher_profile_server(input, output, session, app_state):
                 "command": "Command & Execution",
                 "arsenal": "Arsenal",
                 "count_leverage": "Count Leverage",
+                "sequencing": "Sequencing",
                 "arsenal_plan": "Arsenal Plan",
                 "trends": "Trends",
             }
@@ -815,6 +819,44 @@ def pitcher_profile_server(input, output, session, app_state):
             output_widget("pp_approach_chart"),
         ]
 
+    # -------------------------------------------------------------------
+    # IVB over expected (Oct 2026, from Ryker's article batch: Paradigm's
+    # VAA piece, O'Brien's FB deception index, SABRLions' sliders). Ride
+    # minus what his arm slot predicts -- analytics/ivb_expected.py.
+    # -------------------------------------------------------------------
+    def _ivb_over_children(db, player, rapsodo_pitches):
+        try:
+            model = ivb_expected.get_model(db)
+            scored = ivb_expected.score_pitches(rapsodo_pitches, player, model)
+        except Exception:
+            return []
+        rows = ivb_expected.summary_by_type(scored, FASTBALL_TYPES)
+        title = ui.p(ui.strong("IVB Over Expected (ride vs. his arm slot)"))
+        if not rows:
+            reason = ("Set his height on the Players page -- the arm angle needs it."
+                      if player.height_in is None else "Not enough Rapsodo readings yet.")
+            return [ui.hr(), title, ui.p(reason, class_="text-muted small")]
+        fb = model.get("4-Seam Fastball")
+        slope = (f" On our staff a 4-seam gains about {fb['slope']:.2f}\" of ride per degree of arm slot."
+                 if fb and fb["slope"] > 0 else "")
+        table = [{
+            "Pitch Type": r["label"] + (" *" if r["rough"] else ""), "#": r["n"],
+            "Arm angle": f"{r['arm']:.0f}°", "IVB": f"{r['ivb']:.1f}\"", "Expected IVB": f"{r['exp']:.1f}\"",
+            "Over expected": f"{r['over']:+.1f}\"", "Read": r["read"],
+        } for r in rows]
+        return [
+            ui.hr(), title,
+            ui.p("Ride (IVB) mostly follows arm slot: higher slots get more ride, lower slots more run. This "
+                 "takes out what his slot predicts, so what's left is what's unusual about the pitch -- the part "
+                 "hitters don't expect from that arm. Fastballs: + = carries more than his slot (plays up in the "
+                 "zone), − = sinks/runs more. Breaking balls: + = more carry, − = more depth." + slope +
+                 " Expected values come from lines fit on all of our Rapsodo readings, so this is vs. our staff, "
+                 "not a league. * = rough (too few team readings of that type, pooled line used). "
+                 f"Within ±{ivb_expected.TYPICAL_IN:.1f}\" reads as typical.",
+                 class_="text-muted small"),
+            ui_helpers.render_dict_table(table),
+        ]
+
     @render_plotly
     def pp_approach_chart():
         if not app_state.is_authenticated():
@@ -1006,6 +1048,7 @@ def pitcher_profile_server(input, output, session, app_state):
                 ui_helpers.render_dict_table(table_rows),
                 *trajectory_children,
                 *_approach_children(db, player, rapsodo_pitches),
+                *_ivb_over_children(db, player, rapsodo_pitches),
                 ui.hr(),
                 *graphic_children,
                 ui.hr(),
@@ -1949,6 +1992,8 @@ def pitcher_profile_server(input, output, session, app_state):
             output_widget("pp_trend_metrics"),
             ui.p(ui.strong("Velo and Stuff+ by pitch (Rapsodo: bullpens + games)"), style="margin:14px 0 0;"),
             output_widget("pp_trend_velo"),
+            ui.hr(),
+            ui.output_ui("pp_trend_fade"),
         )
 
     @render_plotly
@@ -1981,6 +2026,23 @@ def pitcher_profile_server(input, output, session, app_state):
             vs = trends.velo_stuff(db, pid, f["date_from"], f["date_to"], by)
             req(vs)
             return trend_charts.velo_stuff_figure(vs)
+        finally:
+            db.close()
+
+    @render.ui
+    def pp_trend_fade():
+        """Velo fade by outing (Oct 2026, analytics/velo_fade.py)."""
+        req(_trend_gate())
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            req(pid)
+            raps = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+                game_scope=f["game_scope"], game_id=f["game_id"],
+            )
+            return velo_fade_display.season_block(velo_fade.by_outing(raps or [], pitch_type_label))
         finally:
             db.close()
 
@@ -2162,6 +2224,90 @@ def pitcher_profile_server(input, output, session, app_state):
     # same nesting reason noted above, so there are three chart functions
     # below (_all / _rhh / _lhh) instead of one.
     # -------------------------------------------------------------------
+
+    # -------------------------------------------------------------------
+    # Sequencing (Oct 2026, from Paradigm's "Sequencing vs Tunneling" --
+    # Ryker picked "Pitch-pair sequencing"). What follows what, and how
+    # the second pitch did. Math in analytics/sequencing.py.
+    # -------------------------------------------------------------------
+    def _seq_gate():
+        if not app_state.is_authenticated():
+            return False
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return False
+        return "pp_view" in input and input.pp_view() == "sequencing"
+
+    @render.ui
+    def pp_sequencing_section():
+        if not _seq_gate():
+            return None
+        return ui.div(
+            ui.p(ui.strong("Sequencing: what follows what"), style="margin-bottom:0;"),
+            ui.p("Each row is two back-to-back pitches to the same hitter (first → second), graded on what the SECOND "
+                 "pitch did. Share = of everything he threw right after the first pitch, how often it was this one. "
+                 "CSW % = called strikes + whiffs; Whiff % = of swings; Chase % = swings at located pitches outside "
+                 f"the zone. Team = the same pair across our whole staff. Gray rows have fewer than {sequencing.MIN_N} "
+                 "-- too few to trust yet. Charted games only; uses the date range above (the pitch-type filter is "
+                 "ignored here so pairs stay whole).", class_="text-muted small"),
+            ui.layout_columns(
+                ui.input_radio_buttons("pp_seq_side", "Hitters", {"all": "All", "R": "vs RHH", "L": "vs LHH"},
+                                       selected="all", inline=True),
+                ui.input_radio_buttons("pp_seq_count", "Count before the 2nd pitch", sequencing.COUNT_FILTERS,
+                                       selected="all", inline=True),
+                col_widths=[4, 8],
+            ),
+            ui.output_ui("pp_seq_table"),
+        )
+
+    @render.ui
+    def pp_seq_table():
+        if not _seq_gate():
+            return None
+        req("pp_seq_side" in input and "pp_seq_count" in input)
+        side, count = input.pp_seq_side(), input.pp_seq_count()
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            mine = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+                game_scope=f["game_scope"], game_id=f["game_id"],
+            ) or []
+            team = trends.team_pitches_in_range(db, f["date_from"], f["date_to"], pitching=True)
+            hands = get_batter_hands(db, list(mine) + list(team))
+        finally:
+            db.close()
+        res = sequencing.table(mine, hands, side, count)
+        if not res["rows"]:
+            return ui_helpers.empty_state("No back-to-back pitches in this range and filter yet.")
+        team_rows = sequencing.team_lookup(team, hands, side, count)
+
+        def pct(v):
+            return f"{v}%" if v is not None else "—"
+        rows = []
+        for r in res["rows"]:
+            t = team_rows.get((r["first"], r["second"]))
+            rows.append({
+                "Pair": r["label"], "Times": r["n"], "Share": pct(r["share"]),
+                "Strike %": pct(r["strike"]), "CSW %": pct(r["csw"]), "Whiff %": pct(r["whiff"]),
+                "Chase %": pct(r["chase"]), "In play (hits)": f"{r['in_play']} ({r['hits']})",
+                "Team CSW %": pct(t["csw"]) if t else "—",
+            })
+        table_html = ui_helpers.render_dict_table(rows)
+        # gray out thin rows (render_dict_table has no per-row class hook)
+        thin = [i for i, r in enumerate(res["rows"]) if not r["reliable"]]
+        style = "".join(f"#{session.ns('pp_seq_table')} tbody tr:nth-child({i + 1}){{opacity:.5}}" for i in thin)
+        notes = sequencing.takeaways(res["rows"])
+        return ui.div(
+            ui.tags.style(style) if style else None,
+            ui.p(f"{res['total']} pairs. " + " · ".join(sorted({f"{sequencing.short(x)} = {x}" for r in res["rows"] for x in (r["first"], r["second"])})),
+                 class_="text-muted small", style="margin:0 0 4px;"),
+            *[ui.p(ui.strong(n), class_="small", style="margin:0 0 4px;") for n in notes],
+            table_html,
+        )
 
     @render.ui
     def pp_count_leverage_section():
@@ -3018,6 +3164,58 @@ def pitcher_profile_server(input, output, session, app_state):
         plan = arsenal_plan.build_plan(raps, player.throws or "R", arm, rel_h, overrides=overrides, label_of=pitch_type_label)
         return player, plan, raps
 
+    def _slider_fit_card(db, player, plan, raps):
+        """Slider type + fit (Oct 2026, analytics/slider_fit.py)."""
+        try:
+            model = ivb_expected.get_model(db)
+            scored = ivb_expected.score_pitches(raps, player, model)
+            overs = {lab: ivb_expected.over_for_type(scored, lab) for lab in {r["label"] for r in scored}}
+            fit = slider_fit.build(plan, raps, pitch_type_label, player.throws or "R", overs)
+        except Exception:
+            return None
+        if fit is None:
+            return None
+        names = {"gyro": "a hard gyro slider", "sweeper": "a sweeper", "either": "either a gyro slider or a sweeper"}
+        if fit["se"] is None:
+            hint = ui.p(f"Not enough fastball spin-efficiency readings yet ({fit['n_se']} of 5) for the fit hint.",
+                        class_="text-muted small")
+        else:
+            lean_txt = {"pronator": "leans pronator", "supinator": "leans supinator",
+                        "neutral": "sits in between"}[fit["lean"]]
+            line = (f"Fastball spin efficiency {fit['se']:.0f}% -- {lean_txt}, which usually suits "
+                    f"{names[fit['suggested']]}. His arm slot / fastball shape points to {names[fit['slot_suggested']]}.")
+            if fit["agree"] is True:
+                line += " Both agree."
+            elif fit["agree"] is False:
+                line += " These disagree -- worth trying both grips in a bullpen and letting the Rapsodo shape decide."
+            hint = ui.p(line, class_="small")
+        items = []
+        for r in fit["rows"]:
+            c = r["cur"]
+            over = f" · {r['ivb_over']:+.1f}\" ride vs. his slot" if r["ivb_over"] is not None else ""
+            v = f"{c['velo']:.1f} mph · " if c.get("velo") is not None else ""
+            items.append(ui.div(
+                ui.strong(f"{r['label']}: ", style=f"color:{get_pitch_color(r['label'])};"),
+                ui.strong(r["type_name"]),
+                ui.div(f"{v}{c['ivb']:.1f}\" ride · {-c['run']:.1f}\" glove-side{over}", class_="small"),
+                *[ui.div(n, class_="small text-muted") for n in r["notes"]],
+                style="margin-bottom:8px;",
+            ))
+        if not items:
+            items = [ui.p("No slider, sweeper or curveball with 5+ readings in this range.", class_="text-muted small")]
+        return ui_helpers.card(
+            hint, *items,
+            ui.p(f"Types by shape: gyro = within {slider_fit.GYRO_RUN:.0f}\" side to side and "
+                 f"{slider_fit.CURVE_IVB:.0f} to +{slider_fit.GYRO_IVB[1]:.0f}\" ride; traditional slider = 5-10\" "
+                 "glove-side; sweeper = "
+                 f"{slider_fit.SWEEP_IN:.0f}\"+ glove-side; carry sweeper = a sweeper with {slider_fit.CARRY_IN:.0f}\"+ "
+                 f"ride over expected; curveball = {slider_fit.CURVE_IVB:.0f}\" ride or less (slurve if it also sweeps 10\"+). Fit hint: fastball spin "
+                 f"efficiency {slider_fit.PRONATOR_SE:.0f}%+ leans pronator (gyro), {slider_fit.SUPINATOR_SE:.0f}% or "
+                 "less leans supinator (sweeper) -- a rule of thumb from public pitch-design work, not a measurement "
+                 "of his forearm.", class_="text-muted small", style="margin:4px 0 0;"),
+            title="Slider type & fit",
+        )
+
     @render.ui
     def pp_arsenal_plan_section():
         if not app_state.is_authenticated():
@@ -3090,6 +3288,7 @@ def pitcher_profile_server(input, output, session, app_state):
 
             children = head + [summary,
                 ui.layout_columns(keep_card, tune_card, add_card, col_widths=[4, 4, 4]),
+                _slider_fit_card(db, player, plan, raps),
                 output_widget("pp_ap_movement"),
                 ui.p("Progress: how far each pitch's shape was from its target in each session (all readings that day).",
                      class_="text-muted small mt-2"),
