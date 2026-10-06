@@ -2574,6 +2574,15 @@ def pitcher_profile_server(input, output, session, app_state):
         if not view_pitches:
             return None
         return ui.div(
+            # Oct 2026 (Ryker): Zone Execution % -- called cell + 3 in cushion.
+            ui.p(ui.strong("Zone Execution"), "  ", ui_helpers.how_to_link("zone_execution")),
+            ui.p(
+                "A pitch hits its spot if it lands in the box the catcher called, or within 3 inches of it. Calls "
+                "off the plate (the outside boxes) count anywhere off the plate on that side.",
+                class_="text-muted small",
+            ),
+            ui.output_ui("pp_zone_exec"),
+            ui.hr(),
             ui.p(ui.strong("Command Target Zones")),
             ui.p(
                 "Same Precision/Command/Competitive target-radius bands and concentric-ring chart Command "
@@ -2623,6 +2632,61 @@ def pitcher_profile_server(input, output, session, app_state):
             ),
             ui.output_ui("pp_targeting_plan_table"),
             output_widget("pp_targeting_plan_chart"),
+        )
+
+    @render.ui
+    def pp_zone_exec():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        from analytics import zone_execution as ze
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            player = db.query(Player).filter(Player.player_id == pid).first()
+            f = _current_filters()
+            pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
+                game_scope=f["game_scope"], game_id=f["game_id"])
+            rep = ze.breakdown(pitches, player.throws if player else None)
+        finally:
+            db.close()
+        if rep is None:
+            return ui.p("No pitches with both a called spot and a charted location in this window.",
+                        class_="text-muted small")
+        o, m = rep["overall"], rep["miss"]
+        cards = [
+            {"label": "Zone Execution %", "value": f"{o['pct']:.0f}%" if o["pct"] is not None else "—",
+             "delta": f"{o['hits']} of {o['n']} hit their spot"},
+            {"label": "Missed over the middle", "value": f"{m['over_middle']:.0f}%" if m["over_middle"] is not None else "—",
+             "delta": "of his misses -- the ones that get hit", "delta_positive": (m["over_middle"] or 0) < 20},
+            {"label": "Miss lean", "value": (m["lean"] or "No clear lean").capitalize(),
+             "delta": f"from {m['n']} misses"},
+        ]
+
+        def _rows(items):
+            return [{"": r["label"], "Zone Exec %": f"{r['pct']:.0f}%" if r["pct"] is not None else "—",
+                     "Hit": r["hits"], "Pitches": r["n"]} for r in items]
+        miss_rows = [{"Missed": k, "% of misses": f"{m[key]:.0f}%" if m[key] is not None else "—"}
+                     for k, key in (("Up", "up"), ("Down", "down"), ("Arm side", "arm"), ("Glove side", "glove"),
+                                    ("Over the middle", "over_middle"))]
+        return ui.div(
+            ui_helpers.render_kpi_cards(cards),
+            ui.layout_columns(
+                ui_helpers.card(ui_helpers.render_dict_table(_rows(rep["by_type"])), title="By pitch"),
+                ui_helpers.card(ui_helpers.render_dict_table(_rows(rep["by_count"])), title="By count"),
+                ui_helpers.card(ui_helpers.render_dict_table(miss_rows),
+                                ui.p("A miss can be both up and arm side, so these don't add to 100%.",
+                                     class_="text-muted small"), title="When he misses"),
+                col_widths=[4, 4, 4],
+            ),
         )
 
     @render.ui

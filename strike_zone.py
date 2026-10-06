@@ -517,3 +517,33 @@ def render_zone_selector(key, marker_x=None, marker_z=None):
             pt = points[0]
             return round(pt["x"], 3), round(pt["y"], 3)
     return None, None
+
+
+# ---------------------------------------------------------------------------
+# Zone Execution / Hit-the-spot -- Oct 2026 (Ryker approved). A pitch HIT
+# ITS SPOT if it landed in the called cell (call_cell of its intended
+# location) or within HIT_SPOT_CUSHION_IN inches of that cell's edge.
+# Same calling system as Command+ / Command Execution %, and off-plate calls
+# (zone 1 / 5) count anywhere off the plate (see _zone_horizontal_offset_ft).
+# Replaces the old 1-9 grid match, which clamped anything outside the zone
+# to the nearest edge box -- a third of its "hits" (54 of 171 on the fall
+# data) had really missed the spot by 6+ inches.
+# ---------------------------------------------------------------------------
+HIT_SPOT_CUSHION_IN = 3.0
+
+
+def hit_spot(intended_x, intended_z, actual_x, actual_z, cushion_in=HIT_SPOT_CUSHION_IN):
+    """True / False, or None when the called spot or the actual location
+    isn't recorded."""
+    if None in (intended_x, intended_z, actual_x, actual_z):
+        return None
+    level, zone = call_cell(float(intended_x), float(intended_z))
+    d = distance_from_cell_in(level, zone, float(actual_x), float(actual_z))
+    if d is None:
+        return None
+    return d <= cushion_in
+
+
+def pitch_hit_spot(p):
+    """hit_spot() for a GamePitch (intended_plate_x/z vs actual_plate_x/z)."""
+    return hit_spot(p.intended_plate_x, p.intended_plate_z, p.actual_plate_x, p.actual_plate_z)

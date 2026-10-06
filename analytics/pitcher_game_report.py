@@ -345,9 +345,11 @@ def _compute_execution(pitches):
     location. Only pitches where BOTH are set count toward the
     denominator -- a not-yet-reviewed pitch is excluded, not scored as
     a miss (see module docstring)."""
-    reviewed = [p for p in pitches if p.intended_zone is not None and p.pitch_zone is not None]
-    hits = sum(1 for p in reviewed if p.intended_zone == p.pitch_zone)
-    return hits, len(reviewed)
+    # Oct 2026: same definition as game_stats' Zone Execution % --
+    # strike_zone.pitch_hit_spot (called cell + 3 in cushion).
+    from strike_zone import pitch_hit_spot
+    flags = [f for f in (pitch_hit_spot(p) for p in pitches) if f is not None]
+    return sum(1 for f in flags if f), len(flags)
 
 
 def _compute_woba(completed_pas, ab, bb, hbp):
