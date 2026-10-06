@@ -149,9 +149,10 @@ def at_bat_pitch_locations_chart(pa_pitches, batter_hand=None, title=None, zoom=
         )
 
     if batter_hand in ("R", "L"):
-        center_x = -HITTER_CENTER_X if batter_hand == "R" else HITTER_CENTER_X
+        cx = 1.75 if zoom else HITTER_CENTER_X     # a touch closer in when zoomed so the whole hitter fits
+        center_x = -cx if batter_hand == "R" else cx
         facing = "right" if center_x > 0 else "left"
-        for img in hitter_images(center_x=center_x, facing=facing, height_ft=HITTER_HEIGHT_FT, ground_y=-0.5):
+        for img in hitter_images(center_x=center_x, facing=facing, height_ft=HITTER_HEIGHT_FT, ground_y=-0.5, batter_hand=batter_hand):
             fig.add_layout_image(**img)
     fig.add_shape(**home_plate_shape(half_width_ft=ZONE_HALF_WIDTH, view="catcher"))
 
@@ -162,9 +163,9 @@ def at_bat_pitch_locations_chart(pa_pitches, batter_hand=None, title=None, zoom=
         if show_intended:
             xs += [abs(float(p.intended_plate_x)) for p in located if p.intended_plate_x is not None]
             zs += [float(p.intended_plate_z) for p in located if p.intended_plate_z is not None]
-        x_ext = max([1.9] + [x + 0.35 for x in xs])
+        x_ext = max([2.7] + [x + 0.35 for x in xs])
         y_lo = min([-0.35] + [z - 0.35 for z in zs])
-        y_hi = max([4.2] + [z + 0.35 for z in zs])
+        y_hi = max([6.0] + [z + 0.35 for z in zs])
     apply_gbo_theme(
         fig, title=title or "Pitch Locations", x_title="Plate Side (ft)", y_title="Plate Height (ft)", height=420,
         xaxis=dict(range=[-x_ext, x_ext], gridcolor=GRID_GRAY, zeroline=False, scaleanchor="y", scaleratio=1),

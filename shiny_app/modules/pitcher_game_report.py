@@ -497,7 +497,7 @@ def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color, ba
         # at it. Confirmed by rendering a few offsets and having Ryker
         # pick -- shifting the batter down (not raising the plate,
         # which barely moved the needle at this scale) closes the gap.
-        for img in hitter_images(center_x=center_x, facing=facing, height_ft=command_charts.HITTER_HEIGHT_FT, ground_y=-0.5):
+        for img in hitter_images(center_x=center_x, facing=facing, height_ft=command_charts.HITTER_HEIGHT_FT, ground_y=-0.5, batter_hand=batter_hand):
             fig.add_layout_image(**img)
 
     fig.add_shape(**home_plate_shape(half_width_ft=strike_zone.ZONE_HALF_WIDTH, ground_y=0.0, view="catcher"))
