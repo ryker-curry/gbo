@@ -75,6 +75,7 @@ STAT_META = [
     ("BB%+", "BB%+", True, 0),
     ("K-BB%+", "K-BB%+", True, 0),
     ("WHIP", "WHIP", False, 2),
+    ("TBIP", "TBIP", False, 2),   # Oct 2026: bases allowed per inning, lower is better
     ("FIP", "FIP", False, 2),
     ("K/9", "K/9", True, 2),
     ("BB/9", "BB/9", False, 2),
@@ -103,7 +104,7 @@ STAT_LABELS = {key: label for key, label, *_rest in STAT_META}
 STAT_HIGHER_BETTER = {key: hib for key, _label, hib, _dec in STAT_META}
 STAT_DECIMALS = {key: dec for key, _label, _hib, dec in STAT_META}
 
-DEFAULT_COLUMNS = ["ERA", "ERA+", "WHIP", "K/9", "BB/9", "K %", "FIP", "K-BB%+", "Command+", "Performance"]
+DEFAULT_COLUMNS = ["ERA", "ERA+", "WHIP", "TBIP", "K/9", "BB/9", "K %", "FIP", "K-BB%+", "Command+", "Performance"]
 DEFAULT_SORT = "ERA"
 
 

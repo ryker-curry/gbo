@@ -255,6 +255,10 @@ def _compute_header_stats(all_pitches, completed_pas, extras=None):
     execution_hits, execution_total = _compute_execution(all_pitches)
 
     whip = round((bb + hits) / ip_decimal, 2) if ip_decimal else None
+    # TBIP (Oct 2026): bases handed out at the plate per inning -- see game_stats.compute_pitching_line.
+    _bw = {"BB": 1, "HBP": 1, "1B": 1, "2B": 2, "3B": 3, "HR": 4}
+    bases = sum(_bw.get(pa[-1].ab_outcome, 0) for pa in completed_pas)
+    tbip = round(bases / ip_decimal, 2) if ip_decimal else None
     k_bb = round(ks / bb, 2) if bb else None
     k_pct = round(ks / bf * 100, 1) if bf else None
     era = round(earned * 9 / ip_decimal, 2) if ip_decimal else None  # Oct 2026: real earned runs (was all runs)
@@ -269,7 +273,7 @@ def _compute_header_stats(all_pitches, completed_pas, extras=None):
         "ip_display": ip_display, "ip_decimal": ip_decimal,
         "ab": ab, "bf": bf, "pitches_per_bf": round(total_pitches / bf, 1) if bf else None,
         "runs": runs, "earned_runs": earned, "earned_runs_approx": earned,
-        "hits": hits, "xbh": xbh, "bb": bb, "hbp": hbp, "whip": whip, "ks": ks, "k_bb": k_bb, "k_pct": k_pct,
+        "hits": hits, "xbh": xbh, "bb": bb, "hbp": hbp, "whip": whip, "bases": bases, "tbip": tbip, "ks": ks, "k_bb": k_bb, "k_pct": k_pct,
         "leadoff_pas": len(leadoff_pas), "leadoff_outs": leadoff_outs,
         "leadoff_out_pct": round(leadoff_outs / len(leadoff_pas) * 100, 1) if leadoff_pas else None,
         "leadoff_bb": leadoff_bb, "two_out_bb": two_out_bb,

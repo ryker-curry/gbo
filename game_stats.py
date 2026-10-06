@@ -1151,6 +1151,13 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0, extra_unea
         "Pitches/Inning": round(len(pitches) / ip_decimal, 1) if ip_decimal else None,
         "AB": ab, "Hits": hits_allowed, "HBP": hbp, "XBH": xbh_allowed,
         "WHIP": round((bb + hits_allowed) / ip_decimal, 2) if ip_decimal else None,
+        # Oct 2026, Ryker: TBIP (SABR Tooth Tigers, "One simple pitching
+        # statistic can predict runs allowed in college baseball") -- every
+        # base handed out at the plate per inning: BB + HBP + 1B + 2x2B +
+        # 3x3B + 4xHR. In D1 each base ~ 0.51 runs; explained 94% of team
+        # runs/inning vs 77% for FIP. Lower is better.
+        "Bases Allowed": bb + hbp + singles + 2 * doubles + 3 * triples + 4 * hr_allowed,
+        "TBIP": round((bb + hbp + singles + 2 * doubles + 3 * triples + 4 * hr_allowed) / ip_decimal, 2) if ip_decimal else None,
         "K/BB": round(k / bb, 2) if bb else None,
         "K %": _rate(k, batters_faced), "K/9": round(k * 9 / ip_decimal, 2) if ip_decimal else None,
         # BB/9, HR/9 -- added Sept 2026 for the Pitching Staff Leaderboard

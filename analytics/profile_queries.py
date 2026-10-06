@@ -727,7 +727,7 @@ def pitching_staff_leaderboard_rows(db, date_from=None, date_to=None, game_scope
             "player": player,
             "Pitcher": f"{player.first_name} {player.last_name}",
             "IP": line["IP"], "IP (decimal)": line["IP (decimal)"],
-            "ERA": line["ERA"], "WHIP": line["WHIP"], "FIP": line["FIP"],
+            "ERA": line["ERA"], "WHIP": line["WHIP"], "FIP": line["FIP"], "TBIP": line["TBIP"],
             # BB/9, HR/9 now come straight from compute_pitching_line
             # (added there Sept 2026) instead of being re-derived here
             # against the already-rounded "IP (decimal)" field -- that

@@ -596,6 +596,7 @@ def pitcher_profile_server(input, output, session, app_state):
                     {"label": "K", "value": str(line["K"])},
                     {"label": "BB", "value": str(line["BB"])},
                     {"label": "WHIP", "value": _fmt(line["WHIP"])},
+                    {"label": "TBIP", "value": _fmt(line["TBIP"])},
                     {"label": "FIP", "value": _fmt(line["FIP"])},
                 ]))
                 sections.append(ui_helpers.render_kpi_cards([

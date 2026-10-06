@@ -231,6 +231,7 @@ def player_game_stats_server(input, output, session, app_state):
                     ]))
                     sections.append(ui_helpers.render_kpi_cards([
                         {"label": "WHIP", "value": _fmt_num(pl["WHIP"])},
+                        {"label": "TBIP", "value": _fmt_num(pl["TBIP"])},
                         {"label": "K/BB", "value": _fmt_num(pl["K/BB"])},
                         {"label": "K %", "value": _fmt_pct1(pl["K %"])},
                         {"label": "ERA", "value": _fmt_num(pl["ERA"])},
