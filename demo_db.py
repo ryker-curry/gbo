@@ -496,6 +496,18 @@ def _populate(db):
         game.our_score, game.opponent_score = score[True], score[False]
         db.flush()
 
+    # --- a few logging mistakes for the Pitch Type Check to catch (Oct
+    # 2026): curveballs tagged as 4-seams for one pitcher, like real
+    # charting slips. Game pitch and Rapsodo reading relabeled together.
+    slip = pitchers[1]
+    cbs = (db.query(m.RapsodoPitch).filter(m.RapsodoPitch.player_id == slip.player_id,
+                                          m.RapsodoPitch.pitch_type_id == ptype["Curveball"],
+                                          m.RapsodoPitch.game_pitch_id.isnot(None)).limit(4).all())
+    for r in cbs:
+        r.pitch_type_id = ptype["4-Seam Fastball"]
+        db.query(m.GamePitch).filter(m.GamePitch.game_pitch_id == r.game_pitch_id).update({"pitch_type_id": ptype["4-Seam Fastball"]})
+    db.flush()
+
     # --- schedule, goals, availability (light touch so those pages aren't empty) ---
     etypes = {e.type_name: e.event_type_id for e in db.query(m.TeamEventType).all()}
     if etypes:
