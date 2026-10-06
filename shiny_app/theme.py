@@ -899,6 +899,7 @@ MOTION_JS = r"""
       el.setAttribute('data-gbo-done','1');
       var node = null; for (var i = 0; i < el.childNodes.length; i++) { if (el.childNodes[i].nodeType === 3 && el.childNodes[i].textContent.trim()) { node = el.childNodes[i]; break; } }
       if (!node) return; var txt = el.getAttribute('data-gbo-txt') || node.textContent.trim(); el.setAttribute('data-gbo-txt', txt); var m = txt.match(/^([^0-9]*)([0-9][0-9,]*\.?[0-9]*)(.*)$/); if (!m) return;
+      if (/[A-Za-z]{4,}/.test(m[1] + m[3]) || /^-[0-9]/.test(m[3])) return;  // Oct 2026: words ("4-Seam Fastball") and counts ("1-1") aren't numbers to count up
       var target = parseFloat(m[2].replace(/,/g,'')); if (isNaN(target) || target === 0) return;
       el.__gboKind = 'num'; el.__gboNode = node; el.__gboTxt = txt; el.__gboM = m; el.__gboTarget = target;
       var dec = (m[2].split('.')[1] || '').length; node.textContent = m[1] + (0).toFixed(dec) + m[3]; io.observe(el);
