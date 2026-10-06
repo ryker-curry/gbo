@@ -57,7 +57,7 @@ from visualizations.hitter_graphic import hitter_images, home_plate_shape
 from visualizations.command_charts import HITTER_HEIGHT_FT, HITTER_CENTER_X, CHART_X_EXTENT_FT
 
 
-def at_bat_pitch_locations_chart(pa_pitches, batter_hand=None, title=None, zoom=False):
+def at_bat_pitch_locations_chart(pa_pitches, batter_hand=None, title=None, zoom=False, show_intended=False):
     """zoom=True (Oct 2026, Ryker: "zoom in more on the strike zone so it
     is bigger"): frames the zone and the batter's lower body instead of
     the whole batter, widening only as far as needed to keep every
@@ -66,9 +66,27 @@ def at_bat_pitch_locations_chart(pa_pitches, batter_hand=None, title=None, zoom=
 
     located = [p for p in pa_pitches if p.actual_plate_x is not None and p.actual_plate_z is not None]
 
+    # show_intended (Oct 2026, Pitcher Game Report's At-Bat by At-Bat):
+    # the catcher's called spot as a hollow ring in the pitch's color,
+    # joined to where it actually went -- the plan vs the execution.
+    # Replaces the pitch-order line (two sets of lines would be noise).
+    if show_intended:
+        for p in located:
+            if p.intended_plate_x is None or p.intended_plate_z is None:
+                continue
+            label = p.pitch_type.type_name if p.pitch_type else "Unspecified"
+            color = get_pitch_color(label) if label != "Unspecified" else MUTED_GRAY
+            fig.add_shape(type="line", xref="x", yref="y", x0=float(p.intended_plate_x), y0=float(p.intended_plate_z),
+                          x1=float(p.actual_plate_x), y1=float(p.actual_plate_z),
+                          line=dict(color=MUTED_GRAY, width=1, dash="dot"), layer="below")
+            fig.add_trace(go.Scatter(
+                x=[float(p.intended_plate_x)], y=[float(p.intended_plate_z)], mode="markers",
+                marker=dict(symbol="circle-open", color=color, size=20, line=dict(color=color, width=2)),
+                showlegend=False, hovertemplate=f"Called spot for pitch #{p.pa_pitch_number}<extra></extra>",
+            ))
     # Connecting line first (layer="below") so the numbered markers
     # always draw on top -- pitch-sequence order, not miss distance.
-    if len(located) > 1:
+    if len(located) > 1 and not show_intended:
         ordered = sorted(located, key=lambda p: p.pa_pitch_number or 0)
         fig.add_trace(go.Scatter(
             x=[float(p.actual_plate_x) for p in ordered],
@@ -141,6 +159,9 @@ def at_bat_pitch_locations_chart(pa_pitches, batter_hand=None, title=None, zoom=
     if zoom:
         xs = [abs(float(p.actual_plate_x)) for p in located]
         zs = [float(p.actual_plate_z) for p in located]
+        if show_intended:
+            xs += [abs(float(p.intended_plate_x)) for p in located if p.intended_plate_x is not None]
+            zs += [float(p.intended_plate_z) for p in located if p.intended_plate_z is not None]
         x_ext = max([1.9] + [x + 0.35 for x in xs])
         y_lo = min([-0.35] + [z - 0.35 for z in zs])
         y_hi = max([4.2] + [z + 0.35 for z in zs])

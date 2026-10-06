@@ -44,7 +44,7 @@ from visualizations.hitter_pitch_chart import at_bat_pitch_locations_chart
 # object exposing .pitch_zone/.contact_quality, which GamePitch does too.
 from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_figure, CONTACT_QUALITY_SCORE
 
-import strike_zone
+from strike_zone import location_words  # noqa: F401 (moved to strike_zone, Oct 2026; shared with Pitcher Game Report)
 import ui_helpers
 from analytics import league_baselines
 import format_helpers
@@ -62,39 +62,6 @@ VIEWS = {"overview": "Overview", "approach": "Approach", "batted": "Batted Balls
 
 def _fmt(value, decimals=3):
     return format_helpers.format_num(value, decimals)
-
-
-def location_words(x, z, batter_hand=None):
-    """Plain description of where a pitch crossed, from the hitter's point
-    of view: "In zone -- up and in", "Ball -- down and away". Catcher's
-    view: a right-handed batter stands on the 3B (negative x) side, so
-    inside = negative x for him and positive x for a lefty. Unknown hand
-    (switch-hitter not resolved) says 3B side / 1B side instead."""
-    if x is None or z is None:
-        return "Not located"
-    x, z = float(x), float(z)
-    third = (strike_zone.ZONE_TOP - strike_zone.ZONE_BOTTOM) / 3
-    if z > strike_zone.ZONE_TOP - third:
-        height = "up"
-    elif z < strike_zone.ZONE_BOTTOM + third:
-        height = "down"
-    else:
-        height = "middle"
-    edge = strike_zone.ZONE_HALF_WIDTH / 3
-    if abs(x) <= edge:
-        side = None
-    elif batter_hand in ("R", "L"):
-        inside = (x < 0) if batter_hand == "R" else (x > 0)
-        side = "in" if inside else "away"
-    else:
-        side = "3B side" if x < 0 else "1B side"
-    if side is None:
-        where = "middle-middle" if height == "middle" else height
-    elif height == "middle":
-        where = side
-    else:
-        where = f"{height} and {side}"
-    return f"{'In zone' if strike_zone.is_in_zone(x, z) else 'Ball'} -- {where}"
 
 
 def _pitcher_of(db, p):
