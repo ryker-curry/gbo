@@ -24,7 +24,7 @@ function's docstring.
 from sqlalchemy.orm import joinedload
 from models import GamePitch, Game, GameForcedHalfInningEnd, GameRunnerEvent, Player, OpponentPlayer
 from plate_discipline import SWING_OUTCOMES, WHIFF_OUTCOMES
-from strike_zone import is_in_zone, classify_attack_zone
+from strike_zone import is_in_zone, classify_attack_zone, pitch_hit_spot
 from field_location import classify_spray_direction
 from gbo_cache import cached
 
@@ -1083,8 +1083,11 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0, extra_unea
     sf = sum(1 for p in pa_pitches if p.ab_outcome == "Sac Fly")
     ab = batters_faced - bb - hbp - sac
 
-    exec_attempts = [p for p in pitches if p.intended_zone is not None and p.pitch_zone is not None]
-    exec_hits = sum(1 for p in exec_attempts if p.intended_zone == p.pitch_zone)
+    # Oct 2026: Zone Execution % = landed in the called cell or within
+    # strike_zone.HIT_SPOT_CUSHION_IN of it (was the old clamped 1-9 grid).
+    exec_flags = [pitch_hit_spot(p) for p in pitches]
+    exec_attempts = [f for f in exec_flags if f is not None]
+    exec_hits = sum(1 for f in exec_attempts if f)
     rv_values = [float(p.run_value) for p in pitches if p.run_value is not None]
 
     strikes = sum(1 for p in pitches if p.pitch_outcome in STRIKE_OUTCOMES)
@@ -1404,8 +1407,11 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
     # compute_pitching_line()'s game-level version, just scoped to this
     # pitch type -- confirmed with Ryker this IS what "Execution Score"
     # means in his sheet (see compute_pitch_type_breakdown's docstring).
-    exec_attempts = [p for p in pitches if p.intended_zone is not None and p.pitch_zone is not None]
-    exec_hits = sum(1 for p in exec_attempts if p.intended_zone == p.pitch_zone)
+    # Oct 2026: Zone Execution % = landed in the called cell or within
+    # strike_zone.HIT_SPOT_CUSHION_IN of it (was the old clamped 1-9 grid).
+    exec_flags = [pitch_hit_spot(p) for p in pitches]
+    exec_attempts = [f for f in exec_flags if f is not None]
+    exec_hits = sum(1 for f in exec_attempts if f)
 
     located = [p for p in pitches if p.actual_plate_x is not None and p.actual_plate_z is not None]
     in_zone = [p for p in located if is_in_zone(float(p.actual_plate_x), float(p.actual_plate_z))]

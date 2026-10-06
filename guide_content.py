@@ -96,6 +96,22 @@ GUIDE = [
         "good": ["Your biggest green bar is the thing to keep; your biggest red bar is the thing to train."],
     },
     {
+        "key": "zone_execution", "title": "Zone Execution % (hitting your spot)", "who": "pitchers",
+        "pages": ["Pitcher Profile", "My Pitcher Profile"],
+        "shows": "How often you put the pitch where the catcher called it. Find it on Pitcher Profile > Command & "
+                 "Execution (also called Hit-the-spot % on the reports).",
+        "use": [
+            "A pitch hits its spot if it lands in the called box or within 3 inches of it (about a ball width).",
+            "Calls off the plate count anywhere off the plate on that side -- a chase pitch way outside still did its job.",
+            "By pitch: which pitch you command best and worst. By count: do you lose the spot when you're behind or "
+            "with two strikes?",
+            "When you miss: up, down, arm side or glove side -- and how often a miss ends up over the middle "
+            "(the misses that get hit).",
+        ],
+        "good": ["Our staff hit about 1 in 5 spots this fall -- anything above that is better than our average.",
+                 "Fewer misses ending up over the middle."],
+    },
+    {
         "key": "hitter_profile", "title": "Hitter Profile", "who": "hitters", "pages": ["Hitter Profile", "My Hitter Profile"],
         "shows": "Everything about a hitter, filtered by dates and pitch type. Use the View menu for Overview, Hot "
                  "Zones, Swing Decisions, How Pitchers Attack Me, Results by Pitch Type, First Pitch & Two Strikes, "
