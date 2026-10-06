@@ -111,6 +111,7 @@ GLOBAL_CSS = """
   --gbo-accent-ink: var(--gbo-text);
   --gbo-text-on-crimson: #FFFFFF;
   --gbo-status-good: #2E9C62;
+  --gbo-series-1: #3E8EDE;   /* single-series charts (Oct 2026, validated vs dark surface) */
   --gbo-status-watch: #B58A22;
   --gbo-status-flag: #D94F3D;
   --gbo-status-good-soft: rgba(46,156,98,.14);
@@ -148,6 +149,7 @@ GLOBAL_CSS = """
   --gbo-accent-ink: var(--gbo-crimson);
   --gbo-text-on-crimson: #FFFFFF;
   --gbo-status-good: #1F7A4C;
+  --gbo-series-1: #2A6FBF;   /* single-series charts (Oct 2026, validated vs white) */
   --gbo-status-watch: #8A6514;
   --gbo-status-flag: #B83C2C;
   --gbo-status-good-soft: rgba(31,122,76,.10);
@@ -397,6 +399,39 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-metric-bar-fill.gold { background: var(--gbo-gold); }
 .gbo-metric-bar-fill.neutral { background: var(--gbo-border-strong); }
 .gbo-metric-bar-percentile { color: var(--gbo-text-muted); font-size: .72rem; margin: 4px 0 0; font-variant-numeric: tabular-nums; }
+/* Oct 2026 (My Assessments): change since last test, next to the percentile */
+.gbo-metric-bar-foot { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.gbo-change { font-weight: 600; white-space: nowrap; }
+.gbo-change.better { color: var(--gbo-status-good); }
+.gbo-change.worse { color: var(--gbo-status-flag); }
+.gbo-change.neutral { color: var(--gbo-text-muted); }
+.gbo-details { border: 1px solid var(--gbo-border); border-radius: 8px; margin: 8px 0; background: var(--gbo-bg-card); }
+.gbo-details > summary { cursor: pointer; padding: 9px 14px; font-weight: 600; font-size: .85rem; color: var(--gbo-text); }
+.gbo-details[open] > summary { border-bottom: 1px solid var(--gbo-border); }
+.gbo-details-in { padding: 4px 14px 10px; }
+/* Progress chart (visualizations/progress_chart.py) */
+.gbo-progress-svg{width:100%;height:auto;display:block;overflow:visible}
+.gbo-progress-svg .grid{stroke:var(--gbo-border);stroke-width:1}
+.gbo-progress-svg .axis{fill:var(--gbo-text-muted);font-size:11px;font-variant-numeric:tabular-nums}
+.gbo-progress-svg .avg{stroke:var(--gbo-text-muted);stroke-width:1.5;stroke-dasharray:5 4}
+.gbo-progress-svg .avg-lbl{fill:var(--gbo-text-muted);font-size:11px}
+.gbo-progress-svg .line{fill:none;stroke:var(--gbo-series-1);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.gbo-progress-svg .dot{fill:var(--gbo-series-1);stroke:var(--gbo-bg-card);stroke-width:2}
+.gbo-progress-svg .hit{fill:transparent}
+.gbo-progress-svg .pt:hover .dot{r:6}
+.gbo-progress-svg .last{fill:var(--gbo-text);font-size:12px;font-weight:700}
+/* My Assessments strengths / work-on card */
+.gbo-sw { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 6px 0 14px; }
+.gbo-sw-col { border: 1px solid var(--gbo-border); border-radius: 10px; padding: 12px 14px; background: var(--gbo-bg-card); }
+.gbo-sw-col h6 { font-size: .74rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; margin: 0 0 6px; }
+.gbo-sw-col.good h6 { color: var(--gbo-status-good); } .gbo-sw-col.work h6 { color: var(--gbo-status-watch); }
+.gbo-sw-item { padding: 7px 0; border-bottom: 1px solid var(--gbo-border); }
+.gbo-sw-item:last-child { border-bottom: 0; }
+.gbo-sw-name { font-weight: 600; font-size: .86rem; color: var(--gbo-text); }
+.gbo-sw-sub { font-size: .76rem; color: var(--gbo-text-muted); }
+.gbo-progress-controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+.gbo-progress-note { font-size: .78rem; color: var(--gbo-text-muted); margin: 6px 0 0; }
+@media (max-width: 700px) { .gbo-sw { grid-template-columns: 1fr; } }
 /* External reference-standard tier badges (Aug 2026, AdaptPTPD force-plate
    sheet -- see force_plate_standards.py). Appended next to a metric's raw
    value in build_metric_bars for the handful of metrics that have an

@@ -64,7 +64,7 @@ def _mobility_rom_region(test_name):
     return "Other"
 
 
-def build_mobility_rom_report(report):
+def build_mobility_rom_report(report, compact=False):
     """Mobility & ROM section -- red/yellow/green rows, NOT percentile
     bars (see MOBILITY_ROM_THRESHOLDS/compute_mobility_rom_report in
     bucket_system.py for why this bucket doesn't rank ROM against the
@@ -155,7 +155,68 @@ def build_mobility_rom_report(report):
                 class_="gbo-rom-row",
             ))
         sections.append(ui.div(*row_els, class_="gbo-rom-group"))
-    return ui.div(*sections)
+    if not compact:
+        return ui.div(*sections)
+    return _compact_mobility(report, sections)
+
+
+def _rom_display_name(row):
+    name = row["test_name"]
+    region = _mobility_rom_region(name)
+    return name[len(region) + 2:] if name.startswith(f"{region}: ") else name
+
+
+def _rom_meaning(row):
+    """One plain line for a flagged Mobility row (player view)."""
+    unit = row.get("unit") or ""
+    if row.get("threshold") is not None:
+        need = f"{row['threshold']:.0f}{unit}"
+        if row["status"] == "red":
+            return f"Below the {need} we want to see. Ask the training staff about mobility work for this."
+        return f"Just over the {need} minimum. Keep an eye on it."
+    if row["status"] == "red":
+        return "Flagged for review. Talk to the training staff about it."
+    return "Worth keeping an eye on."
+
+
+def _compact_mobility(report, full_sections):
+    """Oct 2026 (Ryker, My Assessments): flagged/caution rows first with a
+    one-line meaning; every measurement behind a "Show all" dropdown."""
+    order = {"red": 0, "yellow": 1}
+    flagged = sorted((r for r in report if r.get("status") in order),
+                     key=lambda r: (order[r["status"]], MOBILITY_ROM_REGION_ORDER.index(_mobility_rom_region(r["test_name"]))))
+    out = []
+    if flagged:
+        out.append(ui.p(f"Needs attention ({len(flagged)})", class_="gbo-subgroup-label"))
+        rows = []
+        for r in flagged:
+            unit = r.get("unit") or ""
+            if "explanation" in r:
+                fmt = "{:+.1f}" if r.get("signed", True) else "{:.1f}"
+                raw = f"{fmt.format(r['raw'])}{unit}"
+                label = r["status_label"]
+            else:
+                raw = f"{r['raw']:.1f}{unit}"
+                label = "Below minimum" if r["status"] == "red" else "Caution"
+            rows.append(ui.div(
+                ui.div(
+                    ui.span(f"{_mobility_rom_region(r['test_name'])} · {_rom_display_name(r)}", class_="gbo-rom-name"),
+                    ui.span(raw, class_="gbo-rom-raw"),
+                    ui.span(label, class_=f"gbo-rom-status gbo-rom-status-{r['status']}"),
+                    class_="gbo-rom-row",
+                ),
+                ui.p(_rom_meaning(r), class_="gbo-rom-explanation"),
+                class_="gbo-rom-compound-row",
+            ))
+        out.append(ui.div(*rows, class_="gbo-rom-group"))
+    else:
+        out.append(ui.p("Nothing flagged. Every range we have a minimum for is clear.", class_="text-muted small"))
+    out.append(ui.tags.details(
+        ui.tags.summary(f"Show all {len(report)} measurements"),
+        ui.div(*full_sections, class_="gbo-details-in"),
+        class_="gbo-details",
+    ))
+    return ui.div(*out)
 
 
 _ROM_STATUS_SEVERITY = {"red": 2, "yellow": 1, "green": 0}
@@ -398,7 +459,7 @@ def ordinal(n):
     return f"{n}{suffix}"
 
 
-def build_metric_bars(metrics_dict, chart_key, mode="dark", is_pitcher=None):
+def build_metric_bars(metrics_dict, chart_key, mode="dark", is_pitcher=None, changes=None):
     """One row per metric: name + raw value on a line, a thin colored
     progress bar underneath sized to the percentile (0-100), with the
     percentile itself labeled below the bar. Always returns something
@@ -452,7 +513,9 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark", is_pitcher=None):
         mph = sprint_mph(name, d["raw"])
         if mph is not None:
             raw_label += f" ({mph} mph)"
-        percentile_label = f"{ordinal(raw_percentile)} percentile" if raw_percentile is not None else "No percentile data"
+        # Oct 2026, Ryker: this number is value / team best (bucket_system.
+        # compute_percentile), not a rank -- label it what it is.
+        percentile_label = f"{raw_percentile}% of team best" if raw_percentile is not None else "No team comparison yet"
         header_children = [
             ui.span(name, class_="gbo-metric-bar-name"),
             ui.span(raw_label, class_="gbo-metric-bar-raw"),
@@ -470,10 +533,46 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark", is_pitcher=None):
                 ui.div(class_=f"gbo-metric-bar-fill {status}", style=f"width: {pct}%;"),
                 class_="gbo-metric-bar-track",
             ),
-            ui.p(percentile_label, class_="gbo-metric-bar-percentile"),
+            ui.div(ui.span(percentile_label), change_chip((changes or {}).get(name), d["unit"]),
+                   class_="gbo-metric-bar-percentile gbo-metric-bar-foot"),
             class_="gbo-metric-bar-row",
         ))
     return ui.div(*rows, class_="gbo-metric-bar-group")
+
+
+def _fmt_value(raw, unit, name=None):
+    """raw value + unit the way the bars show it (sprints get mph)."""
+    label = f"{raw:.2f}{unit or ''}"
+    mph = sprint_mph(name, raw) if name else None
+    return f"{label} ({mph} mph)" if mph is not None else label
+
+
+def _fmt_delta(delta, unit):
+    unit = unit or ""
+    if unit == "s":
+        return f"{abs(delta):.2f}s"
+    if unit in ("°", "%"):
+        return f"{abs(delta):.1f}{unit}"
+    if unit == "kcal":
+        return f"{abs(delta):,.0f} kcal"
+    return f"{abs(delta):.1f} {unit}".strip()
+
+
+def change_chip(change, unit):
+    """Oct 2026 (My Assessments): "▲ 2.1 in since Aug 25, 2025" -- green if
+    the change is better, red if worse, gray if neutral (Body Weight) or
+    no change. change = analytics.assessment_progress.change_for(...)."""
+    if not change:
+        return None
+    d = change["delta"]
+    since = f"since {change['prev_date'].strftime('%b %-d, %Y')}"
+    if abs(d) < 1e-9:
+        return ui.span(f"No change {since}", class_="gbo-change neutral")
+    arrow = "▲" if d > 0 else "▼"
+    cls = {True: "better", False: "worse"}.get(change["better"], "neutral")
+    word = {True: "better", False: "worse"}.get(change["better"])
+    return ui.span(f"{arrow} {_fmt_delta(d, unit)} {since}", ui.span(f" ({word})", class_="visually-hidden") if word else None,
+                   class_=f"gbo-change {cls}")
 
 
 def build_raw_metrics(metrics_dict):
@@ -501,7 +600,7 @@ def build_raw_metrics(metrics_dict):
     )
 
 
-def build_full_breakdown(bucket_data, key_prefix, mode="dark"):
+def build_full_breakdown(bucket_data, key_prefix, mode="dark", changes=None, compact_mobility=False):
     """Sub-group score headers + a bar chart per sub-group, for Body
     Comp, Power, Strength, and (if present) Speed/Capacity/Mobility/
     Shoulder Health -- all reference-only sections shown exactly when
@@ -511,7 +610,7 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark"):
     body_comp_metrics = bucket_data["body_comp_metrics"]
     bar_metrics = {name: v for name, v in body_comp_metrics.items() if name in BODY_COMP_BAR_NAMES}
     raw_only_metrics = {name: v for name, v in body_comp_metrics.items() if name not in BODY_COMP_BAR_NAMES}
-    sections.append(build_metric_bars(bar_metrics, f"{key_prefix}_body_comp", mode=mode, is_pitcher=is_pitcher))
+    sections.append(build_metric_bars(bar_metrics, f"{key_prefix}_body_comp", mode=mode, is_pitcher=is_pitcher, changes=changes))
     raw_ui = build_raw_metrics(raw_only_metrics)
     if raw_ui is not None:
         sections.append(raw_ui)
@@ -528,12 +627,12 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark"):
             # bucket_system.MED_BALL_THROW_REFERENCE_METRICS.
             bar_metrics = {name: v for name, v in metrics.items() if name in MED_BALL_THROW_BAR_NAMES}
             raw_only_metrics = {name: v for name, v in metrics.items() if name not in MED_BALL_THROW_BAR_NAMES}
-            sections.append(build_metric_bars(bar_metrics, f"{key_prefix}_power_{sub_name}", mode=mode, is_pitcher=is_pitcher))
+            sections.append(build_metric_bars(bar_metrics, f"{key_prefix}_power_{sub_name}", mode=mode, is_pitcher=is_pitcher, changes=changes))
             raw_ui = build_raw_metrics(raw_only_metrics)
             if raw_ui is not None:
                 sections.append(raw_ui)
         else:
-            sections.append(build_metric_bars(metrics, f"{key_prefix}_power_{sub_name}", mode=mode, is_pitcher=is_pitcher))
+            sections.append(build_metric_bars(metrics, f"{key_prefix}_power_{sub_name}", mode=mode, is_pitcher=is_pitcher, changes=changes))
 
     sections.append(ui.p(f"Strength — {bucket_data['strength_score'] if bucket_data['strength_score'] is not None else '—'}", class_="gbo-category-title"))
     for sub_name, sub_score in bucket_data["strength_subgroup_scores"].items():
@@ -541,11 +640,11 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark"):
         if not metrics:
             continue
         sections.append(ui.p(f"{sub_name} — {sub_score if sub_score is not None else '—'}", class_="gbo-subgroup-label"))
-        sections.append(build_metric_bars(metrics, f"{key_prefix}_strength_{sub_name}", mode=mode, is_pitcher=is_pitcher))
+        sections.append(build_metric_bars(metrics, f"{key_prefix}_strength_{sub_name}", mode=mode, is_pitcher=is_pitcher, changes=changes))
 
     if bucket_data["speed_metrics"]:
         sections.append(ui.p(f"Speed (reference only, not in Total) — {bucket_data['speed_score'] if bucket_data['speed_score'] is not None else '—'}", class_="gbo-category-title"))
-        sections.append(build_metric_bars(bucket_data["speed_metrics"], f"{key_prefix}_speed", mode=mode, is_pitcher=is_pitcher))
+        sections.append(build_metric_bars(bucket_data["speed_metrics"], f"{key_prefix}_speed", mode=mode, is_pitcher=is_pitcher, changes=changes))
 
     capacity_metrics_present = any(bucket_data.get("capacity_subgroup_metrics", {}).values())
     if capacity_metrics_present:
@@ -555,10 +654,10 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark"):
             if not metrics:
                 continue
             sections.append(ui.p(f"{sub_name} — {sub_score if sub_score is not None else '—'}", class_="gbo-subgroup-label"))
-            sections.append(build_metric_bars(metrics, f"{key_prefix}_capacity_{sub_name}", mode=mode, is_pitcher=is_pitcher))
+            sections.append(build_metric_bars(metrics, f"{key_prefix}_capacity_{sub_name}", mode=mode, is_pitcher=is_pitcher, changes=changes))
 
     mobility_rom_report = bucket_data.get("mobility_rom_report", [])
-    mobility_rom_ui = build_mobility_rom_report(mobility_rom_report)
+    mobility_rom_ui = build_mobility_rom_report(mobility_rom_report, compact=compact_mobility)
     movement_ring = build_movement_flag_ring(
         bucket_data.get("movement_flag"), mobility_rom_report, f"{key_prefix}_movement_flag", mode=mode
     )
@@ -578,7 +677,7 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark"):
 
     if bucket_data.get("shoulder_health_metrics"):
         sections.append(ui.p(f"Shoulder Health (reference only, not in Total) — {bucket_data['shoulder_health_score'] if bucket_data['shoulder_health_score'] is not None else '—'}", class_="gbo-category-title"))
-        sections.append(build_metric_bars(bucket_data["shoulder_health_metrics"], f"{key_prefix}_shoulder_health", mode=mode, is_pitcher=is_pitcher))
+        sections.append(build_metric_bars(bucket_data["shoulder_health_metrics"], f"{key_prefix}_shoulder_health", mode=mode, is_pitcher=is_pitcher, changes=changes))
 
     return ui.div(*sections)
 

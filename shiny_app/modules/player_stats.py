@@ -38,6 +38,8 @@ from models import (
     PitchType, IDPGoal, IDPStatus, BullpenPitch,
 )
 from bucket_system import compute_bucket_system
+from analytics import assessment_progress as ap
+from visualizations import progress_chart as pchart
 
 import ui_helpers
 import bucket_display
@@ -46,8 +48,13 @@ import bucket_display
 @module.ui
 def player_stats_ui():
     return ui.div(
-        ui_helpers.page_header("My Assessments"),
+        ui.output_ui("header"),
         ui.output_ui("top_section"),
+        # Oct 2026 (Ryker: "make the my assessments page better for player
+        # login"): progress chart for any test, above the raw history.
+        ui.output_ui("progress_controls"),
+        ui.output_ui("progress_chart"),
+        ui.h5("Every entry", class_="gbo-section-title"),
         ui.output_ui("category_controls"),
         ui.output_ui("history_section"),
         ui_helpers.page_footer(),
@@ -56,6 +63,23 @@ def player_stats_ui():
 
 @module.server
 def player_stats_server(input, output, session, app_state):
+    def _my_player_id(db):
+        me = db.query(User).filter(User.user_id == app_state.user_id()).first()
+        return me.player_id if me is not None else None
+
+    @render.ui
+    def header():
+        if not app_state.is_authenticated():
+            return ui_helpers.page_header("My Assessments")
+        db = get_session()
+        try:
+            pid = _my_player_id(db)
+            last = ap.last_tested(ap.history(db, pid)) if pid else None
+        finally:
+            db.close()
+        sub = f"Last tested {last.strftime('%b %-d, %Y')}" if last else None
+        return ui_helpers.page_header("My Assessments", sub)
+
     @render.ui
     def top_section():
         if not app_state.is_authenticated():
@@ -72,6 +96,14 @@ def player_stats_server(input, output, session, app_state):
 
             sections = []
             mode = app_state.dark_mode() or "dark"
+
+            hist = ap.history(db, my_player.player_id)
+            changes = ap.changes_for_bucket(hist, bucket_data)
+
+            # Oct 2026: plain-English strengths / work-on card up top.
+            sw = _strengths_ui(db, bucket_data, changes)
+            if sw is not None:
+                sections.append(sw)
 
             rings = bucket_display.build_score_rings(bucket_data, "myassess_top", mode=mode)
             if rings is not None:
@@ -120,12 +152,75 @@ def player_stats_server(input, output, session, app_state):
             if not has_any_data:
                 sections.append(ui_helpers.empty_state("No physical testing data yet."))
             else:
-                sections.append(bucket_display.build_full_breakdown(bucket_data, "myassess", mode=mode))
+                sections.append(ui.p("Bars = % of the team's best mark (100 = you have the best). "
+                                     "Green ▲/▼ = better than your last test, red = worse.",
+                                     class_="text-muted small"))
+                sections.append(bucket_display.build_full_breakdown(bucket_data, "myassess", mode=mode,
+                                                                    changes=changes, compact_mobility=True))
             sections.append(ui.hr())
 
             return ui.div(*sections)
         finally:
             db.close()
+
+    @render.ui
+    def progress_controls():
+        if not app_state.is_authenticated():
+            return None
+        db = get_session()
+        try:
+            pid = _my_player_id(db)
+            hist = ap.history(db, pid) if pid else {}
+            work_on = [m[0] for m in ap.strengths_and_work_on(db, compute_bucket_system(db, pid))[1]] if hist else []
+        finally:
+            db.close()
+        choices = ap.chart_choices(hist)
+        if not choices:
+            return None
+        return ui.div(
+            ui.h5("Progress over time", class_="gbo-section-title"),
+            ui.div(ui.input_select("progress_test", "Test", choices=choices, selected=ap.default_chart_test(hist, work_on)),
+                   class_="gbo-progress-controls"),
+        )
+
+    @render.ui
+    def progress_chart():
+        if not app_state.is_authenticated():
+            return None
+        name = input.progress_test() if "progress_test" in input else None
+        req(name)
+        db = get_session()
+        try:
+            pid = _my_player_id(db)
+            h = ap.history(db, pid).get(name) if pid else None
+            if not h:
+                return None
+            avg = ap.team_average(db, name)
+        finally:
+            db.close()
+        pts, unit = h["points"], h["unit"]
+        d = ap.direction_map().get(name)
+        if len(pts) == 1:
+            note = "Only one test so far -- the line starts after your next one."
+        else:
+            first, last = pts[0][1], pts[-1][1]
+            total = last - first
+            word = ""
+            if d is not None and abs(total) > 1e-9:
+                word = " better" if (total > 0) == (d == "higher") else " worse"
+            if abs(total) < 1e-9:
+                moved = "no change"
+            else:
+                moved = f"{'up' if total > 0 else 'down'} {bucket_display._fmt_delta(total, unit)}"
+                moved += f" ({word.strip()})" if word else ""
+            note = f"{len(pts)} tests. Since your first test ({pts[0][0].strftime('%b %-d, %Y')}): {moved}."
+            if d == "lower":
+                note += " Lower is better on this one."
+        return ui.div(
+            ui.HTML(pchart.render_svg(pts, unit, team_avg=avg, name=name)),
+            ui.p(note + (" Dashed line = team average." if avg is not None else ""), class_="gbo-progress-note"),
+            class_="gbo-card", style="padding:14px 16px;margin-bottom:16px;",
+        )
 
     @render.ui
     def category_controls():
@@ -229,6 +324,32 @@ def player_stats_server(input, output, session, app_state):
             )
         finally:
             db.close()
+
+
+def _strengths_ui(db, bucket_data, changes):
+    """Your best 3 tests and 3 to work on, ranked against the team, in
+    plain words ("better than 85% of our team")."""
+    top, low = ap.strengths_and_work_on(db, bucket_data)
+    if not top:
+        return None
+
+    def item(m):
+        name, raw, unit, pct = m
+        sub = ("Best on our team" if pct >= 100 else "Lowest on our team" if pct <= 0
+               else f"Better than {pct}% of our team")
+        c = changes.get(name)
+        chip = bucket_display.change_chip(c, unit) if c else None
+        return ui.div(
+            ui.div(name, class_="gbo-sw-name"),
+            ui.div(f"{bucket_display._fmt_value(raw, unit, name)} · {sub}", class_="gbo-sw-sub"),
+            ui.div(chip, class_="gbo-sw-sub") if chip is not None else None,
+            class_="gbo-sw-item",
+        )
+
+    cols = [ui.div(ui.h6("Your best tests"), *[item(m) for m in top], class_="gbo-sw-col good")]
+    if low:
+        cols.append(ui.div(ui.h6("Most room to grow"), *[item(m) for m in low], class_="gbo-sw-col work"))
+    return ui.div(*cols, class_="gbo-sw")
 
 
 def _goals_table_ui(db, open_goals):
