@@ -239,16 +239,25 @@ def _populate(db):
         side = 1 if p.throws == "R" else -1
         ids["rp"] += 1
         vel = v + p.demo["velo"] * (1 if pitch_name == "4-Seam Fastball" else 0.8) + rnd.gauss(0, 0.9) - fatigue
+        # Per-pitcher arm slot (-4 low .. +4 high, fixed by id) so arm angle varies
+        # and fastball ride follows it, like real staffs (IVB over expected, Oct 2026).
+        slot = (p.player_id * 37) % 9 - 4
+        ivb = ivb + (slot * 0.6 if pitch_name in ("4-Seam Fastball", "2-Seam Fastball") else 0)
+        if pitch_name == "Slider":
+            hb = hb + slot * 1.2          # low slots sweep it, high slots throw it tighter (gyro)
+        if pitch_name == "4-Seam Fastball":
+            eff = eff + slot * 1.5        # efficient backspin from higher slots
+        ivb_v = round(ivb + p.demo["spin"] / 120 + rnd.gauss(0, 1.4), 1)
+        hb_v = round(side * (hb + rnd.gauss(0, 1.5)), 1)
         db.add(m.RapsodoPitch(
             rapsodo_pitch_id=ids["rp"], player_id=p.player_id, import_id=import_id, pitch_number=n,
             game_pitch_id=game_pitch_id, bullpen_id=bullpen_id, pitch_type_id=ptype[pitch_name], pitch_date=when,
             raw_pitch_type=pitch_name, velocity=round(vel, 1),
             total_spin=round(spin + p.demo["spin"] + rnd.gauss(0, 70)), spin_efficiency=round(max(10, min(100, eff + rnd.gauss(0, 5))), 1),
             spin_axis_degrees=round((axis * (1 if side > 0 else -1) + rnd.gauss(0, 10)) % 360, 1),
-            vb_trajectory=round(ivb + p.demo["spin"] / 120 + rnd.gauss(0, 1.4), 1),
-            hb_trajectory=round(side * (hb + rnd.gauss(0, 1.5)), 1),
-            gyro_degree=round(gyro + rnd.gauss(0, 6), 1), release_height=round(rh + (p.height_in - 74) * 0.04 + rnd.gauss(0, .08), 2),
-            release_side=round(side * (1.7 + rnd.gauss(0, .1)), 2), release_extension=round(6.1 + rnd.gauss(0, .2), 2),
+            vb_trajectory=ivb_v, hb_trajectory=hb_v, vb_spin=ivb_v, hb_spin=hb_v,
+            gyro_degree=round(gyro + rnd.gauss(0, 6), 1), release_height=round(rh + (p.height_in - 74) * 0.04 + slot * 0.08 + rnd.gauss(0, .08), 2),
+            release_side=round(side * (1.7 - slot * 0.1 + rnd.gauss(0, .1)), 2), release_extension=round(6.1 + rnd.gauss(0, .2), 2),
             release_angle=round(-1.5 + rnd.gauss(0, .6), 2), horizontal_angle=round(rnd.gauss(0, 1.2), 2)))
 
     # --- bullpens (3 per pitcher) ---
@@ -260,13 +269,17 @@ def _populate(db):
                                     created_by_user_id=1))
             ids["imp"] += 1
             db.add(m.RapsodoImport(import_id=ids["imp"], player_id=p.player_id, bullpen_id=bp_id, original_filename="demo.csv",
-                                   file_hash=f"demo-bp-{bp_id}", uploaded_by_user_id=1, row_count=25, status="success"))
+                                   file_hash=f"demo-bp-{bp_id}", uploaded_by_user_id=1, row_count=40, status="success"))
             db.flush()
             when = dt.datetime.combine(day, dt.time(15))
-            for n in range(1, 26):
+            # 40-pitch pens with a little late fade that varies by pitcher, so
+            # Velo Fade (Oct 2026) has something to show.
+            fade_rate = 0.4 + ((p.player_id * 13) % 5) * 0.25
+            for n in range(1, 41):
                 name = rnd.choices(p.demo["arsenal"], weights=[USAGE[a] for a in p.demo["arsenal"]])[0]
                 db.add(m.BullpenPitch(bullpen_id=bp_id, pitch_number=n, pitch_type_id=ptype[name], target_zone=rnd.randint(1, 9)))
-                rapsodo(p, name, when, bullpen_id=bp_id, import_id=ids["imp"], n=n)
+                rapsodo(p, name, when, bullpen_id=bp_id, import_id=ids["imp"], n=n,
+                        fatigue=max(0.0, (n - 15) / 25) * fade_rate)
     db.flush()
 
     # --- games ---

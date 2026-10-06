@@ -109,6 +109,8 @@ from video_helpers import render_video_clip
 
 import ui_helpers
 import chart_helpers
+import velo_fade_display
+from analytics import velo_fade
 
 GOLD = "#D4AF37"
 TEXT_CREAM = "#FFFDE5"
@@ -513,7 +515,19 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
         # present (Section 18) -- both need `player` for Est. Arm Angle,
         # so both render nothing (not an empty card) when there's no
         # linked player.
-        trajectory_cards = []
+        # Velo fade (Oct 2026, analytics/velo_fade.py) -- always from the
+        # whole session/pitch history (not the type/range filters, which
+        # would cut the fastballs it trends), one card per session, or a
+        # by-outing view on the combined "Overall" dashboard.
+        _t, all_pitches = _target_and_pitches()
+        if target["kind"] == "session":
+            fade_card = _card(_section_label(3, "Velo Fade"),
+                              velo_fade_display.outing_block(velo_fade.fade(velo_fade.points_from_rapsodo(all_pitches or [], pitch_type_label)), title="Fastball velo through the session"))
+        else:
+            fade_card = _card(_section_label(3, "Velo Fade"),
+                              velo_fade_display.season_block(velo_fade.by_outing(all_pitches or [], pitch_type_label)))
+
+        trajectory_cards = [fade_card]
         if player is not None:
             rt_summary = release_trajectory_summary(filtered_pitches, player)
             per_type_rows = pitch_type_summary(filtered_pitches, player=player)
@@ -541,7 +555,7 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
                     ],
                 )
             trajectory_cards.append(_card(
-                _section_label(3, "Release / Trajectory Summary"),
+                _section_label(4, "Release / Trajectory Summary"),
                 ui.div(*[
                     ui.div(ui.div(label, class_="text-muted small"), ui.div(value, style=f"color:{TEXT_CREAM}; font-weight:600;"))
                     for label, value in rt_summary.items()
@@ -597,7 +611,7 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
         # output (registered below) so they can stream in independently
         # instead of this one output blocking until all four are done.
         charts_section = _card(
-            _section_label(4, "Charts"),  # was 3 -- bumped to make room for section 3, Release / Trajectory Summary, above
+            _section_label(5, "Charts"),  # was 3 -- bumped to make room for section 3, Release / Trajectory Summary, above
             ui.input_slider(shading_key, "Minimum pitches to shade a pitch type's cluster", min=1, max=10, value=2),
             ui.output_ui(movement_chart_id),
             ui.p("Centered on release point; color-coded by pitch type.", class_="text-muted small"),
