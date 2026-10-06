@@ -346,7 +346,7 @@ def _compute_execution(pitches):
     denominator -- a not-yet-reviewed pitch is excluded, not scored as
     a miss (see module docstring)."""
     # Oct 2026: same definition as game_stats' Zone Execution % --
-    # strike_zone.pitch_hit_spot (called cell + 3 in cushion).
+    # strike_zone.pitch_hit_spot (called cell + 6 in cushion).
     from strike_zone import pitch_hit_spot
     flags = [f for f in (pitch_hit_spot(p) for p in pitches) if f is not None]
     return sum(1 for f in flags if f), len(flags)

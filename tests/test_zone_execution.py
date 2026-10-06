@@ -10,8 +10,8 @@ def test_hit_spot_cell_plus_cushion():
     xl, xh = sz._ZONE_X_BOUNDS[4]
     ix, iz = (xl + xh) / 2, (lo + hi) / 2
     assert sz.hit_spot(ix, iz, ix, iz) is True                       # bullseye
-    assert sz.hit_spot(ix, iz, xh + 2 / 12, iz) is True               # 2 in outside the box
-    assert sz.hit_spot(ix, iz, xh + 5 / 12, iz) is False              # 5 in outside
+    assert sz.hit_spot(ix, iz, xh + 5 / 12, iz) is True               # 5 in outside the box (half-foot cushion)
+    assert sz.hit_spot(ix, iz, xh + 8 / 12, iz) is False              # 8 in outside
     assert sz.hit_spot(ix, iz, 1.6, iz) is False                      # way off the plate: no longer a "hit"
     assert sz.hit_spot(None, iz, ix, iz) is None
 
@@ -31,7 +31,7 @@ def test_breakdown():
     lo, hi = sz._LEVEL_Z_BOUNDS[2]
     xl, xh = sz._ZONE_X_BOUNDS[4]
     ix, iz = (xl + xh) / 2, (lo + hi) / 2
-    ps = [_p(ix, iz, ix, iz), _p(ix, iz, 0.0, 2.5, b=2, s=0), _p(ix, iz, ix, iz + 1.0, b=0, s=2, t="Slider")]
+    ps = [_p(ix, iz, ix, iz), _p(ix, iz, 0.0, 2.7, b=2, s=0), _p(ix, iz, ix, iz + 1.0, b=0, s=2, t="Slider")]
     r = ze.breakdown(ps, "R")
     assert r["overall"]["hits"] == 1 and r["overall"]["n"] == 3
     assert {x["label"] for x in r["by_count"]} == {"First pitch", "Behind", "Two strikes"}
