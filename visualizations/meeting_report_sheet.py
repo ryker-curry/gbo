@@ -168,6 +168,8 @@ def _rate_line(r):
             + (f' · ERA+ <b>{eplus}</b>' if eplus is not None else "")]
     if y.get("whip") is not None:
         bits.append(f'WHIP <b>{y["whip"]:.2f}</b> (D2 {lb.pitching("whip"):.2f} · MIAA {lb.pitching("whip", "MIAA"):.2f})')
+    if y.get("tbip") is not None:
+        bits.append(f'TBIP <b>{y["tbip"]:.2f}</b> ({y.get("bases", 0)} bases -- each base ≈ ½ run)')
     return f'<div class="small" style="margin-top:3px">{" &nbsp;·&nbsp; ".join(bits)} &nbsp;<span class="na">D2/MIAA = 2026 league averages</span></div>'
 
 

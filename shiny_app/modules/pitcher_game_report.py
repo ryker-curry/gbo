@@ -926,6 +926,7 @@ def pitcher_game_report_server(input, output, session, app_state):
             ]))
             sections.append(ui_helpers.render_kpi_cards([
                 {"label": "WHIP", "value": _fmt(line["WHIP"])},
+                {"label": "TBIP", "value": _fmt(line["TBIP"])},
                 {"label": "K/BB", "value": _fmt(line["K/BB"])},
                 {"label": "K %", "value": _fmt_pct(line["K %"])},
                 {"label": "ERA", "value": _fmt(line["ERA"])},

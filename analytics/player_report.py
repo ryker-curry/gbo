@@ -145,7 +145,7 @@ def stat_bundle(pitches, pitch_types, db=None):
     return {
         "games": games, "pitches": h["pitches"], "bf": bf, "ip_display": h["ip_display"], "outs": outs,
         "hits": h["hits"], "runs": h["runs"], "er": h["earned_runs"], "bb": h["bb"], "hbp": h["hbp"], "ks": h["ks"], "xbh": h["xbh"],
-        "era": h["era"], "whip": h["whip"],
+        "era": h["era"], "whip": h["whip"], "tbip": h["tbip"], "bases": h["bases"],
         "strike_pct": h["strike_pct"],
         "fps_pct": fps["fps_pct"], "fps_opportunities": fps["fps_opportunities"],
         "e_plus_a_pct": h["e_plus_a_pct"],

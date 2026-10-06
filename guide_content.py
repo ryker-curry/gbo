@@ -54,8 +54,10 @@ GUIDE = [
         "shows": "Everything about a pitcher in one place, filtered by dates, pitch type and game type. Use the View "
                  "menu to switch between Overview, Arsenal, Results, Trends and more.",
         "use": [
-            "Overview: your line (IP, K, BB, WHIP, FIP), plus stats vs D2, and your Stuff+/Location+/Pitching+ "
+            "Overview: your line (IP, K, BB, WHIP, TBIP, FIP), plus stats vs D2, and your Stuff+/Location+/Pitching+ "
             "grades overall and by pitch.",
+            "TBIP = bases you give up per inning (walks, HBP and hits, with a double counting 2, a homer 4). In college "
+            "each base turns into about half a run, so every free pass costs you -- lower is better.",
             "Arsenal: each pitch's shape (velo, movement, spin) and its Stuff+ breakdown -- the bars show exactly "
             "which traits add or take away from the grade, compared only to the same pitch type on our staff "
             "(your slider vs our sliders).",

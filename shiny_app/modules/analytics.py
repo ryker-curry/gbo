@@ -262,6 +262,7 @@ def analytics_server(input, output, session, app_state):
                     ]))
                     sections.append(ui_helpers.render_kpi_cards([
                         {"label": "WHIP", "value": _fmt_num(pitching_line["WHIP"])},
+                        {"label": "TBIP", "value": _fmt_num(pitching_line["TBIP"])},
                         {"label": "K/BB", "value": _fmt_num(pitching_line["K/BB"])},
                         {"label": "K %", "value": _fmt_pct1(pitching_line["K %"])},
                         {"label": "ERA", "value": _fmt_num(pitching_line["ERA"])},
