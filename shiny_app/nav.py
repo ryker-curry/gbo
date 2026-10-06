@@ -201,12 +201,16 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             my_dev_pages.append(NavPage("weekly_report", "My Weekly Report", "calendar-week"))
             # Oct 2026: published advance scouting reports, read-only.
             my_dev_pages.append(NavPage("advance_scouting", "Scouting Reports", "binoculars"))
-        # Pitching Staff Leaderboard (Sept 2026, Ryker: "both coaches and
-        # players can see") -- unconditionally, not gated by
-        # is_pitcher_player, since any player (pitcher or hitter) might
-        # want to see the whole staff's leaderboard, not just pitchers.
-        my_dev_pages.append(NavPage("pitching_leaderboard", "Pitching Staff Leaderboard", "trophy"))
-        my_dev_pages.append(NavPage("hitting_leaderboard", "Hitting Leaderboard", "trophy"))
+        # Leaderboards (Oct 2026, Ryker: "hitting leaderboards only
+        # viewable for hitters login and all coaches ... pitching
+        # leaderboard only accessible for pitcher and all coaches") --
+        # a player sees only the board for his own side. Staff roles keep
+        # both (Analytics section above). Pages not in the nav aren't
+        # rendered at all, so this is the access gate too.
+        if is_pitcher_player:
+            my_dev_pages.append(NavPage("pitching_leaderboard", "Pitching Staff Leaderboard", "trophy"))
+        else:
+            my_dev_pages.append(NavPage("hitting_leaderboard", "Hitting Leaderboard", "trophy"))
         sections.append(NavSection("My Development", my_dev_pages))
 
     return sections
