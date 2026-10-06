@@ -288,7 +288,7 @@ def roster_server(input, output, session, app_state):
           }});
         }})();""")
         return ui.div(
-            ui_helpers.card(ui.div(table, class_="table-responsive"), ui.div(f"{len(out)} of {len(rows)} players · scores are latest bucket percentiles, colored when Attention or Priority · hover a name for the flag reason", class_="gbo-page-sub", style="margin-top:12px; font-size:.78rem;")),
+            ui_helpers.card(ui.div(table, class_="table-responsive"), ui.div(f"{len(out)} of {len(rows)} players · scores are % of team best (latest tests), colored when Attention or Priority · hover a name for the flag reason", class_="gbo-page-sub", style="margin-top:12px; font-size:.78rem;")),
             js,
         )
 
