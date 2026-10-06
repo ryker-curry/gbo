@@ -86,7 +86,9 @@ def fingerprint(exc_type, frame):
 def record(exc_type, exc, tb, output_name=None, info=None):
     """Save one error; never raises. Returns the AppError id or None."""
     try:
-        from database import get_session
+        from database import get_session, in_guest_demo
+        if in_guest_demo():
+            return None   # guest demo (fake data): don't log or email (Oct 2026)
         from models import AppError
         frame = _gbo_frame(tb)
         fp, loc = fingerprint(exc_type, frame)

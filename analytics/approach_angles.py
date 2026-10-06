@@ -126,7 +126,7 @@ def get_model(db):
     from sqlalchemy import func
     from sqlalchemy.orm import joinedload
     key = db.query(func.count(RapsodoPitch.rapsodo_pitch_id), func.max(RapsodoPitch.rapsodo_pitch_id)).one()
-    key = (key[0], key[1])
+    key = (id(db.get_bind()), key[0], key[1])   # demo vs real never share (Oct 2026)
     if _cache["key"] == key and _cache["model"] is not None:
         return _cache["model"]
     team = (db.query(RapsodoPitch).options(joinedload(RapsodoPitch.pitch_type))

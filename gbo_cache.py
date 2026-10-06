@@ -45,7 +45,9 @@ def cached(name, tables):
         def wrapper(db, *args, **kwargs):
             if not enabled():
                 return fn(db, *args, **kwargs)
-            key = (name, args, tuple(sorted(kwargs.items())))
+            # id(bind): a guest's demo database and Supabase never share
+            # an entry (Oct 2026, guest demo).
+            key = (name, id(db.get_bind()), args, tuple(sorted(kwargs.items())))
             now = time.time()
             with _lock:
                 hit = _store.get(key)

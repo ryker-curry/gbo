@@ -288,7 +288,7 @@ def get_maps(db):
 
     located = (GamePitch.actual_plate_x.isnot(None), GamePitch.actual_plate_z.isnot(None), GamePitch.run_value.isnot(None))
     key = db.query(func.count(GamePitch.game_pitch_id), func.max(GamePitch.game_pitch_id)).filter(*located).one()
-    key = (key[0], key[1])
+    key = (id(db.get_bind()), key[0], key[1])   # demo vs real never share (Oct 2026)
     if _cache["key"] == key and _cache["maps"] is not None:
         return _cache["maps"]
     pitches = (

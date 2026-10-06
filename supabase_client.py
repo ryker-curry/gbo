@@ -45,6 +45,9 @@ def get_supabase_admin_client() -> Client:
     Only use this in Administrator-only code paths (e.g. the future User
     Management page). Never expose the service role key to end users.
     """
+    from database import in_guest_demo
+    if in_guest_demo():
+        raise RuntimeError("Turned off in the guest demo (nothing is saved outside this demo).")
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         raise RuntimeError(
             "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in .env "

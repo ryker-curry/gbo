@@ -97,6 +97,9 @@ def upload_video_to_r2(uploaded_file, identifier: str, bucket_subfolder: str = "
     small adapter object (or a call-site tweak reading the file from
     datapath) when video upload pages are migrated; not a change to
     this function's contract, just a note for that migration step."""
+    from database import in_guest_demo
+    if in_guest_demo():
+        raise RuntimeError("Uploads are turned off in the guest demo.")
     if not (R2_BUCKET_NAME and R2_PUBLIC_URL_BASE):
         raise RuntimeError(
             "R2_BUCKET_NAME and R2_PUBLIC_URL_BASE must be set in .env (see .env.example)."

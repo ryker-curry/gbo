@@ -166,7 +166,8 @@ def player_bullpens_server(input, output, session, app_state):
             if choice == "__all__":
                 rapsodo_bullpen_ids = [
                     row[0] for row in
-                    db.query(RapsodoPitch.bullpen_id).filter(RapsodoPitch.player_id == my_player.player_id).distinct().all()
+                    db.query(RapsodoPitch.bullpen_id).filter(RapsodoPitch.player_id == my_player.player_id,
+                                                  RapsodoPitch.bullpen_id.isnot(None)).distinct().all()  # game-linked Rapsodo has no bullpen (Oct 2026 fix)
                 ]
                 return {"kind": "combined", "player": my_player, "bullpen_ids": rapsodo_bullpen_ids}
             bullpen_id = int(choice)
@@ -240,7 +241,8 @@ def player_bullpens_server(input, output, session, app_state):
             )
             rapsodo_bullpen_ids = {
                 row[0] for row in
-                db.query(RapsodoPitch.bullpen_id).filter(RapsodoPitch.player_id == my_player.player_id).distinct().all()
+                db.query(RapsodoPitch.bullpen_id).filter(RapsodoPitch.player_id == my_player.player_id,
+                                                  RapsodoPitch.bullpen_id.isnot(None)).distinct().all()  # game-linked Rapsodo has no bullpen (Oct 2026 fix)
             }
             # CommandPitch has no player_id of its own (ownership comes
             # through BullpenSession.player_id, same reason
