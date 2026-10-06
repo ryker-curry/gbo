@@ -28,6 +28,7 @@ import plotly.graph_objects as go
 from database import get_session
 from models import Player, Game, GamePitch, RapsodoPitch, User, OpponentPlayer
 from game_stats import (
+    _group_into_plate_appearances,
     get_pitching_pitches, compute_pitching_line, compute_pitch_type_breakdown,
     get_forced_half_inning_end_runs, get_runner_event_outs, get_batter_hands, pitching_line_for,
 )
@@ -64,6 +65,8 @@ from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, MUTED_GRAY, T
 from visualizations.hitter_graphic import home_plate_shape, hitter_images
 
 import strike_zone
+from visualizations.hitter_pitch_chart import at_bat_pitch_locations_chart
+from analytics.hitter_report import _ABBR as _HR_ABBR
 import chart_helpers
 import ui_helpers
 from analytics import league_baselines
@@ -672,6 +675,7 @@ def pitcher_game_report_ui():
         ui.output_ui("pitch_locations_section"),
         ui.output_ui("rapsodo_shape_section"),
         ui.output_ui("pitch_by_pitch_section"),
+        ui.output_ui("at_bat_section"),
         ui.output_ui("results_section"),
         ui_helpers.page_footer(),
     )
@@ -1023,6 +1027,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                         "pitch_locations": "Pitch Locations",
                         "pitch_shape": "Pitch Shape / Rapsodo",
                         "pitch_by_pitch": "Pitch-by-Pitch",
+                        "at_bats": "At-Bat by At-Bat",
                         "results": "Results",
                     },
                 ),
@@ -2101,6 +2106,135 @@ def pitcher_game_report_server(input, output, session, app_state):
     # render_plotly/output_widget, since it's a small, non-interactive,
     # per-selection image -- simpler than managing another widget id.
     # -------------------------------------------------------------------
+
+    # -------------------------------------------------------------------
+    # At-Bat by At-Bat (Oct 2026, Ryker: "so they can see an entire at bat
+    # vs each hitter and how they attacked them") -- the pitching twin of
+    # Hitter Game Report's view. Chart shows the called spot (hollow
+    # ring) joined to where each pitch went (numbered dot).
+    # -------------------------------------------------------------------
+
+    def _batter_of(db, p):
+        """(name, hand) of the hitter at the plate for one of this pitcher's
+        pitches (game_stats.get_batter_hands for the hand -- same rule the
+        vs RHH/LHH splits use)."""
+        hand = get_batter_hands(db, [p]).get(p.game_pitch_id)
+        bid = p.our_player_id if p.is_our_team_batting else p.opponent_our_player_id
+        if bid is not None:
+            pl = db.query(Player).filter(Player.player_id == bid).first()
+            if pl is not None:
+                return f"{pl.first_name} {pl.last_name}", hand
+        if p.opponent_player_id is not None:
+            op = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == p.opponent_player_id).first()
+            if op is not None:
+                name = op.player_name
+                if op.jersey_number is not None and not name.startswith("#"):
+                    name = f"#{op.jersey_number} {name}"
+                return name, hand
+        return None, hand
+
+    def _pitcher_pas():
+        if "game_select" not in input or "pitcher_select" not in input:
+            return None, []
+        db = get_session()
+        pitches = get_pitching_pitches(db, int(input.pitcher_select()), game_id=int(input.game_select()))
+        return db, _group_into_plate_appearances(sorted(pitches, key=lambda p: p.pitch_sequence))
+
+    @render.ui
+    def at_bat_section():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        req("pitcher_select" in input)
+        req("report_section" in input)
+        if input.report_section() != "at_bats":
+            return None
+        db, pas = _pitcher_pas()
+        try:
+            if not pas:
+                return None
+            choices = {}
+            for i, pa in enumerate(pas, start=1):
+                name, hand = _batter_of(db, pa[0])
+                who = (name or "Unknown hitter") + (f" ({hand}HH)" if hand in ("R", "L") else "")
+                result = pa[-1].ab_outcome if pa[-1].ends_plate_appearance and pa[-1].ab_outcome else "In progress"
+                choices[str(i)] = f"At-bat {i} -- Inning {pa[0].inning} vs {who} -- {result}"
+            return ui.div(
+                ui.p(ui.strong("At-Bat by At-Bat")),
+                ui.p("Pick a hitter he faced to see the whole at-bat: the catcher's called spot (ring) and where "
+                     "each pitch went (numbered dot), plus count, pitch, location and result.", class_="text-muted small"),
+                ui.input_select("pab_select", "At-bat", choices=choices),
+                ui.output_ui("pitcher_at_bat_detail"),
+            )
+        finally:
+            if db is not None:
+                db.close()
+
+    @render.ui
+    def pitcher_at_bat_detail():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("pab_select" in input)
+        if "report_section" not in input or input.report_section() != "at_bats":
+            return None
+        db, pas = _pitcher_pas()
+        try:
+            k = int(input.pab_select())
+            if not (1 <= k <= len(pas)):
+                return None
+            pa = pas[k - 1]
+            name, hand = _batter_of(db, pa[0])
+            rap = profile_queries.rapsodo_by_game_pitch_id(db, [p.game_pitch_id for p in pa])
+            rows, attack = [], []
+            for p in pa:
+                label = p.pitch_type.type_name if p.pitch_type else "Unspecified"
+                r = rap.get(p.game_pitch_id)
+                words = strike_zone.location_words(p.actual_plate_x, p.actual_plate_z, hand)
+                spot = strike_zone.pitch_hit_spot(p)
+                outcome = p.pitch_outcome or "--"
+                if p.ends_plate_appearance and p.ab_outcome:
+                    outcome += f" ({p.ab_outcome})"
+                rows.append({
+                    "#": p.pa_pitch_number,
+                    "Count": f"{p.balls_before}-{p.strikes_before}" if p.balls_before is not None else "--",
+                    "Pitch": label,
+                    "Velo": f"{float(r.velocity):.1f}" if r is not None and r.velocity is not None else "--",
+                    "Location": words,
+                    "Hit spot": "Yes" if spot is True else ("No" if spot is False else "--"),
+                    "Result": outcome,
+                })
+                where = words.split(" -- ", 1)[-1] if " -- " in words else words
+                attack.append(f"{_HR_ABBR.get(label, label[:2].upper())} {where}")
+            if not rap:
+                for row in rows:
+                    row.pop("Velo")
+            result = pa[-1].ab_outcome if pa[-1].ends_plate_appearance else "In progress"
+            spots = [strike_zone.pitch_hit_spot(p) for p in pa]
+            graded = [x for x in spots if x is not None]
+            located = [p for p in pa if p.actual_plate_x is not None and p.actual_plate_z is not None]
+            chart = (chart_helpers.fig_to_img(
+                        at_bat_pitch_locations_chart(pa, batter_hand=hand, title=f"At-bat {k} -- {result or '--'}",
+                                                     zoom=True, show_intended=True), width=460, height=460)
+                     if located else ui.p("No pitch locations charted for this at-bat.", class_="text-muted small"))
+            who = (name or "Unknown hitter") + (f" ({hand}HH)" if hand in ("R", "L") else "")
+            return ui.div(
+                ui.div(ui.span("Hitter", class_="gbo-kpi-label"), ui.div(who, style="font-size:1.15rem;font-weight:700;"),
+                       style="margin:6px 0 4px;"),
+                ui.p(ui.strong("How he attacked him: "), " → ".join(attack) + f"  ({result or 'in progress'})",
+                     style="margin-bottom:4px;"),
+                ui.p(f"Hit the spot on {sum(graded)} of {len(graded)} called pitches." if graded else
+                     "No called spots recorded for this at-bat.", class_="text-muted small"),
+                ui.layout_columns(
+                    ui.div(chart, style="text-align:center;"),
+                    ui.div(ui_helpers.render_dict_table(rows),
+                           ui.p("Location is from the hitter's side: in = toward him. Hit spot = landed in the "
+                                "called box or within 6 inches of it.", class_="text-muted small")),
+                    col_widths=[5, 7],
+                ),
+            )
+        finally:
+            if db is not None:
+                db.close()
 
     @render.ui
     def pitch_by_pitch_section():

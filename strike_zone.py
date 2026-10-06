@@ -547,3 +547,36 @@ def hit_spot(intended_x, intended_z, actual_x, actual_z, cushion_in=HIT_SPOT_CUS
 def pitch_hit_spot(p):
     """hit_spot() for a GamePitch (intended_plate_x/z vs actual_plate_x/z)."""
     return hit_spot(p.intended_plate_x, p.intended_plate_z, p.actual_plate_x, p.actual_plate_z)
+
+
+def location_words(x, z, batter_hand=None):
+    """Plain description of where a pitch crossed, from the hitter's point
+    of view: "In zone -- up and in", "Ball -- down and away". Catcher's
+    view: a right-handed batter stands on the 3B (negative x) side, so
+    inside = negative x for him and positive x for a lefty. Unknown hand
+    (switch-hitter not resolved) says 3B side / 1B side instead."""
+    if x is None or z is None:
+        return "Not located"
+    x, z = float(x), float(z)
+    third = (ZONE_TOP - ZONE_BOTTOM) / 3
+    if z > ZONE_TOP - third:
+        height = "up"
+    elif z < ZONE_BOTTOM + third:
+        height = "down"
+    else:
+        height = "middle"
+    edge = ZONE_HALF_WIDTH / 3
+    if abs(x) <= edge:
+        side = None
+    elif batter_hand in ("R", "L"):
+        inside = (x < 0) if batter_hand == "R" else (x > 0)
+        side = "in" if inside else "away"
+    else:
+        side = "3B side" if x < 0 else "1B side"
+    if side is None:
+        where = "middle-middle" if height == "middle" else height
+    elif height == "middle":
+        where = side
+    else:
+        where = f"{height} and {side}"
+    return f"{'In zone' if is_in_zone(x, z) else 'Ball'} -- {where}"
