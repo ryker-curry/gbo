@@ -365,6 +365,26 @@ def flying_10_mph(time_seconds):
         return None
     return round((FLYING_10_YARDS / float(time_seconds)) * (3600 / 1760), 1)
 
+
+# Oct 2026, Ryker: "for the 30 yard sprint i want to put it underneath in
+# mph just like how we did for top speed for the 10 yd fly". Sprint
+# tests that get an mph shown next to the time -> timed distance (yards).
+# The 30 is from a standing start, so its mph is AVERAGE speed over the
+# whole 30 (start included) -- lower than the fly-10's top speed.
+THIRTY_YARD_TEST_NAME = "30-Yard Sprint Time"
+# Oct 2026, Ryker: "add mph to 10 yd acceleration too" -- also from a
+# standing start, so average speed over the 10.
+ACCEL_10_TEST_NAME = "Acceleration: 10-Yard Sprint Time"
+SPRINT_MPH_YARDS = {FLYING_10_TEST_NAME: FLYING_10_YARDS, THIRTY_YARD_TEST_NAME: 30, ACCEL_10_TEST_NAME: 10}
+
+
+def sprint_mph(test_name, time_seconds):
+    """mph for a sprint test in SPRINT_MPH_YARDS, else None."""
+    yards = SPRINT_MPH_YARDS.get(test_name)
+    if yards is None or time_seconds is None or time_seconds <= 0:
+        return None
+    return round((yards / float(time_seconds)) * (3600 / 1760), 1)
+
 # Feeds the new Capacity score (Physical Development extension) --
 # throwing-arm strength/stability metrics only, matching the
 # higher-is-better shape every other bucket in this file already
