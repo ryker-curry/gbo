@@ -57,7 +57,7 @@ PRINT_JS = """
 def pitcher_meeting_report_ui():
     return ui.div(
         ui_helpers.page_header(
-            "Pitcher Meeting Report",
+            "Pitcher Report",
             "One page to go through with a coach -- what happened, what it means, and what to work on.", actions=ui_helpers.how_to_link("meeting_report")),
         ui.div(
             ui.input_radio_buttons("kind", None, choices={"game": "Game", "season": "Season"}, selected="game", inline=True),

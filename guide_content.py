@@ -191,8 +191,8 @@ GUIDE = [
         "good": ["The thick line moving toward the good side over several games."],
     },
     {
-        "key": "meeting_report", "title": "Meeting Reports (pitcher and hitter)", "who": "all",
-        "pages": ["Pitcher Meeting Report", "Hitter Meeting Report", "My Meeting Report"],
+        "key": "meeting_report", "title": "Pitcher & Hitter Reports", "who": "all",
+        "pages": ["Pitcher Report", "Hitter Report"],
         "shows": "One printable page to go through with a coach, for one game or the whole season.",
         "use": [
             "Key numbers: this game vs your season, the team average and the D2 / MIAA average. ▲ = better, "
@@ -245,7 +245,7 @@ GUIDE = [
         "use": [
             "Cards at the top compare the team to the D2 average (OPS+, ERA+, QAB %).",
             "Standouts list the best and worst individual performances.",
-            "Click a player to open their full meeting report sheet for the same games.",
+            "Click a player to open their full Pitcher or Hitter Report for the same games.",
         ],
         "good": ["ERA+ and OPS+ over 100 and team QAB % at or above 54%."],
     },

@@ -120,7 +120,7 @@ def player_box(data, allowed):
         tiles.append(_tile("My arm today", ui.div(_dot(st), st, class_="big"),
                            ui.div(detail, class_="line") if detail else None,
                            ui.div(last, class_="text-muted line") if last else None))
-    tiles.append(_game_tile(data.get("last_game"), "My last game", _go("My Meeting Report", allowed, "My Meeting Report")))
+    tiles.append(_game_tile(data.get("last_game"), "My last game", _go("Pitcher Report" if "Pitcher Report" in allowed else "Hitter Report", allowed, "Open my report")))
     goals = data.get("goals") or []
     if goals:
         items = []
