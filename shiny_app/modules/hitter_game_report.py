@@ -98,7 +98,17 @@ def location_words(x, z, batter_hand=None):
 
 
 def _pitcher_of(db, p):
-    """(name, hand) of whoever threw this pitch to our batter."""
+    """(name, hand) of whoever threw this pitch to our batter. Same
+    convention as game_stats.get_batting_pitches: when our team is
+    batting, the pitcher is the opponent side (a roster player in an
+    intrasquad, else an OpponentPlayer); when the row is the other
+    intrasquad squad batting (is_our_team_batting False), OUR side
+    (our_player_id) is the pitcher and the batter is opponent_our_player_id."""
+    if not p.is_our_team_batting:
+        pl = db.query(Player).filter(Player.player_id == p.our_player_id).first()
+        if pl is not None:
+            return f"{pl.first_name} {pl.last_name}", pl.throws
+        return None, None
     if p.opponent_our_player_id is not None:
         pl = db.query(Player).filter(Player.player_id == p.opponent_our_player_id).first()
         if pl is not None:
@@ -529,7 +539,8 @@ def hitter_game_report_server(input, output, session, app_state):
         try:
             p = (db.query(GamePitch).options(joinedload(GamePitch.pitch_type))
                  .filter(GamePitch.game_pitch_id == int(raw)).first())
-            if p is None or "batter_select" not in input or p.our_player_id != int(input.batter_select()):
+            batter_id = p.our_player_id if (p is not None and p.is_our_team_batting) else (p.opponent_our_player_id if p is not None else None)
+            if p is None or "batter_select" not in input or batter_id != int(input.batter_select()):
                 return None
             label = p.pitch_type.type_name if p.pitch_type else "Unspecified"
             hand = get_batter_hands(db, [p]).get(p.game_pitch_id)
