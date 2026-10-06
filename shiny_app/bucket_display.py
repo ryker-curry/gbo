@@ -36,7 +36,7 @@ here calls it anymore) so callers didn't need to change.
 
 from shiny import ui
 
-from bucket_system import BODY_COMP_METRICS, POWER_SUBGROUPS, flying_10_mph, FLYING_10_TEST_NAME
+from bucket_system import BODY_COMP_METRICS, POWER_SUBGROUPS, sprint_mph
 import force_plate_standards
 import ui_helpers
 
@@ -448,10 +448,10 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark", is_pitcher=None):
         # the 20/10 fly to be the time itself as well as in mph") --
         # purely a display append, computed from the same raw time
         # already being shown; no separate mph field is stored.
-        if name == FLYING_10_TEST_NAME:
-            mph = flying_10_mph(d["raw"])
-            if mph is not None:
-                raw_label += f" ({mph} mph)"
+        # Oct 2026: the 30-Yard Sprint gets the same mph append.
+        mph = sprint_mph(name, d["raw"])
+        if mph is not None:
+            raw_label += f" ({mph} mph)"
         percentile_label = f"{ordinal(raw_percentile)} percentile" if raw_percentile is not None else "No percentile data"
         header_children = [
             ui.span(name, class_="gbo-metric-bar-name"),
