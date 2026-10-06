@@ -101,14 +101,17 @@ GUIDE = [
         "shows": "How often you put the pitch where the catcher called it. Find it on Pitcher Profile > Command & "
                  "Execution (also called Hit-the-spot % on the reports).",
         "use": [
-            "A pitch hits its spot if it lands in the called box or within 3 inches of it (about a ball width).",
+            "A pitch hits its spot if it lands in the called box or within 6 inches (half a foot) of it.",
             "Calls off the plate count anywhere off the plate on that side -- a chase pitch way outside still did its job.",
             "By pitch: which pitch you command best and worst. By count: do you lose the spot when you're behind or "
             "with two strikes?",
             "When you miss: up, down, arm side or glove side -- and how often a miss ends up over the middle "
             "(the misses that get hit).",
+            "Command Execution % is its partial-credit partner: 4 points within 4 in of the box, 3 within 8, 2 within "
+            "12, 1 within 16, 0 beyond, averaged out of 4. Zone Execution % = how often you hit it; Command "
+            "Execution % = how close you usually get.",
         ],
-        "good": ["Our staff hit about 1 in 5 spots this fall -- anything above that is better than our average.",
+        "good": ["Our staff hit about 1 in 3 spots this fall (33%) -- anything above that is better than our average.",
                  "Fewer misses ending up over the middle."],
     },
     {

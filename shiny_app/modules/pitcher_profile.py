@@ -509,6 +509,11 @@ def pitcher_profile_server(input, output, session, app_state):
         ))
 
     @reactive.effect
+    @reactive.event(input.pp_glossary_command)
+    def _pp_show_command_glossary():
+        ui.modal_show(ui_helpers.glossary_modal("Command Glossary", glossary_content.COMMAND))
+
+    @reactive.effect
     @reactive.event(input.pp_glossary_metrics)
     def _pp_show_metrics_glossary():
         ui.modal_show(ui_helpers.glossary_modal("Metrics Glossary", glossary_content.METRICS))
@@ -2574,10 +2579,14 @@ def pitcher_profile_server(input, output, session, app_state):
         if not view_pitches:
             return None
         return ui.div(
-            # Oct 2026 (Ryker): Zone Execution % -- called cell + 3 in cushion.
-            ui.p(ui.strong("Zone Execution"), "  ", ui_helpers.how_to_link("zone_execution")),
+            # Oct 2026 (Ryker): Zone Execution % -- called cell + 6 in cushion.
+            ui.div(
+                ui.p(ui.strong("Zone Execution"), "  ", ui_helpers.how_to_link("zone_execution"), style="margin:0;"),
+                ui_helpers.glossary_link("pp_glossary_command", "Command Glossary"),
+                style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+            ),
             ui.p(
-                "A pitch hits its spot if it lands in the box the catcher called, or within 3 inches of it. Calls "
+                "A pitch hits its spot if it lands in the box the catcher called, or within 6 inches (half a foot) of it. Calls "
                 "off the plate (the outside boxes) count anywhere off the plate on that side.",
                 class_="text-muted small",
             ),

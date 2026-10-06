@@ -44,7 +44,7 @@ GAME_METRICS = {
     # pitchers
     "p_strike": ("Strike %", "pitch", True, "%", "share of pitches that were strikes"),
     "p_fps": ("First-pitch strike %", "pitch", True, "%", "started hitters 0-1"),
-    "p_spot": ("Hit-the-spot %", "pitch", True, "%", "landed in the called box or within 3 in (needs video review)"),
+    "p_spot": ("Hit-the-spot %", "pitch", True, "%", "landed in the called box or within 6 in (needs video review)"),
     "p_bb": ("Walk %", "pitch", False, "%", "walks per batter faced"),
     "p_whiff": ("Whiff %", "pitch", True, "%", "misses per swing"),
     "p_kbb_plus": ("K-BB%+ (vs D2)", "pitch", True, "", "100 = D2 average"),

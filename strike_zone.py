@@ -522,14 +522,14 @@ def render_zone_selector(key, marker_x=None, marker_z=None):
 # ---------------------------------------------------------------------------
 # Zone Execution / Hit-the-spot -- Oct 2026 (Ryker approved). A pitch HIT
 # ITS SPOT if it landed in the called cell (call_cell of its intended
-# location) or within HIT_SPOT_CUSHION_IN inches of that cell's edge.
+# location) or within HIT_SPOT_CUSHION_IN inches (half a foot) of that cell's edge.
 # Same calling system as Command+ / Command Execution %, and off-plate calls
 # (zone 1 / 5) count anywhere off the plate (see _zone_horizontal_offset_ft).
 # Replaces the old 1-9 grid match, which clamped anything outside the zone
 # to the nearest edge box -- a third of its "hits" (54 of 171 on the fall
 # data) had really missed the spot by 6+ inches.
 # ---------------------------------------------------------------------------
-HIT_SPOT_CUSHION_IN = 3.0
+HIT_SPOT_CUSHION_IN = 6.0   # Oct 2026, Ryker: half a foot (was 3 in -- read too low; 6 in tested as consistent and best tied to fewer balls)
 
 
 def hit_spot(intended_x, intended_z, actual_x, actual_z, cushion_in=HIT_SPOT_CUSHION_IN):

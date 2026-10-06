@@ -39,7 +39,7 @@ RESULTS_WORDS = {
     "WHIP": ("WHIP", "walks + hits per inning (lower is better)"),
     "K/BB": ("K/BB", "strikeouts for every walk"),
     "CSW %": ("CSW %", "called strikes + swinging strikes per pitch"),
-    "Zone Execution %": ("Hit-the-spot %", "pitches that landed in the called box or within 3 inches"),
+    "Zone Execution %": ("Hit-the-spot %", "pitches within half a foot of the called box"),
 }
 
 CSS = """

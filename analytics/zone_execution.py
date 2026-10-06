@@ -2,7 +2,7 @@
 GBO -- Zone Execution % breakdown (Oct 2026, Ryker approved).
 
 Hit = landed in the called cell or within strike_zone.HIT_SPOT_CUSHION_IN
-(3 in) of it -- strike_zone.pitch_hit_spot, the same definition every
+(6 in) of it -- strike_zone.pitch_hit_spot, the same definition every
 "Zone Execution %" / "Hit-the-spot %" number in GBO now uses.
 
 breakdown(pitches, throws) -> {
