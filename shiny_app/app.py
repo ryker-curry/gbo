@@ -51,7 +51,7 @@ for _p in (_REPO_ROOT, _THIS_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from shiny import App, ui, render, reactive, req  # noqa: E402
+from shiny import App, ui, render, reactive  # noqa: E402
 
 from state import new_app_state  # noqa: E402
 import error_log  # noqa: E402
@@ -59,15 +59,14 @@ import error_log  # noqa: E402
 # Oct 2026: record every error a user hits (app_errors) and email Ryker on
 # bursts + a daily summary -- see error_log.py.
 error_log.install()
-from auth import do_login, do_logout  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+from auth import do_login, do_logout, _load_gbo_role  # noqa: E402
+import database  # noqa: E402
+import demo_db  # noqa: E402
 import nav  # noqa: E402
 import ui_helpers  # noqa: E402
 import theme  # noqa: E402
-import chart_helpers  # noqa: E402
 import click_widgets  # noqa: E402
-from shinywidgets import output_widget, render_plotly  # noqa: E402
-import demo_data  # noqa: E402
-import strike_zone  # noqa: E402
 from modules import (  # noqa: E402
     dashboard, player_schedule, player_stats, players, assessments, video_import,
     team_schedule, player_assignments, at_appointments, rapsodo_import, assessment_import,
@@ -76,9 +75,9 @@ from modules import (  # noqa: E402
     pitcher_profile, hitter_profile, pitching_leaderboard, hitting_leaderboard,
     user_management, staff_assignments, hitter_tracking,
     opponent_teams, bullpen_scripts, training_routines, idp, bullpen_tracking,
-    game_tracking, command_tracker, roster, player_profile, guest_demo,
+    game_tracking, command_tracker, roster, player_profile,
     pitcher_meeting_report, weekly_report, advance_scouting, hitter_meeting_report, team_game_report,
-    data_health, arm_care, how_to_read,
+    data_health, arm_care, how_to_read, research_project,
 )
 
 # Registry of page keys (see nav.NavPage.key) that have a real Shiny
@@ -88,6 +87,7 @@ from modules import (  # noqa: E402
 MODULE_UI = {
     "dashboard": lambda: dashboard.dashboard_ui("dashboard"),
     "how_to_read": lambda: how_to_read.how_to_read_ui("how_to_read"),
+    "research_project": lambda: research_project.research_project_ui("research_project"),
     "player_schedule": lambda: player_schedule.player_schedule_ui("player_schedule"),
     "player_stats": lambda: player_stats.player_stats_ui("player_stats"),
     "players": lambda: players.players_ui("players"),
@@ -193,12 +193,6 @@ def server(input, output, session):
     app_state = new_app_state()
     error_log.register_session(session, lambda: (
         app_state.user_id(), app_state.role_name(), input.main_nav() if "main_nav" in input else None))
-    # Sept 2026: which role (Coach vs Player) the interactive guest-mode
-    # sidebar is currently showing -- see _guest_ui()/_GUEST_COACH_GROUPS/
-    # _GUEST_PLAYER_GROUPS below. Only meaningful while app_state.is_guest()
-    # is True; unrelated to the real app_state.role_name() a logged-in
-    # user gets from auth.
-    guest_role = reactive.Value("coach")
 
     # --- Dark/light mode: sync the client-side toggle into AppState so
     # server-rendered plotly charts (bucket_display.py -- CSS can't
@@ -237,135 +231,52 @@ def server(input, output, session):
     def _on_login_submit():
         do_login(app_state, input.login_email(), input.login_password())
 
+    # --- Continue as Guest (Oct 2026, Ryker: midterm progress report) --
+    # A guest gets the REAL app shell, logged in as a demo user, on a
+    # private copy of a made-up team (demo_db.py). database.get_session()
+    # hands this session that copy from here on; nothing a guest does can
+    # reach Supabase, uploads or email (see database.in_guest_demo).
+    guest_engine = {"eng": None}
+
+    def _guest_login(email):
+        app_state.auth_user.set(SimpleNamespace(email=email))
+        app_state.auth_error.set(None)
+        _load_gbo_role(app_state, email)
+
     @reactive.effect
     @reactive.event(input.guest_continue)
     def _on_guest_continue():
+        maker, eng = demo_db.new_guest_db()
+        database.use_guest_db(session, maker)
+        guest_engine["eng"] = eng
         app_state.is_guest.set(True)
+        _guest_login(demo_db.DEMO_COACH_EMAIL)
 
     @reactive.effect
-    @reactive.event(input.guest_back_to_login)
-    def _on_guest_back_to_login():
-        app_state.is_guest.set(False)
+    @reactive.event(input.guest_view)
+    def _on_guest_view():
+        if not app_state.is_guest():
+            return
+        email = {"coach": demo_db.DEMO_COACH_EMAIL, "pitcher": demo_db.DEMO_PLAYER_EMAIL,
+                 "hitter": demo_db.DEMO_HITTER_EMAIL}.get(input.guest_view())
+        if email:
+            _guest_login(email)
 
-    @reactive.effect
-    @reactive.event(input.guest_role_coach)
-    def _on_guest_role_coach():
-        guest_role.set("coach")
+    def _end_guest():
+        database.use_guest_db(session, None)
+        if guest_engine["eng"] is not None:
+            guest_engine["eng"].dispose()
+            guest_engine["eng"] = None
 
-    @reactive.effect
-    @reactive.event(input.guest_role_player)
-    def _on_guest_role_player():
-        guest_role.set("player")
-
-    # --- Guest-mode Game Tracking deep dive (4th interactive page,
-    # Sept 2026) -- see _guest_game_tracking_panel() above for the UI
-    # shell. Unlike the other three deep dives (pre-computed once from
-    # demo_data.py, never mutated), this one is genuinely live: a
-    # session-local pitch log the guest builds by clicking, resetting
-    # only on "New At-Bat". Reuses the real Live Tracking page's exact
-    # click-to-place widget (strike_zone.build_zone_selector_figure +
-    # click_widgets.click_target/build_clickable_widget) and the same
-    # PITCH_OUTCOMES/CONTACT_QUALITY_OPTIONS/is_in_zone/
-    # classify_attack_zone this app already uses for real charted
-    # pitches -- only the count-advance logic below is a deliberately
-    # simplified, single-at-bat-at-a-time stand-in for the real page's
-    # full game/inning/baserunner state (see the "what's simplified
-    # here" note on the page itself). Never touches the database.
-    guest_gt_state = reactive.Value({"balls": 0, "strikes": 0, "pa_number": 1, "log": []})
-
-    @render_plotly
-    def guest_gt_zone_widget():
-        req("guest_gt_x_input" in input)
-        x, z = input.guest_gt_x_input(), input.guest_gt_z_input()
-        return click_widgets.build_clickable_widget(strike_zone.build_zone_selector_figure(marker_x=x, marker_z=z))
-
-    @render.ui
-    def guest_gt_outcome_dependent_fields():
-        req("guest_gt_outcome" in input)
-        if input.guest_gt_outcome() != "In Play":
-            return None
-        contact_choices = [c for c in game_tracking.CONTACT_QUALITY_OPTIONS if c != "Miss"]
-        return ui.input_select("guest_gt_contact_quality", "Contact Quality", choices=contact_choices)
-
-    @reactive.effect
-    @reactive.event(input.guest_gt_log_btn)
-    def _on_guest_gt_log_pitch():
-        outcome = input.guest_gt_outcome()
-        x, z = input.guest_gt_x_input(), input.guest_gt_z_input()
-        contact_quality = input.guest_gt_contact_quality() if outcome == "In Play" and "guest_gt_contact_quality" in input else None
-        prev = guest_gt_state()
-        balls, strikes = prev["balls"], prev["strikes"]
-        balls_before, strikes_before = balls, strikes
-        ends_pa = False
-        if outcome == "Ball":
-            balls += 1
-            ends_pa = balls >= 4
-        elif outcome == "HBP":
-            ends_pa = True
-        elif outcome == "In Play":
-            ends_pa = True
-        elif outcome == "Foul":
-            if strikes < 2:
-                strikes += 1
-        else:  # Called Strike, Swing and Miss
-            strikes += 1
-            ends_pa = strikes >= 3
-        entry = {
-            "pitch_number": len(prev["log"]) + 1,
-            "balls_before": balls_before, "strikes_before": strikes_before,
-            "pitch_type": input.guest_gt_pitch_type(), "outcome": outcome,
-            "plate_x": x, "plate_z": z, "contact_quality": contact_quality,
-            "in_zone": strike_zone.is_in_zone(x, z),
-            "attack_zone": strike_zone.classify_attack_zone(x, z),
-        }
-        guest_gt_state.set({
-            "balls": 0 if ends_pa else balls, "strikes": 0 if ends_pa else strikes,
-            "pa_number": prev["pa_number"] + 1 if ends_pa else prev["pa_number"],
-            "log": prev["log"] + [entry],
-        })
-        if ends_pa:
-            ui.notification_show(f"At-bat #{prev['pa_number']} ended: {outcome}. Starting a new at-bat.", type="message", duration=5)
-
-    @reactive.effect
-    @reactive.event(input.guest_gt_new_ab_btn)
-    def _on_guest_gt_new_ab():
-        prev = guest_gt_state()
-        guest_gt_state.set({"balls": 0, "strikes": 0, "pa_number": prev["pa_number"] + 1, "log": prev["log"]})
-
-    @render.ui
-    def guest_gt_kpis():
-        st = guest_gt_state()
-        return ui.div(
-            ui_helpers.kpi_tile("Count", f"{st['balls']}-{st['strikes']}"),
-            ui_helpers.kpi_tile("At-Bat #", st["pa_number"]),
-            ui_helpers.kpi_tile("Pitches Logged", len(st["log"])),
-            class_="gbo-kpi-row",
-        )
-
-    @render.ui
-    def guest_gt_log_table():
-        st = guest_gt_state()
-        if not st["log"]:
-            return ui.p(
-                "No pitches logged yet -- click a spot in the zone, pick a pitch type and outcome, then hit Log Pitch.",
-                class_="text-muted",
-            )
-        rows = [
-            {
-                "Pitch #": p["pitch_number"], "Count": f"{p['balls_before']}-{p['strikes_before']}",
-                "Pitch Type": p["pitch_type"],
-                "Location": f"{p['plate_x']:.2f}, {p['plate_z']:.2f}" if p["plate_x"] is not None else "--",
-                "In Zone": {True: "Yes", False: "No"}.get(p["in_zone"], "--"),
-                "Attack Zone": p["attack_zone"] or "--",
-                "Outcome": p["outcome"], "Contact": p["contact_quality"] or "",
-            }
-            for p in reversed(st["log"])
-        ]
-        return ui_helpers.render_dict_table(rows)
+    session.on_ended(_end_guest)
 
     @reactive.effect
     @reactive.event(input.logout_button)
     def _on_logout():
+        if app_state.is_guest():          # no Supabase login to sign out of
+            app_state.reset()
+            _end_guest()
+            return
         do_logout(app_state)
 
     @reactive.effect
@@ -408,6 +319,7 @@ def server(input, output, session):
     arm_care.arm_care_server("arm_care", app_state)
     weekly_report.weekly_report_server("weekly_report", app_state)
     how_to_read.how_to_read_server("how_to_read", app_state)
+    research_project.research_project_server("research_project", app_state)
     advance_scouting.advance_scouting_server("advance_scouting", app_state)
     hitter_game_report.hitter_game_report_server("hitter_game_report", app_state)
     pitcher_profile.pitcher_profile_server("pitcher_profile", app_state)
@@ -431,8 +343,6 @@ def server(input, output, session):
     # --- Top-level shell: decide what to show, just like the original --
     @render.ui
     def shell():
-        if app_state.is_guest():
-            return _guest_ui(guest_role())
         if app_state.auth_user() is None:
             return _login_ui(app_state)
         if app_state.is_pending_setup():
@@ -464,411 +374,6 @@ def _login_ui(app_state):
     )
 
 
-_GUEST_ASSESSMENT_CATEGORIES = [
-    ("Body Composition", "19 metrics via InBody770",
-     "Skeletal muscle mass, body fat percentage, and lean/fat mass broken out by limb (including "
-     "throwing arm vs. non-throwing arm). This tracks a player's power-to-weight ratio and conditioning "
-     "level over an offseason or season, and asymmetries between limbs can flag developing imbalances "
-     "before they become injuries."),
-    ("Mobility & ROM", "24 range-of-motion measurements",
-     "How far the shoulder, elbow, and hip move, tested bilaterally (or by drive leg/plant leg for "
-     "the hip) -- plus Total Arc of Motion and GIRD (Glenohumeral Internal Rotation Deficit), both "
-     "calculated automatically from the shoulder readings rather than tested separately. Restricted "
-     "mobility anywhere in the chain limits how efficiently force transfers through the body, and it's "
-     "one of the most "
-     "common root causes of both reduced performance and overuse injury."),
-    ("Arm Health", "26 metrics — ROM, strength, pain, and workload",
-     "A dedicated deep-dive on the throwing arm: shoulder rotation range, shoulder and grip strength, "
-     "elbow mobility, and daily self-reported pain/readiness scores, plus throwing workload counts "
-     "(bullpen and game pitch counts). This is the platform's core injury-prevention tool for pitchers "
-     "and any position player who throws often -- catching a strength or ROM deficit early can prevent "
-     "a shoulder or elbow injury before it happens."),
-    ("Upper Body Strength", "6 metrics — push, pull, grip",
-     "Bench press load and reps, chin-up load and reps, grip strength. Upper body strength underlies "
-     "bat speed and throwing velocity -- a stronger, more stable upper body can produce and control "
-     "more force through the swing or throw."),
-    ("Lower Body Strength", "15 metrics — bilateral, unilateral, hip, knee",
-     "Squat and deadlift loads, isometric mid-thigh pull force, single-leg strength, and hip/knee "
-     "force output on each side. Baseball power starts from the ground up -- sprint speed, jump "
-     "height, and rotational power at the plate or on the mound all trace back to lower body strength "
-     "and how symmetric it is left to right."),
-    ("Explosive Power", "13 metrics — jump and reactive power",
-     "Countermovement jump height, squat jump, single-leg jumps, broad jump, lateral jumps, and a "
-     "plyometric push-up test. This measures how quickly a player can produce force (not just how "
-     "much), which is what actually translates strength into bat speed, throwing velocity, and first-step "
-     "quickness -- strength alone doesn't win at the plate or on the bases without speed of application."),
-    ("Rotational Power", "4 metrics — medicine ball throws",
-     "Distance and velocity of a rotational medicine ball throw, both directions. Baseball's core "
-     "movements -- the swing and the throw -- are both rotational, so this is one of the most direct "
-     "physical proxies for hitting and throwing power the platform tracks."),
-    ("Speed", "4 metrics — acceleration and top speed",
-     "10-yard and 20-yard sprint times, a flying 10-yard split, and estimated max velocity. Directly "
-     "relevant to baserunning and defensive range, and a useful cross-check against lower body "
-     "strength and power numbers -- strength gains that don't show up in speed testing may not be "
-     "transferring to the field yet."),
-    ("Pitcher-Specific (Pitch Characteristics)", "13 metrics via Rapsodo, per pitch",
-     "Velocity, spin rate, spin efficiency, spin axis, horizontal/vertical break, release point, "
-     "extension, approach angle, and plate location -- captured pitch by pitch. This is what "
-     "separates raw arm strength from actual pitch effectiveness: two pitchers can throw the same "
-     "velocity, but movement, spin, and location are what determine how hittable each pitch actually is."),
-    ("Baseball Performance", "reserved for future use",
-     "A placeholder category for future performance metrics not yet defined -- kept open rather than "
-     "removed so it's ready whenever the program decides what belongs here."),
-]
-
-_GUEST_DASHBOARDS = [
-    ("Head Coach / Coach / Administrator", "A general overview: roster size, open IDP goals, "
-     "recent assessments and training sessions, and week-over-week trend deltas."),
-    ("Strength Coach", "S&C-specific: recent Upper/Lower Body Strength, Explosive Power, and "
-     "Rotational Power assessments, lifting session workload, and upcoming scheduled lifts."),
-    ("Athletic Trainer", "Injury and return-to-play focus: a live count of injured/medical-hold "
-     "players, recent Arm Health pain and readiness scores, and recent Arm Care sessions."),
-    ("Player", "Their own upcoming week: team schedule, their prescribed assignments, and their "
-     "Athletic Trainer appointments."),
-]
-
-
-# --- Interactive guest-mode shell (Sept 2026) ---------------------------
-# Ryker, Sept 2026: "make it to where they can click through and see
-# what it would look like as different roles ... click on stuff in the
-# side bar and everything." This reuses the exact same sidebar/
-# navset_hidden mechanism _app_shell_ui() below uses for a real login --
-# same CSS classes (.gbo-side/.gbo-side-link/.gbo-side-group), the same
-# `sidebar_go` -> ui.update_navs("main_nav", ...) click handling
-# (server()'s _on_sidebar_go isn't guest-specific -- it just matches
-# whatever navset currently has id "main_nav"), and the same
-# _SIDEBAR_JS script. The only new server-side state is guest_role
-# (server(), right after app_state = new_app_state()) -- a small
-# reactive.Value the "View as Coach"/"View as Player" buttons flip,
-# which swaps which curated set of sidebar links is visible.
-#
-# Every real module a Coach or Player would actually see is listed
-# below as a clickable nav item -- see _GUEST_COACH_GROUPS/
-# _GUEST_PLAYER_GROUPS. Pitcher Profile (the only page with a full
-# fake-data pipeline built out so far -- see demo_data.py/
-# guest_demo.py) opens the real, complete GBO analytics page on a
-# fictional pitcher (Joe Random). Every other nav item opens a labeled
-# sample card via _guest_sample_panel() explaining what that real page
-# does and does not pretend it's the finished thing. As more modules
-# get the same fake-data treatment (Pitcher Game Report is next),
-# swap that key's entry in _GUEST_PANEL_BUILDERS for a real one --
-# nothing else about this shell needs to change.
-
-_GUEST_COACH_GROUPS = [
-    ("Overview", [("dashboard", "Dashboard")]),
-    ("Roster", [("roster", "Players")]),
-    ("Development", [("assessments", "Assessments"), ("idp", "Development Plans"), ("training_routines", "Training Sessions")]),
-    ("Scheduling", [("team_schedule", "Team Schedule"), ("player_assignments", "Assignments"), ("at_appointments", "AT Appointments")]),
-    ("Pitching", [("bullpen_dashboard", "Bullpen"), ("rapsodo_import", "Import Rapsodo")]),
-    ("Games", [("game_tracking", "Game Tracking"), ("pitcher_game_report", "Pitcher Game Report")]),
-    ("Analytics", [("pitcher_profile", "Pitcher Profile")]),
-    ("Video", [("video_import", "Video")]),
-]
-_GUEST_PLAYER_GROUPS = [
-    ("Me", [("player_profile", "My Profile"), ("player_schedule", "My Schedule"), ("player_stats", "My Stats"), ("player_bullpens", "My Bullpens"), ("player_video", "My Video")]),
-    ("Analytics", [("pitcher_profile", "Pitcher Profile")]),
-]
-
-
-def _guest_sample_panel(title, description, extra=None):
-    """A single labeled placeholder nav panel for a real GBO page that
-    doesn't have a fake-data pipeline built out yet -- see this
-    section's module comment. Same dashed-card convention
-    guest_demo.py's own "Research: coming soon" section uses, so a
-    guest never sees an unexplained blank or broken-looking page."""
-    body = [ui_helpers.page_header(title), ui.p(description)]
-    if extra is not None:
-        body.append(extra)
-    body.append(ui.div(
-        ui.strong("Sample view only. "),
-        "This exact page, on this fictional roster, isn't wired up with fake data yet -- it's next in line "
-        "as this guest mode gets built out further (Pitcher Profile, under Analytics, is the first page to "
-        "get the full treatment).",
-        class_="gbo-profile-card", style="padding:14px; border-style:dashed; margin-top:16px;",
-    ))
-    return ui.div(*body, class_="p-3")
-
-
-def _guest_dashboard_panel():
-    return ui.div(
-        ui_helpers.page_header("Dashboard"),
-        ui.p("The landing page after login -- built differently for every role, all pulling from the same underlying data:"),
-        *[ui.div(ui.p(ui.strong(role)), ui.p(desc), ui.br()) for role, desc in _GUEST_DASHBOARDS],
-        ui.h6("Example: what a Head Coach sees at a glance", class_="gbo-section-title", style="margin-top:12px;"),
-        ui_helpers.render_kpi_cards([
-            {"label": "Players", "value": "24"},
-            {"label": "Open IDP Goals", "value": "12", "delta": "3 vs last week", "delta_positive": False},
-            {"label": "Assessments (7 days)", "value": "18", "delta": "5 vs last week", "delta_positive": True},
-            {"label": "Training Sessions (7 days)", "value": "31", "delta": "8 vs last week", "delta_positive": True},
-        ]),
-        ui.div(
-            ui.strong("Sample view only. "),
-            "This exact page isn't wired up with fake data yet -- it's next in line as this guest mode gets "
-            "built out further (Pitcher Profile, under Analytics, is the first page to get the full treatment).",
-            class_="gbo-profile-card", style="padding:14px; border-style:dashed; margin-top:16px;",
-        ),
-        class_="p-3",
-    )
-
-
-def _guest_assessments_panel():
-    return ui.div(
-        ui_helpers.page_header("Assessments"),
-        ui.p(
-            "10 categories of physical testing. Every category supports full history (not just a snapshot) -- "
-            "a player can be tested the same way repeatedly over months or years, and the platform tracks "
-            "trends (Count, Average, Max, Min) automatically. Here's what each one measures and why it matters:"
-        ),
-        ui.accordion(*[
-            ui.accordion_panel(f"{name} — {count_label}", ui.p(explanation))
-            for name, count_label, explanation in _GUEST_ASSESSMENT_CATEGORIES
-        ], open=False),
-        ui.div(
-            ui.strong("Sample view only. "),
-            "This exact page isn't wired up with fake data yet -- it's next in line as this guest mode gets "
-            "built out further (Pitcher Profile, under Analytics, is the first page to get the full treatment).",
-            class_="gbo-profile-card", style="padding:14px; border-style:dashed; margin-top:16px;",
-        ),
-        class_="p-3",
-    )
-
-
-def _guest_game_tracking_panel():
-    """Sept 2026 -- 4th interactive guest deep dive, and the first one
-    that's genuinely live rather than a pre-computed report: a real,
-    in-session pitch-by-pitch charting loop, not a static readout.
-    Reuses the exact same click-to-place widget the real Live Tracking
-    page uses (strike_zone.build_zone_selector_figure +
-    click_widgets.click_target/build_clickable_widget) -- a guest
-    clicks the literal same component a coach does, wired to a
-    throwaway reactive.Value in server() (guest_gt_state) instead of a
-    real GamePitch row. This function only builds the static shell +
-    inputs -- everything reactive lives behind the ui.output_ui/
-    output_widget ids below, wired up in server()."""
-    spec = next(s for s in demo_data._ROSTER if s["name"] == demo_data.FEATURED_PLAYER_NAME)
-    state = demo_data._state()
-    player = state.players[demo_data.FEATURED_PLAYER_NAME]
-    full_name = f"{player.first_name} {player.last_name}"
-
-    return ui.div(
-        ui_helpers.page_header("Game Tracking"),
-        ui.p(
-            ui.strong(full_name), "'s at-bat below is live. This is the exact same click-to-place widget the "
-            "real Live Tracking page uses to chart a pitch's plate location -- click a spot in the zone, pick "
-            "a pitch type and outcome, and log it. Nothing you do here is saved anywhere or touches the "
-            "database; it's a throwaway, in-session pitch log only.",
-        ),
-        ui.output_ui("guest_gt_kpis"),
-        ui.div(
-            ui.div(
-                click_widgets.click_target(output_widget("guest_gt_zone_widget"), "guest_gt_x_input", "guest_gt_z_input"),
-                ui.div(
-                    ui.input_numeric("guest_gt_x_input", "Plate X (ft)", value=0.0, min=-2.5, max=2.5, step=0.05),
-                    ui.input_numeric("guest_gt_z_input", "Plate Z (ft)", value=2.5, min=0.0, max=5.0, step=0.05),
-                    style="display:flex; gap:12px; max-width:280px;",
-                ),
-                style="flex:1; min-width:300px;",
-            ),
-            ui.div(
-                ui.input_select("guest_gt_pitch_type", "Pitch Type", choices=list(spec["pitches"])),
-                ui.input_select("guest_gt_outcome", "Pitch Outcome", choices=list(game_tracking.PITCH_OUTCOMES)),
-                ui.output_ui("guest_gt_outcome_dependent_fields"),
-                ui.div(
-                    ui.input_action_button("guest_gt_log_btn", "Log Pitch", class_="btn-primary mt-2"),
-                    ui.input_action_button("guest_gt_new_ab_btn", "New At-Bat", class_="btn-outline-secondary mt-2 ms-2"),
-                ),
-                style="flex:1; min-width:260px;",
-            ),
-            style="display:flex; gap:24px; flex-wrap:wrap; margin:16px 0;",
-        ),
-        guest_demo._role_callout(
-            "chart a live at-bat exactly the way the real page works, one pitch at a time -- click, pick a "
-            "type and outcome, log it, watch the count update -- before ever touching it during a real game.",
-            "see the other side of the numbers on Pitcher Profile and Game Report: this click-by-click entry "
-            "is literally where every one of those stats comes from.",
-        ),
-        ui.hr(),
-        ui.h5("Pitch Log (this at-bat)"),
-        ui.output_ui("guest_gt_log_table"),
-        ui.div(
-            ui.strong("What's simplified here: "),
-            "this tracks one at-bat's count at a time (resets on \"New At-Bat\") -- no real game, inning, "
-            "score, base/out state, or opposing lineup the way the full Live Tracking page manages alongside "
-            "this exact same charting widget. Good enough to show the actual click-to-chart interaction; not "
-            "a claim that this reproduces the whole page.",
-            class_="gbo-profile-card text-muted small", style="padding:14px; border-style:dashed; margin-top:12px;",
-        ),
-        class_="p-3",
-    )
-
-
-_GUEST_PANEL_BUILDERS = {
-    "dashboard": _guest_dashboard_panel,
-    "assessments": _guest_assessments_panel,
-    "pitcher_profile": guest_demo.build_pitcher_profile_deep_dive,
-    "roster": lambda: _guest_sample_panel(
-        "Players",
-        "The full team roster: name, photo, jersey number, position, class, graduation year, throws/bats, "
-        "height, weight, hometown, high school, and status (Active, Injured, Redshirt, Medical Hold, "
-        "Inactive). Searchable, filterable, sortable, and exportable to CSV -- the single source of truth "
-        "every other module (assessments, goals, sessions) ties back to a specific player record here.",
-    ),
-    "idp": lambda: _guest_sample_panel(
-        "Development Plans",
-        "A development goal isn't just a note -- it's tied to a specific assessment category, and can link "
-        "directly to the exact assessment record that motivated it (e.g. a shoulder mobility deficit found "
-        "on a specific date). Each goal can carry action steps (specific tasks with due dates and status) "
-        "and progress notes (dated commentary from staff). Training Sessions can be tagged as 'prescribed "
-        "toward' a specific goal, so a coach can open any goal and see the actual work that's been logged "
-        "against it -- not just a plan, but a running record of follow-through.",
-    ),
-    "training_routines": lambda: _guest_sample_panel(
-        "Training Sessions",
-        "A day-to-day log of what actually happened: arm care, lifting, conditioning, hitting drills, or "
-        "throwing/plyometric work, each with notes, optional player feedback, and next steps. Distinct from "
-        "a formal Assessment (periodic testing) -- this is the daily diary that shows consistency and "
-        "follow-through over time, and each entry can optionally link back to a specific Development Plan goal.",
-    ),
-    "team_schedule": lambda: _guest_sample_panel(
-        "Team Schedule",
-        "A shared calendar for team-wide events -- lift days, practices, games -- visible to every role, and "
-        "the thing every player's own 'My Schedule' page (see the Player-view sidebar) is built around.",
-    ),
-    "player_assignments": lambda: _guest_sample_panel(
-        "Assignments",
-        "Forward-looking, prescribed tasks for a specific player (e.g. 'today: throwing program'), assigned "
-        "ahead of time by a coach or Athletic Trainer -- separate from the Training Sessions log of completed "
-        "work, which records what actually happened after the fact.",
-    ),
-    "at_appointments": lambda: _guest_sample_panel(
-        "AT Appointments",
-        "Real, timed appointments between a specific player and a specific Athletic Trainer, so medical care "
-        "shows up on the same shared calendar as everything else a player has coming up.",
-    ),
-    "bullpen_dashboard": guest_demo.build_bullpen_dashboard_deep_dive,
-    "rapsodo_import": lambda: _guest_sample_panel(
-        "Import Rapsodo",
-        "Bulk-import an entire Rapsodo pitching session in one upload instead of typing in every pitch by "
-        "hand -- the platform maps columns automatically (with sensible pre-filled guesses) and converts "
-        "units where needed (like spin axis from clock format to degrees), creating one record per pitch.",
-    ),
-    "game_tracking": _guest_game_tracking_panel,
-    "pitcher_game_report": guest_demo.build_game_report_deep_dive,
-    "video_import": lambda: _guest_sample_panel(
-        "Video",
-        "Any individual pitch (or at-bat) charted in Game Tracking can have video uploaded and linked "
-        "directly to it, so a coach can pull up the exact numbers for a pitch side-by-side with the actual "
-        "footage -- comparing what the data says against what the eye sees.",
-    ),
-    "player_profile": lambda: _guest_sample_panel(
-        "My Profile",
-        "A player's own bio info and status -- the same record a coach sees on the team Players page, just "
-        "scoped to their own profile instead of the whole roster.",
-    ),
-    "player_schedule": lambda: _guest_sample_panel(
-        "My Schedule",
-        "A player's own upcoming week: team-wide schedule items, their own prescribed Assignments, and their "
-        "own AT Appointments, all pulled onto one page instead of three separate coach-side ones.",
-    ),
-    "player_stats": lambda: _guest_sample_panel(
-        "My Stats",
-        "A player's own career and season pitching/hitting numbers -- the same box-score-style stat lines a "
-        "coach sees on the team side, scoped to just them.",
-    ),
-    "player_bullpens": lambda: _guest_sample_panel(
-        "My Bullpens",
-        "A player's own Rapsodo bullpen history over time -- the same velocity/spin/movement trends the "
-        "team-wide Bullpen dashboard shows, scoped to just their own sessions.",
-    ),
-    "player_video": lambda: _guest_sample_panel(
-        "My Video",
-        "A player's own library of linked video clips, tied to specific pitches or at-bats from Game Tracking.",
-    ),
-}
-
-
-def _guest_sidebar(role, groups):
-    links = []
-    first_title = None
-    for gtitle, items in groups:
-        links.append(ui.div(gtitle, class_="gbo-side-group"))
-        for key, label in items:
-            if first_title is None:
-                first_title = label
-            links.append(ui.tags.button(
-                _icon(key), ui.span(label),
-                class_="gbo-side-link" + (" active" if label == first_title else ""),
-                type="button", **{"data-title": label},
-            ))
-    me = ui.div(
-        ui.div("G", class_="gbo-avatar"),
-        ui.div(ui.div("Guest", class_="gbo-side-me-name"), ui.span("Coach view" if role != "player" else "Player view", class_="gbo-role-badge")),
-        class_="gbo-side-me",
-    )
-    brand = ui.div(theme.logo_img(css_class=""), ui.div(ui.div("GBO", class_="gbo-brand-title"), ui.div("Gorilla Baseball Ops", class_="gbo-brand-sub")), class_="gbo-brand")
-    return ui.tags.aside(brand, *links, me, class_="gbo-side"), first_title
-
-
-def _guest_ui(role="coach"):
-    # Mirrors the original app.py's guest mode (pages/guest_overview.py)
-    # in spirit -- a curated, illustrative walkthrough, NOT a real login
-    # and NOT connected to the actual database -- but now an actually
-    # clickable sidebar experience instead of one long scroll. See this
-    # section's module comment for how the sidebar/navset plumbing is
-    # shared with the real logged-in shell below.
-    groups = _GUEST_PLAYER_GROUPS if role == "player" else _GUEST_COACH_GROUPS
-    sidebar, first_title = _guest_sidebar(role, groups)
-
-    seen_titles = set()
-    panels = []
-    for _, items in _GUEST_COACH_GROUPS + _GUEST_PLAYER_GROUPS:
-        for key, label in items:
-            if label in seen_titles:
-                continue
-            seen_titles.add(label)
-            panels.append(ui.nav_panel(label, _GUEST_PANEL_BUILDERS[key]()))
-
-    topbar = ui.div(
-        ui.tags.button(ui.HTML('<svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2"><path d="M4 7h16M4 12h16M4 17h16"/></svg>'), class_="btn btn-outline-light gbo-menu-btn", type="button"),
-        ui.div(ui.HTML(f"<b>{first_title}</b>"), class_="gbo-crumb", id="gbo-crumb"),
-        ui.div(
-            ui.input_action_button("guest_back_to_login", "Go to login", class_="btn-sm btn-outline-light"),
-            class_="gbo-top-right",
-        ),
-        class_="gbo-top",
-    )
-
-    return ui.div(
-        ui.div(
-            ui_helpers.page_header("Gorilla Baseball Operations"),
-            ui.p(
-                "A comprehensive player development platform for Pittsburg State Gorilla Baseball -- click "
-                "around the sidebar below just like a real login. Everything shown is illustrative: a "
-                "fictional roster and fictional numbers, running through the exact same GBO code a real "
-                "coach or player uses."
-            ),
-            ui.p("You're viewing example data as a guest -- this is not connected to real player records.", class_="text-muted small"),
-            ui.div(
-                ui.input_action_button("guest_role_coach", "View as Coach", class_="btn-sm " + ("btn-primary" if role != "player" else "btn-outline-secondary")),
-                ui.input_action_button("guest_role_player", "View as Player", class_="btn-sm " + ("btn-primary" if role == "player" else "btn-outline-secondary")),
-                style="display:flex; gap:8px; margin-bottom:4px;",
-            ),
-            class_="p-4 pb-2",
-        ),
-        ui.div(
-            sidebar,
-            ui.div(
-                topbar,
-                ui.div(ui.navset_hidden(*panels, id="main_nav", selected=first_title), class_="gbo-content"),
-                class_="gbo-main",
-            ),
-            ui.tags.script(_SIDEBAR_JS),
-            class_="gbo-app",
-        ),
-        ui.div(ui_helpers.page_footer(), class_="p-4"),
-    )
-
-
 def _account_not_set_up_ui():
     return ui.div(
         ui.tags.span(
@@ -893,6 +398,7 @@ def _account_not_set_up_ui():
 # Regroup nav.py's role-gated pages into the design-system groups
 # (GBO-DESIGN-SYSTEM.md section 5). Unknown keys fall into "Other".
 _NAV_GROUPS = [
+    ("About", ["research_project"]),   # guest demo only (Oct 2026)
     ("Overview", ["dashboard", "how_to_read"]),
     ("Roster", ["roster", "player_profile", "players"]),
     ("Development", ["assessments", "assessment_import", "idp", "training_routines", "player_assignments", "team_schedule"]),
@@ -918,6 +424,7 @@ _NAV_LABELS = {
     "team_schedule": "Team schedule", "user_management": "Users", "staff_assignments": "Staff assignments",
 }
 _ICONS = {
+    "research_project": '<path d="M9 3h6M10 3v6l-5 9a2 2 0 002 3h10a2 2 0 002-3l-5-9V3"/><path d="M7.5 15h9"/>',
     "roster": '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0113 0M16 4a3.5 3.5 0 010 7M21.5 20a6.5 6.5 0 00-5-6.3"/>',
     "player_profile": '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/>',
     "dashboard": '<path d="M3 11l9-7 9 7v9a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z"/>',
@@ -1031,10 +538,33 @@ def _sidebar(app_state, sections):
     return ui.tags.aside(brand, *links, me, class_="gbo-side"), first_title
 
 
+GUEST_VIEWS = [("coach", "Staff"), ("pitcher", "Pitcher"), ("hitter", "Hitter")]
+
+
+def _guest_banner(app_state):
+    """Oct 2026: strip across the top of the guest demo -- what this is, and
+    buttons to see it as a coach, a pitcher or a hitter."""
+    current = "coach" if app_state.role_name() != "Player" else ("pitcher" if app_state.is_pitcher() else "hitter")
+    buttons = [
+        ui.tags.button(label, type="button", class_="btn btn-sm " + ("btn-primary" if key == current else "btn-outline-secondary"),
+                       onclick=f"Shiny.setInputValue('guest_view', '{key}', {{priority: 'event'}})")
+        for key, label in GUEST_VIEWS
+    ]
+    return ui.div(
+        ui.div(ui.strong("Guest demo"), " · a made-up team, nothing here is real player data (except the counts on "
+               "Research Project) · changes stay in your copy only", class_="gbo-guest-text"),
+        ui.div(ui.span("View as", class_="gbo-guest-lbl"), *buttons, class_="gbo-guest-btns"),
+        class_="gbo-guest-banner",
+    )
+
+
 def _app_shell_ui(app_state):
     sections = nav.build_nav_sections(
         app_state.role_name(), app_state.coach_specialty(), app_state.is_pitcher()
     )
+    guest = app_state.is_guest()
+    if guest:
+        sections = [nav.NavSection("About", [nav.NavPage("research_project", "Research Project", "flask")])] + sections
     sidebar, first_title = _sidebar(app_state, sections)
 
     panels = []
@@ -1047,7 +577,7 @@ def _app_shell_ui(app_state):
         ui.div(ui.HTML(f"<b>{first_title}</b>"), class_="gbo-crumb", id="gbo-crumb"),
         ui.div(
             ui.div(ui.input_dark_mode(id="dark_mode", mode="dark"), class_="gbo-mode-toggle"),
-            ui.input_action_button("logout_button", "Log out", class_="btn-sm btn-outline-light"),
+            ui.input_action_button("logout_button", "Exit demo" if guest else "Log out", class_="btn-sm btn-outline-light"),
             class_="gbo-top-right",
         ),
         class_="gbo-top",
@@ -1057,6 +587,7 @@ def _app_shell_ui(app_state):
         sidebar,
         ui.div(
             topbar,
+            _guest_banner(app_state) if guest else None,
             ui.div(ui.navset_hidden(*panels, id="main_nav", selected=first_title), class_="gbo-content"),
             class_="gbo-main",
         ),

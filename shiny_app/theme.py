@@ -431,6 +431,11 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-sw-sub { font-size: .76rem; color: var(--gbo-text-muted); }
 .gbo-progress-controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
 .gbo-progress-note { font-size: .78rem; color: var(--gbo-text-muted); margin: 6px 0 0; }
+/* Guest demo banner (Oct 2026) */
+.gbo-guest-banner { display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap;
+  padding: 8px 20px; background: var(--gbo-gold-soft); border-bottom: 1px solid var(--gbo-border); font-size: .8rem; color: var(--gbo-text-2); }
+.gbo-guest-btns { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.gbo-guest-lbl { font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--gbo-text-muted); margin-right: 2px; }
 /* My Assessments tab row (Oct 2026): one row, scrolls sideways on a phone */
 .gbo-ma-tabs > .nav-tabs { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; margin-bottom: 16px; }
 .gbo-ma-tabs > .nav-tabs::-webkit-scrollbar { display: none; }

@@ -49,6 +49,34 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
 
 
+def _guest_maker():
+    """Oct 2026 (guest demo): the private demo-database sessionmaker of the
+    Shiny session running right now, if that session is a guest (see
+    demo_db.py / app.py's Continue as Guest). None everywhere else --
+    outside Shiny, or for a real login -- so real users always get Supabase."""
+    try:
+        from shiny.session import get_current_session
+        s = get_current_session()
+    except Exception:
+        return None
+    if s is None:
+        return None
+    root = s.root_scope() if hasattr(s, "root_scope") else s
+    return getattr(root, "_gbo_demo_maker", None)
+
+
+def in_guest_demo():
+    """True while serving a guest (demo data). Uploads, email and anything
+    else that leaves the app check this and refuse."""
+    return _guest_maker() is not None
+
+
+def use_guest_db(shiny_session, maker):
+    """Point one Shiny session at a demo database (None = back to real)."""
+    root = shiny_session.root_scope() if hasattr(shiny_session, "root_scope") else shiny_session
+    root._gbo_demo_maker = maker
+
+
 def get_session():
     """Yield a database session; caller is responsible for closing it.
 
@@ -58,5 +86,11 @@ def get_session():
             ...
         finally:
             session.close()
+
+    A guest's session (Continue as Guest) gets that guest's private demo
+    database instead -- never Supabase.
     """
+    maker = _guest_maker()
+    if maker is not None:
+        return maker()
     return SessionLocal()

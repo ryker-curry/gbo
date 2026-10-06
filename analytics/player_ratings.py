@@ -428,7 +428,7 @@ def roster_context(db, date_from, date_to, season_label=None):
     from analytics.profile_queries import pitching_staff_leaderboard_rows
     from bucket_system import build_roster_batch_cache, compute_bucket_system
 
-    key = (date_from, date_to, season_label)
+    key = (id(db.get_bind()), date_from, date_to, season_label)   # demo vs real never share (Oct 2026)
     hit = _ROSTER_CACHE.get(key)
     if hit and time.time() - hit[0] < ROSTER_CACHE_SECONDS:
         return hit[1]
@@ -465,7 +465,8 @@ def roster_context(db, date_from, date_to, season_label=None):
         )
     ctx = dict(pitch_rows=pitch_rows, staff_velos=staff_velos, velo_base=velo_base,
                hit_lines=hit_lines, hit_base=hit_base, buckets=buckets, raw_cards=raw_cards)
-    _ROSTER_CACHE.clear()
+    for k in [k for k, v in _ROSTER_CACHE.items() if time.time() - v[0] >= ROSTER_CACHE_SECONDS or k[0] == key[0]]:
+        del _ROSTER_CACHE[k]
     _ROSTER_CACHE[key] = (time.time(), ctx)
     return ctx
 
