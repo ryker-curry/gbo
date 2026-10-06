@@ -293,7 +293,7 @@ def _populate(db):
         ps = []
         for j, hand in enumerate("RL"):
             opp_pid += 1
-            db.add(m.OpponentPlayer(opponent_player_id=opp_pid, team_id=k + 1, player_name=f"{name.split()[0]} {hand}HP",
+            db.add(m.OpponentPlayer(opponent_player_id=opp_pid, team_id=k + 1, player_name=f"{name.split()[0]} Pitcher {j + 1}",
                                     throws=hand, position="P"))
             ps.append((opp_pid, hand))
         opp_pitchers[k + 1] = ps

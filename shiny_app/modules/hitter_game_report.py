@@ -57,6 +57,9 @@ from format_helpers import (
 )
 
 
+VIEWS = {"overview": "Overview", "approach": "Approach", "batted": "Batted Balls", "at_bats": "At-Bat by At-Bat"}
+
+
 def _fmt(value, decimals=3):
     return format_helpers.format_num(value, decimals)
 
@@ -120,6 +123,7 @@ def hitter_game_report_ui():
         ui_helpers.page_header("Hitter Game Report", actions=ui_helpers.glossary_link("hgr_glossary", "Stats Glossary")),
         ui.output_ui("game_picker"),
         ui.output_ui("batter_picker"),
+        ui.input_select("hgr_view", "View", choices=VIEWS),
         ui.output_ui("report_body"),
         # Oct 2026, Ryker: "go look at each individual at bat and pitch with
         # pitch type, location, as well as pitch result" -- replaces the old
@@ -142,6 +146,9 @@ def hitter_game_report_server(input, output, session, app_state):
     # flagged Player (see nav.py's is_pitcher_player) -- the is_pitcher
     # check here is defense-in-depth, not the only gate.
     ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator", "Player")
+
+    def _view():
+        return input.hgr_view() if "hgr_view" in input else "overview"
 
     def _my_hitter(db):
         me = db.query(User).filter(User.user_id == app_state.user_id()).first()
@@ -265,7 +272,12 @@ def hitter_game_report_server(input, output, session, app_state):
             # Oct 2026: OPS+ (and the other "+" stats below) vs the 2026 D2 average.
             player_ops_plus = ops_plus(line["OBP"], line["SLG"])
             plus = league_baselines.hitting_plus(line)
-            sections = [ui.h5(f"{batter.first_name} {batter.last_name} — {_game_label(game)}", class_="gbo-section-title")]
+            header = ui.h5(f"{batter.first_name} {batter.last_name} — {_game_label(game)}", class_="gbo-section-title")
+            # Oct 2026, Ryker: View dropdown like Pitcher Game Report --
+            # each block below lands in its view's list; only the picked
+            # view is shown.
+            groups = {"overview": [], "approach": [], "batted": []}
+            sections = groups["overview"]
 
             sections.append(ui.p(ui.strong("Line")))
             sections.append(ui_helpers.render_kpi_cards([
@@ -300,6 +312,7 @@ def hitter_game_report_server(input, output, session, app_state):
             sections.append(ui_helpers.plus_stat_cards(plus, league_baselines.HITTING_PLUS_ORDER, league_baselines.hitting_actuals(line)))
             sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
 
+            sections = groups["approach"]
             sections.append(ui.p(ui.strong("Plate Discipline")))
             sections.append(ui_helpers.render_kpi_cards([
                 {"label": "BB %", "value": _fmt_pct(line["BB %"])},
@@ -307,6 +320,7 @@ def hitter_game_report_server(input, output, session, app_state):
                 {"label": "BB/K", "value": _fmt(line["BB/K"], 2)},
             ]))
 
+            sections = groups["overview"]
             sections.append(ui.p(ui.strong("Situational")))
             sections.append(ui_helpers.render_kpi_cards([
                 {"label": "RISP AVG", "value": _fmt(line["RISP AVG"])},
@@ -321,6 +335,7 @@ def hitter_game_report_server(input, output, session, app_state):
                 class_="text-muted small",
             ))
 
+            sections = groups["approach"]
             sections.append(ui.p(ui.strong("Count Leverage (Ahead / Even / Behind)")))
             sections.append(ui_helpers.render_dict_table([
                 {"Count State": "Ahead", "PA": line["Ahead PA"], "AVG": _fmt(line["Ahead AVG"]), "OBP": _fmt(line["Ahead OBP"]), "SLG": _fmt(line["Ahead SLG"]), "wOBA*": _fmt(line["Ahead wOBA"])},
@@ -358,7 +373,7 @@ def hitter_game_report_server(input, output, session, app_state):
             tier_rows = compute_zone_tier_discipline(pitches)
             sections.append(ui_helpers.render_dict_table(tier_rows))
 
-            sections.append(ui.hr())
+            sections = groups["batted"]
             sections.append(ui.p(ui.strong("Batted-Ball Profile")))
             profile = compute_batted_ball_profile(pitches, bats=batter.bats)
             if profile["Balls in Play"] == 0:
@@ -391,7 +406,7 @@ def hitter_game_report_server(input, output, session, app_state):
                 ]))
                 sections.append(ui.p(f"Balls in Play: {profile['Balls in Play']} ({profile['Located']} with a recorded field location).", class_="text-muted small"))
 
-            return ui.div(*sections)
+            return ui.div(header, *groups.get(_view(), []))
         finally:
             db.close()
 
@@ -412,6 +427,8 @@ def hitter_game_report_server(input, output, session, app_state):
     def at_bat_section():
         if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
             return None
+        if _view() != "at_bats":
+            return None
         req("game_select" in input)
         req("batter_select" in input)
         db = get_session()
@@ -425,7 +442,6 @@ def hitter_game_report_server(input, output, session, app_state):
                 result = pa[-1].ab_outcome if pa[-1].ends_plate_appearance and pa[-1].ab_outcome else "In progress"
                 choices[str(i)] = f"At-bat {i} -- Inning {pa[0].inning} {_vs(name, hand)} -- {result}"
             return ui.div(
-                ui.hr(),
                 ui.p(ui.strong("At-Bat by At-Bat")),
                 ui.p("Pick an at-bat to see every pitch: count, pitch type, location and result. Pick a pitch "
                      "below the table for its own picture.", class_="text-muted small"),
@@ -471,10 +487,23 @@ def hitter_game_report_server(input, output, session, app_state):
             hand = hands.get(pa[0].game_pitch_id)
             located = [p for p in pa if p.actual_plate_x is not None and p.actual_plate_z is not None]
             result = pa[-1].ab_outcome if pa[-1].ends_plate_appearance else "In progress"
-            chart = (chart_helpers.fig_to_img(at_bat_pitch_locations_chart(pa, batter_hand=hand, title=f"At-bat {k} -- {result or '--'}"),
-                                              width=380, height=380)
+            chart = (chart_helpers.fig_to_img(at_bat_pitch_locations_chart(pa, batter_hand=hand, title=f"At-bat {k} -- {result or '--'}", zoom=True),
+                                              width=460, height=460)
                      if located else ui.p("No pitch locations charted for this at-bat.", class_="text-muted small"))
+            # Oct 2026, Ryker: "also add the pitcher they faced, the name of the pitcher"
+            faced = []
+            for p in pa:
+                who = _pitcher_of(db, p)
+                if who not in faced:
+                    faced.append(who)
+            if len(faced) > 1:                # pitching change mid at-bat: say who threw each pitch
+                for row, p in zip(rows, pa):
+                    n, h = _pitcher_of(db, p)
+                    row["Pitcher"] = n or (f"{h}HP" if h else "--")
+            facing = ", ".join(f"{n or 'Unknown pitcher'}" + (f" ({h}HP)" if h in ("R", "L") else "") for n, h in faced)
             return ui.div(
+                ui.div(ui.span("Pitcher faced", class_="gbo-kpi-label"), ui.div(facing, style="font-size:1.15rem;font-weight:700;"),
+                       style="margin:6px 0 10px;"),
                 ui.layout_columns(
                     ui.div(chart, style="text-align:center;"),
                     ui.div(ui_helpers.render_dict_table(rows),
@@ -507,8 +536,8 @@ def hitter_game_report_server(input, output, session, app_state):
             r = profile_queries.rapsodo_by_game_pitch_id(db, [p.game_pitch_id]).get(p.game_pitch_id)
             name, phand = _pitcher_of(db, p)
             located = p.actual_plate_x is not None and p.actual_plate_z is not None
-            pic = (chart_helpers.fig_to_img(at_bat_pitch_locations_chart([p], batter_hand=hand, title=f"Pitch {p.pa_pitch_number} -- {label}"),
-                                            width=380, height=380)
+            pic = (chart_helpers.fig_to_img(at_bat_pitch_locations_chart([p], batter_hand=hand, title=f"Pitch {p.pa_pitch_number} -- {label}", zoom=True),
+                                            width=460, height=460)
                    if located else ui.p("Not located.", class_="text-muted small"))
             extra = []
             if p.contact_quality:
@@ -524,6 +553,7 @@ def hitter_game_report_server(input, output, session, app_state):
                     ui.div(pic, style="text-align:center;"),
                     ui.div(
                         ui_helpers.render_kpi_cards([
+                            {"label": "Pitcher", "value": (name or "Unknown") + (f" ({phand}HP)" if phand in ("R", "L") else "")},
                             {"label": "Pitch", "value": label},
                             {"label": "Velocity", "value": f"{float(r.velocity):.1f} mph" if r is not None and r.velocity is not None else "--"},
                             {"label": "Count", "value": f"{p.balls_before}-{p.strikes_before}" if p.balls_before is not None else "--"},
@@ -566,6 +596,8 @@ def hitter_game_report_server(input, output, session, app_state):
     @render.ui
     def contact_by_zone_section():
         if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        if _view() != "batted":
             return None
         req("game_select" in input)
         req("batter_select" in input)

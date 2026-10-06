@@ -57,7 +57,11 @@ from visualizations.hitter_graphic import hitter_images, home_plate_shape
 from visualizations.command_charts import HITTER_HEIGHT_FT, HITTER_CENTER_X, CHART_X_EXTENT_FT
 
 
-def at_bat_pitch_locations_chart(pa_pitches, batter_hand=None, title=None):
+def at_bat_pitch_locations_chart(pa_pitches, batter_hand=None, title=None, zoom=False):
+    """zoom=True (Oct 2026, Ryker: "zoom in more on the strike zone so it
+    is bigger"): frames the zone and the batter's lower body instead of
+    the whole batter, widening only as far as needed to keep every
+    located pitch on the chart."""
     fig = go.Figure()
 
     located = [p for p in pa_pitches if p.actual_plate_x is not None and p.actual_plate_z is not None]
@@ -133,10 +137,17 @@ def at_bat_pitch_locations_chart(pa_pitches, batter_hand=None, title=None):
             fig.add_layout_image(**img)
     fig.add_shape(**home_plate_shape(half_width_ft=ZONE_HALF_WIDTH, view="catcher"))
 
+    x_ext, y_lo, y_hi = CHART_X_EXTENT_FT, -0.6, HITTER_HEIGHT_FT + 0.4
+    if zoom:
+        xs = [abs(float(p.actual_plate_x)) for p in located]
+        zs = [float(p.actual_plate_z) for p in located]
+        x_ext = max([1.9] + [x + 0.35 for x in xs])
+        y_lo = min([-0.35] + [z - 0.35 for z in zs])
+        y_hi = max([4.2] + [z + 0.35 for z in zs])
     apply_gbo_theme(
         fig, title=title or "Pitch Locations", x_title="Plate Side (ft)", y_title="Plate Height (ft)", height=420,
-        xaxis=dict(range=[-CHART_X_EXTENT_FT, CHART_X_EXTENT_FT], gridcolor=GRID_GRAY, zeroline=False, scaleanchor="y", scaleratio=1),
-        yaxis=dict(range=[-0.6, HITTER_HEIGHT_FT + 0.4], gridcolor=GRID_GRAY, zeroline=False),
+        xaxis=dict(range=[-x_ext, x_ext], gridcolor=GRID_GRAY, zeroline=False, scaleanchor="y", scaleratio=1),
+        yaxis=dict(range=[y_lo, y_hi], gridcolor=GRID_GRAY, zeroline=False),
         legend=dict(orientation="h", y=-0.15),
     )
     return fig
