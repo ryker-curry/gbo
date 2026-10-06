@@ -57,3 +57,17 @@ def test_compact_mobility():
     assert html.index("Right Internal Rotation") < html.index("Plant Leg External Rotation")   # red before caution
     full = str(bucket_display.build_mobility_rom_report(report))
     assert "Needs attention" not in full and "Show all" not in full
+
+
+def test_breakdown_groups_split_into_tabs():
+    import bucket_display
+    empty_m = {}
+    bd = {"body_comp_score": 70, "body_comp_metrics": {"Body Weight": {"raw": 180.0, "percentile": 80, "unit": "lb"}},
+          "power_score": None, "power_subgroup_scores": {}, "power_subgroup_metrics": {},
+          "strength_score": None, "strength_subgroup_scores": {}, "strength_subgroup_metrics": {},
+          "speed_score": 90, "speed_metrics": {"30-Yard Sprint Time": {"raw": 4.0, "percentile": 90, "unit": "s"}},
+          "capacity_subgroup_metrics": empty_m, "mobility_rom_report": [], "movement_flag": None,
+          "shoulder_health_metrics": {}}
+    keys = [k for k, _, _ in bucket_display.breakdown_groups(bd, "t")]
+    assert keys == ["body_comp", "power", "strength", "speed"]       # no Mobility tab without ROM data
+    assert "Body Weight" in str(bucket_display.build_full_breakdown(bd, "t"))

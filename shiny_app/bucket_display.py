@@ -600,13 +600,26 @@ def build_raw_metrics(metrics_dict):
     )
 
 
-def build_full_breakdown(bucket_data, key_prefix, mode="dark", changes=None, compact_mobility=False):
+def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact_mobility=False):
     """Sub-group score headers + a bar chart per sub-group, for Body
     Comp, Power, Strength, and (if present) Speed/Capacity/Mobility/
     Shoulder Health -- all reference-only sections shown exactly when
-    the original showed them (same presence checks)."""
+    the original showed them (same presence checks).
+
+    Oct 2026 (Ryker: My Assessments as tabs): returns [(key, tab label,
+    [elements])] in page order so a page can put each group in its own
+    tab; build_full_breakdown below flattens them for the one-scroll
+    views (Dashboard / Analytics / Player Profile). Shoulder Health rides
+    in the Mobility group."""
+    groups = []
+
+    def start(key, label):
+        groups.append((key, label, []))
+        return groups[-1][2]
+
     is_pitcher = bucket_data.get("is_pitcher")  # None for any pre-Aug-2026 caller's bucket_data that predates this key -- build_metric_bars treats None as "skip badges", same as before this feature existed
-    sections = [ui.p(f"Body Comp — {bucket_data['body_comp_score'] if bucket_data['body_comp_score'] is not None else '—'}", class_="gbo-category-title")]
+    sections = start("body_comp", "Body Comp")
+    sections.append(ui.p(f"Body Comp — {bucket_data['body_comp_score'] if bucket_data['body_comp_score'] is not None else '—'}", class_="gbo-category-title"))
     body_comp_metrics = bucket_data["body_comp_metrics"]
     bar_metrics = {name: v for name, v in body_comp_metrics.items() if name in BODY_COMP_BAR_NAMES}
     raw_only_metrics = {name: v for name, v in body_comp_metrics.items() if name not in BODY_COMP_BAR_NAMES}
@@ -615,6 +628,7 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark", changes=None, com
     if raw_ui is not None:
         sections.append(raw_ui)
 
+    sections = start("power", "Power")
     sections.append(ui.p(f"Power — {bucket_data['power_score'] if bucket_data['power_score'] is not None else '—'}", class_="gbo-category-title"))
     for sub_name, sub_score in bucket_data["power_subgroup_scores"].items():
         metrics = bucket_data["power_subgroup_metrics"][sub_name]
@@ -634,6 +648,7 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark", changes=None, com
         else:
             sections.append(build_metric_bars(metrics, f"{key_prefix}_power_{sub_name}", mode=mode, is_pitcher=is_pitcher, changes=changes))
 
+    sections = start("strength", "Strength")
     sections.append(ui.p(f"Strength — {bucket_data['strength_score'] if bucket_data['strength_score'] is not None else '—'}", class_="gbo-category-title"))
     for sub_name, sub_score in bucket_data["strength_subgroup_scores"].items():
         metrics = bucket_data["strength_subgroup_metrics"][sub_name]
@@ -643,11 +658,13 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark", changes=None, com
         sections.append(build_metric_bars(metrics, f"{key_prefix}_strength_{sub_name}", mode=mode, is_pitcher=is_pitcher, changes=changes))
 
     if bucket_data["speed_metrics"]:
+        sections = start("speed", "Speed")
         sections.append(ui.p(f"Speed (reference only, not in Total) — {bucket_data['speed_score'] if bucket_data['speed_score'] is not None else '—'}", class_="gbo-category-title"))
         sections.append(build_metric_bars(bucket_data["speed_metrics"], f"{key_prefix}_speed", mode=mode, is_pitcher=is_pitcher, changes=changes))
 
     capacity_metrics_present = any(bucket_data.get("capacity_subgroup_metrics", {}).values())
     if capacity_metrics_present:
+        sections = start("capacity", "Arm Capacity")
         sections.append(ui.p(f"Capacity (reference only, not in Total) — {bucket_data['capacity_score'] if bucket_data['capacity_score'] is not None else '—'}", class_="gbo-category-title"))
         for sub_name, sub_score in bucket_data["capacity_subgroup_scores"].items():
             metrics = bucket_data["capacity_subgroup_metrics"][sub_name]
@@ -668,6 +685,7 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark", changes=None, com
     # existing (mirrors the earlier "No physical testing data yet." fix's
     # same lesson: don't gate one section on another unrelated section's
     # data).
+    sections = start("mobility", "Mobility & ROM")
     if movement_ring is not None or mobility_rom_ui is not None:
         sections.append(ui.p("Mobility & ROM (reference only, not in Total)", class_="gbo-category-title"))
         if movement_ring is not None:
@@ -679,7 +697,15 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark", changes=None, com
         sections.append(ui.p(f"Shoulder Health (reference only, not in Total) — {bucket_data['shoulder_health_score'] if bucket_data['shoulder_health_score'] is not None else '—'}", class_="gbo-category-title"))
         sections.append(build_metric_bars(bucket_data["shoulder_health_metrics"], f"{key_prefix}_shoulder_health", mode=mode, is_pitcher=is_pitcher, changes=changes))
 
-    return ui.div(*sections)
+    return [g for g in groups if g[2]]
+
+
+def build_full_breakdown(bucket_data, key_prefix, mode="dark", changes=None, compact_mobility=False):
+    """Every breakdown group, one after another (see breakdown_groups)."""
+    groups = breakdown_groups(bucket_data, key_prefix, mode=mode, changes=changes, compact_mobility=compact_mobility)
+    return ui.div(*[el for _, _, els in groups for el in els])
+
+
 
 
 def build_development_profile(bucket_data, key_prefix, mode="dark"):

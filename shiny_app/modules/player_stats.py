@@ -29,7 +29,7 @@ has rendered at all.
 
 from datetime import date, timedelta
 
-from shiny import module, ui, render, req
+from shiny import module, ui, render, req, reactive
 from sqlalchemy.orm import joinedload
 
 from database import get_session
@@ -49,14 +49,11 @@ import bucket_display
 def player_stats_ui():
     return ui.div(
         ui.output_ui("header"),
+        # Oct 2026, Ryker: "rather than everything showing up like it does
+        # right now switch it to the tab like view ... allow the player to
+        # click on the different test categories". top_section renders the
+        # tab row; Progress and Every Entry tabs hold the outputs below.
         ui.output_ui("top_section"),
-        # Oct 2026 (Ryker: "make the my assessments page better for player
-        # login"): progress chart for any test, above the raw history.
-        ui.output_ui("progress_controls"),
-        ui.output_ui("progress_chart"),
-        ui.h5("Every entry", class_="gbo-section-title"),
-        ui.output_ui("category_controls"),
-        ui.output_ui("history_section"),
         ui_helpers.page_footer(),
     )
 
@@ -94,27 +91,24 @@ def player_stats_server(input, output, session, app_state):
             my_player = db.query(Player).filter(Player.player_id == me.player_id).first()
             bucket_data = compute_bucket_system(db, my_player.player_id)
 
-            sections = []
             mode = app_state.dark_mode() or "dark"
-
             hist = ap.history(db, my_player.player_id)
             changes = ap.changes_for_bucket(hist, bucket_data)
 
-            # Oct 2026: plain-English strengths / work-on card up top.
+            # --- Overview tab: best tests / room to grow, score rings,
+            # development profile, goals in progress. ---
+            overview = []
             sw = _strengths_ui(db, bucket_data, changes)
             if sw is not None:
-                sections.append(sw)
-
+                overview.append(sw)
             rings = bucket_display.build_score_rings(bucket_data, "myassess_top", mode=mode)
             if rings is not None:
-                sections.append(rings)
+                overview.append(rings)
                 profile = bucket_display.build_development_profile(bucket_data, "myassess_top", mode=mode)
                 if profile is not None:
-                    sections.append(profile)
-                sections.append(ui.hr())
-
-            # --- Goals in progress: baseline vs. current for any metric
-            # tied to an active IDP goal, same computation as the IDP page. ---
+                    overview.append(profile)
+            # Goals in progress: baseline vs. current for any metric tied to
+            # an active IDP goal, same computation as the IDP page.
             open_goals = (
                 db.query(IDPGoal)
                 .join(IDPStatus)
@@ -127,39 +121,36 @@ def player_stats_server(input, output, session, app_state):
                 .all()
             )
             if open_goals:
-                sections.append(ui.h5("Goals in progress", class_="gbo-section-title"))
-                sections.append(_goals_table_ui(db, open_goals))
-                sections.append(ui.p("Full goal details (action steps, progress notes) are on My Development.", class_="text-muted small"))
-                sections.append(ui.hr())
+                overview.append(ui.h5("Goals in progress", class_="gbo-section-title"))
+                overview.append(_goals_table_ui(db, open_goals))
+                overview.append(ui.p("Full goal details (action steps, progress notes) are on My Development.", class_="text-muted small"))
 
-            # --- Bucket System: full breakdown by metric. ---
-            sections.append(ui.h5("Physical Testing Breakdown", class_="gbo-section-title"))
             # A player can have real data in a reference-only section
             # (Mobility & ROM, Speed, etc.) before ever having Total/
-            # Body Comp/Power/Strength data -- without also checking
-            # mobility_rom_report here, that player would see "No
-            # physical testing data yet." despite having real ROM
-            # values on record (found via a screenshot of a player
-            # whose ROM testing had just started, Aug 2026).
+            # Body Comp/Power/Strength data, or a movement flag (injury)
+            # before any ROM data -- don't gate on the wrong section.
             has_any_data = (
                 any(bucket_data[k] is not None for k in ("total_score", "body_comp_score", "power_score", "strength_score"))
                 or bool(bucket_data.get("mobility_rom_report"))
-                # movement_flag can be set (e.g. a current_injury flag on the
-                # player profile) before any ROM data is ever entered -- same
-                # "don't gate on the wrong section's data" fix as above.
                 or bool(bucket_data.get("movement_flag"))
             )
-            if not has_any_data:
-                sections.append(ui_helpers.empty_state("No physical testing data yet."))
-            else:
-                sections.append(ui.p("Bars = % of the team's best mark (100 = you have the best). "
-                                     "Green ▲/▼ = better than your last test, red = worse.",
-                                     class_="text-muted small"))
-                sections.append(bucket_display.build_full_breakdown(bucket_data, "myassess", mode=mode,
-                                                                    changes=changes, compact_mobility=True))
-            sections.append(ui.hr())
-
-            return ui.div(*sections)
+            legend = ui.p("Bars = % of the team's best mark (100 = you have the best). "
+                          "Green ▲/▼ = better than your last test, red = worse.", class_="text-muted small")
+            panels = [ui.nav_panel("Overview", ui.div(*overview) if overview else
+                                   ui_helpers.empty_state("No physical testing data yet."), value="overview")]
+            if has_any_data:
+                for key, label, els in bucket_display.breakdown_groups(bucket_data, "myassess", mode=mode,
+                                                                        changes=changes, compact_mobility=True):
+                    panels.append(ui.nav_panel(label, ui.div(legend if key != "mobility" else None, *els), value=key))
+            panels.append(ui.nav_panel("Progress", ui.output_ui("progress_controls"), ui.output_ui("progress_chart"),
+                                       value="progress"))
+            panels.append(ui.nav_panel("Every Entry", ui.output_ui("category_controls"), ui.output_ui("history_section"),
+                                       value="entries"))
+            # Keep the tab the player was on when this re-renders (e.g. the
+            # dark/light toggle), instead of jumping back to Overview.
+            with reactive.isolate():
+                current = input.ma_tab() if "ma_tab" in input else None
+            return ui.div(ui.navset_tab(*panels, id="ma_tab", selected=current or "overview"), class_="gbo-ma-tabs")
         finally:
             db.close()
 
@@ -178,7 +169,6 @@ def player_stats_server(input, output, session, app_state):
         if not choices:
             return None
         return ui.div(
-            ui.h5("Progress over time", class_="gbo-section-title"),
             ui.div(ui.input_select("progress_test", "Test", choices=choices, selected=ap.default_chart_test(hist, work_on)),
                    class_="gbo-progress-controls"),
         )
@@ -318,10 +308,7 @@ def player_stats_server(input, output, session, app_state):
                 content.append(_history_table_ui(past_assessments))
                 body = ui.div(*content)
 
-            return ui.accordion(
-                ui.accordion_panel("Show full history (every individual entry)", body),
-                open=False, id=None,
-            )
+            return body
         finally:
             db.close()
 
@@ -416,4 +403,5 @@ def _history_table_ui(assessments):
 
     header = ui.tags.tr(*[ui.tags.th(c) for c in columns])
     body_rows = [ui.tags.tr(*[ui.tags.td(row.get(c, "—")) for c in columns]) for row in rows_data]
-    return ui.tags.table(ui.tags.thead(header), ui.tags.tbody(*body_rows), class_="table table-sm")
+    return ui.div(ui.tags.table(ui.tags.thead(header), ui.tags.tbody(*body_rows), class_="table table-sm"),
+                  class_="table-responsive")

@@ -431,6 +431,10 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-sw-sub { font-size: .76rem; color: var(--gbo-text-muted); }
 .gbo-progress-controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
 .gbo-progress-note { font-size: .78rem; color: var(--gbo-text-muted); margin: 6px 0 0; }
+/* My Assessments tab row (Oct 2026): one row, scrolls sideways on a phone */
+.gbo-ma-tabs > .nav-tabs { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; margin-bottom: 16px; }
+.gbo-ma-tabs > .nav-tabs::-webkit-scrollbar { display: none; }
+.gbo-ma-tabs > .nav-tabs .nav-link { white-space: nowrap; }
 @media (max-width: 700px) { .gbo-sw { grid-template-columns: 1fr; } }
 /* External reference-standard tier badges (Aug 2026, AdaptPTPD force-plate
    sheet -- see force_plate_standards.py). Appended next to a metric's raw
