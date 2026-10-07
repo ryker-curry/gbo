@@ -522,7 +522,7 @@ def _pitch_location_figure(intended_x, intended_z, actual_x, actual_z, color, ba
     return fig
 
 
-def _all_pitch_locations_figure(pitches, color_by, baseline, own_idx_map=None):
+def _all_pitch_locations_figure(pitches, color_by, baseline, own_idx_map=None, batter_hand=None):
     """All-pitches location scatter for the Pitch Locations view (Ryker,
     Sept 2026: "looking at pitch location for all pitches of a certain
     pitch type vs LHH, RHH ... an option to see all each different
@@ -642,12 +642,28 @@ def _all_pitch_locations_figure(pitches, color_by, baseline, own_idx_map=None):
         y0=strike_zone.ZONE_BOTTOM, y1=strike_zone.ZONE_TOP,
         line=dict(color=TEXT_CREAM, width=2), fillcolor="rgba(0,0,0,0)",
     )
+    # Oct 2026, Ryker: hitter graphic when filtered to vs RHH / vs LHH --
+    # same side/facing/back-view convention and scale as the single-pitch
+    # chart above (_pitch_location_figure); All Batters stays plain.
+    hitter = batter_hand in ("R", "L")
+    if hitter:
+        center_x = -command_charts.HITTER_CENTER_X if batter_hand == "R" else command_charts.HITTER_CENTER_X
+        facing = "right" if center_x > 0 else "left"
+        for img in hitter_images(center_x=center_x, facing=facing, height_ft=command_charts.HITTER_HEIGHT_FT,
+                                 ground_y=-0.5, batter_hand=batter_hand):
+            fig.add_layout_image(**img)
     fig.add_shape(**home_plate_shape(half_width_ft=strike_zone.ZONE_HALF_WIDTH, ground_y=0.0, view="catcher"))
 
+    x_ext = command_charts.CHART_X_EXTENT_FT if hitter else 2.5
+    y_range = [-0.9, command_charts.HITTER_HEIGHT_FT + 0.4] if hitter else [-0.4, 5]
     apply_gbo_theme(
-        fig, title="Pitch Locations", x_title="Plate Side (ft)", y_title="Plate Height (ft)", height=480,
-        xaxis=dict(range=[-2.5, 2.5], gridcolor=GRID_GRAY, zeroline=False, scaleanchor="y", scaleratio=1),
-        yaxis=dict(range=[-0.4, 5], gridcolor=GRID_GRAY, zeroline=False),
+        fig, title="Pitch Locations", x_title="Plate Side (ft)", y_title="Plate Height (ft)",
+        height=560 if hitter else 480,
+        # constrain="domain" with the hitter: keep the +/-3.1 ft window and
+        # narrow the plot instead of plotly padding x out to +/-7 ft.
+        xaxis=dict(range=[-x_ext, x_ext], gridcolor=GRID_GRAY, zeroline=False, scaleanchor="y", scaleratio=1,
+                   **({"constrain": "domain"} if hitter else {})),
+        yaxis=dict(range=y_range, gridcolor=GRID_GRAY, zeroline=False),
         legend=dict(orientation="h", y=-0.15),
     )
     return fig
@@ -1658,7 +1674,8 @@ def pitcher_game_report_server(input, output, session, app_state):
 
             baseline = profile_queries.team_location_plus_baseline(db) if color_by == "result" else None
             own_idx_map = _own_pitch_index_map(db, int(input.pitcher_select()), int(input.game_select()))
-            return _all_pitch_locations_figure(pitches, color_by, baseline, own_idx_map)
+            return _all_pitch_locations_figure(pitches, color_by, baseline, own_idx_map,
+                                                batter_hand=hand_choice if hand_choice in ("R", "L") else None)
         finally:
             db.close()
 
