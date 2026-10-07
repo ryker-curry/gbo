@@ -65,6 +65,7 @@ def assessments_ui():
         ui.output_ui("pitch_type_filter_section"),
         ui.output_ui("edit_section"),
         ui.output_ui("new_entry_section"),
+        ui.output_ui("bc_targets_section"),
         ui_helpers.page_footer(),
     )
 
@@ -546,3 +547,82 @@ def assessments_server(input, output, session, app_state):
                 _bump_refresh()
         finally:
             db.close()
+
+    # -------------------------------------------------------------------
+    # Body comp ring targets (Oct 2026, Ryker: body comp shouldn't be "%
+    # of the heaviest guy"). Team-wide targets for Body Weight / SMM; the
+    # ring scores value / target, capped at 100. Blank = roster median.
+    # -------------------------------------------------------------------
+    _bc_tick = reactive.Value(0)
+
+    @render.ui
+    def bc_targets_section():
+        _bc_tick()
+        if not app_state.is_authenticated() or not app_state.can_edit_assessments():
+            return None
+        import bucket_system as bs
+        db = get_session()
+        try:
+            bs.clear_body_comp_target_cache()
+            start, end = bs.season_date_range(bs.current_season_label())
+            cache, _units = bs._batch_fetch_latest_values(db, list(bs.BODY_COMP_TARGET_NAMES), season_start=start,
+                                                          season_end=end)
+            targets = bs.body_comp_targets(db, _cache=cache)
+            stored = bs.stored_body_comp_targets(db)
+            from sqlalchemy import inspect as sa_inspect
+            ready = sa_inspect(db.get_bind()).has_table("body_comp_targets")
+        finally:
+            db.close()
+        fields = []
+        for i, name in enumerate(bs.BODY_COMP_TARGET_NAMES):
+            t = targets.get(name) or {}
+            med = t.get("median")
+            hint = (f"In use: {t['target']:.1f} lb ({'staff target' if t.get('source') == 'set' else 'team median'})"
+                    if t.get("target") else "No results on file yet")
+            fields.append(ui.div(
+                ui.input_numeric(f"bc_target_{i}", f"{name} target (lb)", value=stored.get(name), step=1),
+                ui.p(hint + (f" · team median {med:.1f} lb" if med else ""), class_="text-muted small"),
+            ))
+        body = ui.div(
+            ui.p("The Body Comp ring scores Body Weight and Skeletal Muscle Mass as progress toward a target: "
+                 "reaching it = 100, 190 of a 200 lb target = 95, and going past it adds nothing. Leave a box empty "
+                 "to use the active roster's median. Once the Research Project's inflection-point results are in, "
+                 "those cutoffs are a good place to set these.", class_="text-muted small"),
+            ui.layout_columns(*fields, col_widths=[6, 6]),
+            ui.input_action_button("bc_targets_save", "Save targets", class_="btn-sm btn-primary") if ready else
+            ui.p("Run migrations/migrate_body_comp_targets.py once to turn on saving -- until then the ring uses the "
+                 "team median.", class_="text-muted small"),
+        )
+        return ui.accordion(ui.accordion_panel("Body comp ring targets", body), open=False, id=None)
+
+    @reactive.effect
+    @reactive.event(input.bc_targets_save)
+    def _bc_targets_save():
+        if not app_state.is_authenticated() or not app_state.can_edit_assessments():
+            return
+        import bucket_system as bs
+        from models import BodyCompTarget
+        db = get_session()
+        try:
+            for i, name in enumerate(bs.BODY_COMP_TARGET_NAMES):
+                v = input[f"bc_target_{i}"]()
+                row = db.query(BodyCompTarget).filter(BodyCompTarget.test_name == name).first()
+                if v is None or v <= 0:
+                    if row is not None:
+                        db.delete(row)
+                    continue
+                if row is None:
+                    row = BodyCompTarget(test_name=name, target_value=v)
+                    db.add(row)
+                row.target_value = v
+                row.updated_by_user_id = app_state.user_id()
+            db.commit()
+            bs.clear_body_comp_target_cache()
+            ui.notification_show("Body comp targets saved.", type="message", duration=6)
+        except Exception as e:
+            db.rollback()
+            ui.notification_show(f"Couldn't save targets: {e}", type="error", duration=8)
+        finally:
+            db.close()
+        _bc_tick.set(_bc_tick() + 1)
+

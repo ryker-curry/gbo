@@ -516,6 +516,10 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark", is_pitcher=None, cha
         # Oct 2026, Ryker: this number is value / team best (bucket_system.
         # compute_percentile), not a rank -- label it what it is.
         percentile_label = f"{raw_percentile}% of team best" if raw_percentile is not None else "No team comparison yet"
+        # Oct 2026: Body Weight / SMM score toward a target, not team best.
+        if d.get("target") and raw_percentile is not None:
+            src = "staff target" if d.get("target_source") == "set" else "team median"
+            percentile_label = f"{raw_percentile}% of target ({d['target']:.1f}{d['unit'] or ''}, {src})"
         header_children = [
             ui.span(name, class_="gbo-metric-bar-name"),
             ui.span(raw_label, class_="gbo-metric-bar-raw"),
