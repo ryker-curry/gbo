@@ -164,3 +164,59 @@ def team_pitches_in_range(db, date_from, date_to, pitching=True):
         q = q.filter(Game.game_date <= date_to)
     ids = [gid for (gid,) in q.all()]
     return team_report.pitching_pitches(db, ids) if pitching else team_report.hitting_pitches(db, ids)
+
+
+
+# ---------------------------------------------------------------------------
+# Pitch mix over time (Oct 2026, from "Pitch Mixes and Their Effectiveness
+# Over Time" -- for our own pitchers: is he using a pitch more or less?)
+# ---------------------------------------------------------------------------
+MIX_SHIFT_PTS = 8.0
+
+
+def mix_over_time(game_pitches=None, bullpen_raps=None, by="game"):
+    """{"buckets": [(label, n)], "series": {type: [pct per bucket]}, "read": str|None}.
+    game_pitches: charted GamePitch rows (one bucket per game or week);
+    bullpen_raps: Rapsodo bullpen readings (one bucket per day or week)."""
+    if game_pitches:
+        groups = [(lab, ps) for _k, lab, ps in _group(game_pitches, by)]
+        label_of = lambda p: p.pitch_type.type_name if p.pitch_type is not None else None
+    else:
+        g = defaultdict(list)
+        for r in bullpen_raps or []:
+            if r.pitch_date is None:
+                continue
+            g[_bucket_key(r.pitch_date.date(), "week" if by == "week" else "day")].append(r)
+        groups = [((f"Wk {k.strftime('%b %d')}" if by == "week" else k.strftime("%b %d")), g[k]) for k in sorted(g)]
+        label_of = pitch_type_label
+    types = defaultdict(int)
+    for _lab, ps in groups:
+        for p in ps:
+            t = label_of(p)
+            if t:
+                types[t] += 1
+    order = [t for t, _n in sorted(types.items(), key=lambda kv: -kv[1])]
+    series = {t: [] for t in order}
+    buckets = []
+    for lab, ps in groups:
+        labeled = [label_of(p) for p in ps if label_of(p)]
+        n = len(labeled)
+        buckets.append((lab, n))
+        for t in order:
+            series[t].append(100.0 * labeled.count(t) / n if n else None)
+    read = None
+    if len(buckets) >= 4:
+        k = min(3, len(buckets) // 2)
+        best = None
+        for t, vals in series.items():
+            early = [v for v in vals[:-k] if v is not None]
+            late = [v for v in vals[-k:] if v is not None]
+            if early and late:
+                d = sum(late) / len(late) - sum(early) / len(early)
+                if abs(d) >= MIX_SHIFT_PTS and (best is None or abs(d) > abs(best[1])):
+                    best = (t, d, sum(early) / len(early), sum(late) / len(late), k)
+        if best:
+            t, d, a, b, k = best
+            read = (f"{t} usage {'up' if d > 0 else 'down'} from {a:.0f}% to {b:.0f}% over his last {k} "
+                    f"{'weeks' if by == 'week' else ('games' if game_pitches else 'bullpens')}.")
+    return {"buckets": buckets, "series": series, "read": read}

@@ -110,7 +110,7 @@ from video_helpers import render_video_clip
 import ui_helpers
 import chart_helpers
 import velo_fade_display
-from analytics import velo_fade
+from analytics import velo_fade, release_consistency
 
 GOLD = "#D4AF37"
 TEXT_CREAM = "#FFFDE5"
@@ -217,6 +217,32 @@ def _team_havaa_baseline_query(db):
             RapsodoPitch.plate_z_ft.isnot(None),
         )
         .all()
+    )
+
+
+def _release_card(pitches):
+    sp = release_consistency.spreads(pitches)
+    if not sp:
+        return None
+    db = get_session()
+    try:
+        base = release_consistency.team_baselines(db)
+    finally:
+        db.close()
+    rows = []
+    for lab, s in sorted(sp.items(), key=lambda kv: -kv[1]["n"]):
+        b = base.get(lab)
+        rows.append({"Pitch Type": lab, "#": s["n"],
+                     "Vertical spread": f"{s['v']:.2f}°", "Team usual": f"{b['v'][0]:.2f}°" if b else "—",
+                     "Horizontal spread": f"{s['h']:.2f}°", "Team usual ": f"{b['h'][0]:.2f}°" if b else "—"})
+    lines = release_consistency.read(sp, base)
+    return _card(
+        _section_label(4, "Release Consistency"),
+        ui.p("How much his release angle (vertical and horizontal) varied pitch to pitch today, next to what's usual on "
+             "our staff for that pitch. Tighter = he repeated his release -- the root of command. ",
+             ui_helpers.how_to_link("release_consistency"), class_="text-muted small"),
+        *[ui.p(ui.strong(t), class_="small") for t in lines],
+        ui_helpers.render_dict_table(rows),
     )
 
 
@@ -528,6 +554,12 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
                               velo_fade_display.season_block(velo_fade.by_outing(all_pitches or [], pitch_type_label)))
 
         trajectory_cards = [fade_card]
+        # Release angle consistency for this one session (Oct 2026,
+        # analytics/release_consistency.py) -- "did he repeat it today".
+        if target["kind"] == "session":
+            rc_card = _release_card(all_pitches or [])
+            if rc_card is not None:
+                trajectory_cards.append(rc_card)
         if player is not None:
             rt_summary = release_trajectory_summary(filtered_pitches, player)
             per_type_rows = pitch_type_summary(filtered_pitches, player=player)
@@ -555,7 +587,7 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
                     ],
                 )
             trajectory_cards.append(_card(
-                _section_label(4, "Release / Trajectory Summary"),
+                _section_label(5, "Release / Trajectory Summary"),
                 ui.div(*[
                     ui.div(ui.div(label, class_="text-muted small"), ui.div(value, style=f"color:{TEXT_CREAM}; font-weight:600;"))
                     for label, value in rt_summary.items()
@@ -611,7 +643,7 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
         # output (registered below) so they can stream in independently
         # instead of this one output blocking until all four are done.
         charts_section = _card(
-            _section_label(5, "Charts"),  # was 3 -- bumped to make room for section 3, Release / Trajectory Summary, above
+            _section_label(6, "Charts"),  # was 3 -- bumped to make room for section 3, Release / Trajectory Summary, above
             ui.input_slider(shading_key, "Minimum pitches to shade a pitch type's cluster", min=1, max=10, value=2),
             ui.output_ui(movement_chart_id),
             ui.p("Centered on release point; color-coded by pitch type.", class_="text-muted small"),

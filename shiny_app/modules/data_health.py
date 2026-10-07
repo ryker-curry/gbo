@@ -431,6 +431,18 @@ def data_health_server(input, output, session, app_state):
         cmd = {pid: command_metrics.game_pitches_command_view(ps, throws.get(pid)) for pid, ps in game.items()}
         rows.insert(1, ("Command+", "game pitches with a called spot", mcheck.split_half(
             cmd, lambda ps: command_metrics.session_command_plus(ps, cmd_base))))
+        # Oct 2026: release angle consistency (analytics/release_consistency.py)
+        from analytics import release_consistency as rc
+
+        def _rc_spread(ps):
+            sp = rc.spreads(ps)
+            tot = sum(v["n"] for v in sp.values())
+            return sum((v["v"] + v["h"]) / 2 * v["n"] for v in sp.values()) / tot if tot else None
+        raps_by = {}
+        for p in sorted(raps, key=lambda p: (p.pitch_date or datetime.min, p.pitch_number or 0)):
+            raps_by.setdefault(p.player_id, []).append(p)
+        rows.insert(2, ("Release angle spread", "Rapsodo readings (within outings)", mcheck.split_half(
+            raps_by, lambda ps: -_rc_spread(ps) if _rc_spread(ps) is not None else None)))
 
         def f2(v):
             return f"{v:.2f}" if v is not None else "—"
@@ -461,6 +473,7 @@ def data_health_server(input, output, session, app_state):
             ui.p("Each dot is a pitcher: his average bullpen Stuff+ against his game rate. If Stuff+ is measuring "
                  "something real, the dots should rise left to right.", class_="text-muted small"),
             ui.layout_columns(*bg_cards, col_widths=[6, 6]),
+            _rc_vs_command(raps_by, game, cmd, cmd_base),
         )
 
 
@@ -534,3 +547,41 @@ def data_health_server(input, output, session, app_state):
     def _open_raps_pitcher():
         if _ok() and "dh_raps_pitcher" in input and input.dh_raps_pitcher():
             _open_pitcher(input.dh_raps_pitcher(), "pitch_type_check")
+
+
+
+def _rc_vs_command(raps_by, game, cmd, cmd_base):
+    """Does release consistency line up with command on our staff? (Oct 2026)"""
+    from analytics import release_consistency as rc, command_metrics
+    from analytics.metric_check import pearson, zone_exec
+    base = rc.baselines(raps_by)
+    pts_ze, pts_cp = [], []
+    for pid, raps in raps_by.items():
+        g = rc.grade(rc.spreads(raps), base)["overall"]
+        if g is None:
+            continue
+        gps = game.get(pid, [])
+        ze = zone_exec(gps) if len(gps) >= 30 else None
+        cp = command_metrics.session_command_plus(cmd.get(pid, []), cmd_base) if len(gps) >= 30 else None
+        if ze is not None:
+            pts_ze.append((g, ze))
+        if cp is not None:
+            pts_cp.append((g, cp))
+
+    def line(pts, name):
+        if len(pts) < 5:
+            return f"{name}: needs 5+ pitchers with both ({len(pts)} so far)."
+        r = pearson([a for a, _b in pts], [b for _a, b in pts])
+        if r is None:
+            return f"{name}: no spread to compare yet."
+        verdict = ("lines up -- tighter releases, better command" if r >= 0.3 else
+                   "goes the wrong way -- don't lean on it yet" if r <= -0.1 else "only a weak link so far")
+        return f"{name}: r = {r:+.2f} across {len(pts)} pitchers -- {verdict}."
+    return ui.div(
+        ui.p(ui.strong("Does release consistency show up as command?"), style="margin:14px 0 4px;"),
+        ui.p("Each pitcher's Release consistency (Rapsodo, 100 = team average, higher = tighter) against his game "
+             "command. If release angle really drives command on our staff, these should be positive.",
+             class_="text-muted small"),
+        ui.tags.ul(ui.tags.li(line(pts_ze, "vs Zone Execution %")), ui.tags.li(line(pts_cp, "vs Command+")),
+                   class_="small"),
+    )

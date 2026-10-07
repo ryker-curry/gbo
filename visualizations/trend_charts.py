@@ -126,3 +126,23 @@ def velo_stuff_figure(vs):
     fig.update_yaxes(ticksuffix=" mph", row=1, col=1)
     fig.update_annotations(font=dict(size=12, color=TEXT_CREAM), x=0, xanchor="left")
     return fig
+
+
+
+def mix_figure(mix):
+    """Pitch usage % per game / week (Oct 2026, trends.mix_over_time)."""
+    if not mix or not mix["buckets"]:
+        return None
+    xs = [lab for lab, _n in mix["buckets"]]
+    ns = [n for _lab, n in mix["buckets"]]
+    fig = go.Figure()
+    for t, vals in mix["series"].items():
+        col = get_pitch_color(t)
+        fig.add_trace(go.Scatter(x=xs, y=vals, mode="lines+markers", name=t, line=dict(color=col, width=2),
+                                 marker=dict(color=col, size=7), connectgaps=True, customdata=ns,
+                                 hovertemplate=f"{t} %{{x}}: %{{y:.0f}}% of %{{customdata}} pitches<extra></extra>"))
+    apply_gbo_theme(fig, height=300, margin=dict(t=20, b=40, l=50, r=20),
+                    legend=dict(orientation="h", y=-0.2, x=0, bgcolor="rgba(0,0,0,0)"))
+    fig.update_yaxes(gridcolor=GRID_GRAY, ticksuffix="%", rangemode="tozero")
+    fig.update_xaxes(gridcolor=GRID_GRAY, type="category")
+    return fig
