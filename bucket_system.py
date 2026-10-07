@@ -1799,6 +1799,84 @@ def compute_movement_flag(session, player_id, mobility_rom_report):
     }
 
 
+# ---------------------------------------------------------------------------
+# Body Comp targets (Oct 2026, Ryker: "percentiles doesn't necessarily make
+# sense" for body comp -- the heaviest guy was always 100 and more always
+# scored better). Body Weight and Skeletal Muscle Mass now score as
+# progress toward a team-wide target: min(100, value / target * 100).
+# Past the target adds nothing. Target = the staff-set value
+# (models.BodyCompTarget, edited on Assessments) or, with none set, the
+# comparison pool's median (the active roster for the current season).
+# Body Fat Mass / Percent Body Fat bars are unchanged (reference only).
+# ---------------------------------------------------------------------------
+
+BODY_COMP_TARGET_NAMES = tuple(n for n, _d in BODY_COMP_METRICS)
+_TARGET_CACHE = {"at": 0.0, "data": None}
+TARGET_CACHE_SECONDS = 60
+
+
+def clear_body_comp_target_cache():
+    _TARGET_CACHE["at"], _TARGET_CACHE["data"] = 0.0, None
+
+
+def stored_body_comp_targets(session):
+    """{test_name: value} staff-set targets; {} when none or the table
+    hasn't been created yet (migrate_body_comp_targets not run)."""
+    import time
+    if _TARGET_CACHE["data"] is not None and time.time() - _TARGET_CACHE["at"] < TARGET_CACHE_SECONDS:
+        return _TARGET_CACHE["data"]
+    from sqlalchemy import inspect as sa_inspect
+    from models import BodyCompTarget
+    out = {}
+    try:
+        if sa_inspect(session.get_bind()).has_table("body_comp_targets"):
+            out = {t.test_name: float(t.target_value) for t in session.query(BodyCompTarget).all()
+                   if t.target_value is not None}
+    except Exception:
+        out = {}
+    _TARGET_CACHE["at"], _TARGET_CACHE["data"] = time.time(), out
+    return out
+
+
+def _median(vals):
+    s = sorted(vals)
+    n = len(s)
+    if not n:
+        return None
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def body_comp_targets(session, _cache=None):
+    """{test_name: {"target", "source": "set" | "median", "median"}}."""
+    stored = stored_body_comp_targets(session)
+    out = {}
+    for name in BODY_COMP_TARGET_NAMES:
+        med = _median(list(get_latest_values_by_player(session, name, _cache=_cache).values()))
+        if stored.get(name):
+            out[name] = {"target": stored[name], "source": "set", "median": med}
+        elif med:
+            out[name] = {"target": med, "source": "median", "median": med}
+    return out
+
+
+def target_score(value, target):
+    if value is None or not target or target <= 0:
+        return None
+    return min(100, round(float(value) / float(target) * 100))
+
+
+def apply_body_comp_targets(metrics, targets):
+    """Rescore Body Weight / SMM entries in a compute_metric_percentiles
+    dict in place: "percentile" becomes the target score, plus "target" /
+    "target_source" for the bar label."""
+    for name, m in metrics.items():
+        t = targets.get(name)
+        if t and m.get("raw") is not None:
+            m["percentile"] = target_score(m["raw"], t["target"])
+            m["target"], m["target_source"] = t["target"], t["source"]
+    return metrics
+
+
 def average_percentiles(metric_dict):
     """Plain mean of whatever percentiles are present (no weighting),
     rounded. None if nothing to average."""
@@ -1980,9 +2058,14 @@ def compute_bucket_system(session, player_id, season_label=None, _cache=None, _u
     # entered fields (BODY_COMP_DISPLAY_METRICS), so players see Body
     # Fat Mass and Percent Body Fat too even though those 2 don't
     # affect body_comp_score.
-    body_comp_score_metrics = compute_metric_percentiles(session, player_id, BODY_COMP_METRICS, _cache=_cache, _units=_units)
+    # Oct 2026: Body Weight / SMM score toward a target (see
+    # apply_body_comp_targets), not value / team max.
+    _bc_targets = body_comp_targets(session, _cache=_cache)
+    body_comp_score_metrics = apply_body_comp_targets(
+        compute_metric_percentiles(session, player_id, BODY_COMP_METRICS, _cache=_cache, _units=_units), _bc_targets)
     body_comp_score = average_percentiles(body_comp_score_metrics)
-    body_comp_metrics = compute_metric_percentiles(session, player_id, BODY_COMP_DISPLAY_METRICS, _cache=_cache, _units=_units)
+    body_comp_metrics = apply_body_comp_targets(
+        compute_metric_percentiles(session, player_id, BODY_COMP_DISPLAY_METRICS, _cache=_cache, _units=_units), _bc_targets)
 
     # Power (5 sub-groups)
     power_subgroup_scores = {}

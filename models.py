@@ -1888,6 +1888,21 @@ class ArsenalTarget(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class BodyCompTarget(Base):
+    """Team-wide Body Comp ring target for one measure (Oct 2026, Ryker:
+    "percentiles doesn't necessarily make sense" for body comp). The ring
+    scores value / target (capped at 100) instead of value / team max;
+    with no row, bucket_system falls back to the roster median. One row
+    per test_name (Body Weight, Skeletal Muscle Mass)."""
+    __tablename__ = "body_comp_targets"
+
+    target_id = Column(Integer, primary_key=True)
+    test_name = Column(String(100), nullable=False, unique=True)
+    target_value = Column(Numeric(7, 2), nullable=False)
+    updated_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class WeeklyReportNote(Base):
     """Coach's optional note on a pitcher's Weekly Progress Report (Oct
     2026). week_start = the Monday of the week the report covers. Goes

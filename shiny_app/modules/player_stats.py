@@ -134,7 +134,7 @@ def player_stats_server(input, output, session, app_state):
                 or bool(bucket_data.get("mobility_rom_report"))
                 or bool(bucket_data.get("movement_flag"))
             )
-            legend = ui.p("Bars = % of the team's best mark (100 = you have the best). "
+            legend = ui.p("Bars = % of the team's best mark (100 = you have the best); Body Weight and Skeletal Muscle Mass are % of a target instead. "
                           "Green ▲/▼ = better than your last test, red = worse.", class_="text-muted small")
             panels = [ui.nav_panel("Overview", ui.div(*overview) if overview else
                                    ui_helpers.empty_state("No physical testing data yet."), value="overview")]

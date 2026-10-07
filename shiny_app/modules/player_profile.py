@@ -101,7 +101,7 @@ def _priorities(bd, limit=3):
                 continue
             st = ui_helpers.status_from_percentile(pct)
             if st in (ui_helpers.STATUS_FLAG, ui_helpers.STATUS_WATCH):
-                items.append((pct, st, name, f"{d.get('raw')}{(' ' + d['unit']) if d.get('unit') else ''} · {pct}% of team best"))
+                items.append((pct, st, name, f"{d.get('raw')}{(' ' + d['unit']) if d.get('unit') else ''} · {pct}% of {'target' if d.get('target') else 'team best'}"))
     items.sort(key=lambda x: x[0])
     return [(st, t, dt) for _, st, t, dt in items[:limit]]
 

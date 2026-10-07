@@ -276,7 +276,7 @@ def _priority_pool(db, bd):
                 "scale": float(pct),
                 "status": st,
                 "title": name,
-                "detail": f"{d.get('raw')}{(' ' + d['unit']) if d.get('unit') else ''} · {pct}% of team best",
+                "detail": f"{d.get('raw')}{(' ' + d['unit']) if d.get('unit') else ''} · {pct}% of {'target' if d.get('target') else 'team best'}",
                 "category_name": tt.category.category_name if tt and tt.category else None,
                 "metric_name": tt.test_name if tt else None,
             })
