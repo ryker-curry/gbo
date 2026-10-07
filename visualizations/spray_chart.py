@@ -108,6 +108,81 @@ def hit_spray_chart(pitches, title=None):
     return fig
 
 
+# Oct 2026, Ryker: "a spray chart that shows all balls in play even if
+# they are outs". Hits keep HIT_TYPE_COLORS as solid dots; outs are
+# hollow rings in their own hues (also distinct from the pitch-type
+# palette) so hit vs out reads at a glance.
+OUT_TYPE_COLORS = {
+    "Groundout": "#2BB3A3",
+    "Flyout": "#C9CED6",
+    "Lineout": "#6DBE45",
+    "Other": "#8A8F98",
+}
+OUT_TYPE_LABELS = {"Groundout": "Groundout", "Flyout": "Flyout", "Lineout": "Lineout",
+                   "Other": "Other (DP / FC / E / Sac)"}
+OUT_TYPE_ORDER = ("Groundout", "Flyout", "Lineout", "Other")
+
+
+def _bip_group(p):
+    if p.ab_outcome in HIT_TYPE_COLORS:
+        return p.ab_outcome
+    if p.ab_outcome in ("Groundout", "Flyout", "Lineout"):
+        return p.ab_outcome
+    return "Other"
+
+
+def all_bip_spray_chart(pitches, title=None):
+    """Every located ball in play -- hits (solid, HIT_TYPE_COLORS) and
+    outs / everything else (hollow rings, OUT_TYPE_COLORS). Hover shows
+    the exact result, distance and contact quality; legend click hides
+    a group. None when nothing is located."""
+    located = [
+        p for p in pitches
+        if p.pitch_outcome == "In Play" and p.batted_ball_x is not None and p.batted_ball_y is not None
+    ]
+    if not located:
+        return None
+
+    fig = go.Figure()
+    draw_field_diagram(fig)
+
+    groups = {}
+    for p in located:
+        groups.setdefault(_bip_group(p), []).append(p)
+
+    for key in HIT_TYPE_ORDER + OUT_TYPE_ORDER:
+        group = groups.get(key)
+        if not group:
+            continue
+        hit = key in HIT_TYPE_COLORS
+        color = HIT_TYPE_COLORS[key] if hit else OUT_TYPE_COLORS[key]
+        label = HIT_TYPE_LABELS[key] if hit else OUT_TYPE_LABELS[key]
+        xs = [float(p.batted_ball_x) for p in group]
+        ys = [float(p.batted_ball_y) for p in group]
+        marker = (dict(size=9, color=color, opacity=0.9, line=dict(color=BG_DARK, width=0.5)) if hit
+                  else dict(size=9, color="rgba(0,0,0,0)", line=dict(color=color, width=2)))
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="markers", marker=marker, name=label, legendgroup=key,
+            customdata=[[HIT_TYPE_LABELS.get(p.ab_outcome) or p.ab_outcome or "In play",
+                         distance_from_plate(x, y), p.contact_quality or "\u2014"]
+                        for p, x, y in zip(group, xs, ys)],
+            hovertemplate="%{customdata[0]}<br>%{customdata[1]:.0f} ft from home<br>"
+                          "Contact: %{customdata[2]}<extra></extra>",
+        ))
+
+    fig.update_layout(
+        title=dict(text=title, x=0, xanchor="left", font=dict(size=15, color="#E9ECF1")) if title else None,
+        xaxis=dict(range=[X_MIN, X_MAX], visible=False, fixedrange=True),
+        yaxis=dict(range=[Y_MIN, Y_MAX], visible=False, fixedrange=True, scaleanchor="x", scaleratio=1),
+        paper_bgcolor=BG_DARK, plot_bgcolor=BG_DARK,
+        height=560, margin=dict(l=10, r=10, t=40 if title else 10, b=10),
+        legend=dict(font=dict(color=GBO_CREAM), bgcolor="rgba(0,0,0,0)", orientation="h",
+                    x=0.5, xanchor="center", y=0.0, yanchor="top"),
+        dragmode=False,
+    )
+    return fig
+
+
 def _wedge_path(angle_start_deg, angle_end_deg, radius, n_points=16):
     """Home plate -> an arc of `n_points` segments from angle_start to
     angle_end -> back to home plate -- a closed polygon Plotly can fill
