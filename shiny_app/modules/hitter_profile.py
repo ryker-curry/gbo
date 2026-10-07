@@ -67,7 +67,7 @@ from visualizations import trend_charts
 from visualizations import hitter_insight_charts as hic
 from visualizations.hitter_hot_zone_chart import hot_zone_figure
 from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_figure, CONTACT_QUALITY_SCORE
-from visualizations.spray_chart import hit_spray_chart, infield_slice_chart
+from visualizations.spray_chart import hit_spray_chart, infield_slice_chart, all_bip_spray_chart
 
 import ui_helpers
 import format_helpers
@@ -1655,6 +1655,12 @@ def hitter_profile_server(input, output, session, app_state):
                     output_widget("hp_infield_slice_widget"),
                     col_widths=[6, 6],
                 ),
+                # Oct 2026, Ryker: every ball in play, outs included.
+                ui.p(ui.strong("All Balls in Play"), class_="mt-3 mb-0"),
+                ui.p("Every ball in play at its recorded field location -- hits are solid dots, outs and everything "
+                     "else are open rings. Hover a dot for the exact result; click a legend item to hide it.",
+                     class_="text-muted small"),
+                output_widget("hp_all_bip_widget"),
             )
         finally:
             db.close()
@@ -1672,6 +1678,22 @@ def hitter_profile_server(input, output, session, app_state):
             if not pitches:
                 return None
             return hit_spray_chart(pitches, title="Spray Chart (Base Hits)")
+        finally:
+            db.close()
+
+    @render_plotly
+    def hp_all_bip_widget():
+        if not app_state.is_authenticated():
+            return None
+        req("hp_view" in input)
+        if input.hp_view() != "spray_chart":
+            return None
+        db = get_session()
+        try:
+            _pid, pitches = _current_pitches(db)
+            if not pitches:
+                return None
+            return all_bip_spray_chart(pitches)
         finally:
             db.close()
 
