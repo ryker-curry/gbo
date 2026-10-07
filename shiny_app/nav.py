@@ -179,9 +179,10 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             # separate player-facing copy.
             NavPage("training_routines", "Training Routines", "activity"),
         ]
-        # My Bullpens is pitcher-specific; My Hitting is the mirror-
-        # opposite for position players -- only one shows, based on the
-        # player's own is_pitcher flag (same as the original).
+        # My Bullpens is pitcher-specific; hitters get the hitter pages
+        # below instead -- based on the player's own is_pitcher flag.
+        # (Oct 2026, Ryker: My Hitting taken off the hitter sidebar --
+        # won't be used.)
         if is_pitcher_player:
             my_dev_pages.append(NavPage("player_bullpens", "My Bullpens", "trophy"))
             my_dev_pages.append(NavPage("pitcher_profile", "My Pitcher Profile", "graph-up-arrow"))
@@ -196,7 +197,6 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             my_dev_pages.append(NavPage("pitcher_meeting_report", "Pitcher Report", "printer"))  # Oct 2026, Ryker: renamed from Meeting Report, no "My"
             my_dev_pages.append(NavPage("weekly_report", "My Weekly Report", "calendar-week"))
         else:
-            my_dev_pages.append(NavPage("player_hitting", "My Hitting", "trophy"))
             my_dev_pages.append(NavPage("hitter_profile", "My Hitter Profile", "graph-up-arrow"))
             my_dev_pages.append(NavPage("hitter_game_report", "My Game Breakdown", "file-text"))
             my_dev_pages.append(NavPage("hitter_meeting_report", "Hitter Report", "printer"))
