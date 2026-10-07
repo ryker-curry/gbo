@@ -104,6 +104,8 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             NavPage("game_tracking", "Game Tracking", "clipboard-data"),
             # Oct 2026: charting completeness checks per game.
             NavPage("data_health", "Data Health", "activity"),
+            # Oct 2026: arsenal cheat sheets + pitch-ID quiz for charters.
+            NavPage("charter_training", "Charter Training", "mortarboard"),
         ]))
         sections.append(NavSection("Scouting", [
             # Oct 2026: series advance reports from our own charting.

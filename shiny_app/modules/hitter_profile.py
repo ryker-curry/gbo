@@ -61,6 +61,8 @@ from game_stats import get_pitcher_hands, compute_batting_line, compute_batted_b
 from plate_discipline import compute_hitter_discipline, compute_zone_tier_discipline
 from analytics import performance_score, profile_queries
 from analytics import hitter_hot_zones, hitter_insights, league_baselines, trends
+from analytics import decision_value, hitter_counts, leverage, zone_whiff, shape_results
+from visualizations import zone_whiff_chart
 from visualizations import trend_charts
 from visualizations import hitter_insight_charts as hic
 from visualizations.hitter_hot_zone_chart import hot_zone_figure
@@ -112,6 +114,8 @@ def hitter_profile_ui():
         # function is what actually controls which one does anything.
         ui.output_ui("hp_view_picker"),
         ui.output_ui("hp_overview_section"),
+        ui.output_ui("hp_zone_whiff_flag"),
+        ui.output_ui("hp_shape_section"),
         ui.output_ui("hp_discipline_section"),
         ui.output_ui("hp_batted_ball_section"),
         ui.output_ui("hp_situational_section"),
@@ -247,6 +251,7 @@ def hitter_profile_server(input, output, session, app_state):
                         "swing_decisions": "Swing Decisions",
                         "attack": "How Pitchers Attack Me",
                         "pitch_type": "Results by Pitch Type",
+                        "pitch_shape": "Results by Pitch Shape",
                         "fp_two": "First Pitch & Two Strikes",
                         "ranks": "Team Percentile Ranks",
                         "trends": "Trends",
@@ -264,6 +269,113 @@ def hitter_profile_server(input, output, session, app_state):
     # plays, and (Ryker's own reference) the top-of-page summary a
     # Baseball Savant player page opens with.
     # -------------------------------------------------------------------
+    # Results by pitch shape (Oct 2026, analytics/shape_results.py)
+    @render.ui
+    def hp_shape_section():
+        if not app_state.is_authenticated():
+            return None
+        if app_state.role_name() != "Player" and app_state.role_name() not in STAFF_ROLES:
+            return None
+        req("hp_view" in input)
+        if input.hp_view() != "pitch_shape":
+            return None
+        db = get_session()
+        try:
+            pid, pitches = _current_pitches(db)
+            if not pitches:
+                return None
+            f = _current_filters()
+            team = profile_queries.get_team_hitting_pitches(db, f["date_from"], f["date_to"], f["pitch_type"], f["game_scope"])
+            team_flat = [p for ps in team.values() for p in ps]
+            ids = list({p.game_pitch_id for p in list(pitches) + team_flat})
+            rap = profile_queries.rapsodo_by_game_pitch_id(db, ids)
+            pitchers = {pl.player_id: pl for pl in db.query(Player).filter(Player.player_id.in_({r.player_id for r in rap.values()})).all()} if rap else {}
+        finally:
+            db.close()
+        mine = shape_results.table(pitches, rap, pitchers)
+        tm = shape_results.table(team_flat, rap, pitchers)
+        head = [ui.p(ui.strong("Results by Pitch Shape"), style="margin-bottom:0;"),
+                ui.p("What kinds of pitches you handle and which ones beat you, by how the pitch actually moved. Uses "
+                     "pitches with a Rapsodo reading -- our own pitchers in intrasquads -- so it's what you've seen in "
+                     "practice games. Riding fastball = 16\"+ of ride; sinking/running = 10\" or less, or big arm-side "
+                     "run; dead zone = in between (the flat, hittable look). RV/100 = runs per 100 pitches, + = good "
+                     "for you. Hard contact = barreled or solid, of balls in play.", class_="text-muted small")]
+        if not mine:
+            return ui.div(*head, ui_helpers.empty_state("No pitches with a Rapsodo reading in this range yet."))
+
+        def pc(v):
+            return f"{v:.0f}%" if v is not None else "—"
+
+        def rv(v):
+            return f"{v:+.1f}" if v is not None else "—"
+        blocks = [ui.p(ui.strong(t), class_="small", style="margin:4px 0;") for t in shape_results.takeaway(mine)]
+        for dim in shape_results.DIMENSIONS:
+            gs = mine.get(dim)
+            if not gs:
+                continue
+            rows = []
+            for g in shape_results.ORDER[dim]:
+                r = gs.get(g)
+                if not r:
+                    continue
+                t = (tm.get(dim) or {}).get(g)
+                rows.append({dim: g, "Pitches": r["n"], "Swing %": pc(r["swing"]), "Whiff %": pc(r["whiff"]),
+                             "CSW %": pc(r["csw"]), "Hard contact %": f"{pc(r['hard'])} ({r['bip']})",
+                             "RV/100": rv(r["rv100"]), "Team RV/100": rv(t["rv100"]) if t else "—",
+                             "Team whiff %": pc(t["whiff"]) if t else "—"})
+            blocks += [ui.p(ui.strong(dim), style="margin:12px 0 2px;"), ui_helpers.render_dict_table(rows)]
+        return ui.div(*head, *blocks)
+
+    # In-zone whiff "check engine light" (Oct 2026, analytics/zone_whiff.py)
+    def _zw():
+        db = get_session()
+        try:
+            _pid, pitches = _current_pitches(db)
+        finally:
+            db.close()
+        return zone_whiff.rolling(pitches or [])
+
+    @render.ui
+    def hp_zone_whiff():
+        if not _insight_gate("trends"):
+            return None
+        res = _zw()
+        head = ui.p(ui.strong("In-zone whiff check"), style="margin:16px 0 0;")
+        if not res["points"]:
+            return ui.div(head, ui.p(f"Needs {zone_whiff.WINDOW}+ swings at strikes in this range ({res['n']} so far).",
+                                     class_="text-muted small"))
+        msg = (f"Flag: missing {res['last']:.0f}% of strikes he swings at over his last {zone_whiff.WINDOW} -- "
+               f"{res['gap']:+.0f} points over his normal. Worth a look at the swing (timing, bat path) before it shows "
+               "up in the results." if res["flag"] else
+               f"Last {zone_whiff.WINDOW} swings at strikes: {res['last']:.0f}% whiffs vs. his normal {res['base']:.0f}%.")
+        return ui.div(
+            head,
+            ui.p(f"Swings and misses on pitches in the zone, rolling over his last {zone_whiff.WINDOW} in-zone swings. A "
+                 f"jump of {zone_whiff.FLAG_PTS:.0f}+ points over his own normal is an early sign something changed in the "
+                 "swing -- hitters tend to flip between a low-miss and a high-miss state.", class_="text-muted small"),
+            ui.p(ui.strong(msg), class_="small",
+                 style="color:var(--gbo-status-flag);" if res["flag"] else ""),
+            ui.HTML(zone_whiff_chart.svg(res, zone_whiff.WINDOW)),
+        )
+
+    @render.ui
+    def hp_zone_whiff_flag():
+        if not app_state.is_authenticated():
+            return None
+        if app_state.role_name() != "Player" and app_state.role_name() not in STAFF_ROLES:
+            return None
+        req("hp_view" in input)
+        if input.hp_view() != "overview":
+            return None
+        res = _zw()
+        if not res["flag"]:
+            return None
+        return ui.div(
+            ui.strong("Check engine light: "),
+            f"missing {res['last']:.0f}% of strikes he swings at lately (normal {res['base']:.0f}%). See Trends.",
+            class_="small", style="border-left:3px solid var(--gbo-status-flag);padding:6px 10px;margin:8px 0;",
+        )
+
     @render.ui
     def hp_overview_section():
         if not app_state.is_authenticated():
@@ -544,6 +656,89 @@ def hitter_profile_server(input, output, session, app_state):
     # Situational & Count Leverage: RISP/2-Strike/Leadoff AVG + QAB %,
     # and the Ahead/Even/Behind count-leverage split table.
     # -------------------------------------------------------------------
+    def _situational_extras(db, pid, pitches):
+        """Count-by-count value, PA length + Early win %, high leverage (Oct 2026,
+        analytics/hitter_counts.py and analytics/leverage.py)."""
+        from models import GamePitch as _GP
+        f = _current_filters()
+        team = profile_queries.get_team_hitting_pitches(db, f["date_from"], f["date_to"], f["pitch_type"], f["game_scope"])
+        team_flat = [p for tpid, ps in team.items() for p in ps]
+        out = []
+
+        def rv(v):
+            return f"{v:+.1f}" if v is not None else "—"
+
+        def pc(v):
+            return f"{v:.0f}%" if v is not None else "—"
+        rows = hitter_counts.count_table(pitches, team_flat)
+        out += [
+            ui.hr(),
+            ui.p(ui.strong("Count by count"), style="margin-bottom:0;"),
+            ui.p("Run value per 100 pitches in each count (+ = good for you), split fastballs vs. breaking/offspeed, "
+                 "next to the team. ★ = the counts that separated hitters who got called up from AAA (2-0, 3-1, 2-1, "
+                 "1-1) -- especially on offspeed. Small samples per count: read the pitch counts.",
+                 class_="text-muted small"),
+            ui_helpers.render_dict_table([{
+                "Count": ("★ " if r["key"] else "") + r["count"], "Pitches": r["n"], "Swing %": pc(r["swing"]),
+                "RV/100": rv(r["rv"]), "vs FB": f"{rv(r['fb_rv'])} ({r['fb_n']})",
+                "vs BB/OS": f"{rv(r['other_rv'])} ({r['other_n']})", "Team RV/100": rv(r["team_rv"]),
+            } for r in rows if r["n"] or r["key"]]),
+        ]
+        pl = hitter_counts.pa_length(pitches)
+        tl = hitter_counts.pa_length(team_flat)
+        out += [
+            ui.hr(),
+            ui.p(ui.strong("How long the at-bat went"), style="margin-bottom:0;"),
+            ui.p("D1 data says working long counts rarely helps: strikeouts jump after the third pitch and results "
+                 "don't improve. Early win % is another way to score a good at-bat -- you got to a hitter's count, or "
+                 "you put pitch 1 or 2 in play hard (barreled / solid).", class_="text-muted small"),
+            ui_helpers.render_kpi_cards([
+                {"label": "Early win %", "value": pc(pl["early"])},
+                {"label": "Team early win %", "value": pc(tl["early"])},
+                {"label": "PAs", "value": str(pl["done"])},
+            ]),
+            ui_helpers.render_dict_table([{
+                "PA length": r["label"], "PAs": r["pas"], "On-base %": pc(r["onbase"]), "K %": pc(r["k"]),
+                "RV per PA": f"{r['rv_pa']:+.2f}" if r["rv_pa"] is not None else "—",
+                "Team on-base %": pc(t["onbase"]), "Team K %": pc(t["k"]),
+            } for r, t in zip(pl["rows"], tl["rows"])]),
+        ]
+        table = leverage.team_table(db)
+        gids = {p.game_id for p in pitches}
+        game_ps = db.query(_GP).filter(_GP.game_id.in_(gids)).all() if gids else []
+        by_game = {}
+        for p in game_ps:
+            by_game.setdefault(p.game_id, []).append(p)
+        scores = {}
+        for ps in by_game.values():
+            scores.update(leverage.score_before(ps))
+        from analytics.hitter_insights import plate_appearances
+        hi_pas, lo_pas = [], []
+        for pa in plate_appearances(pitches):
+            if not (pa[-1].ends_plate_appearance and pa[-1].ab_outcome not in (None, "No Result")):
+                continue
+            (hi_pas if leverage.pa_context(pa, table, scores)["high"] else lo_pas).append(pa)
+
+        def summ(pas):
+            n = len(pas)
+            rvs = [float(p.run_value) for pa in pas for p in pa if p.run_value is not None]
+            return {"PAs": n,
+                    "On-base %": pc(100.0 * sum(1 for pa in pas if pa[-1].ab_outcome in hitter_counts.REACH) / n) if n else "—",
+                    "K %": pc(100.0 * sum(1 for pa in pas if (pa[-1].ab_outcome or "").startswith("K")) / n) if n else "—",
+                    "RV per PA": f"{sum(rvs) / n:+.2f}" if n and rvs else "—"}
+        out += [
+            ui.hr(),
+            ui.p(ui.strong("High-leverage at-bats"), style="margin-bottom:0;"),
+            ui.p(f"High leverage = run leverage {leverage.HIGH}+ (the outs/bases spot swings runs a lot more than an "
+                 f"average PA on our charted games -- 1.0 = average) or late & close ({leverage.LATE_INNING}th inning on, "
+                 f"within {leverage.CLOSE_RUNS} runs). GBO's own run-based version, not Tango's Leverage Index (that needs "
+                 "a college win-expectancy table). Context, not a clutch rating -- clutch hitting doesn't carry over.",
+                 class_="text-muted small"),
+            ui_helpers.render_dict_table([{"Spot": "High leverage", **summ(hi_pas)},
+                                          {"Spot": "Everything else", **summ(lo_pas)}]),
+        ]
+        return out
+
     @render.ui
     def hp_situational_section():
         if not app_state.is_authenticated():
@@ -586,6 +781,7 @@ def hitter_profile_server(input, output, session, app_state):
                 "Split by the count when the at-bat ended -- Ahead = more balls than strikes, Behind = more strikes than balls, Even = equal.",
                 class_="text-muted small",
             ))
+            sections += _situational_extras(db, pid, pitches)
 
             return ui.div(*sections)
         finally:
@@ -773,7 +969,9 @@ def hitter_profile_server(input, output, session, app_state):
                 continue
             v = r["value"]
             raw = "—" if v is None else (_fmt3(v) if key in ("AVG", "OBP", "SLG") else
-                                         (f"{v:.1f}" if key == "Pitches/PA" else f"{v:.0f}%"))
+                                         (f"{v:.1f}" if key == "Pitches/PA" else
+                                          (f"{v:+.2f}" if key == "Decision RV/100" else
+                                           (f"{v:.0f}" if key == "Decision Score" else f"{v:.0f}%"))))
             lg = hitter_insights_league(key)
             lab = ui.div(ui.div(label), ui.div(desc + (f" · {lg}" if lg else ""), class_="text-muted",
                                                style="font-size:.7rem;font-weight:400;"),
@@ -816,6 +1014,7 @@ def hitter_profile_server(input, output, session, app_state):
                 hand_select("hp_sd_hand"),
                 ui.output_ui("hp_sd_summary"),
                 ui.layout_columns(output_widget("hp_sd_chart"), ui.output_ui("hp_sd_table"), col_widths=[7, 5]),
+                ui.output_ui("hp_dv_body"),
             )
         if view == "attack":
             return ui.div(
@@ -878,6 +1077,7 @@ def hitter_profile_server(input, output, session, app_state):
                     col_widths=[6, 6],
                 ),
                 output_widget("hp_trend_metrics"),
+                ui.output_ui("hp_zone_whiff"),
             )
         return ui.div(
             ui.p(ui.strong("Team Percentile Ranks"), style="margin-bottom:0;"),
@@ -916,6 +1116,63 @@ def hitter_profile_server(input, output, session, app_state):
             ])
         finally:
             db.close()
+
+    @render.ui
+    def hp_dv_body():
+        """Decision runs (Oct 2026, analytics/decision_value.py)."""
+        if not _insight_gate("swing_decisions"):
+            return None
+        db = get_session()
+        try:
+            pid, pitches = _current_pitches(db)
+            if not pitches:
+                return None
+            table = decision_value.team_table(db)
+            mine = _hand_pitches(db, pitches, "hp_sd_hand")
+            d = decision_value.score(table, mine)
+            f = _current_filters()
+            team = profile_queries.get_team_hitting_pitches(db, f["date_from"], f["date_to"], f["pitch_type"], f["game_scope"])
+        finally:
+            db.close()
+        if not d["n"]:
+            return None
+        others = [decision_value.score(table, ps) for tpid, ps in team.items() if tpid != pid]
+        others = [o["per100"] for o in others if o["n"] >= 40 and o["per100"] is not None]
+        rank = None
+        if others:
+            rank = 1 + sum(1 for o in others if o > d["per100"])
+        regions = decision_value.REGIONS
+        groups = list(decision_value.COUNT_GROUPS)
+        rows = []
+        for r in regions:
+            row = {"Zone": r}
+            for g in groups:
+                sw = d["by"].get((r, g, "swing"), {"runs": 0.0, "n": 0})
+                tk = d["by"].get((r, g, "take"), {"runs": 0.0, "n": 0})
+                n = sw["n"] + tk["n"]
+                row[g] = f"{sw['runs'] + tk['runs']:+.1f} ({n})" if n else "—"
+            rows.append(row)
+        kpis = [
+            {"label": "Decision runs", "value": f"{d['runs']:+.1f}"},
+            {"label": "Per 100 pitches", "value": f"{d['per100']:+.2f}"},
+            {"label": "Pitches graded", "value": str(d["n"])},
+        ]
+        if rank is not None:
+            kpis.append({"label": "Team rank", "value": f"{rank} of {len(others) + 1}"})
+        return ui.div(
+            ui.hr(),
+            ui.p(ui.strong("Decision runs: the same choices, valued in runs"), style="margin-bottom:0;"),
+            ui.p("Every swing and take is worth what swings and takes in that zone and count are worth across all of our "
+                 "charted games (run expectancy). Your credit is the value of what you did minus the value of the other "
+                 "choice -- so taking a heater down the middle at 3-1 costs more than at 0-2. + = good decision. "
+                 "Hitter's counts: 1-0, 2-0, 3-0, 2-1, 3-1. Pitcher's: 0-1, 0-2, 1-2. Team rank among hitters with 40+ "
+                 "graded pitches. Shadow-in / Shadow-out = the edge just inside / just outside the zone.",
+                 class_="text-muted small"),
+            ui_helpers.render_kpi_cards(kpis),
+            *[ui.p(ui.strong(n), class_="small", style="margin:4px 0;") for n in d["notes"]],
+            ui.p("Runs gained (+) or lost (−) by zone and count, pitches in ( ):", class_="small", style="margin:10px 0 2px;"),
+            ui_helpers.render_dict_table(rows),
+        )
 
     @render_plotly
     def hp_sd_chart():
@@ -1205,7 +1462,7 @@ def hitter_profile_server(input, output, session, app_state):
             team = profile_queries.get_team_hitting_pitches(db, f["date_from"], f["date_to"], f["pitch_type"], f["game_scope"])
             _pid, mine = _current_pitches(db)
             team[pid] = mine or []
-            ranks = hitter_insights.team_percentiles(team, pid)
+            ranks = hitter_insights.team_percentiles(team, pid, decision_value.team_table(db))
             if not ranks:
                 return ui.p("No at-bats in this range yet.", class_="text-muted small")
             n = max((r["n_players"] for r in ranks.values()), default=0)

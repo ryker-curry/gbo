@@ -53,6 +53,8 @@ def rows(db, date_from=None, date_to=None, game_scope="all"):
     if not by_player:
         return []
     players = {pl.player_id: pl for pl in db.query(Player).filter(Player.player_id.in_(list(by_player))).all()}
+    from analytics import decision_value, decision_score
+    dv_table = decision_value.team_table(db)
     out = []
     for pid, ps in by_player.items():
         pl = players.get(pid)
@@ -61,7 +63,7 @@ def rows(db, date_from=None, date_to=None, game_scope="all"):
         line = game_stats.compute_batting_line(ps)
         if not line.get("PA"):
             continue
-        core = hitter_insights.core_metrics(ps)
+        core = hitter_insights.core_metrics(ps, dv_table)
         plus = league_baselines.hitting_plus(line)
         out.append({
             "player": pl, "Hitter": f"{pl.first_name} {pl.last_name}", "PA": line.get("PA"),
@@ -76,5 +78,12 @@ def rows(db, date_from=None, date_to=None, game_scope="all"):
             "Zone Swing %": core.get("Zone Swing %"), "Whiff %": core.get("Whiff %"),
             "Hard contact %": core.get("Hard contact %"), "Pitches/PA": core.get("Pitches/PA"),
             "2-strike K %": core.get("2-strike K %"),
+            "Decision RV/100": core.get("Decision RV/100"),
+            "_core": core,
         })
+    # Oct 2026: Decision Score among hitters with 10+ PA (analytics/decision_score.py)
+    pool = {r["player"].player_id: r["_core"] for r in out if (r["PA"] or 0) >= 10}
+    ds = decision_score.scores(pool)
+    for r in out:
+        r["Decision Score"] = ds.get(r["player"].player_id)
     return out

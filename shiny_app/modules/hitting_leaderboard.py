@@ -38,6 +38,8 @@ STAT_META = [
     ("Zone Swing %", "Zone Swing%", True, "pct"), ("Whiff %", "Whiff%", False, "pct"),
     ("Hard contact %", "Hard Contact%", True, "pct"), ("Pitches/PA", "P/PA", True, "num2"),
     ("2-strike K %", "2-Strike K%", False, "pct"),
+    # Oct 2026 (hitting article batch): run-valued decisions + BEAR-style summary
+    ("Decision RV/100", "Decision RV/100", True, "num2"), ("Decision Score", "Decision Score", True, "int"),
     ("H", "H", True, "int"), ("2B", "2B", True, "int"), ("3B", "3B", True, "int"), ("HR", "HR", True, "int"),
     ("BB", "BB", True, "int"), ("K", "K", False, "int"),
 ]

@@ -107,7 +107,60 @@ def _grid(g, title):
             f'<div class="small muted">in · mid · away / up→down</div><div class="grid">{"".join(cells)}</div></div>')
 
 
-def _pitcher_page(p):
+def _whiff_grid(g, title):
+    """Whiff % of swings by hitter-relative cell (Approach panel, Oct 2026)."""
+    cells = []
+    for row in g["cells"]:
+        for wh, sw in row:
+            if sw < 2:
+                cells.append('<div style="background:#e9edf1;color:#9aa3ad">·</div>')
+                continue
+            v = round(100 * wh / sw)
+            a = 0.12 + 0.88 * min(v, 60) / 60
+            cells.append(f'<div style="background:rgba(194,58,58,{a:.2f})" title="{wh} of {sw} swings">{v}</div>')
+    chase = f' · chase {_p(g["chase"])}' if g.get("chase") is not None else ""
+    return (f'<div><b>{title}</b> <span class="small muted">({g["n"]}{chase})</span>'
+            f'<div class="grid">{"".join(cells)}</div></div>')
+
+
+def _damage_grid(d, hand):
+    if not d:
+        return ""
+    cells = []
+    for row in d:
+        for tb, n in row:
+            if n < 2:
+                cells.append('<div style="background:#e9edf1;color:#9aa3ad">·</div>')
+                continue
+            v = tb / n
+            a = 0.12 + 0.88 * min(v, 1.0)
+            cells.append(f'<div style="background:rgba(46,156,98,{a:.2f})" title="{tb} TB on {n} balls in play">'
+                         f'{("%.3f" % v).lstrip("0") if v < 1 else "%.2f" % v}</div>')
+    return (f'<div><b>Our damage vs {hand}HP</b> <span class="small muted">(SLG in play)</span>'
+            f'<div class="grid">{"".join(cells)}</div></div>')
+
+
+def _approach_panel(prof, damage, hand):
+    wg = prof.get("whiff_grids") or {}
+    names = {"Fastball": "Fastball", "Breaking": "Breaking", "Offspeed": "Offspeed"}
+    grids = "".join(_whiff_grid(wg[f], names[f]) for f in ("Fastball", "Breaking", "Offspeed") if f in wg)
+    dmg = _damage_grid((damage or {}).get(hand), hand) if hand in ("R", "L") else ""
+    tto = prof.get("tto") or []
+    trows = "".join(f'<tr><td>{"1st" if t["tto"] == 1 else "2nd" if t["tto"] == 2 else "3rd+"}</td><td>{t["n"]}</td>'
+                    f'<td>{_p(t["fb"])}</td><td>{_e(t["top"])} {_p(t["top_pct"])}</td><td>{_p(t["strike"])}</td></tr>'
+                    for t in tto)
+    ttable = (f'<table><tr><th>Time through</th><th>#</th><th>FB%</th><th>Top pitch</th><th>Strike</th></tr>{trows}</table>'
+              if trows else '<div class="small muted">Not enough at-bats yet.</div>')
+    return f"""
+  <div class="cols" style="margin-top:10px">
+    <div style="flex:1.4"><h2>Where he wins: swing-and-miss % by zone</h2>
+      <div style="display:flex;gap:18px;flex-wrap:wrap">{grids}{dmg}</div>
+      <div class="small muted" style="margin-top:4px">Whiffs per swing in each zone (in · mid · away, up→down, from the hitter's side), both sides of the plate. Green = how hard we hit balls in play there against {_e(hand or '?')}HP (all our at-bats). Red where he wins + pale green where we don't = lay off it.</div></div>
+    <div style="flex:1"><h2>Times through the order</h2>{ttable}</div>
+  </div>"""
+
+
+def _pitcher_page(p, damage=None):
     prof = p["profile"]
     rows = "".join(
         f'<tr><td><span class="sw" style="background:{get_pitch_color(a["pitch"])}"></span>{_e(a["pitch"])}</td>'
@@ -138,7 +191,7 @@ def _pitcher_page(p):
       <div style="display:flex;gap:22px">{_grid(prof['fb_grid'].get('R'), 'vs RHH')}{_grid(prof['fb_grid'].get('L'), 'vs LHH')}</div>
       <div class="small muted" style="margin-top:4px">% of his located fastballs by zone, catcher's view relative to the hitter.</div>
       <h2 style="margin-top:12px">Approach</h2><ol>{pts}</ol>{notes}</div>
-  </div>
+  </div>{_approach_panel(prof, damage, p.get("hand"))}
 </div>"""
 
 
@@ -148,7 +201,7 @@ def render_sheet(rep, report=None, team_name="Pitt State Baseball"):
     when = report.series_date.strftime("%A, %b %d, %Y") if report and report.series_date else ""
     games = ", ".join(g.game_date.strftime("%b %d") for g in rep["games"]) or "none yet"
     plan = (report.plan_text if report and report.plan_text else "") or "No series plan written yet."
-    pages = "".join(_pitcher_page(p) for p in rep["pitchers"] + rep["unidentified"]
+    pages = "".join(_pitcher_page(p, rep.get("damage")) for p in rep["pitchers"] + rep["unidentified"]
                     if p["profile"] and p["profile"]["n"] >= MIN_PLAN_PITCHES and p["role"] != "Not expected")
     status = "" if (report is None or report.published) else ' <span class="role" style="border-color:#b7860b;color:#b7860b">draft</span>'
     return f"""

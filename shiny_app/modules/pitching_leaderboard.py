@@ -99,6 +99,12 @@ STAT_META = [
     ("Arsenal", "Arsenal", True, 1),
     ("Results", "Results", True, 1),
     ("Performance", "Performance", True, 1),
+    # Oct 2026 (analytics/outperform.py, from Paradigm's "Outperform Your
+    # Stuff"): RV/100 (negative = good), runs per 100 better than his
+    # Stuff+ predicts, and how unusual his release is (largest staff z).
+    ("RV/100", "RV/100", False, 2),
+    ("Beats Stuff", "Beats Stuff", True, 1),
+    ("Release Outlier", "Release Outlier", True, 1),
 ]
 STAT_LABELS = {key: label for key, label, *_rest in STAT_META}
 STAT_HIGHER_BETTER = {key: hib for key, _label, hib, _dec in STAT_META}

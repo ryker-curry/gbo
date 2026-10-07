@@ -634,7 +634,7 @@ def pitching_staff_leaderboard_rows(db, date_from=None, date_to=None, game_scope
     None for any stat this pitcher doesn't have enough data for (never
     0, so the leaderboard's sort/format code can tell "no data" from
     "actually zero")."""
-    from analytics import command_metrics, performance_score
+    from analytics import command_metrics, performance_score, outperform
 
     pitches = _pitching_staff_query(db, date_from, date_to, game_scope).all()
     by_player = {}
@@ -746,8 +746,21 @@ def pitching_staff_leaderboard_rows(db, date_from=None, date_to=None, game_scope
             "Arsenal": arsenal_pitching_value, "Results": results_score, "Performance": performance_value,
             # Oct 2026: "+" stats vs the 2026 D2 average (100 = D2 average).
             **_lb_pitching_plus(line),
+            # Oct 2026 (analytics/outperform.py): inputs for Beats Stuff /
+            # Release Outlier, filled in below once every pitcher is known.
+            "RV/100": outperform.rv_per_100(ps), "_pitches": len(ps),
+            "_release": outperform.release_profile(rapsodo_pitches),
         })
 
+    summ = outperform.summarize_rows(rows)
+    for r in rows:
+        pid = r["player"].player_id
+        b = summ["beats"].get(pid)
+        r["Beats Stuff"] = round(b["value"], 1) if b and b["reliable"] else None
+        r["_beats"] = b
+        rel = summ["release"].get(pid) or {}
+        r["Release Outlier"] = round(rel["score"], 1) if rel.get("score") is not None else None
+        r["_release_detail"] = rel
     return rows
 
 
