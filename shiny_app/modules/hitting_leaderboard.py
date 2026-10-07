@@ -40,6 +40,8 @@ STAT_META = [
     ("2-strike K %", "2-Strike K%", False, "pct"),
     # Oct 2026 (hitting article batch): run-valued decisions + BEAR-style summary
     ("Decision RV/100", "Decision RV/100", True, "num2"), ("Decision Score", "Decision Score", True, "int"),
+    # Oct 2026 ("Gone Hunting"): % of right choices and how good it stays in slumps
+    ("Decision Q %", "Decision Q%", True, "pct"), ("Decision Floor", "Decision Floor", True, "pct"),
     ("H", "H", True, "int"), ("2B", "2B", True, "int"), ("3B", "3B", True, "int"), ("HR", "HR", True, "int"),
     ("BB", "BB", True, "int"), ("K", "K", False, "int"),
 ]
@@ -92,6 +94,7 @@ def hitting_leaderboard_ui():
         ui.output_ui("hlb_columns_picker"),
         ui.output_ui("hlb_table"),
         ui.output_ui("hlb_sort_picker"),
+        ui.output_ui("hlb_lineup"),
     )
 
 
@@ -183,7 +186,75 @@ def hitting_leaderboard_server(input, output, session, app_state):
                  class_="text-muted small mt-1"),
         )
 
+    @render.ui
+    def hlb_lineup():
+        """Lineup consistency (Oct 2026, from "Gone Hunting"): decision quality vs floor, staff only."""
+        if not _ok() or app_state.role_name() not in STAFF_ROLES:
+            return None
+        from analytics import decision_floor
+        rows = _rows()
+        min_pa = input.hlb_min_pa() if "hlb_min_pa" in input and input.hlb_min_pa() is not None else DEFAULT_MIN_PA
+        pts = [r for r in rows if (r.get("PA") or 0) >= min_pa and r.get("Decision Floor") is not None]
+        head = ui.p(ui.strong("Lineup consistency: decision quality vs. floor"), "  ",
+                    ui_helpers.how_to_link("decision_floor"), style="margin:18px 0 0;")
+        if len(pts) < 3:
+            return ui.div(head, ui.p(f"Needs 3+ hitters with {decision_floor.WINDOW}+ graded plate appearances "
+                                     f"(and {min_pa}+ PA).", class_="text-muted small"))
+        floors = sorted(r["Decision Floor"] for r in pts)
+        qs = sorted(r["Decision Q %"] for r in pts)
+        mf, mq = decision_floor._pctl(floors, 0.5), decision_floor._pctl(qs, 0.5)
+        spread = decision_floor._pctl(floors, 0.75) - decision_floor._pctl(floors, 0.25)
+        low = [r for r in pts if r["Decision Floor"] < mf - max(spread, 3.0)]
+        line = (f"Middle half of the lineup's floors sit within {spread:.0f} points (median floor {mf:.0f}%). "
+                + (f"Dragging it down: {', '.join(r['Hitter'] for r in sorted(low, key=lambda r: r['Decision Floor']))}."
+                   if low else "Nobody is far below the pack -- a tight lineup."))
+        return ui.div(
+            head,
+            ui.p("The Dodgers' lineup won back-to-back titles with floors packed tightly together: nobody's approach "
+                 "fell apart in a slump. Each dot is a hitter: across = % of right swing/take choices, up = how good "
+                 "that stays in his worst 10-PA stretches. Up and right is best; far below the floor line = his approach "
+                 "slips when he struggles.", class_="text-muted small"),
+            ui.p(ui.strong(line), class_="small"),
+            ui.HTML(_lineup_svg(pts, mq, mf)),
+        )
+
     @reactive.effect
     @reactive.event(input.hlb_glossary)
     def _show_glossary():
         ui.modal_show(ui_helpers.glossary_modal("Hitting Stats Glossary", glossary_content.HITTING_LEADERBOARD))
+
+
+def _lineup_svg(pts, mq, mf):
+    from html import escape
+    W, H, L, R, T, B = 640, 320, 50, 20, 16, 44
+    xs = [r["Decision Q %"] for r in pts]
+    ys = [r["Decision Floor"] for r in pts]
+    x0, x1 = min(xs) - 3, max(xs) + 3
+    y0, y1 = min(ys) - 3, max(ys) + 3
+
+    def X(v):
+        return L + (W - L - R) * (v - x0) / ((x1 - x0) or 1)
+
+    def Y(v):
+        return T + (H - T - B) * (1 - (v - y0) / ((y1 - y0) or 1))
+    out = [f'<svg viewBox="0 0 {W} {H}" class="gbo-progress-svg" role="img" aria-label="Lineup consistency">']
+    for k in range(4):
+        yv, xv = y0 + (y1 - y0) * k / 3, x0 + (x1 - x0) * k / 3
+        out.append(f'<line x1="{L}" x2="{W - R}" y1="{Y(yv):.1f}" y2="{Y(yv):.1f}" class="grid"/>'
+                   f'<text x="{L - 6}" y="{Y(yv) + 4:.1f}" text-anchor="end" class="axis">{yv:.0f}%</text>'
+                   f'<text x="{X(xv):.1f}" y="{H - 24}" text-anchor="middle" class="axis">{xv:.0f}%</text>')
+    out.append(f'<line x1="{X(mq):.1f}" x2="{X(mq):.1f}" y1="{T}" y2="{H - B}" class="avg"/>'
+               f'<line x1="{L}" x2="{W - R}" y1="{Y(mf):.1f}" y2="{Y(mf):.1f}" class="avg"/>')
+    for r in pts:
+        x, y = X(r["Decision Q %"]), Y(r["Decision Floor"])
+        last = r["Hitter"].split()[-1]
+        out.append(f'<g class="pt"><title>{escape(r["Hitter"])}: {r["Decision Q %"]:.0f}% right, floor '
+                   f'{r["Decision Floor"]:.0f}%</title><circle cx="{x:.1f}" cy="{y:.1f}" r="10" class="hit"/>'
+                   f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" class="dot"/>'
+                   f'<text x="{x + 7:.1f}" y="{y - 6:.1f}" class="axis">{escape(last)}</text></g>')
+    out.append(f'<text x="{(L + W - R) / 2:.0f}" y="{H - 6}" text-anchor="middle" class="axis">decision quality '
+               '(% of right swing/take choices)</text>')
+    out.append(f'<text x="12" y="{(T + H - B) / 2:.0f}" text-anchor="middle" class="axis" '
+               f'transform="rotate(-90 12 {(T + H - B) / 2:.0f})">floor (worst 10-PA stretches)</text>')
+    out.append("</svg>")
+    return "".join(out)

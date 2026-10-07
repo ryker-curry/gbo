@@ -90,3 +90,19 @@ def test_approach_point_pairs_whiffs_with_damage():
     dmg["R"][2][2] = [1, 5]                                  # we slug .200 there
     pts = advance_scouting.approach_points(prof, dmg, "R")
     assert pts and "down and away" in pts[0][1] and "lay off" in pts[0][1]
+
+
+def test_decision_floor():
+    from analytics import decision_floor
+    train = ([_gp(seq=i, out="Called Strike", rv=-0.10, b=1, s=1) for i in range(30)]
+             + [_gp(seq=100 + i, out="In Play", rv=0.15, b=1, s=1) for i in range(30)])
+    t = decision_value.build_table(train)
+    pas = []
+    for k in range(20):          # 20 one-pitch PAs on Heart pitches: swing = right, take = wrong
+        good = k % 4 != 0
+        pas.append(_gp(seq=1000 + k, pa_no=1, ends=True, b=1, s=1, out="In Play" if good else "Called Strike",
+                       ab="1B" if good else None))
+    fl = decision_floor.floor(t, pas)
+    assert fl["n_pa"] == 20 and abs(fl["quality"] - 75.0) < 1e-9 and len(fl["windows"]) == 11
+    assert fl["floor"] <= fl["quality"] and fl["read"]
+    assert decision_floor.floor(t, pas[:5])["floor"] is None

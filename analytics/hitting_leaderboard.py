@@ -53,7 +53,7 @@ def rows(db, date_from=None, date_to=None, game_scope="all"):
     if not by_player:
         return []
     players = {pl.player_id: pl for pl in db.query(Player).filter(Player.player_id.in_(list(by_player))).all()}
-    from analytics import decision_value, decision_score
+    from analytics import decision_value, decision_score, decision_floor
     dv_table = decision_value.team_table(db)
     out = []
     for pid, ps in by_player.items():
@@ -79,6 +79,7 @@ def rows(db, date_from=None, date_to=None, game_scope="all"):
             "Hard contact %": core.get("Hard contact %"), "Pitches/PA": core.get("Pitches/PA"),
             "2-strike K %": core.get("2-strike K %"),
             "Decision RV/100": core.get("Decision RV/100"),
+            **_floor_cols(decision_floor.floor(dv_table, ps)),
             "_core": core,
         })
     # Oct 2026: Decision Score among hitters with 10+ PA (analytics/decision_score.py)
@@ -87,3 +88,9 @@ def rows(db, date_from=None, date_to=None, game_scope="all"):
     for r in out:
         r["Decision Score"] = ds.get(r["player"].player_id)
     return out
+
+
+def _floor_cols(fl):
+    """Oct 2026 (analytics/decision_floor.py): decision quality and floor."""
+    return {"Decision Q %": round(fl["quality"], 1) if fl["quality"] is not None else None,
+            "Decision Floor": round(fl["floor"], 1) if fl["floor"] is not None else None}
