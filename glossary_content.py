@@ -44,6 +44,7 @@ OVERVIEW = [
 ]
 
 METRICS = [
+    ("Bauer Units / BU vs team", "Total spin divided by velocity (rpm per mph) -- spin ability apart from arm speed, since spin naturally rises when a pitcher throws harder. Most telling on breaking balls (high = a natural spinner). BU vs team compares him to our staff's average for that pitch type; within +/-1 is typical."),
     ("Velocity", "Ball speed off the hand, in mph, as read by Rapsodo."),
     ("Spin Rate", "Total spin on the ball, in rpm."),
     ("IVB (Induced Vertical Break)", "Vertical movement caused by spin alone, with gravity's own drop already factored out -- a positive number means the pitch drops less than a spinless pitch would, not that it actually rises (except for a true rise ball)."),
