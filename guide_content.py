@@ -446,6 +446,28 @@ GUIDE += [
                 "Needs 10+ plate appearances; fewer than 5 windows is 'early'."],
         "good": ["A floor within about 5 points of your decision quality, and above the team's average floor."],
     },
+    {
+        "key": "release_consistency", "title": "Release angle consistency", "who": "pitchers",
+        "pages": ["Pitcher Profile", "My Pitcher Profile", "Bullpen Dashboard"],
+        "shows": "Pitcher Profile > Command & Execution, and each Bullpen Dashboard session. How much the angle the ball "
+                 "leaves your hand (up/down and side to side) varies pitch to pitch within an outing, from Rapsodo.",
+        "use": ["The release angle sets where the pitch goes, so a tight spread is the root of command -- and it needs "
+                "no charting, every bullpen measures it.",
+                "Release consistency: 100 = team average for that pitch, higher = tighter.",
+                "A wandering horizontal angle shows up as side-to-side misses; vertical as up/down misses.",
+                "Some spread is on purpose (aiming up vs down), so compare to teammates, not to zero. Data Health > "
+                "Metric check shows whether it actually tracks command on our staff."],
+        "good": ["Release consistency over 100 on the pitches you need to locate."],
+    },
+    {
+        "key": "pitch_mix_trend", "title": "Pitch mix over time", "who": "pitchers",
+        "pages": ["Pitcher Profile", "My Pitcher Profile"],
+        "shows": "Pitcher Profile > Trends. Usage % of each pitch per game or week, from charted games -- or from "
+                 "Rapsodo bullpens, to see a new pitch being worked in before it shows up in games.",
+        "use": ["The line above the chart calls out any pitch whose usage moved 8+ points over the last few games.",
+                "Pair it with Results / Stuff+ trends: is the pitch he's throwing more actually working?"],
+        "good": ["Usage moving toward the pitches that grade and play best."],
+    },
 ]
 BY_KEY = {s["key"]: s for s in GUIDE}
 WHO_LABELS = {"all": "Everyone", "pitchers": "Pitchers", "hitters": "Hitters", "staff": "Coaches & staff"}

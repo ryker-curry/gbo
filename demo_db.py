@@ -258,7 +258,7 @@ def _populate(db):
             vb_trajectory=ivb_v, hb_trajectory=hb_v, vb_spin=ivb_v, hb_spin=hb_v,
             gyro_degree=round(gyro + rnd.gauss(0, 6), 1), release_height=round(rh + (p.height_in - 74) * 0.04 + slot * 0.08 + rnd.gauss(0, .08), 2),
             release_side=round(side * (1.7 - slot * 0.1 + rnd.gauss(0, .1)), 2), release_extension=round(6.1 + rnd.gauss(0, .2), 2),
-            release_angle=round(-1.5 + rnd.gauss(0, .6), 2), horizontal_angle=round(rnd.gauss(0, 1.2), 2),
+            release_angle=round(-1.5 + rnd.gauss(0, .3 + p.demo["cmd"]), 2), horizontal_angle=round(rnd.gauss(0, .6 + 2 * p.demo["cmd"]), 2),
             plate_x_ft=round(rnd.gauss(0, 0.7), 3), plate_z_ft=round(rnd.gauss(2.5, 0.6), 3),
             spin_confidence=round(min(1.0, max(0.2, rnd.gauss(0.92, 0.08))), 3)))
 

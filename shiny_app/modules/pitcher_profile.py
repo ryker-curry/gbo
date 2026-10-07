@@ -117,7 +117,7 @@ import velo_fade_display
 from analytics import velo_fade
 from services.pitch_type_switch import apply_switches, undo_switches
 from models import PitchTypeChange, ArsenalTarget
-from analytics import approach_angles, best_zone, arsenal_plan, stuff_breakdown, trends, ivb_expected, slider_fit, sequencing, tunnel_check, outperform, arsenal_breadth, outcome_profile, bauer_units
+from analytics import approach_angles, best_zone, arsenal_plan, stuff_breakdown, trends, ivb_expected, slider_fit, sequencing, tunnel_check, outperform, arsenal_breadth, outcome_profile, bauer_units, release_consistency
 from visualizations import trend_charts
 from visualizations.stuff_breakdown_chart import trait_impact_figure, strip_figure, outcome_figure, ordinal, fmt_value
 
@@ -307,6 +307,62 @@ def pitcher_profile_server(input, output, session, app_state):
         ui.update_select("pp_player_select", selected=str(pid))
         ui.update_select("pp_view", selected=view)
         _pending_tick.set(_pending_tick() + 1)
+
+    @render.ui
+    def pp_release_consistency():
+        """Release angle consistency (Oct 2026, analytics/release_consistency.py)."""
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            raps = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+                game_scope=f["game_scope"], game_id=f["game_id"]) or []
+            base = release_consistency.team_baselines(db)
+        finally:
+            db.close()
+        sp = release_consistency.spreads(raps)
+        head = [ui.p(ui.strong("Release angle consistency"), "  ", ui_helpers.how_to_link("release_consistency"),
+                     style="margin-bottom:0;"),
+                ui.p("How much the angle the ball leaves his hand varies pitch to pitch, within each outing (Rapsodo). "
+                     "The release angle sets where the pitch goes, so a tighter spread is the root of command. Compared to "
+                     "our staff for the same pitch; Release consistency = 100 at team average, higher = tighter. Some spread "
+                     "is on purpose (aiming up vs. down), so read it against teammates, not on its own.",
+                     class_="text-muted small")]
+        if not sp:
+            return ui.div(*head, ui.p(f"Needs {release_consistency.MIN_OUTING}+ Rapsodo readings of a pitch in an outing.",
+                                      class_="text-muted small"), ui.hr())
+        g = release_consistency.grade(sp, base)
+        rows = []
+        for lab, s_ in sorted(sp.items(), key=lambda kv: -kv[1]["n"]):
+            b = base.get(lab)
+            rows.append({
+                "Pitch Type": lab, "Readings": s_["n"], "Outings": s_["outings"],
+                "Vertical spread": f"{s_['v']:.2f}°", "vs team": f"{s_['v'] - b['v'][0]:+.2f}°" if b else "—",
+                "Horizontal spread": f"{s_['h']:.2f}°", "vs team ": f"{s_['h'] - b['h'][0]:+.2f}°" if b else "—",
+                "Release consistency": f"{g['by_type'][lab]:.0f}" if lab in g["by_type"] else "—",
+            })
+        kpis = [{"label": "Release consistency", "value": f"{g['overall']:.0f}" if g["overall"] is not None else "—"}]
+        return ui.div(
+            *head,
+            ui_helpers.render_kpi_cards(kpis),
+            *[ui.p(ui.strong(t), class_="small", style="margin:4px 0;") for t in release_consistency.read(sp, base)],
+            ui_helpers.render_dict_table(rows),
+            ui.p(f"Grades need {release_consistency.MIN_N}+ readings of that pitch and {release_consistency.MIN_STAFF}+ "
+                 "staff pitchers with the same pitch for comparison. − vs team = tighter than our average.",
+                 class_="text-muted small"),
+            ui.hr(),
+        )
 
     def _take_pending_view():
         """The linked view, once the linked pitcher is the one showing."""
@@ -2196,6 +2252,12 @@ def pitcher_profile_server(input, output, session, app_state):
                  ui_helpers.how_to_link("bauer_units", "What are Bauer units?"), style="margin:14px 0 0;"),
             output_widget("pp_trend_velo"),
             ui.hr(),
+            ui.p(ui.strong("Pitch mix over time"), "  ", ui_helpers.how_to_link("pitch_mix_trend"), style="margin:0;"),
+            ui.input_radio_buttons("pp_mix_src", None, {"games": "Games (charted)", "bullpens": "Bullpens (Rapsodo)"},
+                                   selected="games", inline=True),
+            ui.output_ui("pp_mix_read"),
+            output_widget("pp_mix_chart"),
+            ui.hr(),
             ui.output_ui("pp_trend_fade"),
         )
 
@@ -2231,6 +2293,40 @@ def pitcher_profile_server(input, output, session, app_state):
             return trend_charts.velo_stuff_figure(vs)
         finally:
             db.close()
+
+    def _mix_data():
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            req(pid)
+            by = input.pp_trend_by() if "pp_trend_by" in input else "game"
+            src = input.pp_mix_src() if "pp_mix_src" in input else "games"
+            if src == "bullpens":
+                raps = profile_queries.get_pitcher_rapsodo_pitches(db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                                                                   pitch_type=None) or []
+                return trends.mix_over_time(bullpen_raps=[r for r in raps if r.bullpen_id is not None], by=by)
+            ps = profile_queries.get_pitcher_profile_pitches(db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                                                             pitch_type=None, game_scope=f["game_scope"]) or []
+            return trends.mix_over_time(game_pitches=ps, by=by)
+        finally:
+            db.close()
+
+    @render.ui
+    def pp_mix_read():
+        req(_trend_gate())
+        mix = _mix_data()
+        if not mix["buckets"]:
+            return ui.p("No pitches in this range yet.", class_="text-muted small")
+        return ui.p(ui.strong(mix["read"]) if mix["read"] else
+                    "Usage % of each pitch per game (or week). No pitch has moved 8+ points lately.", class_="small")
+
+    @render_plotly
+    def pp_mix_chart():
+        req(_trend_gate())
+        mix = _mix_data()
+        req(mix["buckets"])
+        return trend_charts.mix_figure(mix)
 
     @render.ui
     def pp_trend_fade():
@@ -2944,6 +3040,7 @@ def pitcher_profile_server(input, output, session, app_state):
             ),
             ui.output_ui("pp_zone_exec"),
             ui.hr(),
+            ui.output_ui("pp_release_consistency"),
             ui.p(ui.strong("Command Target Zones")),
             ui.p(
                 "Same Precision/Command/Competitive target-radius bands and concentric-ring chart Command "
