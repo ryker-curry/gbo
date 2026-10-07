@@ -478,9 +478,22 @@ def hitter_game_report_server(input, output, session, app_state):
                     n, h = _pitcher_of(db, p)
                     row["Pitcher"] = n or (f"{h}HP" if h else "--")
             facing = ", ".join(f"{n or 'Unknown pitcher'}" + (f" ({h}HP)" if h in ("R", "L") else "") for n, h in faced)
+            # Oct 2026: run leverage of the spot (analytics/leverage.py)
+            from analytics import leverage
+            from models import GamePitch as _GP
+            game_ps = db.query(_GP).filter(_GP.game_id == pa[0].game_id).all()
+            ctx = leverage.pa_context(pa, leverage.team_table(db), leverage.score_before(game_ps))
+            lev_line = ui.div(
+                leverage.describe(ctx),
+                (f" · {'up' if ctx['diff'] > 0 else 'down' if ctx['diff'] < 0 else 'tied'}"
+                 f"{(' ' + str(abs(ctx['diff']))) if ctx['diff'] else ''} in the {ctx['inning']}"
+                 f"{'st' if ctx['inning'] == 1 else 'nd' if ctx['inning'] == 2 else 'rd' if ctx['inning'] == 3 else 'th'}"
+                 if ctx["diff"] is not None and ctx["inning"] else ""),
+                title="Run leverage: how much this outs/bases spot swings runs vs an average PA on our charted games (1.0 = average).",
+                class_="text-muted small")
             return ui.div(
                 ui.div(ui.span("Pitcher faced", class_="gbo-kpi-label"), ui.div(facing, style="font-size:1.15rem;font-weight:700;"),
-                       style="margin:6px 0 10px;"),
+                       lev_line, style="margin:6px 0 10px;"),
                 ui.layout_columns(
                     ui.div(chart, style="text-align:center;"),
                     ui.div(ui_helpers.render_dict_table(rows),

@@ -117,7 +117,7 @@ import velo_fade_display
 from analytics import velo_fade
 from services.pitch_type_switch import apply_switches, undo_switches
 from models import PitchTypeChange, ArsenalTarget
-from analytics import approach_angles, best_zone, arsenal_plan, stuff_breakdown, trends, ivb_expected, slider_fit, sequencing
+from analytics import approach_angles, best_zone, arsenal_plan, stuff_breakdown, trends, ivb_expected, slider_fit, sequencing, tunnel_check, outperform, arsenal_breadth, outcome_profile
 from visualizations import trend_charts
 from visualizations.stuff_breakdown_chart import trait_impact_figure, strip_figure, outcome_figure, ordinal, fmt_value
 
@@ -262,6 +262,7 @@ def pitcher_profile_ui():
         # controls which one does anything.
         ui.output_ui("pp_view_picker"),
         ui.output_ui("pp_overview_section"),
+        ui.output_ui("pp_outperform"),
         ui.output_ui("pp_metrics_section"),
         ui.output_ui("pp_tunneling_section"),
         ui.output_ui("pp_results_section"),
@@ -269,6 +270,7 @@ def pitcher_profile_ui():
         ui.output_ui("pp_zone_section"),
         ui.output_ui("pp_command_section"),
         ui.output_ui("pp_arsenal_section"),
+        ui.output_ui("pp_arsenal_extras"),
         ui.output_ui("pp_trends_section"),
         ui.output_ui("pp_count_leverage_section"),
         ui.output_ui("pp_sequencing_section"),
@@ -543,6 +545,69 @@ def pitcher_profile_server(input, output, session, app_state):
     @reactive.event(input.pp_glossary_arsenal)
     def _pp_show_arsenal_glossary():
         ui.modal_show(ui_helpers.glossary_modal("Arsenal Glossary", glossary_content.ARSENAL))
+
+    @render.ui
+    def pp_outperform():
+        """Release outliers + beats his stuff (Oct 2026, analytics/outperform.py)."""
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "overview":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            try:
+                summ = outperform.staff_summary(db, f["date_from"], f["date_to"], f["game_scope"])
+            except Exception:
+                return None
+        finally:
+            db.close()
+        mine = summ["by_pid"].get(pid)
+        if not mine:
+            return None
+        rel, beats = mine["release"], mine["beats"]
+        items = []
+        rel_lines = []
+        for key in ("height", "side", "ext"):
+            d = rel.get(key)
+            if not d:
+                continue
+            rel_lines.append(ui.tags.li(
+                f"{d['name'].capitalize()}: {d['value']:.2f} {d['unit']} -- {ordinal(d['pct'])} percentile of our staff",
+                ui.strong(f" ({d['tag']})") if d["tag"] else ""))
+        if rel_lines:
+            tags = [rel[k]["tag"] for k in ("height", "side", "ext") if rel.get(k) and rel[k]["tag"]]
+            items.append(ui.div(
+                ui.strong("Release vs. our staff: "),
+                ("Stands out from our staff: " + ", ".join(tags) + ". An unusual look can help average stuff play up "
+                 "-- hitters see fewer arms like it.") if tags else "A typical release for our staff.",
+                ui.tags.ul(*rel_lines, style="margin:4px 0 8px; padding-left:18px;"), class_="small"))
+        if beats:
+            v = beats["value"]
+            txt = (f"{v:+.1f} runs per 100 pitches vs. what his Stuff+ predicts -- {outperform.describe_beats(v)}. "
+                   f"Actual RV/100 {beats['actual']:+.2f} vs. expected {beats['expected']:+.2f} "
+                   "(negative RV = good for the pitcher).")
+            if not beats["reliable"]:
+                txt += f" Only {beats['n']} game pitches -- needs {outperform.MIN_PITCHES} before it means much."
+            items.append(ui.div(ui.strong("Results vs. stuff: "), txt, class_="small"))
+        if not items:
+            return None
+        return ui_helpers.card(
+            *items,
+            ui.p("From Paradigm's \"Outperform Your Stuff\": arms without big stuff win with an unusual release, "
+                 "command and mix. Release = his median release point vs. the rest of our staff (percentile; tagged "
+                 "when he's in roughly the top or bottom 10%). Results vs. stuff = how far his run value per 100 "
+                 "pitches beats a line fit across our staff from Stuff+. Uses this page's date range.",
+                 class_="text-muted small", style="margin:6px 0 0;"),
+            title="Release & results vs. stuff",
+        )
 
     @render.ui
     def pp_overview_section():
@@ -1188,6 +1253,13 @@ def pitcher_profile_server(input, output, session, app_state):
                     class_="mt-4 mb-2",
                     style="border-left:3px solid var(--gbo-crimson); padding-left:10px;",
                 ))
+                tc = tunnel_check.check([p for p in rapsodo_pitches if pitch_type_label(p) == primary_fb],
+                                        [p for p in rapsodo_pitches if pitch_type_label(p) == secondary])
+                if tc is not None and not tc["ok"]:
+                    children.append(ui.p(
+                        ui.strong("Too far apart to tunnel: "), f"{tc['reason']}. It can't look like the {primary_fb} "
+                        "out of the hand -- it works as a change of speed / shape instead, so judge it on that, "
+                        "not on these tunnel numbers.", class_="small", style="color:var(--gbo-status-watch);"))
                 children.append(ui_helpers.render_kpi_cards([
                     {"label": "Tunnel", "value": f"{summary['tunnel_in']}\""},
                     {"label": "Plate", "value": f"{summary['plate_in']}\""},
@@ -1848,6 +1920,102 @@ def pitcher_profile_server(input, output, session, app_state):
             return pitch_location_heatmaps(game_pitches)
         finally:
             db.close()
+
+    @render.ui
+    def pp_arsenal_extras():
+        """Outcome profile + Arsenal Breadth+ (Oct 2026, analytics/outcome_profile.py,
+        analytics/arsenal_breadth.py)."""
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "arsenal":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            player = db.query(Player).filter(Player.player_id == pid).first()
+            if player is None:
+                return None
+            mine = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None, game_id=f["game_id"]) or []
+            throws = {pl.player_id: pl.throws for pl in db.query(Player).all()}
+            pairs = (db.query(RapsodoPitch, GamePitch)
+                     .join(GamePitch, RapsodoPitch.game_pitch_id == GamePitch.game_pitch_id)
+                     .options(joinedload(RapsodoPitch.pitch_type)).all())
+            train = outcome_profile.training_rows(pairs, throws)
+            q = db.query(RapsodoPitch).options(joinedload(RapsodoPitch.pitch_type))
+            if f["date_from"] is not None:
+                q = q.filter(RapsodoPitch.pitch_date >= f["date_from"])
+            if f["date_to"] is not None:
+                q = q.filter(RapsodoPitch.pitch_date <= f["date_to"] + timedelta(days=1))
+            staff = {}
+            for r in q.all():
+                staff.setdefault(r.player_id, []).append(r)
+        finally:
+            db.close()
+
+        sections = []
+        prof = outcome_profile.profile(mine, [r for r in train if r["pid"] == pid], player.throws, train, pid)
+        if prof:
+            def pc(v):
+                return f"{v:.0f}%" if v is not None else "—"
+            rows = []
+            notes = []
+            for r in prof:
+                if r.get("too_few"):
+                    notes.append(f"{r['label']}: only {r['fam_n']} linked {r['fam'].lower()} on the staff so far -- not enough to compare.")
+                    continue
+                rows.append({
+                    "Pitch Type": r["label"],
+                    "Whiff % (like it)": pc(r["like"]["whiff"]), "CSW % (like it)": pc(r["like"]["csw"]),
+                    "GB % (like it)": pc(r["like"]["gb"]),
+                    "Staff, same family": f"{pc(r['staff']['whiff'])} / {pc(r['staff']['csw'])} / {pc(r['staff']['gb'])}",
+                    "His actual": f"{pc(r['his']['whiff'])} / {pc(r['his']['csw'])} / {pc(r['his']['gb'])}",
+                })
+            early = any(r.get("early") for r in prof)
+            sections += [
+                ui.hr(),
+                ui.p(ui.strong("Outcome profile: what pitches shaped like his do"), " ",
+                     ui.span("early", class_="badge bg-secondary") if early else None),
+                ui.p(f"For each pitch, the {outcome_profile.K} most similar game pitches (velo, ride, run) thrown by OTHER "
+                     "pitchers on our staff with a Rapsodo reading and a charted result -- what they got. Whiff % is of "
+                     "swings, CSW % of all pitches, GB % of balls in play. Pulled toward the staff rate when the sample is "
+                     "thin. Staff and his actual columns read whiff / CSW / GB. When his actual beats 'like it', he's "
+                     "getting more from location, sequencing or deception than the shape alone; when it trails, the shape "
+                     "is better than his results. No lefty/righty split yet.",
+                     class_="text-muted small"),
+                ui_helpers.render_dict_table(rows) if rows else None,
+                *[ui.p(n, class_="text-muted small") for n in notes],
+            ]
+
+        br = arsenal_breadth.breadth_plus({k: arsenal_breadth.spreads(v, pitch_type_label) for k, v in staff.items()})
+        b = br.get(pid)
+        sections.append(ui.hr())
+        sections.append(ui.p(ui.strong("Arsenal Breadth+")))
+        if b is None:
+            sections.append(ui.p("Needs at least two pitch types with 5+ Rapsodo readings (and five pitchers on the staff) "
+                                 "in this range.", class_="text-muted small"))
+        else:
+            sections.append(ui_helpers.render_kpi_cards([
+                {"label": "Arsenal Breadth+", "value": f"{b['plus']:.0f}"},
+                {"label": "Speed spread", "value": f"{b['speed']:.1f} mph"},
+                {"label": "Movement spread", "value": f"{b['move']:.1f}\""},
+                {"label": "Velo range", "value": f"{b['velo_range']:.0f} mph"},
+            ]))
+            sections.append(ui.p(f"Staff average: {b['speed_avg']:.1f} mph speed spread, {b['move_avg']:.1f}\" movement "
+                                 f"spread. {b['types']} pitch types counted.", class_="small"))
+            sections.append(ui.p(
+                "How much speed and movement range his arsenal covers, weighted by how often he throws each pitch "
+                "(Greenberg, \"Arsenal Models in College Baseball\"). 100 = our staff average, 25 points = one SD. "
+                "Descriptive, not a grade: the article found breadth barely predicts results -- a narrow arsenal that "
+                "tunnels well can be just as good.", class_="text-muted small"))
+        return ui.div(*sections)
 
     @render.ui
     def pp_arsenal_section():

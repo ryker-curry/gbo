@@ -234,7 +234,7 @@ def _populate(db):
     # --- Rapsodo helper ---
     ids = {"rp": 0, "imp": 0, "gp": 0}
 
-    def rapsodo(p, pitch_name, when, game_pitch_id=None, bullpen_id=None, import_id=None, n=1, fatigue=0.0):
+    def rapsodo(p, pitch_name, when, game_pitch_id=None, bullpen_id=None, import_id=None, n=1, fatigue=0.0, spin_off=0):
         v, ivb, hb, spin, axis, eff, gyro, rh = SHAPES[pitch_name]
         side = 1 if p.throws == "R" else -1
         ids["rp"] += 1
@@ -253,12 +253,14 @@ def _populate(db):
             rapsodo_pitch_id=ids["rp"], player_id=p.player_id, import_id=import_id, pitch_number=n,
             game_pitch_id=game_pitch_id, bullpen_id=bullpen_id, pitch_type_id=ptype[pitch_name], pitch_date=when,
             raw_pitch_type=pitch_name, velocity=round(vel, 1),
-            total_spin=round(spin + p.demo["spin"] + rnd.gauss(0, 70)), spin_efficiency=round(max(10, min(100, eff + rnd.gauss(0, 5))), 1),
+            total_spin=round(spin + p.demo["spin"] + spin_off + rnd.gauss(0, 70)), spin_efficiency=round(max(10, min(100, eff + rnd.gauss(0, 5))), 1),
             spin_axis_degrees=round((axis * (1 if side > 0 else -1) + rnd.gauss(0, 10)) % 360, 1),
             vb_trajectory=ivb_v, hb_trajectory=hb_v, vb_spin=ivb_v, hb_spin=hb_v,
             gyro_degree=round(gyro + rnd.gauss(0, 6), 1), release_height=round(rh + (p.height_in - 74) * 0.04 + slot * 0.08 + rnd.gauss(0, .08), 2),
             release_side=round(side * (1.7 - slot * 0.1 + rnd.gauss(0, .1)), 2), release_extension=round(6.1 + rnd.gauss(0, .2), 2),
-            release_angle=round(-1.5 + rnd.gauss(0, .6), 2), horizontal_angle=round(rnd.gauss(0, 1.2), 2)))
+            release_angle=round(-1.5 + rnd.gauss(0, .6), 2), horizontal_angle=round(rnd.gauss(0, 1.2), 2),
+            plate_x_ft=round(rnd.gauss(0, 0.7), 3), plate_z_ft=round(rnd.gauss(2.5, 0.6), 3),
+            spin_confidence=round(min(1.0, max(0.2, rnd.gauss(0.92, 0.08))), 3)))
 
     # --- bullpens (3 per pitcher) ---
     bp_id = 0
@@ -275,11 +277,12 @@ def _populate(db):
             # 40-pitch pens with a little late fade that varies by pitcher, so
             # Velo Fade (Oct 2026) has something to show.
             fade_rate = 0.4 + ((p.player_id * 13) % 5) * 0.25
+            misread = (k == 1 and p is pitchers[1])   # demo: one session where the unit misread spin
             for n in range(1, 41):
                 name = rnd.choices(p.demo["arsenal"], weights=[USAGE[a] for a in p.demo["arsenal"]])[0]
                 db.add(m.BullpenPitch(bullpen_id=bp_id, pitch_number=n, pitch_type_id=ptype[name], target_zone=rnd.randint(1, 9)))
                 rapsodo(p, name, when, bullpen_id=bp_id, import_id=ids["imp"], n=n,
-                        fatigue=max(0.0, (n - 15) / 25) * fade_rate)
+                        fatigue=max(0.0, (n - 15) / 25) * fade_rate, spin_off=-450 if misread else 0)
     db.flush()
 
     # --- games ---
@@ -508,6 +511,23 @@ def _populate(db):
                             break
         game.our_score, game.opponent_score = score[True], score[False]
         db.flush()
+
+    # --- intrasquad (Oct 2026): our hitters also face OUR pitchers in the
+    # last game's pitching half, so pages built on Rapsodo-linked pitches
+    # our hitters saw (Results by Pitch Shape) have data -- the real team's
+    # games are mostly intrasquads. Each PA our pitcher threw gets one of
+    # our hitters as the batter (rotating through the order).
+    last_gid = max(g.game_id for g in db.query(m.Game).all())
+    db.query(m.Game).filter(m.Game.game_id == last_gid).update({"is_intrasquad": True})
+    squad_b = [h for h in hitters][:9]
+    k = -1
+    for gp in (db.query(m.GamePitch).filter(m.GamePitch.game_id == last_gid, m.GamePitch.is_our_team_batting.is_(False))
+               .order_by(m.GamePitch.pitch_sequence).all()):
+        if gp.pa_pitch_number == 1:
+            k += 1
+        gp.opponent_our_player_id = squad_b[k % len(squad_b)].player_id
+        gp.opponent_player_id = None
+    db.flush()
 
     # --- a few logging mistakes for the Pitch Type Check to catch (Oct
     # 2026): curveballs tagged as 4-seams for one pitcher, like real

@@ -350,7 +350,7 @@ def first_pitch_two_strike(pitches):
 # Core numbers (used by percentiles, meeting report, weekly report)
 # ---------------------------------------------------------------------------
 
-def core_metrics(pitches):
+def core_metrics(pitches, dv_table=None):
     pas = plate_appearances(pitches)
     line = _slash(pas)
     sd = swing_decisions(pitches)
@@ -381,7 +381,20 @@ def core_metrics(pitches):
         "Hard contact %": _pct(len(hard), len(bip)),
         "Pitches/PA": round(len(pitches) / len(pas), 2) if pas else None,
         "2-strike K %": fp["two"]["K %"],
+        "Zone contact %": _pct(sum(1 for p in inz if p.pitch_outcome in CONTACT_OUTCOMES),
+                               sum(1 for p in inz if _swung(p))),
+        # Oct 2026 (analytics/decision_value.py): swing/take choices in runs.
+        **_decision_runs(pitches, dv_table),
     }
+
+
+def _decision_runs(pitches, dv_table):
+    if dv_table is None:
+        return {}
+    from analytics import decision_value
+    d = decision_value.score(dv_table, pitches)
+    return {"Decision RV/100": round(d["per100"], 2) if d["per100"] is not None else None,
+            "Decision runs": round(d["runs"], 1) if d["n"] else None}
 
 
 # metric -> (label, higher_is_better, what it means)
@@ -398,17 +411,23 @@ PERCENTILE_METRICS = [
     ("Hard contact %", "Hard contact %", True, "Barreled or solid contact per ball in play"),
     ("Pitches/PA", "Pitches per PA", True, "Makes the pitcher work"),
     ("QAB%", "Quality at-bat %", True, "Brian Cain QABs per PA (goal: 54% a game, .500 season)"),
+    # Oct 2026 (hitting article batch): run-valued decisions + one-number summary.
+    ("Decision RV/100", "Decision runs / 100", True, "Swing/take choices valued in runs for that count and zone"),
+    ("Decision Score", "Decision Score", True, "One number for plate discipline (100 = team average)"),
 ]
 MIN_PA_FOR_RANK = 10
 
 
-def team_percentiles(pitches_by_player, player_id):
+def team_percentiles(pitches_by_player, player_id, dv_table=None):
     """{metric: {"value", "pct", "label", "desc", "n_players"}} -- true
     percentile rank among teammates with MIN_PA_FOR_RANK+ PAs in the same
     window (the player himself is always included so he gets a rank).
     0 = worst on the team, 100 = best."""
-    metrics = {pid: core_metrics(ps) for pid, ps in pitches_by_player.items()}
+    metrics = {pid: core_metrics(ps, dv_table) for pid, ps in pitches_by_player.items()}
     pool = {pid: m for pid, m in metrics.items() if (m["PA"] or 0) >= MIN_PA_FOR_RANK or pid == player_id}
+    from analytics import decision_score
+    for pid, v in decision_score.scores(pool).items():
+        pool[pid]["Decision Score"] = v
     mine = metrics.get(player_id)
     out = {}
     if mine is None:

@@ -94,6 +94,129 @@ def _grid(pitches, hands, bat):
     return {"n": n, "pct": [[round(cells[(r, c)] / n * 100) for c in range(3)] for r in range(3)]}
 
 
+def _rel_cell(p, bat):
+    """(row, col) relative to the hitter: rows up/mid/down, cols in/mid/away."""
+    if bat not in ("R", "L") or p.actual_plate_x is None or p.actual_plate_z is None:
+        return None
+    x, z = float(p.actual_plate_x), float(p.actual_plate_z)
+    in_side = -x if bat == "R" else x
+    col = 0 if in_side > X_THIRD else (2 if in_side < -X_THIRD else 1)
+    row = 0 if z > Z_HIGH else (2 if z < Z_LOW else 1)
+    return row, col
+
+
+ROW_WORDS = ("up", "belt-high", "down")
+COL_WORDS = ("in", "middle", "away")
+MIN_CELL_SWINGS = 6
+
+
+def _family(p):
+    from analytics.hitter_insights import family
+    return family(p)
+
+
+def whiff_grids(pitches, hands):
+    """Approach panel (Oct 2026, Paradigm's "How to Beat an Ace"): where his
+    pitches get swings and misses. {family: {"cells": 3x3 [whiffs, swings],
+    "chase": %, "n"}}; hitter-relative, both hitter hands pooled."""
+    from strike_zone import is_in_zone
+    out = {}
+    for fam in ("Fastball", "Breaking", "Offspeed"):
+        ps = [p for p in pitches if _family(p) == fam]
+        if not ps:
+            continue
+        cells = [[[0, 0] for _c in range(3)] for _r in range(3)]
+        oz = osw = 0
+        for p in ps:
+            rc = _rel_cell(p, hands.get(p.game_pitch_id))
+            if rc is None:
+                continue
+            if p.pitch_outcome in SWINGS:
+                cells[rc[0]][rc[1]][1] += 1
+                if p.pitch_outcome == "Swing and Miss":
+                    cells[rc[0]][rc[1]][0] += 1
+            if not is_in_zone(float(p.actual_plate_x), float(p.actual_plate_z)):
+                oz += 1
+                osw += p.pitch_outcome in SWINGS
+        out[fam] = {"cells": cells, "chase": _pct(osw, oz), "n": len(ps)}
+    return out
+
+
+def times_through(pitches):
+    """Pitch mix the 1st / 2nd / 3rd+ time a hitter sees him in a game."""
+    seen = defaultdict(int)
+    by = defaultdict(list)
+    for pa in _pas(pitches):
+        key = (pa[0].game_id, pa[0].our_player_id)
+        seen[key] += 1
+        by[min(seen[key], 3)].extend(pa)
+    out = []
+    for t in (1, 2, 3):
+        sub = by.get(t, [])
+        if not sub:
+            continue
+        c = Counter(_label(p) for p in sub)
+        top, k = c.most_common(1)[0]
+        out.append({"tto": t, "n": len(sub), "fb": _pct(sum(1 for p in sub if _label(p) in FASTBALL_TYPES), len(sub)),
+                    "top": top, "top_pct": _pct(k, len(sub)),
+                    "strike": _pct(sum(1 for p in sub if p.pitch_outcome in STRIKES), len(sub)),
+                    "mix": [(lab, _pct(v, len(sub))) for lab, v in c.most_common(4)]})
+    return out
+
+
+def damage_grids(db):
+    """Our hitters' SLG on balls in play by hitter-relative cell, split by
+    PITCHER hand (all our charted at-bats). {"R"|"L": 3x3 [tb, bip]}"""
+    from analytics import profile_queries
+    from game_stats import get_pitcher_hands
+    team = profile_queries.get_team_hitting_pitches(db, None, None, None, "all")
+    ps = [p for v in team.values() for p in v if p.pitch_outcome == "In Play"]
+    if not ps:
+        return {}
+    bh = get_batter_hands(db, ps)
+    ph = get_pitcher_hands(db, ps)
+    tb = {"1B": 1, "2B": 2, "3B": 3, "HR": 4}
+    out = {h: [[[0, 0] for _c in range(3)] for _r in range(3)] for h in ("R", "L")}
+    for p in ps:
+        h = ph.get(p.game_pitch_id)
+        rc = _rel_cell(p, bh.get(p.game_pitch_id))
+        if h not in out or rc is None or p.ab_outcome in ("Sac Bunt", "Sac Fly"):
+            continue
+        out[h][rc[0]][rc[1]][0] += tb.get(p.ab_outcome, 0)
+        out[h][rc[0]][rc[1]][1] += 1
+    return out
+
+
+def approach_points(prof, damage, hand):
+    """Lines that pair where he gets whiffs with where we do (or don't) damage."""
+    pts = []
+    dmg = (damage or {}).get(hand)
+    for fam, g in (prof.get("whiff_grids") or {}).items():
+        best = None
+        for r in range(3):
+            for c in range(3):
+                wh, sw = g["cells"][r][c]
+                if sw >= MIN_CELL_SWINGS and wh / sw >= 0.4 and (best is None or wh / sw > best[0]):
+                    best = (wh / sw, r, c, wh, sw)
+        if best is None:
+            continue
+        _rate, r, c, wh, sw = best
+        where = f"{ROW_WORDS[r]} and {COL_WORDS[c]}" if (r, c) != (1, 1) else "middle-middle"
+        name = {"Fastball": "fastball", "Breaking": "breaking ball", "Offspeed": "changeup"}[fam]
+        line = f"His {name} gets whiffs {where} ({wh} of {sw} swings)"
+        if dmg:
+            t, n = dmg[r][c]
+            if n >= 3:
+                line += f"; we slug {t / n:.3f}".replace("0.", ".") + f" there vs {hand}HP"
+                line += " -- lay off it." if t / n < 0.35 else " -- but we hit it there when we connect."
+            else:
+                line += " -- lay off it until two strikes."
+        else:
+            line += " -- lay off it until two strikes."
+        pts.append((2.3, line))
+    return pts
+
+
 def pitcher_profile(db, pitches, hand_label=None):
     """Everything the report shows for one of their pitchers (or one
     team-level 'Unidentified' group)."""
@@ -149,11 +272,12 @@ def pitcher_profile(db, pitches, hand_label=None):
         "arsenal": arsenal, "first": mix(first), "ahead": mix(ahead), "behind": mix(behind), "two_k": mix(two_k),
         "first_swing": first_swing,
         "fb_grid": {"R": _grid(fbs, hands, "R"), "L": _grid(fbs, hands, "L")},
+        "whiff_grids": whiff_grids(pitches, hands), "tto": times_through(pitches),
         "pitches_per_inning": round(n / len(innings), 1) if innings else None,
     }
 
 
-def draft_points(prof, name="He"):
+def draft_points(prof, name="He", damage=None):
     """3-4 plain approach points from the numbers (coach edits them)."""
     if not prof or prof["n"] < MIN_PLAN_PITCHES:
         return []
@@ -191,6 +315,7 @@ def draft_points(prof, name="He"):
             if cols[c_i] >= 45:
                 where.append(["in", "over the middle", "away"][c_i])
             pts.append((1.8, f"Vs {bat}HH his fastball lives {' and '.join(where)} ({max(rows[r_i], cols[c_i])}% of located fastballs)."))
+    pts += approach_points(prof, damage, prof.get("hand"))
     if (prof["bb_pct"] or 0) >= 12 and prof["bf"] >= 10:
         pts.append((2.0, f"Make him throw strikes -- he's walked {prof['bb_pct']:.0f}% of our hitters."))
     if (prof["strike"] or 100) <= 58 and prof["n"] >= 30:
@@ -211,6 +336,7 @@ def build(db, opponent_team_id, roles=None):
         else:
             unknown["L" if p.opponent_hand == "L" else "R"].append(p)
     roster = {op.opponent_player_id: op for op in db.query(OpponentPlayer).filter(OpponentPlayer.team_id == opponent_team_id).all()}
+    damage = damage_grids(db)
     ids = set(by_pitcher) | {pid for pid in roles} | {pid for pid, op in roster.items()
                                                       if (op.position or "").upper().startswith("P") or op.notes}
     pitchers = []
@@ -220,7 +346,7 @@ def build(db, opponent_team_id, roles=None):
             continue
         prof = pitcher_profile(db, by_pitcher[pid], op.throws) if by_pitcher.get(pid) else None
         pitchers.append({"id": pid, "player": op, "name": op.player_name, "hand": op.throws, "role": roles.get(pid, ""),
-                         "notes": op.notes, "profile": prof, "points": draft_points(prof, op.player_name)})
+                         "notes": op.notes, "profile": prof, "points": draft_points(prof, op.player_name, damage)})
     order = {r: i for i, r in enumerate(ROLES[1:])}
     pitchers.sort(key=lambda x: (order.get(x["role"], 99), -(x["profile"]["n"] if x["profile"] else 0), x["name"]))
     unident = []
@@ -228,9 +354,10 @@ def build(db, opponent_team_id, roles=None):
         if unknown[h]:
             prof = pitcher_profile(db, unknown[h], h)
             unident.append({"id": None, "player": None, "name": f"Unidentified {h}HP (before 'Their pitcher' tracking)",
-                            "hand": h, "role": "", "notes": None, "profile": prof, "points": draft_points(prof)})
+                            "hand": h, "role": "", "notes": None, "profile": prof, "points": draft_points(prof, damage=damage)})
     games = sorted({p.game for p in ps if p.game is not None}, key=lambda g: g.game_date)
-    return {"team": team, "pitchers": pitchers, "unidentified": unident, "games": games, "n": len(ps)}
+    return {"team": team, "pitchers": pitchers, "unidentified": unident, "games": games, "n": len(ps),
+            "damage": damage}
 
 
 def draft_series_plan(rep):

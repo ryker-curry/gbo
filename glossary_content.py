@@ -126,6 +126,9 @@ ARSENAL = [
 # a coach or player doesn't hit two different explanations of "Command+"
 # depending on which tab they read it from.
 LEADERBOARD = [
+    ("RV/100", "Run value per 100 pitches from charted games -- how many runs his pitches added or saved compared to an average pitch in the same count. Negative is good for the pitcher."),
+    ("Beats Stuff", "How many runs per 100 pitches better (+) or worse (-) his results are than pitchers with his Stuff+ usually get on our staff. A line is fit across the staff (RV/100 vs Stuff+); this is his distance from it. + means he's getting more out of his stuff than it predicts -- command, deception, sequencing. Needs 60+ game pitches."),
+    ("Release Outlier", "How unusual his release point is compared to the rest of our staff -- the largest of his release height, release side and extension, in standard deviations from the staff average. 1.3+ is roughly the top or bottom 10%. An unusual release is one of the main ways pitchers without big stuff still get outs."),
     ("Plus stats (vs D2)", "ERA+, FIP+, WHIP+, K%+, BB%+, K-BB%+: each stat compared to the 2026 NCAA Division II average (ERA 6.73, WHIP 1.75, K 17.1% / BB 11.6% of batters, K-BB 5.5 points). 100 = D2 average and higher is always better -- ERA+, FIP+, WHIP+ and BB%+ are flipped so lower ERA/WHIP/walks score higher. GBO's FIP constant (4.72) is set so a D2-average pitcher's FIP equals the D2 ERA."),
     ("IP", "Innings Pitched, standard fractional notation -- X.1 means one out into the next inning, X.2 means two outs in (thirds of an inning, not tenths)."),
     ("ERA", "Earned Run Average: earned runs allowed per 9 innings pitched -- runs that scored without the help of a fielding error or passed ball. MLB.com calls it \"the most commonly accepted statistical tool for evaluating pitchers,\" though team defense and park factors can move it independent of how a pitcher actually threw. Lower is better."),
@@ -210,6 +213,8 @@ HITTING_OVERVIEW = [
 ]
 
 HITTING_DISCIPLINE = [
+    ("Decision RV/100", "Swing and take choices valued in runs. Every pitch is worth what a swing or a take in that zone and count is worth across all of our charted games (run expectancy); the hitter gets the value of what he did minus the value of the other choice. Per 100 graded pitches. + = good decisions. Unlike Swing Decision %, it knows the count: taking a strike down the middle at 3-1 costs more than at 0-2."),
+    ("Decision Score", "One plate-discipline number (from the BEAR idea): Swing Decision %, Decision RV/100, Chase %, Zone Swing %, Zone contact %, Whiff %, BB% and K%, each compared to the team and averaged with equal weights. 100 = team average, 25 points = one standard deviation. Ranks hitters with 10+ PA."),
     ('BB % / K %', 'Walks (or strikeouts) as a share of plate appearances. BB %: higher is better. K %: lower is better.'),
     ('BB/K', 'Walk-to-strikeout ratio -- a single-number read on plate discipline. Higher is better.'),
     ('Zone %, Swing %, Chase %, Whiff %, SwStr %', 'Zone % = pitches seen inside the strike zone; Swing % = swung at (in or out of zone); Chase % = swung at pitches OUTSIDE the zone; Whiff % = swings that missed, as a share of all swings; SwStr % = swinging strikes as a share of all pitches seen. Chase % and Whiff %/SwStr %: lower is generally better for a hitter.'),
@@ -250,6 +255,8 @@ HITTING_SPRAY = [
 # Traditional stats follow the standard FanGraphs / MLB.com definitions;
 # plate-discipline stats are GBO's own, from our charting.
 HITTING_LEADERBOARD = [
+    ("Decision RV/100", "Swing and take choices valued in runs. Every pitch is worth what a swing or a take in that zone and count is worth across all of our charted games (run expectancy); the hitter gets the value of what he did minus the value of the other choice. Per 100 graded pitches. + = good decisions. Unlike Swing Decision %, it knows the count: taking a strike down the middle at 3-1 costs more than at 0-2."),
+    ("Decision Score", "One plate-discipline number (from the BEAR idea): Swing Decision %, Decision RV/100, Chase %, Zone Swing %, Zone contact %, Whiff %, BB% and K%, each compared to the team and averaged with equal weights. 100 = team average, 25 points = one standard deviation. Ranks hitters with 10+ PA."),
     ("Plus stats (vs D2)", "OPS+, wOBA+, AVG+, OBP+, SLG+, ISO+, K%+, BB%+, BABIP+: each stat compared to the 2026 NCAA Division II average (AVG .300 / OBP .406 / SLG .457, K 17.1% / BB 11.6% of plate appearances). 100 = D2 average and higher is always better -- K%+ is flipped so striking out less scores higher. OPS+ uses the Baseball-Reference formula 100 x (OBP/D2 OBP + SLG/D2 SLG - 1)."),
     ("PA / Min PA", "Plate appearances. Hitters under the Min PA box sort to the bottom, grayed out and unranked -- a few at-bats can make any rate stat look great or awful."),
     ("AVG / OBP / SLG / OPS", "Batting average (hits per at-bat), on-base percentage (times on base -- hits, walks, HBP -- per plate appearance, sac flies counted), slugging (total bases per at-bat) and OPS (OBP + SLG). Higher is better."),
