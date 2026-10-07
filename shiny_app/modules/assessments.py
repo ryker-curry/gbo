@@ -549,9 +549,10 @@ def assessments_server(input, output, session, app_state):
             db.close()
 
     # -------------------------------------------------------------------
-    # Body comp ring targets (Oct 2026, Ryker: body comp shouldn't be "%
+    # Body comp targets -- PROPOSAL (Oct 2026, Ryker: body comp shouldn't be "%
     # of the heaviest guy"). Team-wide targets for Body Weight / SMM; the
-    # ring scores value / target, capped at 100. Blank = roster median.
+    # proposed score is value / target, capped at 100, shown to staff next
+    # to the official one. Blank = roster median.
     # -------------------------------------------------------------------
     _bc_tick = reactive.Value(0)
 
@@ -584,16 +585,18 @@ def assessments_server(input, output, session, app_state):
                 ui.p(hint + (f" · team median {med:.1f} lb" if med else ""), class_="text-muted small"),
             ))
         body = ui.div(
-            ui.p("The Body Comp ring scores Body Weight and Skeletal Muscle Mass as progress toward a target: "
-                 "reaching it = 100, 190 of a 200 lb target = 95, and going past it adds nothing. Leave a box empty "
-                 "to use the active roster's median. Once the Research Project's inflection-point results are in, "
-                 "those cutoffs are a good place to set these.", class_="text-muted small"),
+            ui.p("Proposal, staff only: a target-based Body Comp score shown next to the official one on Player "
+                 "Profile (the official ring and Total still use % of team best). Body Weight and Skeletal Muscle "
+                 "Mass score as progress toward a target: reaching it = 100, 190 of a 200 lb target = 95, and going "
+                 "past it adds nothing. Leave a box empty to use the active roster's median. Once the Research "
+                 "Project's inflection-point results are in, those cutoffs are a good place to set these.",
+                 class_="text-muted small"),
             ui.layout_columns(*fields, col_widths=[6, 6]),
             ui.input_action_button("bc_targets_save", "Save targets", class_="btn-sm btn-primary") if ready else
             ui.p("Run migrations/migrate_body_comp_targets.py once to turn on saving -- until then the ring uses the "
                  "team median.", class_="text-muted small"),
         )
-        return ui.accordion(ui.accordion_panel("Body comp ring targets", body), open=False, id=None)
+        return ui.accordion(ui.accordion_panel("Body comp targets (proposal)", body), open=False, id=None)
 
     @reactive.effect
     @reactive.event(input.bc_targets_save)

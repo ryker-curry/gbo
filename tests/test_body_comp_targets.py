@@ -1,4 +1,4 @@
-"""Oct 2026: Body Comp ring scores toward a target, capped at 100."""
+"""Oct 2026: proposed Body Comp target score (capped at 100), shown next to the official one."""
 
 import bucket_system as bs
 

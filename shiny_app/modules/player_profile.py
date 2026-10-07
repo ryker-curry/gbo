@@ -320,7 +320,8 @@ def player_profile_server(input, output, session, app_state):
 
         # --- tabs ---
         overview = _overview_tab(bd, summ, pitches, bullpen, goals, mode)
-        breakdown_block = bucket_display.build_full_breakdown(bd, key_prefix="profile", mode=mode) if bd.get("total_score") is not None else ui_helpers.card(ui_helpers.empty_state("No scored assessments yet. Log Body Composition, Power, or Strength tests to populate the breakdown."))
+        breakdown_block = bucket_display.build_full_breakdown(bd, key_prefix="profile", mode=mode,
+                                                                     show_proposal=app_state.role_name() != "Player") if bd.get("total_score") is not None else ui_helpers.card(ui_helpers.empty_state("No scored assessments yet. Log Body Composition, Power, or Strength tests to populate the breakdown."))
         # Full History -- collapsed by default, same treatment the raw
         # history table always got on the (now data-entry-only)
         # Assessments page. Only categories with real data get a panel,
