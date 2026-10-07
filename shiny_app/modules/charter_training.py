@@ -71,7 +71,8 @@ def charter_training_ui():
     return ui.div(
         ui.tags.style(CSS),
         ui_helpers.page_header("Charter Training",
-                               "Learn every arm before you chart it -- arsenal cheat sheets and a pitch-ID quiz from our own Rapsodo data."),
+                               "Learn every arm before you chart it -- arsenal cheat sheets and a pitch-ID quiz from our own Rapsodo data.",
+                               actions=ui_helpers.how_to_link("charter_training")),
         ui.output_ui("gate"),
         ui.navset_tab(
             ui.nav_panel("Arsenal cards", ui.output_ui("cards_controls"), ui.output_ui("cards")),

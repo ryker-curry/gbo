@@ -37,7 +37,8 @@ w.document.close();w.focus();setTimeout(function(){w.print();},300);})();
 @module.ui
 def advance_scouting_ui():
     return ui.div(
-        ui_helpers.page_header("Advance Scouting", "Their staff from our own charting, plus your notes and a series plan."),
+        ui_helpers.page_header("Advance Scouting", "Their staff from our own charting, plus your notes and a series plan.",
+                               actions=ui_helpers.how_to_link("approach_panel", "How to read the approach panel")),
         ui.div(
             ui.output_ui("pickers"),
             ui.tags.button("Print / save as PDF", type="button", class_="btn btn-primary btn-sm", onclick=PRINT_JS,

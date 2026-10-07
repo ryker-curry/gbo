@@ -228,7 +228,7 @@ def build_pitcher_profile_deep_dive():
         ),
         ui.hr(),
         ui.p(
-            "Pitcher Game Report -- one pitcher's one outing -- gets the same full walkthrough further down "
+            "Pitcher Game Breakdown -- one pitcher's one outing -- gets the same full walkthrough further down "
             "the sidebar. Bullpen Tracking, Assessments, and the rest of GBO are still described only at a "
             "high level for now -- expanding those with the same kind of walkthrough is the natural next "
             "update to this page.",
@@ -244,14 +244,14 @@ def build_game_report_deep_dive():
     line = report["pitching_line"]
 
     return ui.div(
-        ui.h4("Sample Pitcher Game Report", class_="gbo-section-title"),
+        ui.h4("Sample Pitcher Game Breakdown", class_="gbo-section-title"),
         ui.p(
             ui.strong(full_name), "'s outing below is not a real game. ", ui.strong("Every pitch is synthetic"),
             " -- one simulated start built by demo_data.py (pitch-by-pitch count, base/out state, and contact "
             "quality, with simple force/advance-one-extra-base logic on balls in play), then scored by the "
             "exact same GBO functions (game_stats.compute_pitching_line/compute_pitch_type_breakdown, "
             "pitch_location_stats.compute_command_precision/compute_attack_zones) that turn real charted game "
-            "pitches into a real Pitcher Game Report. Nothing here is connected to the real database, and no "
+            "pitches into a real Pitcher Game Breakdown. Nothing here is connected to the real database, and no "
             "real player's data was used to build it.",
         ),
         ui.p(

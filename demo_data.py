@@ -243,12 +243,12 @@ def _build_stuff_plus_model(pitch_type_label, pitches_of_type, fastball_velo_by_
     }
 
 
-# --- Pitcher Game Report demo data (Sept 2026) -------------------------
+# --- Pitcher Game Breakdown demo data (Sept 2026) -------------------------
 # Second deep dive in the series (see module docstring above and
 # guest_demo.py's own). Same philosophy as demo_pitcher_report() above:
 # manufacture a plausible, entirely fictional single-game outing, then
 # run it through the REAL game_stats.py/pitch_location_stats.py
-# functions the live Pitcher Game Report page calls -- compute_pitching_
+# functions the live Pitcher Game Breakdown page calls -- compute_pitching_
 # line, compute_pitch_type_breakdown, compute_command_precision,
 # compute_attack_zones. All four of those take a flat pitch list and do
 # their own PA-grouping/inning-math internally; nothing about them
@@ -491,10 +491,10 @@ def _game_state():
 
 
 def demo_game_report():
-    """Everything the guest-mode Pitcher Game Report deep dive needs
+    """Everything the guest-mode Pitcher Game Breakdown deep dive needs
     for one fake single-game outing, computed with the SAME analytics
-    functions the real Pitcher Game Report page calls (see this
-    module's Pitcher Game Report section comment above)."""
+    functions the real Pitcher Game Breakdown page calls (see this
+    module's Pitcher Game Breakdown section comment above)."""
     game = _game_state()
     player = game.player
     pitches = game.pitches

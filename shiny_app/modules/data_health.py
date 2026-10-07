@@ -10,7 +10,7 @@ from datetime import date, timedelta
 from shiny import module, ui, render, reactive, req
 
 from database import get_session
-from analytics import data_health, box_score, rapsodo_check
+from analytics import data_health, box_score, rapsodo_check, label_check
 from analytics import metric_check as mcheck
 from analytics.team_report import game_label
 
@@ -32,6 +32,7 @@ def data_health_ui():
                          ui.output_ui("box_card"),
                          ui.output_ui("games")),
             ui.nav_panel("Rapsodo readings", ui.output_ui("rapsodo")),
+            ui.nav_panel("Pitch labels", ui.output_ui("labels")),
             ui.nav_panel("Metric check", ui.output_ui("metric_check")),
             id="dh_tab",
         ),
@@ -308,7 +309,7 @@ def data_health_server(input, output, session, app_state):
             f"{rapsodo_check.Z_FLAG} SD from that pitcher's own normal (needs {rapsodo_check.MIN_NORM}+ readings of it "
             "on file) -- usually a misread or a mislabeled pitch, sometimes a real change. Bad readings skew Stuff+, "
             "IVB over expected and the classifiers, so fix the label (Fastball Shape Check / Pitch Type Check) or "
-            "check the setup.", class_="text-muted small", style="margin-top:10px;")
+            "check the setup.", " ", ui_helpers.how_to_link("data_tools"), class_="text-muted small", style="margin-top:10px;")
         if not n:
             return ui.div(intro, ui_helpers.empty_state("No Rapsodo readings in this range."))
         if not rows:
@@ -324,6 +325,12 @@ def data_health_server(input, output, session, app_state):
             ui.input_action_button("dh_bp_open", "Open in Bullpen Dashboard", class_="btn-sm btn-outline-light"),
             style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-top:8px;",
         ) if bp else None
+        pitch_opts = {str(r["player_id"]): names.get(r["player_id"], "—") for r in rows}
+        pitcher_opener = ui.div(
+            ui.input_select("dh_raps_pitcher", "Open a flagged pitcher's label checks", choices=pitch_opts),
+            ui.input_action_button("dh_raps_open", "Open Pitch Type Check", class_="btn-sm btn-outline-light"),
+            style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-top:8px;",
+        ) if pitch_opts else None
         return ui.div(
             intro,
             ui_helpers.render_kpi_cards([
@@ -333,6 +340,7 @@ def data_health_server(input, output, session, app_state):
             ]),
             ui_helpers.render_dict_table(table),
             opener,
+            pitcher_opener,
         )
 
     @reactive.effect
@@ -447,10 +455,82 @@ def data_health_server(input, output, session, app_state):
                  "are compared across the staff -- then stepped up to the full sample (Spearman-Brown). "
                  f"{mcheck.STABLE}+ = stable, {mcheck.GETTING}+ = getting there, lower = mostly noise so far. "
                  f"Pitchers need {mcheck.MIN_HALF}+ pitches per half. Uses the date range above -- a wider range "
-                 "gives a truer answer.", class_="text-muted small", style="margin-top:10px;"),
+                 "gives a truer answer.", " ", ui_helpers.how_to_link("data_tools"), class_="text-muted small", style="margin-top:10px;"),
             ui_helpers.render_dict_table(table),
             ui.p(ui.strong("Does bullpen stuff show up in games?"), style="margin:14px 0 4px;"),
             ui.p("Each dot is a pitcher: his average bullpen Stuff+ against his game rate. If Stuff+ is measuring "
                  "something real, the dots should rise left to right.", class_="text-muted small"),
             ui.layout_columns(*bg_cards, col_widths=[6, 6]),
         )
+
+
+    # ---- Pitch labels (Oct 2026 reorganization, analytics/label_check.py) ----
+    @reactive.calc
+    def _labels():
+        req(_ok() and "range" in input and input.range())
+        d0, d1 = input.range()
+        req(d0 and d1)
+        db = get_session()
+        try:
+            return label_check.staff_flags(db, d0, d1)
+        finally:
+            db.close()
+
+    @render.ui
+    def labels():
+        if not _ok():
+            return None
+        rows = _labels()
+        intro = ui.p(
+            "Pitches whose Rapsodo shape doesn't match the label on file, by pitcher. Fastball shape = a 4-seam that "
+            "moves like a 2-seam (or the other way), plus plain \"Fastball\" readings that need a type. Pitch type = a "
+            "pitch that moves like a different family (fastball / breaking / offspeed). Wrong labels skew Stuff+, the "
+            "Arsenal Plan, Results by Pitch Shape and every pitch-type split -- open a pitcher to review and switch them "
+            "(every switch can be undone).", " ", ui_helpers.how_to_link("data_tools"), class_="text-muted small", style="margin-top:10px;")
+        if not rows:
+            return ui.div(intro, ui_helpers.empty_state("No Rapsodo readings in this range."))
+        flagged = [r for r in rows if r["fs"] or r["ptc"] or r["fs_unlabeled"]]
+        table = [{
+            "Pitcher": f"{r['player'].first_name} {r['player'].last_name}", "Readings": r["n"],
+            "Fastball shape": r["fs"] or "—", "Plain \"Fastball\" to type": r["fs_unlabeled"] or "—",
+            "Pitch type": r["ptc"] or "—",
+        } for r in flagged]
+        choices = {str(r["player"].player_id): f"{r['player'].first_name} {r['player'].last_name}" for r in flagged}
+        return ui.div(
+            intro,
+            ui_helpers.render_kpi_cards([
+                {"label": "Pitchers checked", "value": str(len(rows))},
+                {"label": "With flags", "value": str(len(flagged))},
+                {"label": "Flagged readings", "value": str(sum(r["fs"] + r["ptc"] + r["fs_unlabeled"] for r in rows))},
+            ]),
+            ui_helpers.render_dict_table(table) if table else ui.p("Every label in this range matches its shape.",
+                                                                   class_="text-muted"),
+            ui.div(
+                ui.input_select("dh_lbl_pitcher", "Pitcher", choices=choices),
+                ui.input_action_button("dh_lbl_fs", "Open Fastball Shape Check", class_="btn-sm btn-outline-light"),
+                ui.input_action_button("dh_lbl_ptc", "Open Pitch Type Check", class_="btn-sm btn-outline-light"),
+                style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-top:8px;",
+            ) if choices else None,
+        )
+
+    def _open_pitcher(pid, view):
+        app_state.deep_link_pitcher.set((int(pid), view))
+        ui.update_navs("main_nav", selected="Pitcher Profile", session=session.root_scope())
+
+    @reactive.effect
+    @reactive.event(input.dh_lbl_fs)
+    def _open_fs():
+        if _ok() and "dh_lbl_pitcher" in input and input.dh_lbl_pitcher():
+            _open_pitcher(input.dh_lbl_pitcher(), "fastball_shape")
+
+    @reactive.effect
+    @reactive.event(input.dh_lbl_ptc)
+    def _open_ptc():
+        if _ok() and "dh_lbl_pitcher" in input and input.dh_lbl_pitcher():
+            _open_pitcher(input.dh_lbl_pitcher(), "pitch_type_check")
+
+    @reactive.effect
+    @reactive.event(input.dh_raps_open)
+    def _open_raps_pitcher():
+        if _ok() and "dh_raps_pitcher" in input and input.dh_raps_pitcher():
+            _open_pitcher(input.dh_raps_pitcher(), "pitch_type_check")

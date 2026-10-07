@@ -493,7 +493,7 @@ def compute_grading_bundle(db, game_pitches, rapsodo_pitches, stuff_baselines=No
     attack-zone counts, the Pitching+ trend series (one point per
     OUTING, not per pitch -- see aggregate_trend_by_game), the Arsenal
     rollup, and the Individual Pitches rows. Moved here from
-    pitcher_profile.py (Sept 2026, Pitching Staff Leaderboard) so a
+    pitcher_profile.py (Sept 2026, Pitching Leaderboard) so a
     roster-wide caller (pitching_staff_leaderboard_rows below) can call
     it once per pitcher without duplicating this ~60-line loop a second
     time -- pitcher_profile.py's own pp_overview_section/pp_zone_

@@ -51,8 +51,9 @@ GUIDE = [
     {
         "key": "pitcher_profile", "title": "Pitcher Profile", "who": "pitchers",
         "pages": ["Pitcher Profile", "My Pitcher Profile"],
-        "shows": "Everything about a pitcher in one place, filtered by dates, pitch type and game type. Use the View "
-                 "menu to switch between Overview, Arsenal, Results, Trends and more.",
+        "shows": "Everything about a pitcher in one place, filtered by dates, pitch type and game type. The View "
+                 "menu is grouped: Summary (Overview, Trends), Stuff & Shape (Metrics, Arsenal, Tunneling+, Arsenal "
+                 "Plan), Command (Command & Execution, Zone) and Usage & Results (Results, Count Leverage, Sequencing).",
         "use": [
             "Overview: your line (IP, K, BB, WHIP, TBIP, FIP), plus stats vs D2, and your Stuff+/Location+/Pitching+ "
             "grades overall and by pitch.",
@@ -118,9 +119,10 @@ GUIDE = [
     },
     {
         "key": "hitter_profile", "title": "Hitter Profile", "who": "hitters", "pages": ["Hitter Profile", "My Hitter Profile"],
-        "shows": "Everything about a hitter, filtered by dates and pitch type. Use the View menu for Overview, Hot "
-                 "Zones, Swing Decisions, How Pitchers Attack Me, Results by Pitch Type, First Pitch & Two Strikes, "
-                 "Team Percentile Ranks and Trends.",
+        "shows": "Everything about a hitter, filtered by dates and pitch type. The View menu is grouped: Summary "
+                 "(Overview, Team Percentile Ranks, Trends), Approach (Discipline & Decisions, Counts & Situations), "
+                 "Matchups (How Pitchers Attack Me, Results by Pitch Type, Results by Pitch Shape) and Contact "
+                 "(Batted Ball, Hot Zones, Contact Quality by Zone, Spray Chart).",
         "use": [
             "Overview: your slash line (AVG/OBP/SLG/OPS), QAB %, plus stats vs D2.",
             "Results by Pitch Type: how you do vs fastballs, breaking balls and offspeed -- where the damage and "
@@ -264,7 +266,7 @@ GUIDE = [
     },
     {
         "key": "leaderboard", "title": "Pitching & Hitting Leaderboards", "who": "all",
-        "pages": ["Pitching Staff Leaderboard", "Hitting Leaderboard"],
+        "pages": ["Pitching Leaderboard", "Hitting Leaderboard"],
         "shows": "The whole staff or lineup side by side, sortable by any stat, with plus stats vs D2. Pick any "
                  "dates (season to date by default).",
         "use": ["Tick the columns you care about, then click a stat under the table to sort best to worst.",
@@ -275,5 +277,151 @@ GUIDE = [
     },
 ]
 
+BY_KEY = {s["key"]: s for s in GUIDE}
+
+
+# Oct 2026: article-batch features (pitching, hitting, data tools) --
+# added with the reorganization so "How to read this" covers them.
+GUIDE += [
+    {
+        "key": "ivb_expected", "title": "IVB over expected (ride vs. arm slot)", "who": "pitchers",
+        "pages": ["Pitcher Profile", "My Pitcher Profile"],
+        "shows": "Pitcher Profile > Metrics. How much more (or less) ride a pitch has than pitchers with the same arm "
+                 "slot get on our staff. Ride mostly follows slot, so the leftover is what surprises hitters.",
+        "use": ["Fastballs: + means it carries more than hitters expect from that arm -- it plays up in the zone. "
+                "- means it sinks or runs more -- live lower in the zone.",
+                "Breaking balls: + = more carry than expected, - = more depth.",
+                "Within +/-1.5\" reads as typical. Compared to our staff, not a league."],
+        "good": ["A fastball 2\"+ over expected (carry) thrown up, or 2\"+ under (sink) thrown down."],
+    },
+    {
+        "key": "slider_fit", "title": "Slider type & fit", "who": "pitchers",
+        "pages": ["Pitcher Profile", "My Pitcher Profile"],
+        "shows": "Pitcher Profile > Arsenal Plan. What his breaking ball actually is (gyro, traditional, sweeper, "
+                 "carry sweeper, curveball, slurve) and which slider his fastball suggests he'll spin best.",
+        "use": ["Fastball spin efficiency 93%+ leans pronator -- usually a hard gyro slider. 85% or less leans "
+                "supinator -- usually a sweeper. In between, either can work.",
+                "When that hint and the arm-slot rule disagree, try both grips in a bullpen and let the Rapsodo shape decide.",
+                "Past about 12\" of sweep, more sweep adds little -- velo matters more."],
+        "good": ["A clear type (not 'traditional') that matches his fit hint."],
+    },
+    {
+        "key": "velo_fade", "title": "Velo fade", "who": "pitchers",
+        "pages": ["Bullpen Dashboard", "Pitcher Game Breakdown", "Pitcher Profile"],
+        "shows": "Fastball velo by pitch number through a bullpen or a Rapsodo game, with a trend line. Pitcher Profile > "
+                 "Trends shows one bar per outing.",
+        "use": ["The headline is mph lost per 25 pitches. Under 0.5 = held, 0.5-1.5 = mild fade, more = notable.",
+                "Needs 15+ fastballs with a Rapsodo velo. Game velo only exists when Rapsodo was running.",
+                "A fade that grows outing to outing is a workload flag -- check Arm Care."],
+        "good": ["Held velo (under 0.5 mph per 25) through his normal pitch count."],
+    },
+    {
+        "key": "sequencing", "title": "Sequencing (what follows what)", "who": "pitchers",
+        "pages": ["Pitcher Profile", "My Pitcher Profile"],
+        "shows": "Pitcher Profile > Sequencing. Back-to-back pitches to the same hitter (FB -> SL, SL -> SL ...), graded "
+                 "on the second pitch: strike %, CSW %, whiff %, chase %, balls in play.",
+        "use": ["Filter by hitter hand and the count before the second pitch.",
+                "Compare his CSW % on a pair to the team's on the same pair.",
+                "Gray rows have fewer than 8 -- don't read into them yet."],
+        "good": ["His most-used pairs at or above the team's CSW %."],
+    },
+    {
+        "key": "tunnel_check", "title": "Tunnel check", "who": "pitchers",
+        "pages": ["Pitcher Profile", "My Pitcher Profile"],
+        "shows": "Pitcher Profile > Tunneling+. Pairs more than about 20\" apart in movement or 10 mph apart in velo "
+                 "can't look like his fastball out of the hand.",
+        "use": ["Those pitches still work -- as a change of speed or shape. Judge them on whiffs and results, not "
+                "tunnel numbers."],
+        "good": ["Secondaries that tunnel, plus one that's a big change of speed or shape."],
+    },
+    {
+        "key": "outperform", "title": "Release & results vs. stuff", "who": "pitchers",
+        "pages": ["Pitcher Profile", "My Pitcher Profile", "Pitching Leaderboard"],
+        "shows": "Pitcher Profile > Overview card, plus Beats Stuff / Release Outlier on the leaderboard. How unusual his "
+                 "release is on our staff, and whether his results beat what his Stuff+ predicts.",
+        "use": ["Release: his release height, side and extension as a percentile of our staff; tagged when he's in "
+                "roughly the top or bottom 10%.",
+                "Beats Stuff: runs per 100 pitches better (+) or worse (-) than pitchers with his Stuff+ usually get. "
+                "Needs 60+ game pitches."],
+        "good": ["A + Beats Stuff -- command, deception or mix carrying average stuff."],
+    },
+    {
+        "key": "arsenal_extras", "title": "Outcome profile & Arsenal Breadth+", "who": "pitchers",
+        "pages": ["Pitcher Profile", "My Pitcher Profile"],
+        "shows": "Pitcher Profile > Arsenal. Outcome profile: what the 60 most similar pitches thrown by other staff "
+                 "pitchers got (whiff %, CSW %, ground-ball %). Arsenal Breadth+: how much speed and movement range "
+                 "his arsenal covers (100 = staff average).",
+        "use": ["If his actual rates beat 'like it', he's getting more from location or sequencing than the shape alone.",
+                "Breadth+ is descriptive -- a narrow arsenal that tunnels well can be just as good."],
+        "good": ["His actual whiff / CSW at or above what pitches like it get."],
+    },
+    {
+        "key": "data_tools", "title": "Data Health: Rapsodo readings, Pitch labels, Metric check", "who": "staff",
+        "pages": ["Data Health"],
+        "shows": "Three more tabs on Data Health. Rapsodo readings: sessions where a pitch type sat far off a "
+                 "pitcher's normal (misread or mislabeled). Pitch labels: pitchers with readings that don't move like "
+                 "their label. Metric check: which stats are stable enough to trust yet.",
+        "use": ["Fix labels from Pitch labels -- 'Open' jumps to that pitcher's Fastball Shape or Pitch Type Check.",
+                "Metric check splits each pitcher's pitches odd/even: 0.7+ = stable, 0.4+ = getting there, lower = "
+                "mostly noise so far. Wider date ranges give truer answers.",
+                "Bullpen -> game: if Stuff+ is real, pitchers with better bullpen Stuff+ should get more game whiffs."],
+        "good": ["No flagged sessions or labels; game stats moving toward 'stable' as the season fills in."],
+    },
+    {
+        "key": "charter_training", "title": "Charter Training", "who": "staff", "pages": ["Charter Training"],
+        "shows": "Arsenal cards (each pitcher's pitch types: velo range, ride, run, spin, tilt, movement plot) and a "
+                 "pitch-ID quiz from real Rapsodo readings.",
+        "use": ["Keep a pitcher's card open while charting him.",
+                "Quiz: 'Pitcher named' to learn arms, 'Pitcher hidden' to learn shapes. Score is for that visit only."],
+        "good": ["New charters at 85%+ in 'Pitcher named' before charting a game alone."],
+    },
+    {
+        "key": "decision_runs", "title": "Decision runs & Decision Score", "who": "hitters",
+        "pages": ["Hitter Profile", "My Hitter Profile", "Hitting Leaderboard"],
+        "shows": "Hitter Profile > Discipline & Decisions. Every swing and take valued in runs for that zone and count; "
+                 "Decision Score rolls the discipline stats into one number (100 = team average).",
+        "use": ["+ = good decisions. Taking a strike down the middle at 3-1 costs more than at 0-2.",
+                "The zone x count table shows exactly where runs are gained and lost; the coaching lines say it in words.",
+                "Swing Decision % (rule based) stays next to it."],
+        "good": ["Decision runs above 0 and a Decision Score over 100."],
+    },
+    {
+        "key": "counts_situations", "title": "Counts & Situations", "who": "hitters",
+        "pages": ["Hitter Profile", "My Hitter Profile"],
+        "shows": "Hitter Profile > Counts & Situations. RISP / two-strike / leadoff, count leverage, first pitch & two "
+                 "strikes, run value in every count, how long at-bats go, and high-leverage spots.",
+        "use": ["Starred counts (2-0, 3-1, 2-1, 1-1) are where hitters who got called up separated themselves.",
+                "Early win % = you got to a hitter's count, or put pitch 1 or 2 in play hard. Long at-bats rarely help.",
+                "High leverage uses GBO's run leverage (1.0 = average spot) or late & close (7th on, within 2). "
+                "Context only -- clutch doesn't carry over."],
+        "good": ["+ run value in the starred counts and Early win % at or above the team."],
+    },
+    {
+        "key": "pitch_shape", "title": "Results by Pitch Shape", "who": "hitters",
+        "pages": ["Hitter Profile", "My Hitter Profile"],
+        "shows": "Hitter Profile > Results by Pitch Shape. How you do against riding vs dead-zone vs sinking fastballs, "
+                 "gyro vs sweeping sliders, curveballs, arm slots and velo bands -- from our own pitchers in intrasquads.",
+        "use": ["Find the shapes that beat you and ask for those in BP or live at-bats.",
+                "Compare to the team row -- some shapes are tough for everyone."],
+        "good": ["No shape far below the team in RV/100."],
+    },
+    {
+        "key": "zone_whiff", "title": "In-zone whiff check", "who": "hitters",
+        "pages": ["Hitter Profile", "My Hitter Profile"],
+        "shows": "Hitter Profile > Trends. Your miss rate on strikes you swing at, over your last 30, against your normal.",
+        "use": ["A jump of 10+ points flags on Overview -- often timing or bat path before it shows in results.",
+                "Needs 30+ swings at strikes."],
+        "good": ["The line at or under your normal."],
+    },
+    {
+        "key": "approach_panel", "title": "Advance Scouting: approach panel", "who": "staff",
+        "pages": ["Advance Scouting", "Scouting Reports"],
+        "shows": "On each of their pitchers' pages: where each pitch family gets swings and misses, where we do damage "
+                 "against that hand, and his mix the 1st, 2nd and 3rd time through our order.",
+        "use": ["Red where he wins + pale green where we don't = lay off it. The auto-drafted points say it in words.",
+                "Mix changing the 2nd / 3rd time through tells hitters what's coming late."],
+        "good": ["A plan built on his best pitch being in zones we can lay off."],
+    },
+]
 BY_KEY = {s["key"]: s for s in GUIDE}
 WHO_LABELS = {"all": "Everyone", "pitchers": "Pitchers", "hitters": "Hitters", "staff": "Coaches & staff"}

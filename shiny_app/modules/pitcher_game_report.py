@@ -1,5 +1,5 @@
 """
-GBO -- Pitcher Game Report module.
+GBO -- Pitcher Game Breakdown module.
 
 Direct port of pages/pitcher_game_report.py -- single-game box score +
 pitch-type breakdown (Usage/Strike/CSW/Whiff/Chase/Putaway/GB-FB-LD%,
@@ -656,7 +656,7 @@ def _all_pitch_locations_figure(pitches, color_by, baseline, own_idx_map=None):
 @module.ui
 def pitcher_game_report_ui():
     return ui.div(
-        ui_helpers.page_header("Pitcher Game Report"),
+        ui_helpers.page_header("Pitcher Game Breakdown"),
         ui.output_ui("game_picker"),
         ui.output_ui("staff_totals_section"),
         ui.output_ui("pitcher_picker"),
@@ -2117,7 +2117,7 @@ def pitcher_game_report_server(input, output, session, app_state):
     # -------------------------------------------------------------------
     # At-Bat by At-Bat (Oct 2026, Ryker: "so they can see an entire at bat
     # vs each hitter and how they attacked them") -- the pitching twin of
-    # Hitter Game Report's view. Chart shows the called spot (hollow
+    # Hitter Game Breakdown's view. Chart shows the called spot (hollow
     # ring) joined to where each pitch went (numbered dot).
     # -------------------------------------------------------------------
 

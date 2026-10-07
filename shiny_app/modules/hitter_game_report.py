@@ -1,5 +1,5 @@
 """
-GBO -- Hitter Game Report module.
+GBO -- Hitter Game Breakdown module.
 
 Direct port of pages/hitter_game_report.py -- batting-side counterpart to
 pitcher_game_report.py: single-game slash line + situational splits,
@@ -44,7 +44,7 @@ from visualizations.hitter_pitch_chart import at_bat_pitch_locations_chart
 # object exposing .pitch_zone/.contact_quality, which GamePitch does too.
 from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_figure, CONTACT_QUALITY_SCORE
 
-from strike_zone import location_words  # noqa: F401 (moved to strike_zone, Oct 2026; shared with Pitcher Game Report)
+from strike_zone import location_words  # noqa: F401 (moved to strike_zone, Oct 2026; shared with Pitcher Game Breakdown)
 import ui_helpers
 from analytics import league_baselines
 import format_helpers
@@ -97,7 +97,7 @@ def _vs(name, hand):
 @module.ui
 def hitter_game_report_ui():
     return ui.div(
-        ui_helpers.page_header("Hitter Game Report", actions=ui_helpers.glossary_link("hgr_glossary", "Stats Glossary")),
+        ui_helpers.page_header("Hitter Game Breakdown", actions=ui_helpers.glossary_link("hgr_glossary", "Stats Glossary")),
         ui.output_ui("game_picker"),
         ui.output_ui("batter_picker"),
         ui.input_select("hgr_view", "View", choices=VIEWS),
@@ -250,7 +250,7 @@ def hitter_game_report_server(input, output, session, app_state):
             player_ops_plus = ops_plus(line["OBP"], line["SLG"])
             plus = league_baselines.hitting_plus(line)
             header = ui.h5(f"{batter.first_name} {batter.last_name} — {_game_label(game)}", class_="gbo-section-title")
-            # Oct 2026, Ryker: View dropdown like Pitcher Game Report --
+            # Oct 2026, Ryker: View dropdown like Pitcher Game Breakdown --
             # each block below lands in its view's list; only the picked
             # view is shown.
             groups = {"overview": [], "approach": [], "batted": []}

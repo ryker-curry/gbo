@@ -361,7 +361,7 @@ def core_metrics(pitches, dv_table=None):
     hard = [p for p in bip if (p.contact_quality or "") in HARD_CONTACT]
     fp = first_pitch_two_strike(pitches)
     # Oct 2026: Quality at-bats (Brian Cain's definition, game_stats.
-    # _is_quality_at_bat -- the same check Hitter Game Report uses).
+    # _is_quality_at_bat -- the same check Hitter Game Breakdown uses).
     from game_stats import _is_quality_at_bat
     done = [pa for pa in pas if pa[-1].ends_plate_appearance and pa[-1].ab_outcome not in (None, "No Result")]
     qab = sum(1 for pa in done if _is_quality_at_bat(pa))

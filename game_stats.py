@@ -1160,7 +1160,7 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0, extra_unea
         "TBIP": round((bb + hbp + singles + 2 * doubles + 3 * triples + 4 * hr_allowed) / ip_decimal, 2) if ip_decimal else None,
         "K/BB": round(k / bb, 2) if bb else None,
         "K %": _rate(k, batters_faced), "K/9": round(k * 9 / ip_decimal, 2) if ip_decimal else None,
-        # BB/9, HR/9 -- added Sept 2026 for the Pitching Staff Leaderboard
+        # BB/9, HR/9 -- added Sept 2026 for the Pitching Leaderboard
         # (Ryker: "create a pitching staff leaderboard ... allow the coach
         # to pick what stats they want to see"). Divides by the SAME raw,
         # unrounded ip_decimal every other rate stat here uses (WHIP, K/9,

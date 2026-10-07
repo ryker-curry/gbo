@@ -48,7 +48,7 @@ Usage:
     fig.add_shape(**home_plate_shape(view="pitcher"))
 
 Image source (Sept 2026 fix, Ryker: "theres no graphic" -- the batter
-silhouette was invisible on Pitcher Game Report's Pitch-by-Pitch card):
+silhouette was invisible on Pitcher Game Breakdown's Pitch-by-Pitch card):
 hitter_images() embeds each PNG as a base64 data: URI rather than
 pointing at the "/assets/..." static route. That relative URL only
 resolves when Plotly renders live in a browser (command_charts.py's

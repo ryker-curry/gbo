@@ -409,12 +409,12 @@ _NAV_GROUPS = [
     # just out of the visible sidebar) -- see nav.py's matching comments.
     ("Pitching", ["arm_care", "bullpen_dashboard", "bullpen_tracking", "rapsodo_import"]),
     # ("Hitting", ["hitter_tracking"]) -- removed from the sidebar Oct 2026 (Ryker)
-    ("Games", ["game_tracking", "data_health", "charter_training", "team_game_report", "pitcher_game_report", "pitcher_meeting_report", "hitter_game_report", "hitter_meeting_report"]),
-    # Sept 2026, Ryker: "pitcher profile, hitter profile, player stats
-    # should be under analytics rather than games" -- moved out of
-    # "Games" above into their own group; Pitcher/Hitter Game Report
-    # stay under Games (single-outing box scores, not asked to move).
-    ("Analytics", ["analytics", "pitcher_profile", "weekly_report", "hitter_profile", "pitching_leaderboard", "hitting_leaderboard"]),
+    # Oct 2026 reorganization (Ryker approved): doing the work vs reading it.
+    ("Game Operations", ["game_tracking", "data_health", "charter_training"]),
+    ("Reports", ["team_game_report", "pitcher_game_report", "pitcher_meeting_report", "hitter_game_report",
+                 "hitter_meeting_report", "weekly_report"]),
+    # Sept 2026, Ryker: profiles / stats / leaderboards live under Analytics.
+    ("Analytics", ["analytics", "pitcher_profile", "hitter_profile", "pitching_leaderboard", "hitting_leaderboard"]),
     ("Scouting", ["advance_scouting", "opponent_teams"]),
     ("Admin", ["user_management", "staff_assignments", "video_import"]),
     ("Me", ["player_profile", "player_schedule", "player_development", "player_stats", "player_game_stats", "player_hitting", "player_video", "player_bullpens", "pitcher_profile", "pitcher_meeting_report", "weekly_report", "advance_scouting", "hitter_profile", "hitter_meeting_report", "pitching_leaderboard", "hitting_leaderboard"]),
@@ -422,7 +422,7 @@ _NAV_GROUPS = [
 _NAV_LABELS = {
     "players": "Player setup", "roster": "Players", "idp": "Development plans", "rapsodo_import": "Import Rapsodo",
     "assessment_import": "Import Assessments",
-    "analytics": "Player stats", "at_appointments": "AT appointments", "player_assignments": "Assignments",
+    "analytics": "Season stats", "at_appointments": "AT appointments", "player_assignments": "Assignments",
     "team_schedule": "Team schedule", "user_management": "Users", "staff_assignments": "Staff assignments",
 }
 _ICONS = {
