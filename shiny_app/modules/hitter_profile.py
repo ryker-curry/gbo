@@ -61,7 +61,7 @@ from game_stats import get_pitcher_hands, compute_batting_line, compute_batted_b
 from plate_discipline import compute_hitter_discipline, compute_zone_tier_discipline
 from analytics import performance_score, profile_queries
 from analytics import hitter_hot_zones, hitter_insights, league_baselines, trends
-from analytics import decision_value, hitter_counts, leverage, zone_whiff, shape_results
+from analytics import decision_value, hitter_counts, leverage, zone_whiff, shape_results, decision_floor
 from visualizations import zone_whiff_chart
 from visualizations import trend_charts
 from visualizations import hitter_insight_charts as hic
@@ -1018,6 +1018,7 @@ def hitter_profile_server(input, output, session, app_state):
                 ui.output_ui("hp_sd_summary"),
                 ui.layout_columns(output_widget("hp_sd_chart"), ui.output_ui("hp_sd_table"), col_widths=[7, 5]),
                 ui.output_ui("hp_dv_body"),
+                ui.output_ui("hp_floor_body"),
             )
         if view == "attack":
             return ui.div(
@@ -1119,6 +1120,47 @@ def hitter_profile_server(input, output, session, app_state):
             ])
         finally:
             db.close()
+
+    @render.ui
+    def hp_floor_body():
+        """Decision quality & floor (Oct 2026, analytics/decision_floor.py)."""
+        if not _insight_gate("swing_decisions"):
+            return None
+        db = get_session()
+        try:
+            pid, pitches = _current_pitches(db)
+            if not pitches:
+                return None
+            table = decision_value.team_table(db)
+            f = _current_filters()
+            team = profile_queries.get_team_hitting_pitches(db, f["date_from"], f["date_to"], f["pitch_type"], f["game_scope"])
+        finally:
+            db.close()
+        mine = decision_floor.floor(table, pitches)
+        head = [ui.hr(), ui.p(ui.strong("Decision quality & floor"), "  ", ui_helpers.how_to_link("decision_floor"),
+                              style="margin-bottom:0;"),
+                ui.p(f"Decision quality = % of your swing/take choices that were the better one for that zone and count. "
+                     f"The line is that % over every run of {decision_floor.WINDOW} straight plate appearances; your floor "
+                     "is how good it stays in your worst stretches (25th percentile). The Dodgers' lineup won with "
+                     "floors that barely dropped -- an approach that holds up in a slump.", class_="text-muted small")]
+        if mine["floor"] is None:
+            return ui.div(*head, ui.p(f"Needs {decision_floor.WINDOW}+ plate appearances with a located pitch "
+                                      f"({mine['n_pa']} so far).", class_="text-muted small"))
+        others = {tpid: decision_floor.floor(table, ps) for tpid, ps in team.items() if tpid != pid}
+        floors = [o["floor"] for o in others.values() if o["floor"] is not None]
+        rank = 1 + sum(1 for x in floors if x > mine["floor"]) if floors else None
+        team_floor = sum(floors) / len(floors) if floors else None
+        kpis = [{"label": "Decision quality", "value": f"{mine['quality']:.0f}%"},
+                {"label": "Floor", "value": f"{mine['floor']:.0f}%"},
+                {"label": "Gap", "value": f"{mine['gap']:.0f} pts"}]
+        if rank is not None:
+            kpis.append({"label": "Floor rank", "value": f"{rank} of {len(floors) + 1}"})
+        return ui.div(
+            *head,
+            ui_helpers.render_kpi_cards(kpis),
+            ui.p(ui.strong(mine["read"]), (" Early -- only a few windows so far." if mine["early"] else ""), class_="small"),
+            ui.HTML(_floor_svg(mine, team_floor)),
+        )
 
     @render.ui
     def hp_dv_body():
@@ -1648,3 +1690,40 @@ def hitter_profile_server(input, output, session, app_state):
             return infield_slice_chart(pitches, title="Infield Slice Chart")
         finally:
             db.close()
+
+
+def _floor_svg(res, team_floor):
+    """Rolling decision-quality line with his floor and the team's average floor."""
+    from html import escape
+    pts = res["windows"]
+    W, H, L, R, T, B = 640, 200, 44, 130, 14, 30
+    vals = pts + [res["floor"]] + ([team_floor] if team_floor is not None else [])
+    y0, y1 = max(0.0, min(vals) - 8), min(100.0, max(vals) + 8)
+    n = len(pts)
+
+    def X(i):
+        return L + (W - L - R) * (i / max(n - 1, 1))
+
+    def Y(v):
+        return T + (H - T - B) * (1 - (v - y0) / ((y1 - y0) or 1))
+    out = [f'<svg viewBox="0 0 {W} {H}" class="gbo-progress-svg" role="img" aria-label="Rolling decision quality">']
+    for k in range(4):
+        v = y0 + (y1 - y0) * k / 3
+        out.append(f'<line x1="{L}" x2="{W - R}" y1="{Y(v):.1f}" y2="{Y(v):.1f}" class="grid"/>'
+                   f'<text x="{L - 6}" y="{Y(v) + 4:.1f}" text-anchor="end" class="axis">{v:.0f}%</text>')
+    out.append(f'<line x1="{L}" x2="{W - R}" y1="{Y(res["floor"]):.1f}" y2="{Y(res["floor"]):.1f}" class="avg"/>'
+               f'<text x="{W - R + 6}" y="{Y(res["floor"]) + (-4 if team_floor is not None and team_floor <= res["floor"] else 12):.1f}" class="avg-lbl">His floor {res["floor"]:.0f}%</text>')
+    if team_floor is not None:
+        out.append(f'<line x1="{L}" x2="{W - R}" y1="{Y(team_floor):.1f}" y2="{Y(team_floor):.1f}" '
+                   'style="stroke:var(--gbo-series-2,#B58A22);stroke-width:1;stroke-dasharray:2 4"/>'
+                   f'<text x="{W - R + 6}" y="{Y(team_floor) + (14 if team_floor <= res["floor"] else -4):.1f}" class="avg-lbl">Team avg floor {team_floor:.0f}%</text>')
+    if n > 1:
+        path = " ".join(f'{"M" if i == 0 else "L"}{X(i):.1f},{Y(v):.1f}' for i, v in enumerate(pts))
+        out.append(f'<path d="{path}" class="line"/>')
+    for i, v in enumerate(pts):
+        out.append(f'<g class="pt"><title>{escape(f"PAs {i + 1}-{i + 10}: {v:.0f}% right")}</title>'
+                   f'<circle cx="{X(i):.1f}" cy="{Y(v):.1f}" r="3.5" class="dot"/></g>')
+    out.append(f'<text x="{(L + W - R) / 2:.0f}" y="{H - 6}" text-anchor="middle" class="axis">'
+               'each point = his last 10 plate appearances, oldest to newest</text>')
+    out.append("</svg>")
+    return "".join(out)

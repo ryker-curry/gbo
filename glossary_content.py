@@ -218,6 +218,7 @@ HITTING_OVERVIEW = [
 ]
 
 HITTING_DISCIPLINE = [
+    ("Decision Q % / Decision Floor", "Decision Q % = share of swing/take choices that were the better one for that zone and count (from the Decision runs values). Decision Floor = the 25th percentile of that % across every run of 10 straight plate appearances -- how good the approach stays in his worst stretches."),
     ("Decision RV/100", "Swing and take choices valued in runs. Every pitch is worth what a swing or a take in that zone and count is worth across all of our charted games (run expectancy); the hitter gets the value of what he did minus the value of the other choice. Per 100 graded pitches. + = good decisions. Unlike Swing Decision %, it knows the count: taking a strike down the middle at 3-1 costs more than at 0-2."),
     ("Decision Score", "One plate-discipline number (from the BEAR idea): Swing Decision %, Decision RV/100, Chase %, Zone Swing %, Zone contact %, Whiff %, BB% and K%, each compared to the team and averaged with equal weights. 100 = team average, 25 points = one standard deviation. Ranks hitters with 10+ PA."),
     ('BB % / K %', 'Walks (or strikeouts) as a share of plate appearances. BB %: higher is better. K %: lower is better.'),
@@ -263,6 +264,7 @@ HITTING_SPRAY = [
 # Traditional stats follow the standard FanGraphs / MLB.com definitions;
 # plate-discipline stats are GBO's own, from our charting.
 HITTING_LEADERBOARD = [
+    ("Decision Q % / Decision Floor", "Decision Q % = share of swing/take choices that were the better one for that zone and count (from the Decision runs values). Decision Floor = the 25th percentile of that % across every run of 10 straight plate appearances -- how good the approach stays in his worst stretches."),
     ("Decision RV/100", "Swing and take choices valued in runs. Every pitch is worth what a swing or a take in that zone and count is worth across all of our charted games (run expectancy); the hitter gets the value of what he did minus the value of the other choice. Per 100 graded pitches. + = good decisions. Unlike Swing Decision %, it knows the count: taking a strike down the middle at 3-1 costs more than at 0-2."),
     ("Decision Score", "One plate-discipline number (from the BEAR idea): Swing Decision %, Decision RV/100, Chase %, Zone Swing %, Zone contact %, Whiff %, BB% and K%, each compared to the team and averaged with equal weights. 100 = team average, 25 points = one standard deviation. Ranks hitters with 10+ PA."),
     ("Plus stats (vs D2)", "OPS+, wOBA+, AVG+, OBP+, SLG+, ISO+, K%+, BB%+, BABIP+: each stat compared to the 2026 NCAA Division II average (AVG .300 / OBP .406 / SLG .457, K 17.1% / BB 11.6% of plate appearances). 100 = D2 average and higher is always better -- K%+ is flipped so striking out less scores higher. OPS+ uses the Baseball-Reference formula 100 x (OBP/D2 OBP + SLG/D2 SLG - 1)."),

@@ -434,6 +434,18 @@ GUIDE += [
                 "expected for that."],
         "good": ["Breaking balls above the team's Bauer units for that pitch."],
     },
+    {
+        "key": "decision_floor", "title": "Decision quality & floor", "who": "hitters",
+        "pages": ["Hitter Profile", "My Hitter Profile", "Hitting Leaderboard"],
+        "shows": "Hitter Profile > Discipline & Decisions, plus the Hitting Leaderboard's Lineup consistency chart. "
+                 "Decision quality = % of your swing/take choices that were the better one for that zone and count. "
+                 "Floor = how good that stays in your worst 10-plate-appearance stretches.",
+        "use": ["A small gap between quality and floor means your approach holds up when you're slumping -- the "
+                "Dodgers' whole lineup looked like that.",
+                "A big gap means decisions slip when results go bad: chasing to get out of it, or taking pitches to hit.",
+                "Needs 10+ plate appearances; fewer than 5 windows is 'early'."],
+        "good": ["A floor within about 5 points of your decision quality, and above the team's average floor."],
+    },
 ]
 BY_KEY = {s["key"]: s for s in GUIDE}
 WHO_LABELS = {"all": "Everyone", "pitchers": "Pitchers", "hitters": "Hitters", "staff": "Coaches & staff"}
