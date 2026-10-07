@@ -816,13 +816,18 @@ def pitcher_game_report_server(input, output, session, app_state):
                 for r in totals["by_pitcher"]
             ]
 
-            return ui_helpers.card(
-                goal_tiles,
-                plain_tiles,
+            # Oct 2026, Ryker: the by-inning / by-pitcher game-goal tables are
+            # coaches only -- a Player login sees just the staff tiles.
+            coach_only = [] if app_state.role_name() == "Player" else [
                 ui.h6("By inning", class_="mt-3"),
                 ui_helpers.render_dict_table(by_inning_rows, empty_message="No innings pitched yet."),
                 ui.h6("By pitcher", class_="mt-3"),
                 ui_helpers.render_dict_table(by_pitcher_rows, empty_message="No pitchers recorded yet."),
+            ]
+            return ui_helpers.card(
+                goal_tiles,
+                plain_tiles,
+                *coach_only,
                 title="Staff Totals", right=_game_label(game),
             )
         finally:
