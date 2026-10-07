@@ -34,7 +34,9 @@ from game_stats import (
 )
 from plate_discipline import compute_hitter_discipline, compute_zone_tier_discipline
 from analytics import profile_queries
-from visualizations.hitter_pitch_chart import at_bat_pitch_locations_chart
+from visualizations.hitter_pitch_chart import at_bat_pitch_locations_chart, swing_decision_chart
+from visualizations.spray_chart import all_bip_spray_chart
+from analytics import decision_value
 # Reusing Hitter Tracking's own zone-score math/heatmap builder and its
 # CONTACT_QUALITY_SCORE/ZONE_LABELS constants -- rather than a second,
 # parallel implementation -- so a batter's "how well do I make contact
@@ -102,6 +104,9 @@ def hitter_game_report_ui():
         ui.output_ui("batter_picker"),
         ui.input_select("hgr_view", "View", choices=VIEWS),
         ui.output_ui("report_body"),
+        # Oct 2026, Ryker: game visuals -- swing decisions map (Approach),
+        # all-balls-in-play spray chart (Batted Balls).
+        ui.output_ui("hgr_visuals"),
         # Oct 2026, Ryker: "go look at each individual at bat and pitch with
         # pitch type, location, as well as pitch result" -- replaces the old
         # all-at-bats chart grid.
@@ -583,6 +588,95 @@ def hitter_game_report_server(input, output, session, app_state):
         if not game_id_raw or not batter_id_raw:
             return None
         return get_batting_pitches(db, int(batter_id_raw), game_id=int(game_id_raw))
+
+    @render.ui
+    def hgr_visuals():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        view = _view()
+        if view not in ("approach", "batted"):
+            return None
+        req("game_select" in input)
+        req("batter_select" in input)
+        db = get_session()
+        try:
+            pitches = _selected_batter_pitches(db)
+            if not pitches:
+                return None
+            if view == "approach":
+                if not any(p.actual_plate_x is not None and p.actual_plate_z is not None for p in pitches):
+                    return None
+                table = decision_value.team_table(db)
+                sc = decision_value.score(table, pitches)
+                graded = [decision_value.credit(table, p) for p in pitches]
+                good = sum(1 for g in graded if g is not None and g[0] > 0)
+                bad = sum(1 for g in graded if g is not None and g[0] <= 0)
+                summary = (f"{good} good, {bad} bad decision{'s' if bad != 1 else ''} · Decision runs {sc['runs']:+.2f}"
+                           if sc["n"] else "No pitches could be graded yet.")
+                return ui.div(
+                    ui.hr(),
+                    ui.p(ui.strong("Swing Decisions"), class_="mb-0"),
+                    ui.p(summary, class_="small mb-1"),
+                    ui.p("Every pitch he saw this game. Filled = swung, open ring = took. Green = good decision, red = "
+                         "bad, valued in runs for that zone spot and count from our own charted games (same table as "
+                         "Decision Score). Hover a pitch for the at-bat, count, pitch type and result.",
+                         class_="text-muted small"),
+                    output_widget("hgr_decision_chart"),
+                )
+            located = [p for p in pitches if p.pitch_outcome == "In Play"
+                       and p.batted_ball_x is not None and p.batted_ball_y is not None]
+            if not located:
+                return None
+            return ui.div(
+                ui.hr(),
+                ui.p(ui.strong("Balls in Play"), class_="mb-0"),
+                ui.p("Where every ball in play went this game -- hits solid, outs open rings. Hover for the exact "
+                     "result, distance and contact quality.", class_="text-muted small"),
+                output_widget("hgr_spray_chart"),
+            )
+        finally:
+            db.close()
+
+    @render_plotly
+    def hgr_decision_chart():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        if _view() != "approach":
+            return None
+        db = get_session()
+        try:
+            pitches = _selected_batter_pitches(db)
+            if not pitches:
+                return None
+            pas = _group_into_plate_appearances(pitches)
+            ab_of = {p.game_pitch_id: k for k, pa in enumerate(pas, start=1) for p in pa}
+            table = decision_value.team_table(db)
+            items = []
+            for p in pitches:
+                if p.actual_plate_x is None or p.actual_plate_z is None:
+                    continue
+                g = decision_value.credit(table, p)
+                items.append((p, g[0] if g is not None else None, ab_of.get(p.game_pitch_id, "—")))
+            if not items:
+                return None
+            hands = {h for h in get_batter_hands(db, pitches).values() if h in ("R", "L")}
+            return swing_decision_chart(items, batter_hand=hands.pop() if len(hands) == 1 else None,
+                                        title=f"{len(items)} pitches seen")
+        finally:
+            db.close()
+
+    @render_plotly
+    def hgr_spray_chart():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        if _view() != "batted":
+            return None
+        db = get_session()
+        try:
+            pitches = _selected_batter_pitches(db)
+            return all_bip_spray_chart(pitches) if pitches else None
+        finally:
+            db.close()
 
     @render.ui
     def contact_by_zone_section():

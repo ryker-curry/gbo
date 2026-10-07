@@ -52,6 +52,7 @@ import plotly.graph_objects as go
 
 from pitch_type_config import get_pitch_color
 from strike_zone import ZONE_HALF_WIDTH, ZONE_BOTTOM, ZONE_TOP
+from plate_discipline import SWING_OUTCOMES
 from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, MUTED_GRAY, TEXT_CREAM
 from visualizations.hitter_graphic import hitter_images, home_plate_shape
 from visualizations.command_charts import HITTER_HEIGHT_FT, HITTER_CENTER_X, CHART_X_EXTENT_FT
@@ -169,6 +170,85 @@ def at_bat_pitch_locations_chart(pa_pitches, batter_hand=None, title=None, zoom=
     apply_gbo_theme(
         fig, title=title or "Pitch Locations", x_title="Plate Side (ft)", y_title="Plate Height (ft)", height=420,
         xaxis=dict(range=[-x_ext, x_ext], gridcolor=GRID_GRAY, zeroline=False, scaleanchor="y", scaleratio=1),
+        yaxis=dict(range=[y_lo, y_hi], gridcolor=GRID_GRAY, zeroline=False),
+        legend=dict(orientation="h", y=-0.15),
+    )
+    return fig
+
+
+# Oct 2026, Ryker: Hitter Game Breakdown "Swing decisions" map -- every
+# pitch he saw in the game. Filled = swung, hollow = took; green = good
+# decision, red = bad, by analytics.decision_value's run credit (the same
+# table as Decision Score). Gray = couldn't be graded (no count / location
+# / a bunt or HBP).
+GOOD_COLOR = "#3DBE6B"
+BAD_COLOR = "#E0524A"
+
+
+def swing_decision_chart(items, batter_hand=None, title=None):
+    """items: [(pitch, credit_or_None, at_bat_no)] for located pitches."""
+    fig = go.Figure()
+    buckets = {}
+    for p, cr, ab in items:
+        swung = p.pitch_outcome in SWING_OUTCOMES
+        if cr is None:
+            key = "Not graded"
+        else:
+            key = ("Good " if cr > 0 else "Bad ") + ("swing" if swung else "take")
+        buckets.setdefault(key, []).append((p, cr, ab, swung))
+    styles = {
+        "Good swing": dict(symbol="circle", color=GOOD_COLOR, line=dict(color="#1E1E1E", width=1)),
+        "Bad swing": dict(symbol="circle", color=BAD_COLOR, line=dict(color="#1E1E1E", width=1)),
+        "Good take": dict(symbol="circle-open", color=GOOD_COLOR, line=dict(color=GOOD_COLOR, width=3)),
+        "Bad take": dict(symbol="circle-open", color=BAD_COLOR, line=dict(color=BAD_COLOR, width=3)),
+        "Not graded": dict(symbol="circle-open", color=MUTED_GRAY, line=dict(color=MUTED_GRAY, width=2)),
+    }
+    for key in ("Good swing", "Bad swing", "Good take", "Bad take", "Not graded"):
+        rows = buckets.get(key)
+        if not rows:
+            continue
+        fig.add_trace(go.Scatter(
+            x=[float(p.actual_plate_x) for p, *_ in rows],
+            y=[float(p.actual_plate_z) for p, *_ in rows],
+            mode="markers", name=key,
+            marker=dict(size=18, opacity=0.95, **styles[key]),
+            customdata=[[ab, p.pa_pitch_number or "—",
+                         f"{p.balls_before}-{p.strikes_before}" if p.balls_before is not None else "—",
+                         p.pitch_type.type_name if p.pitch_type else "Unspecified",
+                         p.pitch_outcome or "—",
+                         f"{cr:+.2f} runs" if cr is not None else "not graded"]
+                        for p, cr, ab, _s in rows],
+            hovertemplate=("At-bat %{customdata[0]}, pitch %{customdata[1]} · %{customdata[2]} count<br>"
+                           "%{customdata[3]} · %{customdata[4]}<br>Decision: %{customdata[5]}<extra></extra>"),
+        ))
+
+    fig.add_shape(type="rect", x0=-ZONE_HALF_WIDTH, x1=ZONE_HALF_WIDTH, y0=ZONE_BOTTOM, y1=ZONE_TOP,
+                  line=dict(color=TEXT_CREAM, width=2), fillcolor="rgba(0,0,0,0)")
+    zone_width, zone_height = 2 * ZONE_HALF_WIDTH, ZONE_TOP - ZONE_BOTTOM
+    for i in (1, 2):
+        gx = -ZONE_HALF_WIDTH + zone_width * i / 3
+        fig.add_shape(type="line", xref="x", yref="y", x0=gx, x1=gx, y0=ZONE_BOTTOM, y1=ZONE_TOP,
+                      line=dict(color=TEXT_CREAM, width=1, dash="dot"))
+        gy = ZONE_BOTTOM + zone_height * i / 3
+        fig.add_shape(type="line", xref="x", yref="y", x0=-ZONE_HALF_WIDTH, x1=ZONE_HALF_WIDTH, y0=gy, y1=gy,
+                      line=dict(color=TEXT_CREAM, width=1, dash="dot"))
+    if batter_hand in ("R", "L"):
+        center_x = -1.75 if batter_hand == "R" else 1.75
+        facing = "right" if center_x > 0 else "left"
+        for img in hitter_images(center_x=center_x, facing=facing, height_ft=HITTER_HEIGHT_FT, ground_y=-0.5,
+                                 batter_hand=batter_hand):
+            fig.add_layout_image(**img)
+    fig.add_shape(**home_plate_shape(half_width_ft=ZONE_HALF_WIDTH, view="catcher"))
+
+    xs = [abs(float(p.actual_plate_x)) for p, *_ in items]
+    zs = [float(p.actual_plate_z) for p, *_ in items]
+    x_ext = max([2.7] + [x + 0.35 for x in xs])
+    y_lo = min([-0.35] + [z - 0.35 for z in zs])
+    y_hi = max([6.0] + [z + 0.35 for z in zs])
+    apply_gbo_theme(
+        fig, title=title or "Swing Decisions", x_title="Plate Side (ft)", y_title="Plate Height (ft)", height=520,
+        xaxis=dict(range=[-x_ext, x_ext], gridcolor=GRID_GRAY, zeroline=False, scaleanchor="y", scaleratio=1,
+                   constrain="domain"),
         yaxis=dict(range=[y_lo, y_hi], gridcolor=GRID_GRAY, zeroline=False),
         legend=dict(orientation="h", y=-0.15),
     )
