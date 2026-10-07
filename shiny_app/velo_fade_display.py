@@ -1,6 +1,6 @@
 """
 GBO -- "Velo fade" block (Oct 2026), shared by Bullpen Dashboard (one
-session), Pitcher Game Report (Pitch Shape / Rapsodo) and Pitcher
+session), Pitcher Game Breakdown (Pitch Shape / Rapsodo) and Pitcher
 Profile's Trends view (one bar per outing). Data: analytics/velo_fade.py.
 """
 
@@ -17,7 +17,7 @@ EXPLAIN = (f"Fastballs only. The line is the trend across the outing; the headli
 
 
 def outing_block(res, title="Velo fade"):
-    head = ui.p(ui.strong(title))
+    head = ui.p(ui.strong(title), "  ", ui_helpers.how_to_link("velo_fade"))
     if not res.get("ok"):
         return ui.div(head, ui.p(f"Only {res['n']} fastball{'s' if res['n'] != 1 else ''} with a velo here -- needs "
                                  f"{velo_fade.MIN_FB} to trend.", class_="text-muted small"))
@@ -41,7 +41,7 @@ def outing_block(res, title="Velo fade"):
 
 def season_block(outings):
     ok = [o for o in outings if o["fade"].get("ok")]
-    head = ui.p(ui.strong("Velo fade by outing"))
+    head = ui.p(ui.strong("Velo fade by outing"), "  ", ui_helpers.how_to_link("velo_fade"))
     if not ok:
         return ui.div(head, ui.p(f"No outing in this range has {velo_fade.MIN_FB}+ Rapsodo fastballs yet.",
                                  class_="text-muted small"))

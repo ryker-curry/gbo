@@ -66,7 +66,7 @@ def at_bat_pitch_locations_chart(pa_pitches, batter_hand=None, title=None, zoom=
 
     located = [p for p in pa_pitches if p.actual_plate_x is not None and p.actual_plate_z is not None]
 
-    # show_intended (Oct 2026, Pitcher Game Report's At-Bat by At-Bat):
+    # show_intended (Oct 2026, Pitcher Game Breakdown's At-Bat by At-Bat):
     # the catcher's called spot as a hollow ring in the pitch's color,
     # joined to where it actually went -- the plan vs the execution.
     # Replaces the pitch-order line (two sets of lines would be noise).

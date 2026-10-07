@@ -3,12 +3,12 @@ GBO -- Pitcher Meeting Report page (Oct 2026).
 
 Ryker: a simpler, one-page report a pitcher can sit down and go through
 with a coach -- printable -- for a single GAME or a whole SEASON. A
-separate page from Pitcher Game Report / Pitcher Profile (those stay the
+separate page from Pitcher Game Breakdown / Pitcher Profile (those stay the
 full-detail tools). Data: analytics/player_report.py. Sheet HTML:
 visualizations/meeting_report_sheet.py.
 
 Access (Ryker's call): staff can open any pitcher's report; a Player
-only his own (self-scoped, same pattern as Pitcher Game Report). Coach
+only his own (self-scoped, same pattern as Pitcher Game Breakdown). Coach
 notes ("Coach's focus") are typed and saved per report
 (models.PlayerReportNote) by NOTE_EDIT_ROLES and print on the sheet;
 players see them read-only.

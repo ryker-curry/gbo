@@ -291,6 +291,33 @@ def pitcher_profile_server(input, output, session, app_state):
             q = q.filter(Player.player_id.in_(ids))
         return q.filter(Player.active.is_(True)).order_by(Player.last_name, Player.first_name).all()
 
+    # Deep link from Data Health "Pitch labels" (Oct 2026): open a pitcher on
+    # a given view. Held until the pickers render with it, then cleared.
+    _pending = {"pid": None, "view": None, "view_pid": None}
+    _pending_tick = reactive.Value(0)
+
+    @reactive.effect
+    def _consume_pitcher_link():
+        link = app_state.deep_link_pitcher()
+        if link is None:
+            return
+        pid, view = link
+        _pending.update(pid=pid, view=view, view_pid=pid)
+        app_state.deep_link_pitcher.set(None)
+        ui.update_select("pp_player_select", selected=str(pid))
+        ui.update_select("pp_view", selected=view)
+        _pending_tick.set(_pending_tick() + 1)
+
+    def _take_pending_view():
+        """The linked view, once the linked pitcher is the one showing."""
+        if _pending["view"] is None:
+            return None
+        cur = input.pp_player_select() if "pp_player_select" in input else None
+        if app_state.role_name() in STAFF_ROLES and cur != str(_pending["view_pid"]):
+            return _pending["view"]          # still switching pitchers -- keep it for the next render
+        v, _pending["view"] = _pending["view"], None
+        return v
+
     def _current_player_id(db):
         if app_state.role_name() == "Player":
             me = _my_player(db, app_state)
@@ -313,7 +340,10 @@ def pitcher_profile_server(input, output, session, app_state):
         if not pitchers:
             return ui_helpers.empty_state("No pitchers to show yet.")
         choices = {str(p.player_id): f"{p.last_name}, {p.first_name}" + (f"  #{p.jersey_number}" if p.jersey_number else "") for p in pitchers}
-        return ui.div(ui.input_select("pp_player_select", "Pitcher", choices=choices, width="320px"), style="margin-bottom:8px;")
+        _pending_tick()
+        sel = str(_pending["pid"]) if _pending["pid"] is not None and str(_pending["pid"]) in choices else None
+        _pending["pid"] = None
+        return ui.div(ui.input_select("pp_player_select", "Pitcher", choices=choices, selected=sel, width="320px"), style="margin-bottom:8px;")
 
     @render.ui
     def pp_filters():
@@ -464,27 +494,24 @@ def pitcher_profile_server(input, output, session, app_state):
             )
             if not game_pitches and not rapsodo_pitches:
                 return None
+            # Oct 2026 reorganization (Ryker approved): grouped menu (optgroups);
+            # the view keys themselves are unchanged.
             view_choices = {
-                "overview": "Overview",
-                "metrics": "Metrics (Physical Profile)",
-                "tunneling": "Tunneling+",
-                "results": "Results",
-                "zone": "Zone",
-                "command": "Command & Execution",
-                "arsenal": "Arsenal",
-                "count_leverage": "Count Leverage",
-                "sequencing": "Sequencing",
-                "arsenal_plan": "Arsenal Plan",
-                "trends": "Trends",
+                "Summary": {"overview": "Overview", "trends": "Trends"},
+                "Stuff & Shape": {"metrics": "Metrics (Physical Profile)", "arsenal": "Arsenal",
+                                  "tunneling": "Tunneling+", "arsenal_plan": "Arsenal Plan"},
+                "Command": {"command": "Command & Execution", "zone": "Zone"},
+                "Usage & Results": {"results": "Results", "count_leverage": "Count Leverage",
+                                    "sequencing": "Sequencing"},
             }
             # Oct 2026, Ryker: "i don't want guys to see it" -- the
-            # Fastball Shape Check is a staff-only data-cleanup tool.
+            # label checks are staff-only data-cleanup tools.
             if app_state.role_name() in STAFF_ROLES:
-                view_choices["fastball_shape"] = "Fastball Shape Check"
-                view_choices["pitch_type_check"] = "Pitch Type Check"
+                view_choices["Staff tools"] = {"fastball_shape": "Fastball Shape Check",
+                                               "pitch_type_check": "Pitch Type Check"}
             return ui.div(
                 ui.hr(),
-                ui.input_select("pp_view", "View", choices=view_choices),
+                ui.input_select("pp_view", "View", choices=view_choices, selected=_take_pending_view()),
             )
         finally:
             db.close()
@@ -600,6 +627,7 @@ def pitcher_profile_server(input, output, session, app_state):
         if not items:
             return None
         return ui_helpers.card(
+            ui_helpers.how_to_link("outperform"),
             *items,
             ui.p("From Paradigm's \"Outperform Your Stuff\": arms without big stuff win with an unusual release, "
                  "command and mix. Release = his median release point vs. the rest of our staff (percentile; tagged "
@@ -896,7 +924,7 @@ def pitcher_profile_server(input, output, session, app_state):
         except Exception:
             return []
         rows = ivb_expected.summary_by_type(scored, FASTBALL_TYPES)
-        title = ui.p(ui.strong("IVB Over Expected (ride vs. his arm slot)"))
+        title = ui.p(ui.strong("IVB Over Expected (ride vs. his arm slot)"), "  ", ui_helpers.how_to_link("ivb_expected"))
         if not rows:
             reason = ("Set his height on the Players page -- the arm angle needs it."
                       if player.height_in is None else "Not enough Rapsodo readings yet.")
@@ -1259,7 +1287,7 @@ def pitcher_profile_server(input, output, session, app_state):
                     children.append(ui.p(
                         ui.strong("Too far apart to tunnel: "), f"{tc['reason']}. It can't look like the {primary_fb} "
                         "out of the hand -- it works as a change of speed / shape instead, so judge it on that, "
-                        "not on these tunnel numbers.", class_="small", style="color:var(--gbo-status-watch);"))
+                        "not on these tunnel numbers.", " ", ui_helpers.how_to_link("tunnel_check"), class_="small", style="color:var(--gbo-status-watch);"))
                 children.append(ui_helpers.render_kpi_cards([
                     {"label": "Tunnel", "value": f"{summary['tunnel_in']}\""},
                     {"label": "Plate", "value": f"{summary['plate_in']}\""},
@@ -1981,7 +2009,7 @@ def pitcher_profile_server(input, output, session, app_state):
             early = any(r.get("early") for r in prof)
             sections += [
                 ui.hr(),
-                ui.p(ui.strong("Outcome profile: what pitches shaped like his do"), " ",
+                ui.p(ui.strong("Outcome profile: what pitches shaped like his do"), "  ", ui_helpers.how_to_link("arsenal_extras"), " ",
                      ui.span("early", class_="badge bg-secondary") if early else None),
                 ui.p(f"For each pitch, the {outcome_profile.K} most similar game pitches (velo, ride, run) thrown by OTHER "
                      "pitchers on our staff with a Rapsodo reading and a charted result -- what they got. Whiff % is of "
@@ -2411,7 +2439,7 @@ def pitcher_profile_server(input, output, session, app_state):
         if not _seq_gate():
             return None
         return ui.div(
-            ui.p(ui.strong("Sequencing: what follows what"), style="margin-bottom:0;"),
+            ui.p(ui.strong("Sequencing: what follows what"), "  ", ui_helpers.how_to_link("sequencing"), style="margin-bottom:0;"),
             ui.p("Each row is two back-to-back pitches to the same hitter (first → second), graded on what the SECOND "
                  "pitch did. Share = of everything he threw right after the first pitch, how often it was this one. "
                  "CSW % = called strikes + whiffs; Whiff % = of swings; Chase % = swings at located pitches outside "
@@ -2721,7 +2749,7 @@ def pitcher_profile_server(input, output, session, app_state):
             db.close()
 
     def _team_command_plus_baselines(db):
-        """Same all-time, all-games team population Pitcher Game Report's
+        """Same all-time, all-games team population Pitcher Game Breakdown's
         Command+ uses (see that module's docstring) -- not scoped to
         this page's own filters, a stable roster-wide reference. Returns
         command_metrics.team_command_plus_baselines()'s {"pooled": (mean,
@@ -3052,7 +3080,7 @@ def pitcher_profile_server(input, output, session, app_state):
 
             # Command+ by pitch type (Ryker, Sept 2026: "i want command+
             # by pitch type to show up in pitcher profile command and
-            # execution" -- same table/column Pitcher Game Report already
+            # execution" -- same table/column Pitcher Game Breakdown already
             # has, added here too since Pitcher Profile's own window can
             # span multiple games/a date range, which is exactly the
             # larger sample this needs to be a trustworthy read (a
@@ -3372,7 +3400,7 @@ def pitcher_profile_server(input, output, session, app_state):
         if not items:
             items = [ui.p("No slider, sweeper or curveball with 5+ readings in this range.", class_="text-muted small")]
         return ui_helpers.card(
-            hint, *items,
+            ui_helpers.how_to_link("slider_fit"), hint, *items,
             ui.p(f"Types by shape: gyro = within {slider_fit.GYRO_RUN:.0f}\" side to side and "
                  f"{slider_fit.CURVE_IVB:.0f} to +{slider_fit.GYRO_IVB[1]:.0f}\" ride; traditional slider = 5-10\" "
                  "glove-side; sweeper = "

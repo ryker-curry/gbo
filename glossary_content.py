@@ -60,6 +60,7 @@ METRICS = [
 ]
 
 TUNNELING = [
+    ("Too far apart to tunnel", "A pitch more than about 20 in. of movement or 10 mph away from his fastball can't look like it out of the hand. It still works -- as a change of speed or shape -- so judge it on results, not tunnel numbers."),
     ("Tunnel", "How far apart (in inches) two pitches' flight paths still are about 167 milliseconds before THIS pitch crosses the plate -- roughly the moment a hitter has to commit to swinging. Measured at a fixed TIME before the plate rather than a fixed distance, so it stays comparable across pitches thrown at different speeds (a fastball and a changeup reach that 167ms mark at different distances from the plate, since the changeup is still in the air longer). Reference: Baseball Prospectus's 2017 MLB-wide study (Pavlidis/Long/Judge, \"Introducing Pitch Tunnels\") found a league average of about 10.0\" here, measured at their own fixed 23.8-foot point -- not a direct apples-to-apples comparison (different measuring point, MLB not Division II), but a rough sense of scale: single-digit inches is tight, well into the teens is loose."),
     ("Plate", "How far apart (in inches) the two pitches actually end up when they cross the front of the plate. Reference: BP's study found a league average of about 18.7\" here -- same comparability caveats as Tunnel above."),
     ("Late Break", "Plate minus Tunnel -- how much separation got added AFTER the decision point, once it's too late for the hitter to change his mind. Reference: BP's study found a league average of about 2.6\" here."),
@@ -91,6 +92,9 @@ ZONE = [
 ]
 
 ARSENAL = [
+    ("Arsenal Breadth+", "How much speed and movement range his arsenal covers, weighted by how often he throws each pitch. 100 = our staff average, 25 points = one SD. Descriptive, not a grade."),
+    ("Outcome profile", "For each pitch: the whiff %, CSW % and ground-ball % that the 60 most similar pitches (velo, ride, run) thrown by other staff pitchers got in games, next to the staff rate and his own."),
+    ("Slider type", "Gyro (tight, little sweep), traditional (5-10 in. glove-side), sweeper (10 in.+), carry sweeper (sweeper with 3 in.+ ride over expected), curveball (-6 in. ride or less), slurve (curveball depth plus 10 in.+ sweep)."),
     ("Usage % / Reliable", "Usage % is that pitch type's share of total pitches thrown. \"Reliable\" means this window has at least the minimum pitch count needed for that pitch type's Stuff+/Location+/Pitching+ grade to hold up -- below it, the grade still shows but can swing wildly with every new pitch."),
     ("Strike % / Called Strike % / FPS %", "Strike% is any strike (swing or take) as a share of all pitches of that type. Called Strike% narrows that to takes the umpire rang up. FPS% (First Pitch Strike%) looks only at the very first pitch of each plate appearance."),
     ("Swing % / Zone Swings", "Swing% is how often that pitch type gets swung at, out of every pitch thrown. Zone Swings counts how many of those swings came against a pitch that was actually located in the strike zone."),
@@ -110,7 +114,7 @@ ARSENAL = [
 ]
 
 
-# Pitching Staff Leaderboard (Sept 2026, Ryker: "have a glossary
+# Pitching Leaderboard (Sept 2026, Ryker: "have a glossary
 # explaining each stat. pull definitions for stats from trustworthy
 # sources, fangraphs, mlb.com, pitchprofiler."). Traditional-stat
 # entries below are written from real definitions pulled from MLB.com's
@@ -153,7 +157,7 @@ LEADERBOARD = [
 ]
 
 
-# Hitter Game Report / Hitter Profile (Sept 2026, Ryker: "add glossary
+# Hitter Game Breakdown / Hitter Profile (Sept 2026, Ryker: "add glossary
 # that explains all hitting stats"). Traditional-stat entries below are
 # written from real definitions pulled from MLB.com's own glossary
 # (mlb.com/glossary -- AVG, OBP, SLG, OPS, ISO) and FanGraphs'
@@ -232,6 +236,9 @@ HITTING_BATTED_BALL = [
 ]
 
 HITTING_SITUATIONAL = [
+    ("Count by count", "Run value per 100 pitches in each of the 12 counts, split fastball vs breaking/offspeed. Starred counts (2-0, 3-1, 2-1, 1-1) are where hitters who got called up separated themselves."),
+    ("Early win %", "Share of plate appearances where you got to a hitter's count (more balls than strikes) or put pitch 1 or 2 in play with barreled / solid contact."),
+    ("Run leverage", "GBO's own measure of how much an outs/bases spot swings runs, from our charted games -- 1.0 = an average plate appearance. High leverage = 1.5+ or late & close (7th inning on, within 2 runs)."),
     ('QAB / QAB %', "Quality At-Bat: an at-bat that made a positive team contribution, credited automatically when any of several things happened -- a walk, HBP, sacrifice bunt or bunt hit, any RBI (with 2 or fewer outs), moving a runner station-to-station with a productive out, a hard-hit ball in play, an at-bat of 8+ pitches, or battling back to see 4+ more pitches after falling behind 0-2. Definition follows Brian Cain's published Quality At-Bat criteria. QAB % is QAB divided by PA. Higher is better."),
     ('Ahead / Even / Behind (count leverage)', 'AVG/OBP/SLG/wOBA split by the ball-strike count at the moment the at-bat ended: Ahead = the hitter had more balls than strikes (the count favored them), Behind = more strikes than balls (the count favored the pitcher), Even = equal.'),
     ('RISP AVG', 'Batting average specifically in at-bats with a Runner In Scoring Position (a runner on 2nd and/or 3rd).'),

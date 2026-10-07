@@ -59,7 +59,7 @@ def _fmt_pct(value):
 @module.ui
 def analytics_ui():
     return ui.div(
-        ui_helpers.page_header("Player Stats"),
+        ui_helpers.page_header("Season Stats"),
         ui.output_ui("player_picker"),
         ui.output_ui("report_body"),
         ui_helpers.page_footer(),

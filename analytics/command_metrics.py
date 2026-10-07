@@ -314,7 +314,7 @@ def game_pitches_command_view(game_pitches, throws):
     Target hover text was showing "Pitch #52" using GamePitch's own
     pitch_sequence, which is the game-wide count across BOTH pitchers,
     not this pitcher's own count -- same "specific to that pitcher"
-    complaint already fixed elsewhere on Pitcher Game Report) is
+    complaint already fixed elsewhere on Pitcher Game Breakdown) is
     computed here as each pitch's own 1-based position within ITS GAME,
     in pitch_sequence order -- grouped by game_id first so (a) two
     pitchers who both threw in the same game are numbered

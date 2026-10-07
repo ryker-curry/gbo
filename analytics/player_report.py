@@ -5,7 +5,7 @@ Ryker: "build reports to where a player could sit down and go through it
 like in a meeting style with a coach ... print off a sheet and be able to
 see everything important and have a better understanding of what it all
 means and how you as a pitcher performed and what you need to work on."
-A separate, simpler one-page companion to Pitcher Game Report and
+A separate, simpler one-page companion to Pitcher Game Breakdown and
 Pitcher Profile -- not a replacement for either.
 
 Decisions agreed with Ryker (AskUserQuestion, Oct 2026):

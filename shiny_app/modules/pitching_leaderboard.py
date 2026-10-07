@@ -1,5 +1,5 @@
 """
-GBO -- Pitching Staff Leaderboard (Sept 2026, Ryker: "create a pitching
+GBO -- Pitching Leaderboard (Sept 2026, Ryker: "create a pitching
 staff leaderboard with both coaches and players can see. be able to
 click a specific stat and it rearranges them best to worst. allow the
 coach to pick what stats they want to see. have a glossary explaining
@@ -127,7 +127,7 @@ def _fmt_stat(key, value):
 def pitching_leaderboard_ui():
     return ui.div(
         ui.div(
-            ui.h4("Pitching Staff Leaderboard", class_="gbo-section-title", style="margin-bottom:0;"),
+            ui.h4("Pitching Leaderboard", class_="gbo-section-title", style="margin-bottom:0;"),
             ui_helpers.glossary_link("lb_glossary", "Stats Glossary"),
             style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
         ),

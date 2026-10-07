@@ -926,7 +926,7 @@ def _pitching_staff_section(db, players, window):
     ))
 
     sections.append(ui.hr())
-    sections.append(ui.h5("Pitching Staff Leaderboard", class_="gbo-section-title"))
+    sections.append(ui.h5("Pitching Leaderboard", class_="gbo-section-title"))
     sections.append(ui_helpers.render_dict_table(
         [
             {
@@ -944,7 +944,7 @@ def _pitching_staff_section(db, players, window):
         empty_message="No pitchers with charted innings yet.",
     ))
     sections.append(ui.p(
-        "See Bullpen Dashboard / Pitcher Game Report in the navigation for full pitch-by-pitch detail.",
+        "See Bullpen Dashboard / Pitcher Game Breakdown in the navigation for full pitch-by-pitch detail.",
         class_="text-muted small",
     ))
 
@@ -1013,7 +1013,7 @@ def _hitter_staff_section(db, players, window):
         empty_message="No hitters with charted plate appearances yet.",
     ))
     sections.append(ui.p(
-        "See Hitter Tracking / Hitter Game Report in the navigation for full at-bat detail.",
+        "See Hitter Tracking / Hitter Game Breakdown in the navigation for full at-bat detail.",
         class_="text-muted small",
     ))
 

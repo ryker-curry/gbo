@@ -113,22 +113,22 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             NavPage("opponent_teams", "Opponent Teams", "people"),
         ]))
         sections.append(NavSection("Analytics", [
-            NavPage("analytics", "Player Stats", "graph-up"),
+            NavPage("analytics", "Season Stats", "graph-up"),
             # Oct 2026, Ryker: whole-team report (pitching + hitting) for a
             # game, series, season or any dates, with every player's own
             # report one click away. Also emailed to coaches after each game.
             NavPage("team_game_report", "Team Game Report", "people"),
-            NavPage("pitcher_game_report", "Pitcher Game Report", "file-text"),
+            NavPage("pitcher_game_report", "Pitcher Game Breakdown", "file-text"),
             # Oct 2026, Ryker: one-page, printable report to go through
             # with a pitcher in a meeting (game or season).
             NavPage("pitcher_meeting_report", "Pitcher Report", "printer"),
-            NavPage("hitter_game_report", "Hitter Game Report", "trophy"),
+            NavPage("hitter_game_report", "Hitter Game Breakdown", "trophy"),
             # Oct 2026: one-page printable report for hitters (game or season).
             NavPage("hitter_meeting_report", "Hitter Report", "printer"),
             # Filterable per-player deep dive (Aug 2026, Stat Lab plan) --
             # Stuff+/Location+/Pitching+ grading, physical charts, Command
             # Target Zones, all filterable by date range/pitch type/
-            # opponent scope, vs. Pitcher Game Report's single-outing
+            # opponent scope, vs. Pitcher Game Breakdown's single-outing
             # snapshot above. Same key reused for the Player-facing 'My
             # Pitcher/Hitter Profile' entries below -- one module,
             # self-scoped by role, same pattern as player_profile.py.
@@ -141,7 +141,7 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             # by any stat, coach/player-configurable columns. Also added
             # to My Development below (unconditionally, not just for
             # pitcher-flagged players) so a Player role sees it too.
-            NavPage("pitching_leaderboard", "Pitching Staff Leaderboard", "trophy"),
+            NavPage("pitching_leaderboard", "Pitching Leaderboard", "trophy"),
             # Oct 2026, Ryker: same board for hitters.
             NavPage("hitting_leaderboard", "Hitting Leaderboard", "trophy"),
         ]))
@@ -185,20 +185,20 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
         if is_pitcher_player:
             my_dev_pages.append(NavPage("player_bullpens", "My Bullpens", "trophy"))
             my_dev_pages.append(NavPage("pitcher_profile", "My Pitcher Profile", "graph-up-arrow"))
-            # My Game Report (Sept 2026, Ryker: players should be able to
+            # My Game Breakdown (Sept 2026, Ryker: players should be able to
             # see game reports for themselves) -- same shared-module,
             # self-scoped pattern as My Pitcher/Hitter Profile just above:
             # pitcher_game_report.py/hitter_game_report.py each detect
             # role_name() == "Player" and restrict the game/pitcher(batter)
             # pickers to this player's own outings instead of showing a
             # roster-wide picker.
-            my_dev_pages.append(NavPage("pitcher_game_report", "My Game Report", "file-text"))
+            my_dev_pages.append(NavPage("pitcher_game_report", "My Game Breakdown", "file-text"))
             my_dev_pages.append(NavPage("pitcher_meeting_report", "Pitcher Report", "printer"))  # Oct 2026, Ryker: renamed from Meeting Report, no "My"
             my_dev_pages.append(NavPage("weekly_report", "My Weekly Report", "calendar-week"))
         else:
             my_dev_pages.append(NavPage("player_hitting", "My Hitting", "trophy"))
             my_dev_pages.append(NavPage("hitter_profile", "My Hitter Profile", "graph-up-arrow"))
-            my_dev_pages.append(NavPage("hitter_game_report", "My Game Report", "file-text"))
+            my_dev_pages.append(NavPage("hitter_game_report", "My Game Breakdown", "file-text"))
             my_dev_pages.append(NavPage("hitter_meeting_report", "Hitter Report", "printer"))
             my_dev_pages.append(NavPage("weekly_report", "My Weekly Report", "calendar-week"))
             # Oct 2026: published advance scouting reports, read-only.
@@ -210,7 +210,7 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
         # both (Analytics section above). Pages not in the nav aren't
         # rendered at all, so this is the access gate too.
         if is_pitcher_player:
-            my_dev_pages.append(NavPage("pitching_leaderboard", "Pitching Staff Leaderboard", "trophy"))
+            my_dev_pages.append(NavPage("pitching_leaderboard", "Pitching Leaderboard", "trophy"))
         else:
             my_dev_pages.append(NavPage("hitting_leaderboard", "Hitting Leaderboard", "trophy"))
         sections.append(NavSection("My Development", my_dev_pages))

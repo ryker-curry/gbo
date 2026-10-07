@@ -5,7 +5,7 @@ pitcher_profile.py: a filterable, per-hitter deep dive across counting
 stats/slash line, plate discipline (overall and by zone tier), batted-
 ball profile, situational splits, and contact quality by zone/pitch
 type -- all from the exact same game_stats.py/plate_discipline.py
-functions Analytics/My Stats and Hitter Game Report already use, just
+functions Analytics/My Stats and Hitter Game Breakdown already use, just
 scoped to this page's own date-range/pitch-type/game-scope filters
 instead of one game_id. No Stuff+/Location+/Pitching+ here -- those
 are pitcher-only grades (see pitcher_profile.py); a hitter's "how am I
@@ -242,21 +242,17 @@ def hitter_profile_server(input, output, session, app_state):
                 ui.hr(),
                 ui.input_select(
                     "hp_view", "View",
+                    # Oct 2026 reorganization (Ryker approved): grouped menu;
+                    # Plate Discipline + Swing Decisions and Situational +
+                    # First Pitch & Two Strikes are now one view each
+                    # (_MERGED below), the rest keep their keys.
                     choices={
-                        "overview": "Overview",
-                        "discipline": "Plate Discipline",
-                        "batted_ball": "Batted Ball",
-                        "situational": "Situational & Count Leverage",
-                        "hot_zones": "Hot Zones",
-                        "swing_decisions": "Swing Decisions",
-                        "attack": "How Pitchers Attack Me",
-                        "pitch_type": "Results by Pitch Type",
-                        "pitch_shape": "Results by Pitch Shape",
-                        "fp_two": "First Pitch & Two Strikes",
-                        "ranks": "Team Percentile Ranks",
-                        "trends": "Trends",
-                        "contact_zone": "Contact Quality by Zone",
-                        "spray_chart": "Spray Chart",
+                        "Summary": {"overview": "Overview", "ranks": "Team Percentile Ranks", "trends": "Trends"},
+                        "Approach": {"discipline": "Discipline & Decisions", "situational": "Counts & Situations"},
+                        "Matchups": {"attack": "How Pitchers Attack Me", "pitch_type": "Results by Pitch Type",
+                                     "pitch_shape": "Results by Pitch Shape"},
+                        "Contact": {"batted_ball": "Batted Ball", "hot_zones": "Hot Zones",
+                                    "contact_zone": "Contact Quality by Zone", "spray_chart": "Spray Chart"},
                     },
                 ),
             )
@@ -294,7 +290,7 @@ def hitter_profile_server(input, output, session, app_state):
             db.close()
         mine = shape_results.table(pitches, rap, pitchers)
         tm = shape_results.table(team_flat, rap, pitchers)
-        head = [ui.p(ui.strong("Results by Pitch Shape"), style="margin-bottom:0;"),
+        head = [ui.p(ui.strong("Results by Pitch Shape"), "  ", ui_helpers.how_to_link("pitch_shape"), style="margin-bottom:0;"),
                 ui.p("What kinds of pitches you handle and which ones beat you, by how the pitch actually moved. Uses "
                      "pitches with a Rapsodo reading -- our own pitchers in intrasquads -- so it's what you've seen in "
                      "practice games. Riding fastball = 16\"+ of ride; sinking/running = 10\" or less, or big arm-side "
@@ -340,7 +336,7 @@ def hitter_profile_server(input, output, session, app_state):
         if not _insight_gate("trends"):
             return None
         res = _zw()
-        head = ui.p(ui.strong("In-zone whiff check"), style="margin:16px 0 0;")
+        head = ui.p(ui.strong("In-zone whiff check"), "  ", ui_helpers.how_to_link("zone_whiff"), style="margin:16px 0 0;")
         if not res["points"]:
             return ui.div(head, ui.p(f"Needs {zone_whiff.WINDOW}+ swings at strikes in this range ({res['n']} so far).",
                                      class_="text-muted small"))
@@ -673,7 +669,7 @@ def hitter_profile_server(input, output, session, app_state):
         rows = hitter_counts.count_table(pitches, team_flat)
         out += [
             ui.hr(),
-            ui.p(ui.strong("Count by count"), style="margin-bottom:0;"),
+            ui.p(ui.strong("Count by count"), "  ", ui_helpers.how_to_link("counts_situations"), style="margin-bottom:0;"),
             ui.p("Run value per 100 pitches in each count (+ = good for you), split fastballs vs. breaking/offspeed, "
                  "next to the team. ★ = the counts that separated hitters who got called up from AAA (2-0, 3-1, 2-1, "
                  "1-1) -- especially on offspeed. Small samples per count: read the pitch counts.",
@@ -789,7 +785,7 @@ def hitter_profile_server(input, output, session, app_state):
 
     # -------------------------------------------------------------------
     # Contact Quality by Zone / Pitch Type -- same reused Hitter Tracking
-    # zone-score math/heatmap builder Hitter Game Report already uses,
+    # zone-score math/heatmap builder Hitter Game Breakdown already uses,
     # just scoped by this page's own filters instead of one game_id. Own
     # top-level output (own render.ui/render_plotly split), same reason
     # as hitter_game_report.py: a render_plotly output needs its own
@@ -929,6 +925,13 @@ def hitter_profile_server(input, output, session, app_state):
     _INSIGHT_VIEWS = ("swing_decisions", "attack", "pitch_type", "fp_two", "ranks", "trends")
     _HAND_CHOICES = {"all": "All pitchers", "R": "vs RHP", "L": "vs LHP"}
 
+    # Oct 2026 reorganization: views folded into another view's page.
+    _MERGED = {"discipline": "swing_decisions", "situational": "fp_two"}
+
+    def _insight_view():
+        v = input.hp_view()
+        return _MERGED.get(v, v)
+
     def _insight_gate(view):
         if not app_state.is_authenticated():
             return False
@@ -936,7 +939,7 @@ def hitter_profile_server(input, output, session, app_state):
         if role != "Player" and role not in STAFF_ROLES:
             return False
         req("hp_view" in input)
-        return input.hp_view() == view
+        return _insight_view() == view
 
     def _hand_pitches(db, pitches, input_id):
         choice = input[input_id]() if input_id in input else "all"
@@ -999,7 +1002,7 @@ def hitter_profile_server(input, output, session, app_state):
         if not app_state.is_authenticated():
             return None
         req("hp_view" in input)
-        view = input.hp_view()
+        view = _insight_view()
         if view not in _INSIGHT_VIEWS:
             return None
         if not _insight_gate(view):
@@ -1161,7 +1164,7 @@ def hitter_profile_server(input, output, session, app_state):
             kpis.append({"label": "Team rank", "value": f"{rank} of {len(others) + 1}"})
         return ui.div(
             ui.hr(),
-            ui.p(ui.strong("Decision runs: the same choices, valued in runs"), style="margin-bottom:0;"),
+            ui.p(ui.strong("Decision runs: the same choices, valued in runs"), "  ", ui_helpers.how_to_link("decision_runs"), style="margin-bottom:0;"),
             ui.p("Every swing and take is worth what swings and takes in that zone and count are worth across all of our "
                  "charted games (run expectancy). Your credit is the value of what you did minus the value of the other "
                  "choice -- so taking a heater down the middle at 3-1 costs more than at 0-2. + = good decision. "

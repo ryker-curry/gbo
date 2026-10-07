@@ -413,7 +413,7 @@ K_OUTCOMES = ("K", "K (Looking)")
 # Tracking's practice-session options. Scored as weak contact wherever
 # contact_quality feeds a rate stat or a quality score (game_stats.py's
 # per-pitch-type Weak %, and hitter_tracking.py's CONTACT_QUALITY_SCORE
-# used by the Hitter Game Report/Profile zone-quality heatmaps on game
+# used by the Hitter Game Breakdown/Profile zone-quality heatmaps on game
 # data), per Ryker's call -- not its own 8th bucket.
 CONTACT_QUALITY_OPTIONS = ["Barreled/Squared Up", "Solid", "Weak", "Jammed", "Off the End", "Clipped", "Miss", "Bunt"]
 
