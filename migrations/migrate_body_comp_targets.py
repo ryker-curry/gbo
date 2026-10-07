@@ -26,7 +26,7 @@ def main():
                 updated_at TIMESTAMP NOT NULL DEFAULT NOW()
             )
         """))
-    print("Done. Set targets on Assessments -> Body comp ring targets.")
+    print("Done. Set targets on Assessments -> Body comp targets (proposal).")
 
 
 if __name__ == "__main__":

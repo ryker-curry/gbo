@@ -1889,10 +1889,11 @@ class ArsenalTarget(Base):
 
 
 class BodyCompTarget(Base):
-    """Team-wide Body Comp ring target for one measure (Oct 2026, Ryker:
-    "percentiles doesn't necessarily make sense" for body comp). The ring
-    scores value / target (capped at 100) instead of value / team max;
-    with no row, bucket_system falls back to the roster median. One row
+    """Team-wide Body Comp target for one measure (Oct 2026, Ryker:
+    "percentiles doesn't necessarily make sense" for body comp). Feeds the
+    PROPOSED target score (value / target, capped at 100) staff see next to
+    the official value / team max score; with no row, bucket_system falls
+    back to the roster median. One row
     per test_name (Body Weight, Skeletal Muscle Mass)."""
     __tablename__ = "body_comp_targets"
 

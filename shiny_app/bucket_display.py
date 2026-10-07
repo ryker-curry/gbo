@@ -604,7 +604,29 @@ def build_raw_metrics(metrics_dict):
     )
 
 
-def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact_mobility=False):
+def body_comp_proposal(bucket_data):
+    """Oct 2026 (Ryker): staff-only look at the PROPOSED target-based Body
+    Comp score next to the official one -- not used in any ring or Total."""
+    score = bucket_data.get("body_comp_target_score")
+    metrics = bucket_data.get("body_comp_target_metrics") or {}
+    if score is None or not metrics:
+        return None
+    parts = []
+    for name, d in metrics.items():
+        if d.get("percentile") is None or not d.get("target"):
+            continue
+        src = "staff target" if d.get("target_source") == "set" else "team median"
+        parts.append(f"{name} {d['raw']:.1f} of {d['target']:.1f}{d['unit'] or ''} ({src}) = {d['percentile']}")
+    return ui.div(
+        ui.p(ui.strong(f"Target version (proposal): {score}"), " · staff only, not in the ring or Total",
+             class_="small mb-1"),
+        ui.p(" · ".join(parts) + ". Scores each measure as % of a target, capped at 100, instead of % of the "
+             "team's best. Targets: Assessments → Body comp targets (proposal).", class_="text-muted small"),
+        class_="gbo-proposal", style="border-left:3px solid var(--gbo-status-watch);padding:6px 10px;margin:8px 0 14px;",
+    )
+
+
+def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact_mobility=False, show_proposal=False):
     """Sub-group score headers + a bar chart per sub-group, for Body
     Comp, Power, Strength, and (if present) Speed/Capacity/Mobility/
     Shoulder Health -- all reference-only sections shown exactly when
@@ -628,6 +650,10 @@ def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact
     bar_metrics = {name: v for name, v in body_comp_metrics.items() if name in BODY_COMP_BAR_NAMES}
     raw_only_metrics = {name: v for name, v in body_comp_metrics.items() if name not in BODY_COMP_BAR_NAMES}
     sections.append(build_metric_bars(bar_metrics, f"{key_prefix}_body_comp", mode=mode, is_pitcher=is_pitcher, changes=changes))
+    if show_proposal:
+        prop = body_comp_proposal(bucket_data)
+        if prop is not None:
+            sections.append(prop)
     raw_ui = build_raw_metrics(raw_only_metrics)
     if raw_ui is not None:
         sections.append(raw_ui)
@@ -704,9 +730,10 @@ def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact
     return [g for g in groups if g[2]]
 
 
-def build_full_breakdown(bucket_data, key_prefix, mode="dark", changes=None, compact_mobility=False):
+def build_full_breakdown(bucket_data, key_prefix, mode="dark", changes=None, compact_mobility=False, show_proposal=False):
     """Every breakdown group, one after another (see breakdown_groups)."""
-    groups = breakdown_groups(bucket_data, key_prefix, mode=mode, changes=changes, compact_mobility=compact_mobility)
+    groups = breakdown_groups(bucket_data, key_prefix, mode=mode, changes=changes, compact_mobility=compact_mobility,
+                              show_proposal=show_proposal)
     return ui.div(*[el for _, _, els in groups for el in els])
 
 

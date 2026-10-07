@@ -1802,7 +1802,8 @@ def compute_movement_flag(session, player_id, mobility_rom_report):
 # ---------------------------------------------------------------------------
 # Body Comp targets (Oct 2026, Ryker: "percentiles doesn't necessarily make
 # sense" for body comp -- the heaviest guy was always 100 and more always
-# scored better). Body Weight and Skeletal Muscle Mass now score as
+# scored better). PROPOSAL, shown to staff next to the official score
+# (which is unchanged): Body Weight and Skeletal Muscle Mass scored as
 # progress toward a team-wide target: min(100, value / target * 100).
 # Past the target adds nothing. Target = the staff-set value
 # (models.BodyCompTarget, edited on Assessments) or, with none set, the
@@ -2058,14 +2059,15 @@ def compute_bucket_system(session, player_id, season_label=None, _cache=None, _u
     # entered fields (BODY_COMP_DISPLAY_METRICS), so players see Body
     # Fat Mass and Percent Body Fat too even though those 2 don't
     # affect body_comp_score.
-    # Oct 2026: Body Weight / SMM score toward a target (see
-    # apply_body_comp_targets), not value / team max.
-    _bc_targets = body_comp_targets(session, _cache=_cache)
-    body_comp_score_metrics = apply_body_comp_targets(
-        compute_metric_percentiles(session, player_id, BODY_COMP_METRICS, _cache=_cache, _units=_units), _bc_targets)
+    body_comp_score_metrics = compute_metric_percentiles(session, player_id, BODY_COMP_METRICS, _cache=_cache, _units=_units)
     body_comp_score = average_percentiles(body_comp_score_metrics)
-    body_comp_metrics = apply_body_comp_targets(
-        compute_metric_percentiles(session, player_id, BODY_COMP_DISPLAY_METRICS, _cache=_cache, _units=_units), _bc_targets)
+    body_comp_metrics = compute_metric_percentiles(session, player_id, BODY_COMP_DISPLAY_METRICS, _cache=_cache, _units=_units)
+    # Oct 2026, Ryker: target-based Body Comp is a PROPOSAL shown next to
+    # the official score (staff only) -- the official ring and Total above
+    # stay value / team max. See apply_body_comp_targets.
+    body_comp_target_metrics = apply_body_comp_targets(
+        {n: dict(m) for n, m in body_comp_score_metrics.items()}, body_comp_targets(session, _cache=_cache))
+    body_comp_target_score = average_percentiles(body_comp_target_metrics)
 
     # Power (5 sub-groups)
     power_subgroup_scores = {}
@@ -2137,6 +2139,8 @@ def compute_bucket_system(session, player_id, season_label=None, _cache=None, _u
 
     return {
         "body_comp_score": body_comp_score,
+        "body_comp_target_score": body_comp_target_score,
+        "body_comp_target_metrics": body_comp_target_metrics,
         "body_comp_metrics": body_comp_metrics,
         "power_score": power_score,
         "power_subgroup_scores": power_subgroup_scores,
