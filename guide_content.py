@@ -422,6 +422,18 @@ GUIDE += [
                 "Mix changing the 2nd / 3rd time through tells hitters what's coming late."],
         "good": ["A plan built on his best pitch being in zones we can lay off."],
     },
+    {
+        "key": "bauer_units", "title": "Bauer units", "who": "pitchers",
+        "pages": ["Pitcher Profile", "My Pitcher Profile", "Bullpen Dashboard"],
+        "shows": "Spin divided by velo (rpm per mph). Spin climbs when you throw harder, so this separates natural "
+                 "spin ability from arm speed. In the Metrics table (with a vs-team column) and on Trends.",
+        "use": ["Most telling on breaking balls: high Bauer units = a natural spinner.",
+                "On Trends: spin up with Bauer units flat = you're throwing harder; Bauer units up = you're actually "
+                "spinning it better.",
+                "On fastballs it doesn't say how much of the spin moves the ball -- use spin efficiency and IVB over "
+                "expected for that."],
+        "good": ["Breaking balls above the team's Bauer units for that pitch."],
+    },
 ]
 BY_KEY = {s["key"]: s for s in GUIDE}
 WHO_LABELS = {"all": "Everyone", "pitchers": "Pitchers", "hitters": "Hitters", "staff": "Coaches & staff"}

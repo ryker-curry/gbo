@@ -309,6 +309,9 @@ def pitch_type_summary(pitches, player=None):
             "Avg Velo": _avg([p.velocity for p in group]),
             "Max Velo": _max([p.velocity for p in group]),
             "Avg Spin": _avg([p.total_spin for p in group]),
+            # Oct 2026: Bauer units = spin / velo, per reading then averaged
+            "Bauer Units": _avg([float(p.total_spin) / float(p.velocity) for p in group
+                                 if p.total_spin is not None and p.velocity is not None and float(p.velocity) > 0]),
             "IVB": _avg([p.vb_spin for p in group]),
             "HB": _avg([p.hb_trajectory for p in group]),
             "Extension": _avg_extension([p.release_extension for p in group]),

@@ -117,7 +117,7 @@ import velo_fade_display
 from analytics import velo_fade
 from services.pitch_type_switch import apply_switches, undo_switches
 from models import PitchTypeChange, ArsenalTarget
-from analytics import approach_angles, best_zone, arsenal_plan, stuff_breakdown, trends, ivb_expected, slider_fit, sequencing, tunnel_check, outperform, arsenal_breadth, outcome_profile
+from analytics import approach_angles, best_zone, arsenal_plan, stuff_breakdown, trends, ivb_expected, slider_fit, sequencing, tunnel_check, outperform, arsenal_breadth, outcome_profile, bauer_units
 from visualizations import trend_charts
 from visualizations.stuff_breakdown_chart import trait_impact_figure, strip_figure, outcome_figure, ordinal, fmt_value
 
@@ -1031,6 +1031,7 @@ def pitcher_profile_server(input, output, session, app_state):
             # locally below rather than widening that shared function
             # (see _avg_or_none's docstring).
             summary_rows = pitch_type_summary(rapsodo_pitches, player=player)
+            team_bu = bauer_units.team_by_type(db)
             groups_by_label = {}
             for p in rapsodo_pitches:
                 groups_by_label.setdefault(pitch_type_label(p), []).append(p)
@@ -1041,6 +1042,8 @@ def pitcher_profile_server(input, output, session, app_state):
                     "Pitch Type": row["Pitch Type"], "#": row["#"],
                     "Velo": row["Avg Velo"], "Max Velo": row["Max Velo"],
                     "Spin Rate": row["Avg Spin"],
+                    "Bauer Units": row.get("Bauer Units"),
+                    "BU vs team": bauer_units.vs_team(row.get("Bauer Units"), team_bu.get(row["Pitch Type"])),
                     "Spin Eff %": _avg_or_none([p.spin_efficiency for p in group]),
                     "Gyro °": _avg_or_none([p.gyro_degree for p in group]),
                     "IVB": row["IVB"], "HB": row["HB"],
@@ -1139,6 +1142,9 @@ def pitcher_profile_server(input, output, session, app_state):
                     class_="text-muted small",
                 ),
                 ui_helpers.render_dict_table(table_rows),
+                ui.p("Bauer units = spin / velo (rpm per mph): spin ability apart from arm speed -- most telling on "
+                     "breaking balls. BU vs team compares him to our staff's average for that pitch type (within ±1 = "
+                     "typical). ", ui_helpers.how_to_link("bauer_units"), class_="text-muted small"),
                 *trajectory_children,
                 *_approach_children(db, player, rapsodo_pitches),
                 *_ivb_over_children(db, player, rapsodo_pitches),
@@ -2186,7 +2192,8 @@ def pitcher_profile_server(input, output, session, app_state):
                     col_widths=[6, 6],
                 ),
             output_widget("pp_trend_metrics"),
-            ui.p(ui.strong("Velo and Stuff+ by pitch (Rapsodo: bullpens + games)"), style="margin:14px 0 0;"),
+            ui.p(ui.strong("Velo, Stuff+ and Bauer units by pitch (Rapsodo: bullpens + games)"), "  ",
+                 ui_helpers.how_to_link("bauer_units", "What are Bauer units?"), style="margin:14px 0 0;"),
             output_widget("pp_trend_velo"),
             ui.hr(),
             ui.output_ui("pp_trend_fade"),

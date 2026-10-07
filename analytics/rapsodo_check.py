@@ -29,9 +29,21 @@ Z_FLAG = 2.5
 MIN_NORM = 15
 MIN_DAY = 3
 LOW_CONF = 0.5
-FLOOR = {"velocity": 1.0, "total_spin": 80.0, "vb_spin": 1.5, "hb_trajectory": 1.5}
+FLOOR = {"velocity": 1.0, "total_spin": 80.0, "vb_spin": 1.5, "hb_trajectory": 1.5, "bauer": 1.0}
 NAMES = {"velocity": ("velo", " mph", 1), "total_spin": ("spin", " rpm", 0),
-         "vb_spin": ("ride", '"', 1), "hb_trajectory": ("run", '"', 1)}
+         "vb_spin": ("ride", '"', 1), "hb_trajectory": ("run", '"', 1), "bauer": ("Bauer units", "", 1)}
+
+
+def _val(p, f):
+    """Field value; "bauer" = total spin / velo (Oct 2026). A day's spin is
+    only flagged when Bauer units moved too -- spin that rose because he
+    threw harder isn't a misread."""
+    if f == "bauer":
+        if p.total_spin is None or p.velocity is None or float(p.velocity) <= 0:
+            return None
+        return float(p.total_spin) / float(p.velocity)
+    v = getattr(p, f)
+    return float(v) if v is not None else None
 
 
 def _label(p):
@@ -55,7 +67,7 @@ def norms(all_pitches):
             continue
         stats = {}
         for f in FLOOR:
-            vals = [float(getattr(p, f)) for p in ps if getattr(p, f) is not None]
+            vals = [v for v in (_val(p, f) for p in ps) if v is not None]
             if len(vals) < MIN_NORM:
                 continue
             med = median(vals)
@@ -83,18 +95,31 @@ def check(range_pitches, all_pitches):
             stats = nm.get((ps[0].player_id, lab))
             if not stats or len(tps) < MIN_DAY:
                 continue
+            shifted = {}
             for f, (med, sd) in stats.items():
-                vals = [float(getattr(p, f)) for p in tps if getattr(p, f) is not None]
+                vals = [v for v in (_val(p, f) for p in tps) if v is not None]
                 if len(vals) < MIN_DAY:
                     continue
                 day = median(vals)
                 z = (day - med) / sd
                 if abs(z) >= Z_FLAG:
-                    name, unit, d = NAMES[f]
-                    sign = "+" if day > med else "-"
-                    issues.append(f"{lab} {name} {day:.{d}f}{unit} vs his usual {med:.{d}f}{unit} "
-                                  f"({sign}{abs(day - med):.{d}f}{unit}, {abs(z):.1f} SD)")
-                    sev += 3
+                    shifted[f] = (day, med, z)
+            if "total_spin" in shifted and "bauer" not in stats:
+                pass                                   # no Bauer norm: judge spin on its own
+            elif "total_spin" in shifted and "bauer" not in shifted:
+                del shifted["total_spin"]              # spin moved with velo -- not a misread
+            for f, (day, med, z) in shifted.items():
+                if f == "bauer":
+                    continue                           # reported with spin below
+                name, unit, d = NAMES[f]
+                sign = "+" if day > med else "-"
+                line = (f"{lab} {name} {day:.{d}f}{unit} vs his usual {med:.{d}f}{unit} "
+                        f"({sign}{abs(day - med):.{d}f}{unit}, {abs(z):.1f} SD)")
+                if f == "total_spin" and "bauer" in shifted:
+                    bd, bm, _bz = shifted["bauer"]
+                    line += f" -- Bauer units {bd:.1f} vs {bm:.1f} too, so it isn't just velo"
+                issues.append(line)
+                sev += 3
         unc = sum(1 for p in ps if p.pitch_type is None)
         if unc:
             issues.append(f"{unc} unclassified reading{'s' if unc != 1 else ''}")

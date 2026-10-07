@@ -142,8 +142,11 @@ def velo_stuff(db, player_id, date_from, date_to, by="game", stuff_models=None):
             rs = days[k]
             vs = [float(r.velocity) for r in rs if r.velocity is not None]
             sp = [x for x in (stuff_plus(r, model) for r in rs) if x is not None] if model else []
+            bus = [float(r.total_spin) / float(r.velocity) for r in rs
+                   if r.total_spin is not None and r.velocity is not None and float(r.velocity) > 0]
             rows.append({"date": k, "n": len(rs), "velo": sum(vs) / len(vs) if vs else None,
                          "top": max(vs) if vs else None, "stuff": sum(sp) / len(sp) if sp else None,
+                         "bu": sum(bus) / len(bus) if bus else None,   # Oct 2026: Bauer units
                          "bullpen": all(r.bullpen_id is not None for r in rs)})
         out[label] = rows
     return out

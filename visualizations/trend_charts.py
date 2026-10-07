@@ -91,8 +91,10 @@ def metrics_figure(trend):
 def velo_stuff_figure(vs):
     if not vs:
         return None
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1,
-                        subplot_titles=["<b>Average velo</b> (dot size = pitches; open = bullpen)", "<b>Stuff+</b> (100 = team average for that pitch)"])
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.08,
+                        subplot_titles=["<b>Average velo</b> (dot size = pitches; open = bullpen)",
+                                        "<b>Stuff+</b> (100 = team average for that pitch)",
+                                        "<b>Bauer units</b> (spin / velo -- up = spinning it better, not just throwing harder)"])
     for label, rows in sorted(vs.items(), key=lambda kv: -sum(r["n"] for r in kv[1])):
         col = get_pitch_color(label)
         xs = [r["date"] for r in rows]
@@ -110,8 +112,14 @@ def velo_stuff_figure(vs):
                 showlegend=False, line=dict(color=col, width=2), marker=dict(color=col, size=6), connectgaps=True,
                 hovertemplate=f"{label} %{{x|%b %d}}: Stuff+ %{{y:.0f}}<extra></extra>",
             ), row=2, col=1)
+        if any(r.get("bu") is not None for r in rows):
+            fig.add_trace(go.Scatter(
+                x=xs, y=[r.get("bu") for r in rows], mode="lines+markers", name=label, legendgroup=label,
+                showlegend=False, line=dict(color=col, width=2), marker=dict(color=col, size=6), connectgaps=True,
+                hovertemplate=f"{label} %{{x|%b %d}}: %{{y:.1f}} Bauer units<extra></extra>",
+            ), row=3, col=1)
     fig.add_hline(y=100, line=dict(color=MUTED_GRAY, dash="dash", width=1), row=2, col=1)
-    apply_gbo_theme(fig, height=560, margin=dict(t=40, b=40, l=50, r=20),
+    apply_gbo_theme(fig, height=760, margin=dict(t=40, b=40, l=50, r=20),
                     legend=dict(orientation="h", y=-0.08, x=0, bgcolor="rgba(0,0,0,0)"))
     fig.update_yaxes(gridcolor=GRID_GRAY)
     fig.update_xaxes(gridcolor=GRID_GRAY)

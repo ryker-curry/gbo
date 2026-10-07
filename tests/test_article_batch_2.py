@@ -95,3 +95,12 @@ def test_charter_training():
     s = charter_training.update_score(dict(charter_training.NEW_SCORE), True)
     s = charter_training.update_score(s, False)
     assert s == {"right": 1, "total": 2, "streak": 0, "best": 1}
+
+
+def test_rapsodo_check_ignores_spin_that_moved_with_velo():
+    rng = random.Random(5)
+    norm = [_rap(spin=2200 + rng.gauss(0, 30), velo=88 + rng.gauss(0, 0.5), bp=b, n=i) for b in range(1, 6) for i in range(10)]
+    harder = [_rap(spin=2200 * 92 / 88 + rng.gauss(0, 30), velo=92 + rng.gauss(0, 0.5), bp=8, n=i, rid=300 + i) for i in range(10)]
+    rows = rapsodo_check.check(harder, norm + harder)
+    issues = [i for r in rows for i in r["issues"]]
+    assert any("velo" in i for i in issues) and not any("spin" in i for i in issues)
