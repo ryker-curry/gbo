@@ -133,6 +133,8 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             # Pitcher/Hitter Profile' entries below -- one module,
             # self-scoped by role, same pattern as player_profile.py.
             NavPage("pitcher_profile", "Pitcher Profile", "graph-up-arrow"),
+            # Oct 2026, Ryker: compensation profiles across the staff.
+            NavPage("staff_compensation", "Staff Compensation", "diagram-3"),
             NavPage("hitter_profile", "Hitter Profile", "graph-up-arrow"),
             # Oct 2026: automated weekly progress report (pitchers for now).
             NavPage("weekly_report", "Weekly Reports", "calendar-week"),
