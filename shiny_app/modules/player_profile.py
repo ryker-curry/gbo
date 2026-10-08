@@ -37,7 +37,7 @@ their own linked player and gets no picker.
 
 from datetime import date, timedelta
 
-from shiny import module, ui, render, reactive
+from shiny import module, ui, render, reactive, req
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
@@ -135,10 +135,17 @@ def player_profile_server(input, output, session, app_state):
             q = q.filter(Player.player_id.in_(ids))
         return q.filter(Player.active.is_(True)).order_by(Player.last_name, Player.first_name).all()
 
+    _open_tab = reactive.Value(None)   # Oct 2026: deep link may be (pid, tab) -- Staff Compensation opens "Compensation"
+
     @reactive.effect
     def _consume_deep_link():
         pid = app_state.deep_link_player_id()
         if pid is not None:
+            if isinstance(pid, tuple):
+                pid, tab = pid
+                _open_tab.set((int(pid), tab))
+            else:
+                _open_tab.set(None)
             _selected.set(int(pid))
             app_state.deep_link_player_id.set(None)
             ui.update_select("pick", selected=str(pid))
@@ -351,9 +358,128 @@ def player_profile_server(input, output, session, app_state):
             ui.nav_panel("Pitching", ui.div(pitching_tab, class_="gbo-tab-body")),
             ui.nav_panel("Development", ui.div(dev_tab, class_="gbo-tab-body")),
             ui.nav_panel("Video", ui.div(video_tab, class_="gbo-tab-body")),
+            # Oct 2026, Ryker: how each pitcher compensates -- staff only.
+            *([ui.nav_panel("Compensation", ui.div(ui.output_ui("comp_tab"), class_="gbo-tab-body"))]
+              if p.is_pitcher and app_state.role_name() != "Player" else []),
             id="profile_tabs",
+            selected=_take_open_tab(p.player_id),
         )
         return ui.div(header, hero, ui.div(tabs, style="margin-top:24px;"))
+
+    @render.ui
+    def comp_tab():
+        """Compensation profile (analytics/compensation.py) -- only rendered
+        once the tab exists (staff, pitcher), computed when opened."""
+        if not app_state.is_authenticated() or app_state.role_name() == "Player":
+            return None
+        req("profile_tabs" in input and input.profile_tabs() == "Compensation")
+        from analytics import compensation as comp, velo_fade
+        from analytics.bullpen_metrics import pitch_type_label
+        from models import PitcherAvailability, RapsodoPitch
+        import compensation_display as cd
+        db = get_session()
+        try:
+            pid = _selected()
+            if pid is None:
+                players = _visible_players(db)
+                pid = players[0].player_id if players else None
+            data = comp.load(db)
+            if pid not in data["players"]:
+                return ui_helpers.card(ui_helpers.empty_state("Compensation profile covers active pitchers this season."))
+            p = data["players"][pid]
+            doms = data["doms"][pid]
+            fl = comp.flags(pid, doms, data["derived"][pid], data["model"], data["velo"])
+            hist = comp.test_history(db, list(data["players"]))
+            avail_all = db.query(PitcherAvailability).filter(PitcherAvailability.player_id.in_(list(data["players"]))).all()
+            avail_by = {}
+            for a in avail_all:
+                avail_by.setdefault(a.player_id, []).append(a)
+            tl = comp.domain_timeline(hist.get(pid, []), p.throws, data["stats"])
+            effects = {d: comp.change_effects(comp.changes(tl, d), data["fb"].get(pid, []), avail_by.get(pid, []))
+                       for d in comp.DOMAIN_NAMES}
+            raps = (db.query(RapsodoPitch).options(joinedload(RapsodoPitch.pitch_type))
+                    .filter(RapsodoPitch.player_id == pid).all())
+            months = comp.monthly(data["fb"].get(pid, []), avail_by.get(pid, []), comp.game_misses(db, pid),
+                                  velo_fade.by_outing(raps, pitch_type_label))
+            team = comp.team_effects(data, hist, avail_by)
+            # Oct 2026 fine-tuning: his own history, delivery, IDP link.
+            own = comp.own_drivers(hist.get(pid, []), p.throws, data["fb"].get(pid, []))
+            dl = comp.load_delivery(db, data)
+            from analytics import release_consistency as rc
+            rg = rc.grade(rc.spreads(raps), rc.team_baselines(db))["overall"]
+            _strong, weak = comp.read(doms)
+            dfl = comp.delivery_flags(dl["drifts"].get(pid, {}), dl["el"].get(pid, (None, None)), dl["staff"], weak, rg)
+            specs = {d: comp.idp_goal_spec(pid, d, data) for d in weak}
+            _comp_ctx.set({"pid": pid, "weak": weak, "specs": specs})
+            return ui.div(
+                ui.p("How he gets his results: what he leans on, what he lacks, whether that pattern is a known arm-stress "
+                     "risk, and whether fixing the limiter has paid off. Staff only.", class_="text-muted small"),
+                cd.strengths_card(doms),
+                cd.idp_buttons(weak, specs, "comp_idp"),
+                cd.velo_card(pid, data["model"], data["velo"].get(pid)),
+                cd.flags_card(fl),
+                cd.delivery_card(dl["drifts"].get(pid, {}), dl["el"].get(pid, (None, None)), dl["staff"], rg, dfl),
+                cd.own_card(own, len(hist.get(pid, []))),
+                cd.tracking_card(doms, tl, effects, months),
+                cd.team_card(team),
+            )
+        finally:
+            db.close()
+
+    _comp_ctx = reactive.Value({})
+
+    def _take_open_tab(pid):
+        """Tab to open for this player from a (pid, tab) deep link -- kept
+        (not cleared) so the picker's own re-render lands on it too; a
+        different player or a plain deep link resets it."""
+        with reactive.isolate():
+            ot = _open_tab.get()
+        return ot[1] if ot and ot[0] == pid else None
+
+    def _make_idp_goal(i):
+        ctx = _comp_ctx.get()
+        weak = ctx.get("weak") or []
+        if i >= len(weak) or app_state.role_name() == "Player":
+            return
+        dom = weak[i]
+        sp = (ctx.get("specs") or {}).get(dom)
+        if not sp:
+            return
+        from datetime import timedelta as _td
+        from models import IDPGoal, IDPStatus, AssessmentTestType
+        from analytics import compensation as comp
+        db = get_session()
+        try:
+            tt = db.query(AssessmentTestType).filter(AssessmentTestType.test_name == sp["test"]).first()
+            st = db.query(IDPStatus).order_by(IDPStatus.display_order, IDPStatus.status_id).first()
+            if tt is None or st is None:
+                ui.notification_show("Couldn't make the goal -- test type or IDP statuses missing.", type="error")
+                return
+            db.add(IDPGoal(
+                player_id=ctx["pid"], category_id=tt.category_id, target_test_type_id=tt.test_type_id,
+                baseline_value=round(sp["baseline"], 3), target_value=round(sp["target"], 3),
+                target_date=date.today() + _td(weeks=comp.IDP_WEEKS), status_id=st.status_id,
+                description=(f"Compensation profile limiter: {dom}. Raise {sp['test']} from {sp['baseline']:.1f} to the "
+                             f"staff average ({sp['target']:.1f}) -- so he doesn't have to make up for it elsewhere."),
+                created_by_user_id=app_state.user_id(),
+            ))
+            db.commit()
+            ui.notification_show(f"IDP goal created: {sp['test']}. Edit it under Development plans.", type="message", duration=6)
+        except Exception as e:
+            db.rollback()
+            ui.notification_show(f"Couldn't make the goal: {e}", type="error", duration=8)
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.comp_idp_0)
+    def _comp_idp_0():
+        _make_idp_goal(0)
+
+    @reactive.effect
+    @reactive.event(input.comp_idp_1)
+    def _comp_idp_1():
+        _make_idp_goal(1)
 
     def _overview_tab(bd, summ, pitches, bullpen, goals, mode):
         def flat(sub):
