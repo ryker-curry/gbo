@@ -29,6 +29,8 @@ class AppState:
     first_name: reactive.Value      # str | None
     last_name: reactive.Value       # str | None
     role_name: reactive.Value       # str | None, e.g. "Head Coach"
+    role_title: reactive.Value      # str | None -- shown title when it differs from role_name (Oct 2026:
+                                    # a Pitching Strategist runs as role_name "Coach" + Pitching specialty)
     can_view_all_players: reactive.Value
     can_edit_assessments: reactive.Value
     can_edit_sessions: reactive.Value
@@ -75,6 +77,7 @@ class AppState:
         self.first_name.set(None)
         self.last_name.set(None)
         self.role_name.set(None)
+        self.role_title.set(None)
         self.can_view_all_players.set(False)
         self.can_edit_assessments.set(False)
         self.can_edit_sessions.set(False)
@@ -96,6 +99,7 @@ def new_app_state() -> AppState:
         first_name=reactive.Value(None),
         last_name=reactive.Value(None),
         role_name=reactive.Value(None),
+        role_title=reactive.Value(None),
         can_view_all_players=reactive.Value(False),
         can_edit_assessments=reactive.Value(False),
         can_edit_sessions=reactive.Value(False),

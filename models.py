@@ -1904,6 +1904,23 @@ class BodyCompTarget(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class PitchCard(Base):
+    """A saved pre-game Pitch Calling Card for one pitcher in one game (Oct
+    2026, Ryker -- analytics/pitch_card.py). data = the card JSON (rows of
+    hitters x count groups of Level-Pitch-Zone codes, plus generic vs
+    RHH/LHH), including any coach edits; the post-game Card vs Calls
+    report compares charted calls to it."""
+    __tablename__ = "pitch_cards"
+    __table_args__ = (UniqueConstraint("game_id", "pitcher_id", name="uq_pitch_card_game_pitcher"),)
+
+    card_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id", ondelete="CASCADE"), nullable=False)
+    pitcher_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    data = Column(JSON, nullable=False)
+    updated_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class WeeklyReportNote(Base):
     """Coach's optional note on a pitcher's Weekly Progress Report (Oct
     2026). week_start = the Monday of the week the report covers. Goes

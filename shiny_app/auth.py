@@ -60,6 +60,10 @@ def do_logout(app_state):
     app_state.reset()
 
 
+# role in the database -> (role the app runs as, coach_specialty). Oct 2026.
+ROLE_ALIASES = {"Pitching Strategist": ("Coach", "Pitching")}
+
+
 def _load_gbo_role(app_state, auth_email: str):
     """Same query as the original app.py: look up the active GBO user
     row matching the Supabase auth email, with role + player eager-
@@ -90,9 +94,18 @@ def _load_gbo_role(app_state, auth_email: str):
     app_state.user_id.set(current_user.user_id)
     app_state.first_name.set(current_user.first_name)
     app_state.last_name.set(current_user.last_name)
-    app_state.role_name.set(current_user.role.role_name)
+    role, specialty = current_user.role.role_name, current_user.coach_specialty
+    title = None
+    if role in ROLE_ALIASES:
+        # Oct 2026 (Ryker): a Pitching Strategist gets exactly a pitching
+        # coach's access -- run as Coach + Pitching everywhere (every page's
+        # role checks), but keep the real title for display.
+        title = role
+        role, specialty = ROLE_ALIASES[role]
+    app_state.role_name.set(role)
+    app_state.role_title.set(title)
     app_state.can_view_all_players.set(current_user.role.can_view_all_players)
     app_state.can_edit_assessments.set(current_user.role.can_edit_assessments)
     app_state.can_edit_sessions.set(current_user.role.can_edit_sessions)
-    app_state.coach_specialty.set(current_user.coach_specialty)
+    app_state.coach_specialty.set(specialty)
     app_state.is_pitcher.set(current_user.player.is_pitcher if current_user.player else False)

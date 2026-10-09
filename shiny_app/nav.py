@@ -110,6 +110,8 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
         sections.append(NavSection("Scouting", [
             # Oct 2026: series advance reports from our own charting.
             NavPage("advance_scouting", "Advance Scouting", "binoculars"),
+            # Oct 2026, Ryker: pre-game pocket cards for the pitching coach.
+            NavPage("pitch_cards", "Pitch Calling Cards", "card-list"),
             NavPage("opponent_teams", "Opponent Teams", "people"),
         ]))
         sections.append(NavSection("Analytics", [
