@@ -221,11 +221,21 @@ def pitch_cards_server(input, output, session, app_state):
                 ui.notification_show("Pick a game and at least one pitcher.", type="warning")
                 return
             model, use, _p = _model(db)
+            # Oct 2026 (Paradigm, "The Angle Advantage"): each pitch's VAAA /
+            # HAAAA nudges where it's called -- analytics/pitch_card.angle_bonus.
+            try:
+                from analytics import approach_angles as aa
+                profiles = aa.staff_profiles(db)["profiles"]
+            except Exception:
+                profiles = {}
             cards = []
             for pid in pids:
                 p = db.query(Player).filter(Player.player_id == pid).first()
                 if p is not None:
-                    cards.append(pc.build_card(model, p, hitters, use))
+                    angles = {d: (v, (h if p.throws == "R" else -h) if h is not None else None)
+                              for d, (v, h) in aa.digit_angles(profiles.get(pid), pc.PITCH_DIGIT).items()} \
+                        if profiles.get(pid) else None
+                    cards.append(pc.build_card(model, p, hitters, use, angles))
             built.set({"game_id": g.game_id, "label": _game_label(g), "cards": cards})
             if _can_edit() and _table_ready(db):
                 _save_cards(db, g.game_id, cards)

@@ -67,5 +67,6 @@ def card_html(card, game_label, editable=True):
             f'<span class="gm">{escape(game_label)} · throws: {escape(digits)}</span></div>'
             f'<div class="lg">{escape(LEGEND)}</div>'
             f'<table><thead><tr><th class="h">Hitter</th>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table>'
-            f'<div class="ft">GBO Pitch Calling Card -- built from {card.get("n", 0):,} charted pitches; a starting '
+            f'<div class="ft">{("Angles: " + escape(card["angle_note"]) + " · ") if card.get("angle_note") else ""}'
+            f'GBO Pitch Calling Card -- built from {card.get("n", 0):,} charted pitches; a starting '
             f'point, not a script.</div></div>')

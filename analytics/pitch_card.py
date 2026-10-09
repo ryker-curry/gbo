@@ -194,13 +194,17 @@ class Model:
         s, n = self.dev.get(key, (0.0, 0))
         return s / (n + k)
 
-    def score(self, pid, digit, pl, group, level, zone, batter=None):
+    def score(self, pid, digit, pl, group, level, zone, batter=None, angle=None):
         b = self.base(digit, pl, group, level, zone)
         pc = self._d(("PC", pid, digit, pl, level, zone), KP_CELL)
         pt = self._d(("PT", pid, digit), KP_TYPE)
         in_z = sz.is_in_zone(sz.ZONE_TO_PLATE_X[zone], sz.LEVEL_TO_PLATE_Z[level])
         h = self._d(("H", batter, digit, in_z), KH) if batter is not None else 0.0
-        return b + pc + pt + h, {"base": b, "pitcher": pc + pt, "hitter": h}
+        a = 0.0
+        if angle is not None:
+            n_own = self.dev.get(("PT", pid, digit), (0.0, 0))[1]
+            a = angle_bonus(digit, level, zone, *angle) * KA / (KA + n_own)
+        return b + pc + pt + h + a, {"base": b, "pitcher": pc + pt, "hitter": h, "angle": a}
 
     def n_batter(self, batter):
         return sum(n for (k, b, *_r), (_s, n) in self.dev.items() if k == "H" and b == batter)
@@ -210,12 +214,62 @@ class Model:
 # Card
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Angle profile nudge (Oct 2026, Paradigm "The Angle Advantage"): a pitch's
+# VAAA / HAAAA says where it should play -- flat fastballs up, steep ones and
+# steep breakers down, arm-side angles open an inside lane, glove-side an
+# away lane. Small (ANGLE_W runs per degree, capped at ANGLE_CAP degrees) and
+# faded by KA / (KA + his game pitches of that pitch), so once real outcomes
+# pile up they outweigh it. Zones are in the righty frame here (1-2 = arm side).
+# ---------------------------------------------------------------------------
+
+ANGLE_W = 0.01
+ANGLE_CAP = 1.5
+ANGLE_MIN = 0.3
+KA = 60
+
+
+def angle_bonus(digit, level, zone, vaaa, haaaa_arm):
+    b = 0.0
+    if vaaa is not None and abs(vaaa) >= ANGLE_MIN:
+        m = min(abs(vaaa), ANGLE_CAP) * ANGLE_W
+        if digit in (1, 5):
+            if vaaa > 0:
+                b += m if level == 4 else (-m / 2 if level in (1, 2) else 0)
+            else:
+                b += m if level in (1, 2) else (-m / 2 if level == 4 else 0)
+        elif vaaa < 0:
+            b += m if level in (1, 2) else 0
+        else:
+            b += -m / 2 if level == 1 else 0
+    if haaaa_arm is not None and abs(haaaa_arm) >= ANGLE_MIN:
+        m = min(abs(haaaa_arm), ANGLE_CAP) * ANGLE_W
+        lane = (1, 2) if haaaa_arm > 0 else (4, 5)
+        b += m if zone in lane else 0
+    return b
+
+
+def angle_note(angles, digits):
+    """Short footer line, e.g. 'FB flat (+0.8 VAAA), SL glove-side'."""
+    bits = []
+    for d in digits:
+        v, h = (angles or {}).get(d, (None, None))
+        words = []
+        if v is not None and abs(v) >= ANGLE_MIN:
+            words.append(f"{'flat' if v > 0 else 'steep'} {v:+.1f}")
+        if h is not None and abs(h) >= ANGLE_MIN:
+            words.append("arm-side" if h > 0 else "glove-side")
+        if words:
+            bits.append(f"{DIGIT_NAME[d]} {' '.join(words)}")
+    return ", ".join(bits)
+
+
 def arsenal(pid, use):
     digits = [d for d, s in (use.get(pid) or {}).items() if s >= MIN_USE]
     return sorted(digits) or [1]
 
 
-def best_two(model, pid, throws, hand, group, digits, batter=None):
+def best_two(model, pid, throws, hand, group, digits, batter=None, angles=None):
     """[(code, score, parts)] best code + backup with a different pitch
     (or a different spot if he only has one pitch). Codes in the REAL
     frame (zone un-mirrored for a lefty)."""
@@ -225,7 +279,7 @@ def best_two(model, pid, throws, hand, group, digits, batter=None):
     cand = []
     for d in digits:
         for lv, z in CELLS:
-            s, parts = model.score(pid, d, pl, group, lv, z, batter)
+            s, parts = model.score(pid, d, pl, group, lv, z, batter, (angles or {}).get(d))
             real_z = z if throws == "R" else mirror_zone(z)
             cand.append((s, d, lv, real_z, parts))
     cand.sort(key=lambda c: -c[0])
@@ -258,7 +312,7 @@ def hitter_note(model, batter, digits):
     return " · ".join(bits)
 
 
-def build_card(model, pitcher, hitters, use):
+def build_card(model, pitcher, hitters, use, angles=None):
     """pitcher: Player; hitters: [{"key": ("our"|"opp", id), "name", "bats"}].
     -> {"pitcher_id", "pitcher", "throws", "digits", "rows": [...], "generic": {...}, "n": model.n}"""
     digits = arsenal(pitcher.player_id, use)
@@ -267,7 +321,7 @@ def build_card(model, pitcher, hitters, use):
         hand = batter_hand(h.get("bats"), pitcher.throws)
         cells = {}
         for g, _l, _cs in GROUPS:
-            two = best_two(model, pitcher.player_id, pitcher.throws, hand, g, digits, tuple(h["key"]))
+            two = best_two(model, pitcher.player_id, pitcher.throws, hand, g, digits, tuple(h["key"]), angles)
             cells[g] = {"primary": two[0][0] if two else "", "backup": two[1][0] if len(two) > 1 else ""}
         rows.append({"key": list(h["key"]), "name": h["name"], "hand": hand or "?", "cells": cells,
                      "note": hitter_note(model, tuple(h["key"]), digits)})
@@ -275,10 +329,11 @@ def build_card(model, pitcher, hitters, use):
     for hand in ("R", "L"):
         generic[hand] = {}
         for g, _l, _cs in GROUPS:
-            two = best_two(model, pitcher.player_id, pitcher.throws, hand, g, digits)
+            two = best_two(model, pitcher.player_id, pitcher.throws, hand, g, digits, angles=angles)
             generic[hand][g] = {"primary": two[0][0] if two else "", "backup": two[1][0] if len(two) > 1 else ""}
     return {"pitcher_id": pitcher.player_id, "pitcher": f"{pitcher.first_name} {pitcher.last_name}",
-            "throws": pitcher.throws, "digits": digits, "rows": rows, "generic": generic, "n": model.n}
+            "throws": pitcher.throws, "digits": digits, "rows": rows, "generic": generic, "n": model.n,
+            "angle_note": angle_note(angles, digits)}
 
 
 # ---------------------------------------------------------------------------

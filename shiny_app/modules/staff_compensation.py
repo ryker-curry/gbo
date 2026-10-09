@@ -54,11 +54,17 @@ def staff_compensation_server(input, output, session, app_state):
         try:
             data = comp.load(db)
             dl = comp.load_delivery(db, data)
+            try:   # Oct 2026 (Paradigm, "The Angle Advantage"): staff angle standouts
+                from analytics import approach_angles as aa
+                angle_x = aa.staff_extremes(aa.staff_profiles(db))
+            except Exception:
+                angle_x = {}
         finally:
             db.close()
         if not data["players"]:
             return ui_helpers.card(ui_helpers.empty_state("No active pitchers."))
         head = ui.tags.tr(ui.tags.th("Pitcher"), ui.tags.th("Flags"), ui.tags.th("Velo vs body", class_="z"),
+                          ui.tags.th("Angle standouts"),
                           *[ui.tags.th(SHORT[d], class_="z", title=d) for d in comp.DOMAIN_NAMES])
         body = []
         counts = {"tested": 0, "flags": 0}
@@ -89,6 +95,9 @@ def staff_compensation_server(input, output, session, app_state):
                                      onclick=f"Shiny.setInputValue('{open_js}', {pid}, {{priority: 'event'}})"),
                            style="white-space:nowrap;"),
                 ui.tags.td(ui.div(*chips, style="display:flex;gap:4px;flex-wrap:wrap;min-width:180px;") if chips else "—"),
+                ui.tags.td(ui.div(*[ui.span(_angle_short(e), title=e["text"], class_="small", style="white-space:nowrap;")
+                                    for e in angle_x.get(pid, [])], style="display:flex;flex-direction:column;min-width:150px;")
+                           if angle_x.get(pid) else "—"),
                 ui.tags.td(vtxt, class_=vcls, title="mph above (+) or below (-) what his body predicts"),
                 *cells,
             ))
@@ -109,3 +118,8 @@ def staff_compensation_server(input, output, session, app_state):
             return
         app_state.deep_link_player_id.set((int(input.open()), "Compensation"))
         ui.update_navs("main_nav", selected="Player Profile", session=session.root_scope())
+
+
+def _angle_short(e):
+    word = {"flat": "flattest", "steep": "steepest", "arm": "arm-side", "glove": "glove-side"}[e["kind"]]
+    return f"{e['label']}: {word} ({e['value']:+.1f}°)"
