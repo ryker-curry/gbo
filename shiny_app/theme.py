@@ -717,7 +717,13 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator { filter: inv
    amount of space that the pitch location chart takes up" -- Location
    didn't have this bug because it returns its <img> directly, with no
    wrapping div). */
-.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > div {
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > div,
+/* Oct 2026 (Ryker's photo of Game Breakdown -> Results): an interactive
+   plotly chart (shinywidgets output_widget) sitting next to two filter
+   dropdowns landed in the third ~270px grid cell -- the Damage by Zone
+   chart drawn tiny on the right. Widget outputs always span the row. */
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-ipywidget-output,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > .shiny-ipywidget-output {
   grid-column: 1 / -1;
 }
 .gbo-content .shiny-html-output:has(.shiny-input-container) .btn-primary { margin-top: .55rem; }
@@ -735,7 +741,8 @@ input[type="date"].form-control::-webkit-calendar-picker-indicator { filter: inv
    still get the narrow max-width as originally intended). */
 .gbo-content .shiny-html-output:has(.shiny-input-container):has(img),
 .gbo-content .shiny-html-output:has(.shiny-input-container):has(svg),
-.gbo-content .shiny-html-output:has(.shiny-input-container):has(.bslib-grid) {
+.gbo-content .shiny-html-output:has(.shiny-input-container):has(.bslib-grid),
+.gbo-content .shiny-html-output:has(.shiny-input-container):has(.shiny-ipywidget-output) {
   max-width: none;
 }
 
