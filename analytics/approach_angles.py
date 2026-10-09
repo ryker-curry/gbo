@@ -278,3 +278,196 @@ def usage_tips(row, throws):
     if not tips:
         tips.append("Typical angles for where it's thrown -- call it on movement and location; the angle doesn't add an edge.")
     return tips
+
+
+# ---------------------------------------------------------------------------
+# Staff extremes + rubber moves (Oct 2026, Ryker sent Paradigm's "The Angle
+# Advantage": flag each pitch's top / bottom 10% angles with a one-line cue,
+# and "before rebuilding a pitch, try a rubber-position change first").
+# ---------------------------------------------------------------------------
+
+EXTREME_PCT = 0.10
+EXTREME_MIN_PITCHERS = 8
+RUBBER_SHIFT_IN = 3.0
+RUBBER_MIN_OUTING = 10
+RUBBER_SIDE_OUTINGS = 3
+_staff_cache = {"key": None, "data": None}
+_FB_ALL = _FB_FOR_TIPS | _SINKERS
+
+
+def staff_profiles(db):
+    """{pid: {label: {"vaaa", "haaaa", "n_v", "n_h"}}} for every active pitcher,
+    from all of his Rapsodo readings (cached with the model)."""
+    from models import RapsodoPitch, Player
+    from sqlalchemy.orm import joinedload
+    model = get_model(db)
+    if _staff_cache["key"] == _cache["key"] and _staff_cache["data"] is not None:
+        return _staff_cache["data"]
+    players = {p.player_id: p for p in db.query(Player).filter(Player.active.is_(True), Player.is_pitcher.is_(True)).all()}
+    raps = {}
+    for r in (db.query(RapsodoPitch).options(joinedload(RapsodoPitch.pitch_type))
+              .filter(RapsodoPitch.player_id.in_(list(players)), RapsodoPitch.plate_x_ft.isnot(None)).all()):
+        raps.setdefault(r.player_id, []).append(r)
+    out = {}
+    for pid, rs in raps.items():
+        prof = {}
+        for row in summary_by_type(score_pitches(rs, players[pid].throws, model), players[pid].throws, _FB_ALL):
+            prof[row["label"]] = {"vaaa": row["vaaa"], "haaaa": row["haaaa"], "n_v": row["n_vaaa"], "n_h": row["n_haaaa"]}
+        out[pid] = prof
+    data = {"profiles": out, "throws": {pid: p.throws for pid, p in players.items()}}
+    _staff_cache["key"], _staff_cache["data"] = _cache["key"], data
+    return data
+
+
+def _arm_side(haaaa, throws):
+    """HAAAA re-signed so + = toward the pitcher's arm side (same-handed hitter) for either hand."""
+    return haaaa if throws == "R" else -haaaa
+
+
+def _cue(label, kind):
+    fb, sink = label in _FB_FOR_TIPS, label in _SINKERS
+    brk_off = label in _BREAKING or label in _OFFSPEED
+    return {
+        ("flat", True): "live at the top of the zone -- the flat angle plays up there",
+        ("steep", True): "work the lower third and finish below the zone",
+        ("steep", False): "bury it below the zone for whiffs" if brk_off else "keep it at the knees",
+        ("flat", False): "less drop than it looks -- steal strikes early, not a chase pitch",
+        ("arm", True): "inside lane: go in on same-side hitters for swings",
+        ("arm", False): "inside lane: start it at the inner third" if brk_off else "fade it in on same-side hitters",
+        ("glove", True): "away lane: work away to same-side hitters",
+        ("glove", False): "away lane: finish it away -- more chases off the plate",
+    }[(kind, fb or sink)]
+
+
+def staff_extremes(data, pct=EXTREME_PCT, min_pitchers=EXTREME_MIN_PITCHERS):
+    """{pid: [{"label", "kind", "value", "rank", "of", "text"}]} -- each pitch in the top / bottom
+    pct of OUR staff (same pitch type, TIP_MIN_N+ readings) for VAAA and arm-side HAAAA."""
+    out = {}
+    labels = {l for prof in data["profiles"].values() for l in prof}
+    for label in labels:
+        for metric, kinds in (("vaaa", ("flat", "steep")), ("haaaa", ("arm", "glove"))):
+            vals = []
+            for pid, prof in data["profiles"].items():
+                r = prof.get(label)
+                n = (r or {}).get("n_v" if metric == "vaaa" else "n_h", 0)
+                v = (r or {}).get(metric)
+                if v is None or n < TIP_MIN_N:
+                    continue
+                if metric == "haaaa":
+                    v = _arm_side(v, data["throws"].get(pid))
+                vals.append((v, pid))
+            if len(vals) < min_pitchers:
+                continue
+            vals.sort(reverse=True)
+            k = max(1, int(round(pct * len(vals))))
+            for side, chunk in ((kinds[0], vals[:k]), (kinds[1], vals[-k:])):
+                for v, pid in chunk:
+                    if abs(v) < TIP_MIN_DEG or (v > 0) != (side == kinds[0]):
+                        continue                      # extreme for us but not unusual (or wrong sign) -- skip
+                    rank = vals.index((v, pid)) + 1 if side == kinds[0] else len(vals) - vals.index((v, pid))
+                    word = {"flat": "flattest", "steep": "steepest", "arm": "most arm-side angle",
+                            "glove": "most glove-side angle"}[side]
+                    unit = "VAAA" if metric == "vaaa" else "HAAAA (arm side +)"
+                    out.setdefault(pid, []).append({
+                        "label": label, "kind": side, "value": v, "rank": rank, "of": len(vals),
+                        "text": (f"{label}: {'top' if rank == 1 else f'#{rank}'} {word} on staff "
+                                 f"({v:+.1f}° {unit}, of {len(vals)}) -- {_cue(label, side)}")})
+    return out
+
+
+def _outing_key(p):
+    return ("bp", p.bullpen_id) if p.bullpen_id is not None else ("imp", p.import_id)
+
+
+def rubber_moves(raps, throws, model, game_pitches=None):
+    """Release-side shifts of RUBBER_SHIFT_IN+ inches between consecutive outings
+    (median release side, all pitches). For each: release side, HAAAA by pitch
+    type and (when game_pitches given) game whiff / chase by pitch type for the
+    RUBBER_SIDE_OUTINGS outings before vs from the move on.
+    -> [{"date", "from_in", "to_in", "toward", "by_type": [...], "n_before", "n_after"}]"""
+    from statistics import median
+    scored = {id(r["pitch"]): r for r in score_pitches(raps, throws, model)}
+    outs = {}
+    for p in raps:
+        if p.release_side is None or p.pitch_date is None:
+            continue
+        outs.setdefault(_outing_key(p), []).append(p)
+    seq = []
+    for key, ps in outs.items():
+        if len(ps) < RUBBER_MIN_OUTING:
+            continue
+        side = median(-float(p.release_side) * 12 for p in ps)        # GBO frame: + = 1B side, inches
+        seq.append((min(p.pitch_date for p in ps), side, ps))
+    seq.sort(key=lambda t: t[0])
+    moves = []
+    for i in range(1, len(seq)):
+        d = seq[i][1] - seq[i - 1][1]
+        if abs(d) < RUBBER_SHIFT_IN:
+            continue
+        before = seq[max(0, i - RUBBER_SIDE_OUTINGS):i]
+        after = seq[i:i + RUBBER_SIDE_OUTINGS]
+        day = seq[i][0].date() if hasattr(seq[i][0], "date") else seq[i][0]
+        moves.append({"date": day, "from_in": sum(s for _d, s, _p in before) / len(before),
+                      "to_in": sum(s for _d, s, _p in after) / len(after),
+                      "toward": "1B side" if d > 0 else "3B side",
+                      "by_type": _move_by_type([p for _d, _s, ps in before for p in ps],
+                                               [p for _d, _s, ps in after for p in ps], scored, throws,
+                                               game_pitches, day, seq[i - 1][0], (seq[i + RUBBER_SIDE_OUTINGS][0]
+                                                                                  if i + RUBBER_SIDE_OUTINGS < len(seq) else None)),
+                      "n_before": len(before), "n_after": len(after)})
+    return moves
+
+
+def _game_rates(gps):
+    from plate_discipline import SWING_OUTCOMES
+    import strike_zone as sz
+    sw = [g for g in gps if g.pitch_outcome in SWING_OUTCOMES]
+    out_zone = [g for g in gps if g.actual_plate_x is not None and g.actual_plate_z is not None
+                and not sz.is_in_zone(float(g.actual_plate_x), float(g.actual_plate_z))]
+    whiff = 100 * sum(g.pitch_outcome == "Swing and Miss" for g in sw) / len(sw) if len(sw) >= 5 else None
+    chase = 100 * sum(g.pitch_outcome in SWING_OUTCOMES for g in out_zone) / len(out_zone) if len(out_zone) >= 5 else None
+    return whiff, chase, len(gps)
+
+
+def _move_by_type(before, after, scored, throws, game_pitches, day, start, end):
+    rows = []
+    labels = sorted({pitch_type_label(p) for p in before + after})
+    for label in labels:
+        hb = [scored[id(p)]["haaaa"] for p in before if pitch_type_label(p) == label and id(p) in scored
+              and scored[id(p)]["haaaa"] is not None]
+        ha = [scored[id(p)]["haaaa"] for p in after if pitch_type_label(p) == label and id(p) in scored
+              and scored[id(p)]["haaaa"] is not None]
+        if len(hb) < 5 or len(ha) < 5:
+            continue
+        row = {"label": label, "haaaa_before": _arm_side(sum(hb) / len(hb), throws),
+               "haaaa_after": _arm_side(sum(ha) / len(ha), throws), "n_before": len(hb), "n_after": len(ha)}
+        if game_pitches is not None:
+            def lab(g):
+                return g.pitch_type.type_name if g.pitch_type is not None else None
+            gd = lambda g: g.game.game_date if getattr(g, "game", None) is not None else None
+            gb = [g for g in game_pitches if lab(g) == label and gd(g) and start.date() <= gd(g) < day] \
+                if hasattr(start, "date") else []
+            ga = [g for g in game_pitches if lab(g) == label and gd(g) and gd(g) >= day
+                  and (end is None or gd(g) < (end.date() if hasattr(end, "date") else end))]
+            row["game_before"], row["game_after"] = _game_rates(gb), _game_rates(ga)
+        rows.append(row)
+    return rows
+
+
+def digit_angles(profile, digit_of):
+    """Collapse a pitcher's per-label profile to {digit: (vaaa, haaaa)} weighted by readings
+    (for the Pitch Calling Card, whose pitch digits merge e.g. 4-seam + 2-seam)."""
+    acc = {}
+    for label, r in (profile or {}).items():
+        d = digit_of.get(label)
+        if d is None:
+            continue
+        a = acc.setdefault(d, [0.0, 0, 0.0, 0])
+        if r["vaaa"] is not None and r["n_v"]:
+            a[0] += r["vaaa"] * r["n_v"]
+            a[1] += r["n_v"]
+        if r["haaaa"] is not None and r["n_h"]:
+            a[2] += r["haaaa"] * r["n_h"]
+            a[3] += r["n_h"]
+    return {d: (a[0] / a[1] if a[1] >= TIP_MIN_N else None, a[2] / a[3] if a[3] >= TIP_MIN_N else None)
+            for d, a in acc.items()}

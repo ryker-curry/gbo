@@ -964,9 +964,57 @@ def pitcher_profile_server(input, output, session, app_state):
                      class_="text-muted small", style="margin:0;"),
                 title="How to use it",
             ),
+            *_angle_extras(db, player, rapsodo_pitches, model),
             ui.input_switch("pp_aa_show_chart", "Show advanced chart (every pitch's VAAA vs. HAAAA)", value=False),
             output_widget("pp_approach_chart"),
         ]
+
+    def _angle_extras(db, player, rapsodo_pitches, model):
+        """Oct 2026 (Paradigm, "The Angle Advantage"): staff top/bottom-10%
+        angle flags with a one-line cue, and rubber-position moves."""
+        out = []
+        try:
+            data = approach_angles.staff_profiles(db)
+            mine = approach_angles.staff_extremes(data).get(player.player_id, [])
+        except Exception:
+            mine = []
+        if mine:
+            out.append(ui_helpers.card(
+                *[ui.p(e["text"], class_="small mb-1") for e in sorted(mine, key=lambda e: e["label"])],
+                ui.p(f"Top / bottom {int(approach_angles.EXTREME_PCT * 100)}% of our staff for that pitch type "
+                     f"({approach_angles.EXTREME_MIN_PITCHERS}+ pitchers with {approach_angles.TIP_MIN_N}+ readings). "
+                     "HAAAA here is re-signed so + = toward his arm side for either hand.", class_="text-muted small"),
+                title="Angle standouts on our staff"))
+        try:
+            from game_stats import get_pitching_pitches
+            moves = approach_angles.rubber_moves(rapsodo_pitches, player.throws, model,
+                                                 get_pitching_pitches(db, player.player_id))
+        except Exception:
+            moves = []
+        rows = []
+        for m in moves:
+            for t in m["by_type"] or [{}]:
+                gb, ga = t.get("game_before"), t.get("game_after")
+                pct = lambda v: "—" if v is None else f"{v:.0f}%"
+                rows.append({
+                    "Date": m["date"].strftime("%b %-d"), "Moved": f"{abs(m['to_in'] - m['from_in']):.1f}\" toward {m['toward']}",
+                    "Pitch": t.get("label", "—"),
+                    "HAAAA (arm side +)": (f"{t['haaaa_before']:+.1f}° → {t['haaaa_after']:+.1f}°" if t else "—"),
+                    "Game whiff % (of swings)": (f"{pct(gb[0])} → {pct(ga[0])}" if gb and ga else "—"),
+                    "Game chase %": (f"{pct(gb[1])} → {pct(ga[1])}" if gb and ga else "—"),
+                })
+        out.append(ui_helpers.card(
+            ui_helpers.render_dict_table(rows) if rows else ui.p(
+                f"No rubber move found -- his median release side hasn't shifted "
+                f"{approach_angles.RUBBER_SHIFT_IN:.0f}\"+ between Rapsodo outings.", class_="text-muted small"),
+            ui.p(f"A shift of {approach_angles.RUBBER_SHIFT_IN:.0f}\"+ in median release side between outings "
+                 "(usually a move on the rubber). Before = the "
+                 f"{approach_angles.RUBBER_SIDE_OUTINGS} outings before it, after = the move on. Changing rubber "
+                 "position changes the horizontal angle without touching grip or arm action -- worth trying before "
+                 "rebuilding a pitch (Paradigm). Game rates need 5+ swings / chase chances on each side.",
+                 class_="text-muted small"),
+            title="Rubber position moves"))
+        return out
 
     # -------------------------------------------------------------------
     # IVB over expected (Oct 2026, from Ryker's article batch: Paradigm's
