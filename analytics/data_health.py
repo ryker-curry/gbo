@@ -115,8 +115,27 @@ def check_game(db, game, players=None, opp_players=None):
         checks.append({"key": key, "label": label, "why": why, "missing": missing, "total": total, "weight": w})
     score = round(100 * num / den, 1) if den else 100.0
     grade = "green" if score >= GREEN else ("yellow" if score >= YELLOW else "red")
+    # Oct 2026, Ryker: list the exact balls in play to fix, so Data Health
+    # can jump straight to each one in Game Tracking's Pitch Log.
+    def _who(pid, opp_id=None):
+        if opp_id and opp_id in opp_players:
+            return opp_players[opp_id].player_name
+        pl = players.get(pid)
+        return f"{pl.first_name} {pl.last_name}" if pl else "—"
+    bip_fix = []
+    for p in bip:
+        missing = [w for w, ok in (("batted-ball type", p.batted_ball_type), ("contact quality", p.contact_quality)) if not ok]
+        if not missing:
+            continue
+        if p.is_our_team_batting:
+            batter, pitcher = _who(p.our_player_id), (_who(p.opponent_our_player_id) if p.opponent_our_player_id else "their pitcher")
+        else:
+            batter = _who(p.opponent_our_player_id, p.opponent_player_id) if (p.opponent_player_id or p.opponent_our_player_id) else "their hitter"
+            pitcher = _who(p.our_player_id)
+        bip_fix.append({"game_pitch_id": p.game_pitch_id, "inning": p.inning, "seq": p.pitch_sequence,
+                        "batter": batter, "pitcher": pitcher, "result": p.ab_outcome or "In play", "missing": missing})
     return {"game": game, "checks": checks, "score": score, "grade": grade, "pitches": n,
-            "box_rows": box_rows, "has_box": has_box}
+            "box_rows": box_rows, "has_box": has_box, "bip_fix": bip_fix}
 
 
 def check_range(db, date_from, date_to):

@@ -132,7 +132,7 @@ def data_health_server(input, output, session, app_state):
             rows = [{"Problem": c["label"], "Missing": f"{c['missing']} of {c['total']}" if c["key"] != "final" else "—",
                      "Why it matters": c["why"]} for c in issues]
             body = ui_helpers.render_dict_table(rows) if rows else ui.p("All checks pass.", class_="text-muted small")
-            blocks.append(ui_helpers.card(head, ui.div(body, style="margin-top:8px;"), _box_line(r)))
+            blocks.append(ui_helpers.card(head, ui.div(body, style="margin-top:8px;"), _bip_fix_list(r), _box_line(r)))
         if not blocks:
             return ui.p("Every game in this range passes all checks.", class_="text-muted", style="margin-top:12px;")
         return ui.div(*blocks, style="margin-top:12px;display:flex;flex-direction:column;gap:12px;")
@@ -253,6 +253,39 @@ def data_health_server(input, output, session, app_state):
                     "missing PA, a wrong result, or a run that didn't get credited.", class_="small",
                     style="color:#D94F3D;margin-top:6px;"))
         return ui.div(ui.tags.table(head, *body, class_="table table-sm"), msg)
+
+    def _bip_fix_list(r):
+        """Oct 2026, Ryker: every ball in play missing its batted-ball type (or
+        contact quality), each with a Fix link straight to that pitch's edit
+        form in Game Tracking -> Pitch Log."""
+        items = r.get("bip_fix") or []
+        if not items:
+            return None
+        js = session.ns("fix_pitch")
+        trs = [ui.tags.tr(
+            ui.tags.td(f"Inn {it['inning']}"), ui.tags.td(f"#{it['seq']}"),
+            ui.tags.td(it["batter"]), ui.tags.td(it["pitcher"], class_="text-muted"), ui.tags.td(it["result"]),
+            ui.tags.td(", ".join(it["missing"]), style="color:var(--gbo-status-watch);"),
+            ui.tags.td(ui.tags.button("Fix", type="button", class_="btn btn-sm btn-outline-light",
+                                      onclick=f"Shiny.setInputValue('{js}', '{r['game'].game_id}:{it['game_pitch_id']}', "
+                                              "{priority: 'event'})")))
+            for it in items]
+        head = ui.tags.tr(*[ui.tags.th(h) for h in ("Inning", "Pitch", "Batter", "Pitcher", "Result", "Missing", "")])
+        return ui.accordion(ui.accordion_panel(
+            f"Balls in play to fix ({len(items)})",
+            ui.div(ui.tags.table(ui.tags.thead(head), ui.tags.tbody(*trs), class_="table table-sm"), class_="table-responsive"),
+            ui.p("Fix opens Game Tracking on this game's Pitch Log with that pitch's edit form already open.",
+                 class_="text-muted small"),
+        ), open=False, style="margin-top:8px;")
+
+    @reactive.effect
+    @reactive.event(input.fix_pitch)
+    def _fix_pitch():
+        if not _ok():
+            return
+        gid, pid = (int(x) for x in input.fix_pitch().split(":"))
+        app_state.deep_link_game_id.set((gid, pid))
+        ui.update_navs("main_nav", selected="Game Tracking", session=session.root_scope())
 
     # One observer for every "Fix" button (ids are per game).
     _seen = {}

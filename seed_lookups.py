@@ -29,6 +29,10 @@ def seed_roles(session):
              can_edit_assessments=False, can_edit_idp=True, can_edit_sessions=False, can_view_all_players=True),
         Role(role_name="Coach", description="Assigned players only -- view-only on assessments, sessions (Rapsodo/Bullpen/Hitter Tracking), and video; can still manage IDP goals/reports.",
              can_edit_assessments=False, can_edit_idp=True, can_edit_sessions=False, can_view_all_players=False),
+        # Oct 2026 (Ryker): same access as a pitching coach -- auth.ROLE_ALIASES
+        # runs it as Coach + Pitching specialty; only the title differs.
+        Role(role_name="Pitching Strategist", description="Pitching coach access (assigned players): game planning, pitch design, bullpen usage, in-game decisions and pitch calling.",
+             can_edit_assessments=False, can_edit_idp=True, can_edit_sessions=False, can_view_all_players=False),
         Role(role_name="Strength Coach", description="Assessments, sessions, and IDP -- edit rights.",
              can_edit_assessments=True, can_edit_idp=True, can_edit_sessions=True, can_view_all_players=True),
         Role(role_name="Athletic Trainer", description="Assessments, sessions, and IDP progress notes -- edit rights.",

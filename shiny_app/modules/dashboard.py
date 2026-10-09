@@ -163,7 +163,8 @@ def dashboard_server(input, output, session, app_state):
             sections = [
                 ui_helpers.page_header(
                     "Team dashboard",
-                    f"{date.today().strftime('%A, %b %d')} · {app_state.first_name()} {app_state.last_name()} · {role_name}",
+                    f"{date.today().strftime('%A, %b %d')} · {app_state.first_name()} {app_state.last_name()} · "
+                    f"{app_state.role_title() or role_name}",
                 ),
             ]
 
@@ -219,6 +220,11 @@ def dashboard_server(input, output, session, app_state):
             elif role_name == "Sports Scientist":
                 sections.append(_sports_scientist_section(db, players, player_ids, week_ago))
             elif role_name == "Coach" and specialty == "Pitching":
+                if app_state.role_title() == "Pitching Strategist":
+                    try:
+                        sections.append(_strategist_section(db, players, session.ns))
+                    except Exception as exc:  # never let it take the dashboard down
+                        sections.append(ui_helpers.empty_state(f"Strategist section unavailable: {exc}"))
                 # Reads the radio button rendered by controls() above --
                 # accessing it before the client has echoed its default
                 # value back is expected to briefly hold this output
@@ -1328,3 +1334,112 @@ def _general_section(db, players, player_ids, week_ago):
     ))
 
     return ui.div(*sections)
+
+
+# =============================================================================
+# PITCHING STRATEGIST (Oct 2026, Ryker) -- runs as Coach + Pitching (see
+# auth.ROLE_ALIASES), plus this section on top: next opponent + scouting
+# status, arsenal watch, compensation flags. Who can throw today is
+# already in the Today box above.
+# =============================================================================
+
+VELO_SHIFT = 1.5           # mph, last 14 days vs season, to call out
+
+
+def _strategist_section(db, players, ns):
+    from statistics import mean
+    from models import AdvanceReport, ArsenalTarget, RapsodoPitch, PitchType
+    from analytics import compensation as comp
+    import bucket_system as bs
+    today = date.today()
+    pitchers = [p for p in players if p.is_pitcher]
+    pids = [p.player_id for p in pitchers]
+    name = {p.player_id: f"{p.first_name} {p.last_name}" for p in pitchers}
+    cards = []
+
+    # --- Next opponent + scouting status ---
+    g = (db.query(Game).options(joinedload(Game.opponent_team))
+         .filter(Game.game_date >= today, Game.status.in_(["Scheduled", "In Progress", "Paused"]))
+         .order_by(Game.game_date).first())
+    if g is None:
+        opp_body = [ui.p("No game scheduled.", class_="text-muted small")]
+    else:
+        opp = g.opponent_team.team_name if g.opponent_team else ("Intrasquad" if g.is_intrasquad else (g.opponent_name or "TBD"))
+        rep = None
+        if g.opponent_team_id:
+            rep = (db.query(AdvanceReport).filter(AdvanceReport.opponent_team_id == g.opponent_team_id)
+                   .order_by(AdvanceReport.updated_at.desc()).first())
+        if rep is None:
+            status = ui_helpers.status_chip("flag", "No scouting report")
+        elif rep.published:
+            status = ui_helpers.status_chip("good", "Report published")
+        else:
+            status = ui_helpers.status_chip("watch", "Report in draft")
+        sp = getattr(g, "starting_pitcher", None)
+        opp_body = [
+            ui.p(ui.strong(f"{g.game_date.strftime('%a %-m/%-d')} vs {opp}"), "  ", status),
+            ui.p(f"Our starter: {sp.first_name} {sp.last_name}" if sp else "Our starter: not set", class_="small mb-1"),
+            ui.p(f"Latest report: {rep.title} (updated {rep.updated_at.strftime('%-m/%-d')})" if rep else
+                 "Build hitter plans on Advance Scouting.", class_="text-muted small"),
+        ]
+    cards.append(ui_helpers.card(*opp_body, title="Next opponent"))
+
+    # --- Arsenal watch: velo shifts + open arsenal targets ---
+    rows = []
+    if pids:
+        start, end = bs.season_date_range(bs.current_season_label())
+        q = (db.query(RapsodoPitch.player_id, RapsodoPitch.pitch_date, RapsodoPitch.velocity)
+             .join(PitchType, PitchType.pitch_type_id == RapsodoPitch.pitch_type_id)
+             .filter(PitchType.type_name.in_(comp.FASTBALLS), RapsodoPitch.player_id.in_(pids),
+                     RapsodoPitch.velocity.isnot(None)))
+        if start is not None:
+            q = q.filter(RapsodoPitch.pitch_date >= start)
+        season, recent = {}, {}
+        cut = today - timedelta(days=14)
+        for pid, d, v in q.all():
+            season.setdefault(pid, []).append(float(v))
+            if d is not None and (d.date() if hasattr(d, "date") else d) >= cut:
+                recent.setdefault(pid, []).append(float(v))
+        targets = {}
+        for t in db.query(ArsenalTarget).filter(ArsenalTarget.player_id.in_(pids)).all():
+            targets.setdefault(t.player_id, []).append(t.family.replace("_", " "))
+        for pid in pids:
+            s, r = season.get(pid, []), recent.get(pid, [])
+            shift = (mean(r) - mean(s)) if len(s) >= 20 and len(r) >= 10 else None
+            note = []
+            if shift is not None and abs(shift) >= VELO_SHIFT:
+                note.append(f"FB velo {shift:+.1f} mph last 14 days vs season ({mean(r):.1f})")
+            if pid in targets:
+                note.append("arsenal targets: " + ", ".join(sorted(targets[pid])))
+            if note:
+                rows.append({"Pitcher": name[pid], "Watch": " · ".join(note)})
+    cards.append(ui_helpers.card(
+        ui_helpers.render_dict_table(rows, empty_message="No velo shifts or open arsenal targets."),
+        ui.p(f"Velo shift = Rapsodo fastballs in the last 14 days vs his season average (±{VELO_SHIFT} mph or more). "
+             "Arsenal targets = coach overrides on Pitcher Profile → Arsenal Plan.", class_="text-muted small"),
+        title="Arsenal watch"))
+
+    # --- Compensation flags ---
+    flags = []
+    try:
+        data = comp.load(db)
+        for pid in pids:
+            if pid not in data["players"]:
+                continue
+            for f in comp.flags(pid, data["doms"][pid], data["derived"][pid], data["model"], data["velo"]):
+                flags.append((0 if f["level"] == "high" else 1, name[pid], f))
+    except Exception:
+        flags = []
+    flags.sort(key=lambda t: (t[0], t[1]))
+    flag_ui = [ui.div(ui_helpers.status_chip("flag" if f["level"] == "high" else "watch",
+                                             "High" if f["level"] == "high" else "Watch"), " ",
+                      ui.strong(nm), f" -- {f['name']}", style="margin-bottom:6px;") for _l, nm, f in flags[:10]]
+    cards.append(ui_helpers.card(
+        *(flag_ui or [ui.p("No compensation flags on your pitchers.", class_="small")]),
+        ui.p("Research-based watch items from Staff Compensation -- open it for the full grid.", class_="text-muted small"),
+        title="Compensation flags"))
+
+    return ui.div(ui.h5("Strategist", class_="gbo-section-title"),
+                  ui.layout_columns(*cards, col_widths=[4, 4, 4]),
+                  style="margin-bottom:18px;")
+

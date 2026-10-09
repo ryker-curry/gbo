@@ -1675,6 +1675,9 @@ def game_tracking_server(input, output, session, app_state):
     _gt_editing_pitch_id = reactive.Value(None)
     _gt_pending_delete_pitch_id = reactive.Value(None)
     _pitch_log_limit = reactive.Value(50)  # "Load more" bumps this by 50 at a time -- see pitch_log_body
+    # Oct 2026: Data Health "Fix" on one ball in play -> (game_id, game_pitch_id).
+    # Held here until that game is active, then opens Pitch Log on that pitch.
+    _gt_fix_target = reactive.Value(None)
     # Set only while a state-affecting Pitch Log edit (pitch_outcome/
     # ab_outcome/ends_plate_appearance/outs_after/bases_after/
     # runs_scored_on_play/unearned_runs_on_play) is awaiting the
@@ -1902,6 +1905,9 @@ def game_tracking_server(input, output, session, app_state):
             # read once (isolated so clearing it doesn't loop), then cleared.
             with reactive.isolate():
                 deep = app_state.deep_link_game_id()
+            if isinstance(deep, tuple):          # (game_id, game_pitch_id) from Data Health's per-pitch Fix
+                _gt_fix_target.set(deep)
+                deep = deep[0]
             if deep is not None and str(deep) not in choices:
                 g = db.query(Game).options(joinedload(Game.opponent_team)).filter(Game.game_id == deep).first()
                 if g is not None:
@@ -1936,6 +1942,55 @@ def game_tracking_server(input, output, session, app_state):
         _gt_pl_pending_insert.set(None)
         _gt_re_editing_event_id.set(None)
         _gt_re_pending_preview.set(None)
+        with reactive.isolate():
+            tab = _gt_open_tab.get()
+        if tab and tab[0] != _active_game_id.get():
+            _gt_open_tab.set(None)
+        _open_fix_target()
+
+    # Oct 2026: Data Health per-pitch Fix -- (game_id, tab) to land on.
+    _gt_open_tab = reactive.Value(None)
+
+    def _open_fix_target():
+        """Open Pitch Log with the Data Health target pitch's edit form, if the
+        target's game is the active one. Called after the game switch's own
+        state reset (above) and when the target arrives for the game that's
+        already open (below)."""
+        with reactive.isolate():
+            t = _gt_fix_target.get()
+            gid = _active_game_id.get()
+        if not t or t[0] != gid:
+            return
+        _gt_fix_target.set(None)
+        db = get_session()
+        try:
+            target = db.query(GamePitch).filter(GamePitch.game_pitch_id == t[1], GamePitch.game_id == gid).first()
+            if target is None:
+                return
+            newer = db.query(GamePitch).filter(GamePitch.game_id == gid,
+                                               GamePitch.pitch_sequence >= target.pitch_sequence).count()
+        finally:
+            db.close()
+        _pitch_log_limit.set(max(50, newer + 5))      # make sure the pitch is in the loaded page
+        _gt_editing_pitch_id.set(t[1])
+        _gt_open_tab.set((gid, "Pitch Log"))
+        ui.update_navs("gt_tabs", selected="Pitch Log")
+        ui.insert_ui(ui.tags.script(
+            "(function(n){var f=function(){var e=document.getElementById('gt-pl-editing');"
+            "if(e){e.scrollIntoView({block:'start',behavior:'smooth'});}else if(n-->0){setTimeout(f,250);}};f();})(24);"),
+            selector="body", where="beforeEnd", immediate=True)
+
+    @reactive.effect
+    def _leave_fix_tab():
+        """Picking any other game tab ends the Data Health fix landing."""
+        if "gt_tabs" in input and input.gt_tabs() and input.gt_tabs() != "Pitch Log":
+            _gt_open_tab.set(None)
+
+    @reactive.effect
+    def _fix_target_same_game():
+        t = _gt_fix_target()
+        if t and "game_select" in input and input.game_select() == str(t[0]):
+            _open_fix_target()
 
     # -------------------------------------------------------------------
     # New game
@@ -2134,6 +2189,8 @@ def game_tracking_server(input, output, session, app_state):
             return None
         if _active_game_id() is None:
             return None
+        with reactive.isolate():
+            open_tab = _gt_open_tab.get()
         return ui.navset_tab(
             ui.nav_panel("Live Tracking", ui.output_ui("live_tracking_body")),
             ui.nav_panel("Lineup & Setup", ui.output_ui("lineup_setup_body")),
@@ -2141,6 +2198,8 @@ def game_tracking_server(input, output, session, app_state):
             ui.nav_panel("Pitch Log", ui.output_ui("pitch_log_body")),
             ui.nav_panel("Runner Events", ui.output_ui("runner_events_log_body")),
             ui.nav_panel("Manage Game", ui.output_ui("manage_game_body")),
+            id="gt_tabs",
+            selected=open_tab[1] if open_tab and open_tab[0] == _active_game_id() else None,
         )
 
     # -------------------------------------------------------------------

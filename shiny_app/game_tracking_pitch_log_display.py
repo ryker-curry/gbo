@@ -648,7 +648,7 @@ def register_game_tracking_pitch_log(
                         ui.input_action_button("gt_pl_cancel_edit_btn", "Cancel", class_="btn-outline-secondary btn-sm"),
                         col_widths=[6, 6],
                     ))
-                    rows.append(ui.div(*edit_children, class_="border rounded p-2 mb-2"))
+                    rows.append(ui.div(*edit_children, class_="border rounded p-2 mb-2", id="gt-pl-editing"))
                     continue
 
                 if can_edit and p.game_pitch_id == pending_delete_id:
