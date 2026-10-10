@@ -48,6 +48,7 @@ from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_fi
 
 from strike_zone import location_words  # noqa: F401 (moved to strike_zone, Oct 2026; shared with Pitcher Game Breakdown)
 import ui_helpers
+import deep_link
 from analytics import league_baselines
 import format_helpers
 import chart_helpers
@@ -118,6 +119,9 @@ def hitter_game_report_ui():
 
 @module.server
 def hitter_game_report_server(input, output, session, app_state):
+    # Oct 2026: opened from Player Profile with the player/game picked (shiny_app/deep_link.py).
+    _dl = deep_link.Pending(app_state, "Hitter Game Breakdown", on_arrive=lambda p: [ui.update_select("game_select", selected=str(p["game_id"])) if "game_id" in p else None])
+
     # "Player" added Sept 2026 (Ryker: players should be able to see game
     # reports for themselves) -- same self-scoping pattern as
     # pitcher_game_report.py/hitter_profile.py: a Player sees no game/
@@ -182,7 +186,7 @@ def hitter_game_report_server(input, output, session, app_state):
             if not games:
                 return ui_helpers.empty_state("No games tracked yet. Start one on Game Tracking first.")
             choices = {str(g.game_id): _game_label(g) for g in games}
-            return ui.input_select("game_select", "Game", choices=choices)
+            return ui.input_select("game_select", "Game", choices=choices, selected=_dl.take("game_id", choices))
         finally:
             db.close()
 
@@ -226,7 +230,7 @@ def hitter_game_report_server(input, output, session, app_state):
                 return ui_helpers.empty_state("No pitches recorded for any of our batters in this game yet.")
             batters = db.query(Player).filter(Player.player_id.in_(batter_ids)).order_by(Player.last_name, Player.first_name).all()
             choices = {str(p.player_id): f"{p.first_name} {p.last_name}" for p in batters}
-            return ui.input_select("batter_select", "Batter", choices=choices)
+            return ui.input_select("batter_select", "Batter", choices=choices, selected=_dl.take("pid", choices))
         finally:
             db.close()
 

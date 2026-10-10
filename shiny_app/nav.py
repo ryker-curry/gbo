@@ -220,3 +220,56 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
         sections.append(NavSection("My Development", my_dev_pages))
 
     return sections
+
+
+# ---------------------------------------------------------------------------
+# Simplified staff sidebar (Oct 2026, Ryker: "simplify the sidebar for coach
+# view to only see what matters to them"). Every staff role except
+# Administrator sees only its everyday pages up top; the rest of what
+# build_nav_sections() allows goes into one collapsed "More tools" group.
+# This only regroups -- it never adds a page the role can't already open
+# (a key missing from build_nav_sections() is simply skipped).
+# ---------------------------------------------------------------------------
+_COACH_CORE = [
+    ("Home", ["dashboard", "how_to_read"]),
+    ("Players", ["roster", "player_profile", "arm_care"]),
+    ("Games", ["team_game_report", "pitch_cards", "advance_scouting"]),
+    ("Leaderboards", ["pitching_leaderboard", "hitting_leaderboard", "analytics"]),
+]
+SIMPLE_SIDEBAR = {
+    "Head Coach": _COACH_CORE,
+    "Coach": _COACH_CORE,
+    "Strength Coach": [
+        ("Home", ["dashboard", "how_to_read"]),
+        ("Players", ["roster", "player_profile", "arm_care"]),
+        ("Training", ["assessments", "training_routines", "player_assignments", "team_schedule"]),
+    ],
+    "Athletic Trainer": [
+        ("Home", ["dashboard", "how_to_read"]),
+        ("Players", ["roster", "player_profile", "arm_care"]),
+        ("Care", ["assessments", "team_schedule"]),
+    ],
+    "Sports Scientist": [
+        ("Home", ["dashboard", "how_to_read"]),
+        ("Players", ["roster", "player_profile"]),
+        ("Analysis", ["assessments", "staff_compensation", "research_project", "analytics"]),
+    ],
+    "Data Analyst": [
+        ("Home", ["dashboard", "how_to_read"]),
+        ("Players", ["roster", "player_profile"]),
+        ("Games", ["game_tracking", "data_health", "team_game_report"]),
+        ("Leaderboards", ["pitching_leaderboard", "hitting_leaderboard", "analytics"]),
+    ],
+    "Video Coordinator": [
+        ("Home", ["dashboard", "how_to_read"]),
+        ("Video", ["video_import"]),
+        ("Games", ["game_tracking", "team_game_report"]),
+    ],
+}
+MORE_TOOLS = "More tools"
+
+
+def simple_sidebar_groups(role_name):
+    """Core (group, keys) list for a role, or None = full sidebar
+    (Administrator, Player, unknown roles)."""
+    return SIMPLE_SIDEBAR.get(role_name)

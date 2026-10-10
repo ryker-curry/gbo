@@ -18,6 +18,7 @@ from analytics import weekly_report
 from visualizations.weekly_report_sheet import render_sheet
 
 import ui_helpers
+import deep_link
 
 STAFF_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
 NOTE_ROLES = ("Administrator", "Head Coach", "Coach")
@@ -50,6 +51,9 @@ def weekly_report_ui():
 
 @module.server
 def weekly_report_server(input, output, session, app_state):
+    # Oct 2026: opened from Player Profile with the player/game picked (shiny_app/deep_link.py).
+    _dl = deep_link.Pending(app_state, "Weekly Reports", on_arrive=lambda p: [ui.update_select("pitcher", selected=str(p["pid"])) if "pid" in p else None])
+
     tick = reactive.Value(0)
 
     def _role():
@@ -99,7 +103,8 @@ def weekly_report_server(input, output, session, app_state):
                 "Pitchers": {str(p.player_id): f"{p.last_name}, {p.first_name}" for p in ps if p.is_pitcher},
                 "Hitters": {str(p.player_id): f"{p.last_name}, {p.first_name}" for p in ps if not p.is_pitcher},
             }
-            return ui.input_select("pitcher", "Player", {k: v for k, v in groups.items() if v})
+            flat = {k for g in groups.values() for k in g}
+            return ui.input_select("pitcher", "Player", {k: v for k, v in groups.items() if v}, selected=_dl.take("pid", flat))
         finally:
             db.close()
 

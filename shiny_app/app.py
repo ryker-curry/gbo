@@ -285,7 +285,28 @@ def server(input, output, session):
     @reactive.effect
     @reactive.event(input.sidebar_go)
     def _on_sidebar_go():
+        app_state.back_to.set(None)   # using the sidebar ends a "came from a profile" trip
         ui.update_navs("main_nav", selected=input.sidebar_go())
+
+    # Oct 2026, Ryker: pages opened from a Player Profile link show a
+    # "Back to <name>" bar (shiny_app/profile_links.py sets back_to).
+    @render.ui
+    def gbo_back_bar():
+        back = app_state.back_to()
+        if not back or input.main_nav() == "Player Profile":
+            return None
+        return ui.div(ui.input_action_button("gbo_back_btn", f"← Back to {back[1]}", class_="btn-sm gbo-back-btn"),
+                      class_="gbo-back")
+
+    @reactive.effect
+    @reactive.event(input.gbo_back_btn)
+    def _on_back():
+        back = app_state.back_to()
+        if not back:
+            return
+        app_state.back_to.set(None)
+        app_state.deep_link_player_id.set(back[0])
+        ui.update_navs("main_nav", selected="Player Profile")
 
     @reactive.effect
     async def _mirror_nav_to_sidebar():
@@ -485,6 +506,9 @@ _SIDEBAR_JS = """
     document.querySelectorAll('.gbo-side-link[data-title]').forEach(function(b){
       b.classList.toggle('active', b.getAttribute('data-title') === title);
     });
+    document.querySelectorAll('.gbo-side-more').forEach(function(d){
+      if (d.querySelector('.gbo-side-link.active[data-title]')) { d.open = true; }
+    });
     var c = document.getElementById('gbo-crumb');
     if (c) { c.innerHTML = '<b>' + title.replace(/</g,'&lt;') + '</b>'; }
   }
@@ -519,23 +543,50 @@ def _sidebar(app_state, sections):
             pages_by_key.setdefault(page.key, page)
     placed = set()
     groups = []
-    for gtitle, keys in _NAV_GROUPS:
-        items = [pages_by_key[k] for k in keys if k in pages_by_key and k not in placed]
-        if items:
-            groups.append((gtitle, items)); placed.update(p.key for p in items)
-    leftovers = [p for k, p in pages_by_key.items() if k not in placed]
-    if leftovers:
-        groups.append(("Other", leftovers))
+    nav_groups = _NAV_GROUPS
+    # Oct 2026, Ryker: staff other than Administrator get a short sidebar
+    # (nav.SIMPLE_SIDEBAR) -- everything else they can open is folded into
+    # a collapsed "More tools" group at the bottom.
+    core = nav.simple_sidebar_groups(app_state.role_name())
+    if core is not None:
+        if app_state.is_guest() and "research_project" in pages_by_key:
+            core = [("About", ["research_project"])] + core
+        for gtitle, keys in core:
+            items = [pages_by_key[k] for k in keys if k in pages_by_key and k not in placed]
+            if items:
+                groups.append((gtitle, items)); placed.update(p.key for p in items)
+        more = []
+        for _g, keys in nav_groups:
+            more += [pages_by_key[k] for k in keys if k in pages_by_key and k not in placed and k not in {p.key for p in more}]
+        more += [p for k, p in pages_by_key.items() if k not in placed and p not in more]
+        if more:
+            groups.append((nav.MORE_TOOLS, more))
+    else:
+        for gtitle, keys in nav_groups:
+            items = [pages_by_key[k] for k in keys if k in pages_by_key and k not in placed]
+            if items:
+                groups.append((gtitle, items)); placed.update(p.key for p in items)
+        leftovers = [p for k, p in pages_by_key.items() if k not in placed]
+        if leftovers:
+            groups.append(("Other", leftovers))
 
     links = []
     first_title = None
     for gtitle, items in groups:
-        links.append(ui.div(gtitle, class_="gbo-side-group"))
+        buttons = []
         for page in items:
             if first_title is None:
                 first_title = page.title
             label = _NAV_LABELS.get(page.key, page.title)
-            links.append(ui.tags.button(_icon(page.key), ui.span(label), class_="gbo-side-link" + (" active" if page.title == first_title else ""), type="button", **{"data-title": page.title}))
+            buttons.append(ui.tags.button(_icon(page.key), ui.span(label), class_="gbo-side-link" + (" active" if page.title == first_title else ""), type="button", **{"data-title": page.title}))
+        if gtitle == nav.MORE_TOOLS:
+            links.append(ui.tags.details(
+                ui.tags.summary(ui.HTML('<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>'),
+                                ui.span(f"{nav.MORE_TOOLS} ({len(items)})"), class_="gbo-side-link gbo-side-more-sum"),
+                *buttons, class_="gbo-side-more"))
+        else:
+            links.append(ui.div(gtitle, class_="gbo-side-group"))
+            links.extend(buttons)
 
     initials = (app_state.first_name() or "?")[:1] + (app_state.last_name() or "")[:1]
     me = ui.div(
@@ -597,6 +648,7 @@ def _app_shell_ui(app_state):
         ui.div(
             topbar,
             _guest_banner(app_state) if guest else None,
+            ui.output_ui("gbo_back_bar"),
             ui.div(ui.navset_hidden(*panels, id="main_nav", selected=first_title), class_="gbo-content"),
             class_="gbo-main",
         ),

@@ -57,6 +57,14 @@ class AppState:
     deep_link_player_id: reactive.Value   # set by Roster, consumed once by Player Profile
     deep_link_game_id: reactive.Value     # set by Data Health "Fix in Game Tracking", consumed once by Game Tracking
     deep_link_pitcher: reactive.Value     # (player_id, pp_view) -- set by Data Health "Pitch labels", consumed once by Pitcher Profile
+    # Oct 2026, Ryker: Player Profile is the coach's hub -- its "Go to"
+    # buttons open a page with the player (and game) already picked.
+    # deep_link_open = {"page": title, "pid": .., "game_id": .., "n": k},
+    # consumed once by that page (see shiny_app/deep_link.py). back_to =
+    # (pid, name) while the coach is on a page reached that way; the
+    # "Back to <name>" bar shows until they use the sidebar.
+    deep_link_open: reactive.Value
+    back_to: reactive.Value
 
     def is_authenticated(self) -> bool:
         """True once Supabase login succeeded AND a matching, active GBO
@@ -87,6 +95,8 @@ class AppState:
         self.deep_link_game_id.set(None)
         self.deep_link_player_id.set(None)
         self.deep_link_pitcher.set(None)
+        self.deep_link_open.set(None)
+        self.back_to.set(None)
 
 
 def new_app_state() -> AppState:
@@ -111,4 +121,6 @@ def new_app_state() -> AppState:
         deep_link_player_id=reactive.Value(None),
         deep_link_game_id=reactive.Value(None),
         deep_link_pitcher=reactive.Value(None),
+        deep_link_open=reactive.Value(None),
+        back_to=reactive.Value(None),
     )

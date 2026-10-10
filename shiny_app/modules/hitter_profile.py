@@ -70,6 +70,7 @@ from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_fi
 from visualizations.spray_chart import hit_spray_chart, infield_slice_chart, all_bip_spray_chart
 
 import ui_helpers
+import deep_link
 import format_helpers
 import glossary_content
 from format_helpers import format_pct as _fmt_pct
@@ -129,6 +130,9 @@ def hitter_profile_ui():
 
 @module.server
 def hitter_profile_server(input, output, session, app_state):
+    # Oct 2026: opened from Player Profile with the player/game picked (shiny_app/deep_link.py).
+    _dl = deep_link.Pending(app_state, "Hitter Profile", on_arrive=lambda p: [ui.update_select("hp_player_select", selected=str(p["pid"])) if "pid" in p else None])
+
 
     def _visible_hitters(db):
         q = db.query(Player).filter(Player.is_pitcher.is_(False))
@@ -159,7 +163,7 @@ def hitter_profile_server(input, output, session, app_state):
         if not hitters:
             return ui_helpers.empty_state("No hitters to show yet.")
         choices = {str(p.player_id): f"{p.last_name}, {p.first_name}" + (f"  #{p.jersey_number}" if p.jersey_number else "") for p in hitters}
-        return ui.div(ui.input_select("hp_player_select", "Hitter", choices=choices, width="320px"), style="margin-bottom:8px;")
+        return ui.div(ui.input_select("hp_player_select", "Hitter", choices=choices, selected=_dl.take("pid", choices), width="320px"), style="margin-bottom:8px;")
 
     @render.ui
     def hp_filters():

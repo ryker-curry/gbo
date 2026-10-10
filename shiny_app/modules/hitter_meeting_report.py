@@ -38,6 +38,7 @@ from visualizations.hitter_report_sheet import render_sheet
 from format_helpers import game_label
 
 import ui_helpers
+import deep_link
 
 STAFF_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
 NOTE_EDIT_ROLES = ("Administrator", "Head Coach", "Coach")
@@ -82,6 +83,9 @@ def hitter_meeting_report_ui():
 
 @module.server
 def hitter_meeting_report_server(input, output, session, app_state):
+    # Oct 2026: opened from Player Profile with the player/game picked (shiny_app/deep_link.py).
+    _dl = deep_link.Pending(app_state, "Hitter Report", on_arrive=lambda p: [ui.update_radio_buttons("kind", selected="game"), ui.update_select("pitcher", selected=str(p["pid"])) if "pid" in p else None, ui.update_select("game", selected=str(p["game_id"])) if "game_id" in p else None])
+
     notes_tick = reactive.Value(0)
 
     def _role():
@@ -116,7 +120,8 @@ def hitter_meeting_report_server(input, output, session, app_state):
                        .order_by(Player.last_name, Player.first_name).all()) if ids else []
             if not players:
                 return ui_helpers.empty_state("No hitters with tracked games yet.")
-            return ui.input_select("pitcher", "Hitter", choices={str(p.player_id): f"{p.last_name}, {p.first_name}" for p in players})
+            choices = {str(p.player_id): f"{p.last_name}, {p.first_name}" for p in players}
+            return ui.input_select("pitcher", "Hitter", choices=choices, selected=_dl.take("pid", choices))
         finally:
             db.close()
 
@@ -137,7 +142,8 @@ def hitter_meeting_report_server(input, output, session, app_state):
                 games = hitter_report.hitter_games(db, pid)
                 if not games:
                     return ui.p("No games tracked for this hitter yet.", class_="text-muted")
-                return ui.input_select("game", "Game", choices={str(g.game_id): game_label(g) for g in games})
+                choices = {str(g.game_id): game_label(g) for g in games}
+                return ui.input_select("game", "Game", choices=choices, selected=_dl.take("game_id", choices))
             games = hitter_report.hitter_games(db, pid)
             season_ids = [g.season_id for g in games if g.season_id is not None]
             seasons = db.query(Season).filter(Season.season_id.in_(set(season_ids))).all() if season_ids else []
