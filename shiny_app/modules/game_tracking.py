@@ -348,9 +348,10 @@ role):
     and orthogonal.
 """
 
+import json
 import re
 import time
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from shiny import module, ui, render, reactive, req
 from shinywidgets import output_widget, render_plotly
@@ -365,6 +366,7 @@ from models import (
     Player, Position, PitchType, Game, GameLineupSlot, GamePitch, RunExpectancy,
     OpponentTeam, OpponentPlayer, Season, PitchingChange, PlayerPitchArsenal, OpponentLineupSlot,
     LineupSubstitution, GameRunnerEvent, GameForcedHalfInningEnd,
+    RapsodoPitch, GameVideoClip,
 )
 from game_stats import (
     get_pitching_pitches, get_batting_pitches, compute_pitching_line, compute_batting_line,
@@ -424,8 +426,72 @@ CONTACT_QUALITY_OPTIONS = ["Barreled/Squared Up", "Solid", "Weak", "Jammed", "Of
 # advance; every other type always advances (never an out) -- so the
 # UI only ever needs to show a to-base picker OR an "out" note, never
 # both, per event type.
-RUNNER_EVENT_TYPES = ["Stolen Base", "Caught Stealing", "Picked Off", "Wild Pitch", "Passed Ball", "Balk", "Defensive Indifference", "Throwing Error"]
-RUNNER_EVENT_OUT_TYPES = ("Caught Stealing", "Picked Off")
+RUNNER_EVENT_TYPES = ["Stolen Base", "Caught Stealing", "Picked Off", "Wild Pitch", "Passed Ball", "Balk", "Defensive Indifference", "Throwing Error",
+                      # Oct 2026, Ryker: more ways a runner moves (drag-and-drop bases)
+                      "Fielding Error", "Advanced on Throw", "Obstruction", "Interference", "Out on Bases"]
+RUNNER_EVENT_OUT_TYPES = ("Caught Stealing", "Picked Off", "Interference", "Out on Bases")
+RUNNER_ADVANCE_TYPES = [t for t in RUNNER_EVENT_TYPES if t not in RUNNER_EVENT_OUT_TYPES]
+BATTER_REACH_BASE = {"1B": 1, "BB": 1, "HBP": 1, "E": 1, "FC": 1, "2B": 2, "3B": 3}
+
+
+def runners_on_base(pitches, runner_events):
+    """{base: identity} for the runners on base right now, identity being
+    ("our", player_id) / ("opp", opponent_player_id) / None when GBO can't
+    tell. Oct 2026, for the drag-and-drop bases. Walks the current half-
+    inning: the batter goes to the base his result puts him on, runners
+    already on fill the other occupied bases lead-first (anyone left over
+    was put out -- e.g. the forced runner on a fielder's choice), runs take
+    the lead runners off first, and runner events move whoever they name."""
+    ev_after = {}
+    for e in runner_events or []:
+        ev_after.setdefault(e.pitch_sequence_after, []).append(e)
+    for k in ev_after:
+        ev_after[k].sort(key=lambda e: (e.created_at or 0, getattr(e, "runner_event_id", 0) or 0))
+
+    def batter_of(p):
+        if p.is_our_team_batting:
+            return ("our", p.our_player_id) if p.our_player_id else None
+        if p.opponent_our_player_id:
+            return ("our", p.opponent_our_player_id)
+        return ("opp", p.opponent_player_id) if p.opponent_player_id else None
+
+    def bases_set(b):
+        return {i + 1 for i, c in enumerate((b or "000")[:3]) if c == "1"}
+
+    def apply_events(runners, anchor):
+        for e in ev_after.get(anchor, []):
+            who = runners.pop(e.from_base, None)
+            if e.our_player_id:
+                who = ("our", e.our_player_id)
+            elif e.opponent_player_id:
+                who = ("opp", e.opponent_player_id)
+            if not e.is_out and e.to_base in (1, 2, 3):
+                runners[e.to_base] = who
+
+    runners, half = {}, None
+    apply_events(runners, 0)
+    for p in sorted(pitches, key=lambda x: x.pitch_sequence):
+        key = (p.inning, bool(p.is_our_team_batting), p.batting_squad)
+        if key != half:
+            runners, half = {}, key
+        on_before = bases_set(p.bases_before)
+        runners = {b: runners.get(b) for b in on_before}
+        if p.ends_plate_appearance and p.ab_outcome not in (None, "No Result"):
+            if (p.outs_after or 0) >= 3:
+                runners = {}
+            else:
+                lead_first = [runners[b] for b in sorted(runners, reverse=True)]
+                remaining = lead_first[(p.runs_scored_on_play or 0):]
+                new_on = bases_set(p.bases_after)
+                placed = {}
+                bb = BATTER_REACH_BASE.get(p.ab_outcome)
+                if bb in new_on:
+                    placed[bb] = batter_of(p)
+                for b in sorted(new_on - set(placed), reverse=True):
+                    placed[b] = remaining.pop(0) if remaining else None
+                runners = placed
+        apply_events(runners, p.pitch_sequence)
+    return runners
 
 # Display-only label for each squad letter (Sep 2026, Ryker: show "Team
 # 1/2/3" instead of "Squad A/B/C"). Purely cosmetic -- the underlying
@@ -949,8 +1015,29 @@ def suggest_after_state(ab_outcome, bases_before, outs_before):
     # was left on base when the out was made.
     if outs >= 3:
         b = ["0", "0", "0"]
+        # Oct 2026: a run can't count on the 3rd out of a force play / the
+        # batter-runner (e.g. bases-loaded FC with 2 outs used to suggest
+        # 1 run). The coach can still type one in for a timing play.
+        runs = 0
 
     return outs, "".join(b), runs
+
+
+def check_after_state(outs_before, bases_before, outs_after, runs, unearned=0):
+    """Plain-English problem with a hand-entered play result, or None.
+    Oct 2026: the number boxes' min/max only limit the browser, so
+    impossible results (outs going down, 4 outs, more runs than runners
+    plus the batter) could be saved."""
+    if outs_after < (outs_before or 0):
+        return f"Outs after ({outs_after}) can't be lower than outs before the pitch ({outs_before})"
+    if outs_after > 3:
+        return "Outs after can't be more than 3"
+    max_runs = (bases_before or "000").count("1") + 1
+    if runs < 0 or unearned < 0:
+        return "Runs can't be negative"
+    if runs > max_runs:
+        return f"{runs} runs can't score with {max_runs - 1} runner(s) on base"
+    return None
 
 
 def apply_runner_events(bases, outs, events):
@@ -972,6 +1059,29 @@ def apply_runner_events(bases, outs, events):
         if ev.is_out:
             outs += 1
     return "".join(b), outs
+
+
+def first_batting_is_ours(game):
+    """Which side bats first (the top of the 1st) -- True when our side
+    (Squad A, or "us" in an external game) leads off. Away always bats
+    first:
+      - two-squad intrasquad: Squad A unless intrasquad_away_squad == "B"
+      - three-squad intrasquad: Squad A (the A -> B -> C rotation)
+      - external game: us unless we're the home team (Oct 2026 fix --
+        is_home used to be ignored, so a home game started with us
+        batting in the top of the 1st)
+    One helper for compute_current_state, replay_game and _inning_display
+    so the live state, a Pitch Log replay and the Top/Bot label can never
+    disagree about who started (Oct 2026: replay_game always assumed
+    Squad A, so editing any pitch of a "B bats first" game flipped every
+    pitch's side and swapped the score)."""
+    if game is None:
+        return True
+    if game.is_intrasquad:
+        if getattr(game, "uses_three_squad_intrasquad", False):
+            return True
+        return game.intrasquad_away_squad != "B"
+    return game.is_home is not True
 
 
 def compute_current_state(pitches, runner_events=None, forced_ends=None, game=None):
@@ -1016,12 +1126,8 @@ def compute_current_state(pitches, runner_events=None, forced_ends=None, game=No
     # second, independent rollover on top -- see that loop below.
     already_rolled = False
     if not pitches:
-        away_is_squad_b = bool(
-            game and game.is_intrasquad and not game.uses_three_squad_intrasquad
-            and game.intrasquad_away_squad == "B"
-        )
         state = {
-            "inning": 1, "is_our_batting": not away_is_squad_b, "outs": 0, "bases": "000",
+            "inning": 1, "is_our_batting": first_batting_is_ours(game), "outs": 0, "bases": "000",
             "balls": 0, "strikes": 0, "pa_pitch_number": 1, "new_pa": True,
         }
         anchor = 0
@@ -1153,18 +1259,14 @@ def _inning_display(raw_inning, game=None, state=None):
         return f"Half-inning {raw_inning}"
     real_inning = (raw_inning + 1) // 2
     if state is not None and "is_our_batting" in state:
-        away_is_squad_b = bool(
-            game is not None and game.is_intrasquad and not game.uses_three_squad_intrasquad
-            and game.intrasquad_away_squad == "B"
-        )
-        is_top = state["is_our_batting"] == (not away_is_squad_b)
+        is_top = state["is_our_batting"] == first_batting_is_ours(game)
     else:
         is_top = raw_inning % 2 == 1
     ordinal_suffix = "th" if real_inning % 100 in (11, 12, 13) else {1: "st", 2: "nd", 3: "rd"}.get(real_inning % 10, "th")
     return f"{real_inning}{ordinal_suffix} ({'Top' if is_top else 'Bot'})"
 
 
-def replay_game(pitches, runner_events, re_lookup, forced_ends=None):
+def replay_game(pitches, runner_events, re_lookup, forced_ends=None, game=None):
     """Recompute every pitch's forward-derived chain (balls_before,
     strikes_before, outs_before, bases_before, inning, is_our_team_batting,
     pa_pitch_number, re_before, re_after, run_value) plus the game's
@@ -1266,9 +1368,16 @@ def replay_game(pitches, runner_events, re_lookup, forced_ends=None):
     ordered_pitches = sorted(pitches, key=lambda p: p.pitch_sequence)
     events = list(runner_events or [])
     forced = list(forced_ends or [])
+    if game is None:
+        # Every caller passes rows from one game -- take it off any of them
+        # (Oct 2026: replay used to always start with Squad A batting).
+        for row in list(ordered_pitches) + events + forced:
+            game = getattr(row, "game", None)
+            if game is not None:
+                break
 
     state = {
-        "inning": 1, "is_our_batting": True, "outs": 0, "bases": "000",
+        "inning": 1, "is_our_batting": first_batting_is_ours(game), "outs": 0, "bases": "000",
         "balls": 0, "strikes": 0, "pa_pitch_number": 1,
     }
     our_score = opponent_score = squad_c_score = 0
@@ -1635,6 +1744,154 @@ def _game_label(g):
 # click_target() is used via the click_widgets module directly at each
 # output_widget(...) call site (see live_tracking_body/video review UI).
 import click_widgets  # noqa: E402
+from analytics.pitch_card import PITCH_DIGIT  # noqa: E402  (Ryker's 1 FB, 2 CB, 3 SL, 4 CH, 5 CT digits)
+
+# Oct 2026, Ryker: drag-and-drop bases. The diamond's config (runners,
+# cause lists, roster) comes from the server as JSON on the element; moves
+# queue up client-side and one Confirm sends them all as a single input.
+_DIAMOND_JS = r"""
+(function(){
+  if (window.gboDiamondInit) return;
+  var BASE = {1: '1st', 2: '2nd', 3: '3rd', 4: 'Home', out: 'Out'};
+  window.gboDiamondInit = function(root){
+    if (!root || root.__gboInit) return; root.__gboInit = true;
+    var cfg = JSON.parse(root.getAttribute('data-config'));
+    var occ = {};                       // base -> runner key
+    var runners = {};                   // key -> {name, who, base}
+    Object.keys(cfg.bases).forEach(function(b){
+      var r = cfg.bases[b]; if (!r) return;
+      var k = 'r' + b; runners[k] = {name: r.name, who: r.who || '', base: +b}; occ[b] = k;
+    });
+    var moves = [];
+    var list = root.querySelector('.gbo-dia-moves'), bar = root.querySelector('.gbo-dia-bar');
+    function chip(k){
+      var r = runners[k], el = document.createElement('div');
+      el.className = 'gbo-dia-chip'; el.textContent = r.name; el.setAttribute('data-k', k);
+      el.title = 'Drag to the base he reached, or to Out';
+      return el;
+    }
+    function draw(){
+      root.querySelectorAll('.gbo-dia-chip').forEach(function(c){ c.remove(); });
+      Object.keys(occ).forEach(function(b){
+        var slot = root.querySelector('.gbo-dia-base[data-base="' + b + '"]');
+        if (slot && occ[b]) slot.appendChild(chip(occ[b]));
+      });
+      list.innerHTML = '';
+      moves.forEach(function(m, i){
+        var row = document.createElement('div'); row.className = 'gbo-dia-move';
+        var causes = m.to === 'out' ? cfg.out_causes : cfg.advance_causes;
+        var sel = '<select data-i="' + i + '" data-f="cause">' + causes.map(function(c){
+          return '<option' + (c === m.cause ? ' selected' : '') + '>' + c + '</option>'; }).join('') + '</select>';
+        var who = '<select data-i="' + i + '" data-f="who"><option value="">Runner (unknown)</option>' + cfg.roster.map(function(o){
+          return '<option value="' + o.v + '"' + (o.v === m.who ? ' selected' : '') + '>' + o.label + '</option>'; }).join('') + '</select>';
+        row.innerHTML = '<span class="gbo-dia-path">' + BASE[m.from] + ' &rarr; ' + BASE[m.to] + '</span>' + sel + who +
+                        '<button type="button" class="btn btn-sm btn-outline-secondary" data-undo="' + i + '">&times;</button>';
+        list.appendChild(row);
+      });
+      bar.style.display = moves.length ? '' : 'none';
+      root.querySelector('.gbo-dia-confirm').textContent = 'Save ' + moves.length + ' runner move' + (moves.length === 1 ? '' : 's');
+    }
+    function undoFrom(i){
+      // take back move i and everything after it (later moves may depend on it)
+      for (var j = moves.length - 1; j >= i; j--){
+        var m = moves[j], k = m.k;
+        if (m.to !== 'out' && m.to !== 4) delete occ[m.to];
+        occ[m.from] = k; runners[k].base = m.from;
+      }
+      moves = moves.slice(0, i); draw();
+    }
+    list.addEventListener('change', function(e){
+      var i = +e.target.getAttribute('data-i'), f = e.target.getAttribute('data-f');
+      if (!isNaN(i) && f) { moves[i][f] = e.target.value; if (f === 'who') runners[moves[i].k].who = e.target.value; }
+    });
+    list.addEventListener('click', function(e){
+      var u = e.target.getAttribute && e.target.getAttribute('data-undo'); if (u !== null && u !== undefined) undoFrom(+u);
+    });
+    root.querySelector('.gbo-dia-clear').addEventListener('click', function(){ undoFrom(0); });
+    root.querySelector('.gbo-dia-confirm').addEventListener('click', function(){
+      if (!moves.length) return;
+      Shiny.setInputValue(cfg.input, {moves: moves.map(function(m){ return {from: m.from, to: m.to, cause: m.cause, who: m.who}; }), t: Date.now()}, {priority: 'event'});
+    });
+    var drag = null;
+    root.addEventListener('pointerdown', function(e){
+      var c = e.target.closest && e.target.closest('.gbo-dia-chip'); if (!c) return;
+      e.preventDefault();
+      var g = c.cloneNode(true); g.classList.add('gbo-dia-ghost'); document.body.appendChild(g);
+      drag = {k: c.getAttribute('data-k'), ghost: g, src: c}; c.classList.add('gbo-dia-dragging');
+      move(e);
+    });
+    function move(e){ if (!drag) return; drag.ghost.style.left = (e.clientX - 28) + 'px'; drag.ghost.style.top = (e.clientY - 16) + 'px';
+      root.querySelectorAll('.gbo-dia-drop').forEach(function(z){
+        var r = z.getBoundingClientRect(); z.classList.toggle('gbo-dia-over', e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom);
+      });
+    }
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', function(e){
+      if (!drag) return;
+      var d = drag; drag = null; d.ghost.remove(); d.src.classList.remove('gbo-dia-dragging');
+      var hit = null;
+      root.querySelectorAll('.gbo-dia-drop').forEach(function(z){
+        var r = z.getBoundingClientRect(); z.classList.remove('gbo-dia-over');
+        if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) hit = z.getAttribute('data-base');
+      });
+      if (!hit) return;
+      var r = runners[d.k], from = r.base, to = hit === 'out' ? 'out' : +hit;
+      var msg = root.querySelector('.gbo-dia-msg'); msg.textContent = '';
+      if (to !== 'out' && to <= from) { msg.textContent = 'Runners only move forward -- drag to a later base, Home, or Out.'; return; }
+      if (to !== 'out' && to !== 4 && occ[to]) { msg.textContent = 'Someone is on ' + BASE[to] + ' -- move the lead runner first.'; return; }
+      delete occ[from];
+      if (to !== 'out' && to !== 4) { occ[to] = d.k; r.base = to; }
+      moves.push({k: d.k, from: from, to: to, who: r.who, cause: to === 'out' ? cfg.out_causes[0] : cfg.advance_causes[0]});
+      draw();
+    });
+    draw();
+  };
+})();
+"""
+
+# Oct 2026: keyboard shortcuts for the live charter (Track-A-Pitch / chartIT
+# style). Only acts while Live Tracking's Record button is on screen and
+# never while typing in a text box (Enter in the pitch-code box applies the
+# code; Enter in the notes box records). __NS__ is the module namespace.
+_SHORTCUT_JS = """
+(function(){
+  if (window.__gboGtKeys) return; window.__gboGtKeys = true;
+  var NS = '__NS__';
+  var OUT = {b: 'Ball', c: 'Called Strike', s: 'Swing and Miss', f: 'Foul', x: 'In Play', h: 'HBP'};
+  function el(id){ return document.getElementById(NS + id); }
+  function setSel(id, v){
+    var s = el(id); if (!s) return false;
+    if (s.selectize) { s.selectize.setValue(v); return true; }
+    if (![].some.call(s.options, function(o){ return o.value === v; })) return false;
+    s.value = v; s.dispatchEvent(new Event('change', {bubbles: true})); return true;
+  }
+  function flash(id){ var s = el(id); if (!s) return; s.classList.add('gbo-key-flash'); setTimeout(function(){ s.classList.remove('gbo-key-flash'); }, 350); }
+  document.addEventListener('keydown', function(e){
+    var rec = el('record_pitch_btn');
+    if (!rec || !rec.offsetParent || e.metaKey || e.ctrlKey || e.altKey) return;
+    var t = e.target, tag = (t && t.tagName) || '';
+    var typing = tag === 'TEXTAREA' || tag === 'SELECT' || (tag === 'INPUT' && !/checkbox|radio|button/.test(t.type));
+    if (e.key === 'Enter') {
+      if (t && t.id === NS + 'pitch_code_input') { e.preventDefault(); var a = el('apply_pitch_code_btn'); if (a) a.click(); t.blur(); return; }
+      if (typing && t.id !== NS + 'pitch_notes_input') return;
+      if (tag === 'BUTTON') return;
+      e.preventDefault(); if (!rec.disabled) rec.click(); return;
+    }
+    if (typing) return;
+    var k = (e.key || '').toLowerCase();
+    if (OUT[k]) { if (setSel('pitch_outcome_select', OUT[k])) { e.preventDefault(); flash('pitch_outcome_select'); } return; }
+    if (/^[1-5]$/.test(k)) {
+      var m = el('gt_digit_map'); var map = m ? JSON.parse(m.getAttribute('data-map') || '{}') : {};
+      if (map[k] && setSel('pitch_type_select', map[k])) { e.preventDefault(); flash('pitch_type_select'); }
+    }
+  });
+  document.addEventListener('click', function(e){
+    var b = e.target && e.target.closest ? e.target.closest('#' + NS + 'record_pitch_btn, #' + NS + 'undo_last_pitch_btn') : null;
+    if (!b) return;
+    setTimeout(function(){ b.disabled = true; setTimeout(function(){ b.disabled = false; }, 1200); }, 0);
+  }, true);
+})();
+"""
 from click_widgets import build_clickable_widget as _build_clickable_widget  # noqa: E402
 
 
@@ -1962,6 +2219,12 @@ def game_tracking_server(input, output, session, app_state):
         if not t or t[0] != gid:
             return
         _gt_fix_target.set(None)
+        _open_pitch_edit(gid, t[1])
+
+    def _open_pitch_edit(gid, game_pitch_id):
+        """Jump to Pitch Log with this pitch's edit form open and scrolled
+        into view (Data Health's Fix, and Live Tracking's half-inning review)."""
+        t = (gid, game_pitch_id)
         db = get_session()
         try:
             target = db.query(GamePitch).filter(GamePitch.game_pitch_id == t[1], GamePitch.game_id == gid).first()
@@ -2184,7 +2447,10 @@ def game_tracking_server(input, output, session, app_state):
 
     @render.ui
     def game_tabs():
-        _refresh_tick()
+        # Oct 2026: no longer redrawn on every _refresh_tick. Every recorded
+        # pitch bumps that tick, and redrawing the tab set rebuilt all six
+        # tabs (and every output inside them) after each pitch. Each tab body
+        # already follows the ticks it needs on its own.
         if not _access_ok():
             return None
         if _active_game_id() is None:
@@ -3054,8 +3320,10 @@ def game_tracking_server(input, output, session, app_state):
             # denser, un-sectioned wall of widgets.
             return ui.div(
                 ui.output_ui("live_game_dashboard"),
+                ui.output_ui("half_inning_review"),
                 ui.hr(),
                 ui.output_ui("game_state_display"),
+                ui.output_ui("base_diamond"),
                 ui.output_ui("runner_events_panel"),
                 ui.output_ui("forced_half_inning_end_panel"),
                 ui.hr(),
@@ -3080,6 +3348,10 @@ def game_tracking_server(input, output, session, app_state):
                 ui.output_ui("result_fields_body"),
                 ui.hr(),
                 ui.output_ui("record_pitch_controls"),
+                ui.p("Shortcuts: B ball · C called strike · S swinging strike · F foul · X in play · H hit by pitch · "
+                     "1-5 pitch type (1 FB, 2 CB, 3 SL, 4 CH, 5 CT) · Enter records the pitch.",
+                     class_="text-muted small gbo-gt-keys"),
+                ui.tags.script(_SHORTCUT_JS.replace("__NS__", session.ns("x")[:-1])),
             )
         elif _can_edit() and status == "Scheduled":
             return ui.p('This game hasn\'t started yet -- click "Start game" on the Manage Game tab to begin live tracking.', class_="text-muted")
@@ -3089,6 +3361,101 @@ def game_tracking_server(input, output, session, app_state):
             return ui.p(f"Live tracking isn't active for a {status.lower()} game.", class_="text-muted")
         else:
             return ui.p("Live tracking status is only shown for edit-enabled roles today.", class_="text-muted")
+
+    # Oct 2026 (TrackMan's "review at natural breaks" habit): after a
+    # half-inning ends, list its pitches that are missing something, each
+    # with a Fix button that opens it in Pitch Log. Dismissable per half.
+    _hi_dismissed = reactive.Value(frozenset())
+
+    def half_inning_gaps(game, pitches):
+        """(raw inning, [(pitch, [missing...])]) for the last completed
+        half-inning, or (None, [])."""
+        if not pitches:
+            return None, []
+        current = pitches[-1].inning
+        last_pitch = pitches[-1]
+        ended = bool(last_pitch.ends_plate_appearance and (last_pitch.outs_after or 0) >= 3)
+        done = [p.inning for p in pitches if p.inning < current]
+        target = current if ended else (max(done) if done else None)
+        if target is None:
+            return None, []
+        rows = []
+        for p in pitches:
+            if p.inning != target:
+                continue
+            miss = []
+            if p.pitch_type_id is None:
+                miss.append("pitch type")
+            if ((not p.is_our_team_batting) or game.is_intrasquad) and p.intended_plate_x is None:
+                miss.append("intended spot")
+            if p.pitch_outcome == "In Play":
+                if not p.batted_ball_type:
+                    miss.append("batted-ball type")
+                if p.batted_ball_x is None:
+                    miss.append("landing spot")
+            if miss:
+                rows.append((p, miss))
+        return target, rows
+
+    @render.ui
+    def half_inning_review():
+        _pa_tick()
+        if not _access_ok() or not _can_edit():
+            return None
+        game_id = _active_game_id()
+        if game_id is None:
+            return None
+        db = get_session()
+        try:
+            ctx = _load_tracking_context(db, game_id)
+            if ctx is None:
+                return None
+            game, pitches = ctx[0], ctx[1]
+            target, rows = half_inning_gaps(game, pitches)
+            if target is None or not rows or (game_id, target) in _hi_dismissed():
+                return None
+            last_in_half = next(p for p in reversed(pitches) if p.inning == target)
+            label = _inning_display(target, game, {"is_our_batting": last_in_half.is_our_team_batting})
+            fix_id = session.ns("hi_fix")
+            items = []
+            for p, miss in rows:
+                who = f"{p.our_player.first_name} {p.our_player.last_name}" if p.our_player else ""
+                items.append(ui.tags.li(
+                    f"#{p.pitch_sequence} {p.pitch_outcome or ''}{(' — ' + who) if who else ''}: missing {', '.join(miss)} ",
+                    ui.tags.a("Fix", href="#", class_="gbo-recent-link",
+                              onclick=f"Shiny.setInputValue('{fix_id}', {p.game_pitch_id}, {{priority: 'event'}}); return false;"),
+                ))
+            return ui.div(
+                ui.div(ui.strong(f"{label}: {len(rows)} pitch{'es' if len(rows) != 1 else ''} to check"),
+                       ui.input_action_link("hi_dismiss", "Dismiss", class_="small ms-3"),
+                       style="display:flex;align-items:baseline;"),
+                ui.tags.ul(*items, class_="small mb-0"),
+                class_="gbo-hi-review",
+            )
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.hi_fix)
+    def _on_hi_fix():
+        gid = _active_game_id()
+        if gid is not None and input.hi_fix():
+            _open_pitch_edit(gid, int(input.hi_fix()))
+
+    @reactive.effect
+    @reactive.event(input.hi_dismiss)
+    def _on_hi_dismiss():
+        gid = _active_game_id()
+        if gid is None:
+            return
+        db = get_session()
+        try:
+            ctx = _load_tracking_context(db, gid)
+            target = half_inning_gaps(ctx[0], ctx[1])[0] if ctx else None
+        finally:
+            db.close()
+        if target is not None:
+            _hi_dismissed.set(_hi_dismissed() | {(gid, target)})
 
     @render.ui
     def live_game_dashboard():
@@ -3209,6 +3576,173 @@ def game_tracking_server(input, output, session, app_state):
     # own output via ui.output_ui(), the same nesting technique this
     # module's docstring documents (bullpen_tracking.py precedent).
     # -------------------------------------------------------------------
+
+    def _diamond_roster(db, game, pitches, squad_a_slots, squad_b_slots, squad_c_slots, state):
+        """Runner choices for the batting side: [("our:12", "First Last"), ...]."""
+        if game.uses_three_squad_intrasquad:
+            slots = {"A": squad_a_slots, "B": squad_b_slots, "C": squad_c_slots}.get(suggest_current_batting_squad(pitches, state))
+        else:
+            slots = squad_a_slots if state["is_our_batting"] else (squad_b_slots if game.is_intrasquad else None)
+        if slots:
+            ids = [get_current_slot_occupant_id(sl) for sl in slots]
+            by_id = {p.player_id: p for p in db.query(Player).filter(Player.player_id.in_([i for i in ids if i])).all()}
+            return [(f"our:{pid}", f"{by_id[pid].first_name} {by_id[pid].last_name}") for pid in ids if pid in by_id]
+        if not state["is_our_batting"] and not game.is_intrasquad and game.opponent_team:
+            return [(f"opp:{op.opponent_player_id}", op.player_name) for op in game.opponent_team.roster]
+        return []
+
+    @render.ui
+    def base_diamond():
+        """Oct 2026, Ryker: see the bases and drag a runner to log how he
+        moved (steal, wild pitch, error, caught stealing...)."""
+        _pa_tick()
+        if not _access_ok() or not _can_edit():
+            return None
+        game_id = _active_game_id()
+        if game_id is None:
+            return None
+        db = get_session()
+        try:
+            ctx = _load_tracking_context(db, game_id)
+            if ctx is None:
+                return None
+            game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
+            if game.status != "In Progress":
+                return None
+            roster = _diamond_roster(db, game, pitches, squad_a_slots, squad_b_slots, squad_c_slots, state)
+            names = dict(roster)
+            known = runners_on_base(pitches, game.runner_events)
+            bases = {}
+            for b in (1, 2, 3):
+                if state["bases"][b - 1] != "1":
+                    bases[b] = None
+                    continue
+                who = known.get(b)
+                key = f"{who[0]}:{who[1]}" if who else ""
+                label = names.get(key)
+                if label is None and who and who[0] == "our":
+                    pl = db.query(Player).filter(Player.player_id == who[1]).first()
+                    label = f"{pl.first_name} {pl.last_name}" if pl else None
+                    if label:
+                        roster.append((key, label))
+                short = (label.split()[-1] if label else "Runner")
+                bases[b] = {"name": short, "who": key if label else ""}
+            cfg = {
+                "bases": bases, "input": session.ns("diamond_moves"),
+                "advance_causes": RUNNER_ADVANCE_TYPES, "out_causes": list(RUNNER_EVENT_OUT_TYPES),
+                "roster": [{"v": v, "label": lab} for v, lab in roster],
+            }
+            dom_id = session.ns("gbo_diamond")
+            return ui.div(
+                ui.div(
+                    ui.div(class_="gbo-dia-field"),
+                    *[ui.div(class_=f"gbo-dia-base gbo-dia-drop gbo-dia-b{b}", **{"data-base": str(b)}) for b in (1, 2, 3)],
+                    ui.div(ui.span("Home"), class_="gbo-dia-base gbo-dia-drop gbo-dia-b4", **{"data-base": "4"}),
+                    ui.div("Out", class_="gbo-dia-out gbo-dia-drop", **{"data-base": "out"}),
+                    class_="gbo-dia",
+                ),
+                ui.div(class_="gbo-dia-msg small text-warning"),
+                ui.div(class_="gbo-dia-moves"),
+                ui.div(
+                    ui.tags.button("Save", type="button", class_="btn btn-primary btn-sm gbo-dia-confirm"),
+                    ui.tags.button("Clear", type="button", class_="btn btn-outline-secondary btn-sm gbo-dia-clear"),
+                    class_="gbo-dia-bar", style="display:none",
+                ),
+                ui.p("Drag a runner to the base he reached, Home, or Out, then pick what caused it. "
+                     "Drag every runner that moved on the play, then save them together.",
+                     class_="text-muted small mb-0") if "1" in state["bases"] else
+                ui.p("Bases empty.", class_="text-muted small mb-0"),
+                ui.tags.script(_DIAMOND_JS + f"\nwindow.gboDiamondInit(document.getElementById('{dom_id}'));"),
+                id=dom_id, class_="gbo-dia-wrap", **{"data-config": json.dumps(cfg)},
+            )
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.diamond_moves)
+    def _save_diamond_moves():
+        """Saves the queued drag-and-drop moves as GameRunnerEvent rows, in
+        order, after checking each one against the bases as they stand."""
+        payload = input.diamond_moves() or {}
+        moves = payload.get("moves") or []
+        game_id = _active_game_id()
+        if game_id is None or not moves or not _can_edit():
+            return
+        db = get_session()
+        try:
+            ctx = _load_tracking_context(db, game_id)
+            if ctx is None:
+                return
+            game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
+            if game.status != "In Progress":
+                return
+            bases = [c == "1" for c in state["bases"]]
+            anchor = pitches[-1].pitch_sequence if pitches else 0
+            batting_squad = suggest_current_batting_squad(pitches, state) if game.uses_three_squad_intrasquad else None
+            rows, runs = [], 0
+            for m in moves:
+                frm = int(m.get("from") or 0)
+                to = m.get("to")
+                cause = m.get("cause")
+                is_out = to == "out"
+                if frm not in (1, 2, 3) or not bases[frm - 1]:
+                    ui.notification_show(f"No runner on {frm} -- nothing saved.", type="error", duration=8)
+                    return
+                if is_out:
+                    if cause not in RUNNER_EVENT_OUT_TYPES:
+                        cause = RUNNER_EVENT_OUT_TYPES[0]
+                    to_base = None
+                else:
+                    to_base = int(to)
+                    if cause not in RUNNER_ADVANCE_TYPES:
+                        cause = RUNNER_ADVANCE_TYPES[0]
+                    if to_base <= frm or to_base > 4 or (to_base < 4 and bases[to_base - 1]):
+                        ui.notification_show("A runner move doesn't fit the bases -- nothing saved.", type="error", duration=8)
+                        return
+                bases[frm - 1] = False
+                if to_base and to_base < 4:
+                    bases[to_base - 1] = True
+                if to_base == 4:
+                    runs += 1
+                our_pid = opp_pid = None
+                kind, _, rid = (m.get("who") or "").partition(":")
+                if rid.isdigit():
+                    if kind == "our":
+                        our_pid = int(rid)
+                    elif kind == "opp":
+                        opp_pid = int(rid)
+                rows.append(dict(event_type=cause, from_base=frm, to_base=to_base, is_out=is_out,
+                                 our_player_id=our_pid, opponent_player_id=opp_pid))
+            now = datetime.utcnow()
+            for i, r in enumerate(rows):
+                db.add(GameRunnerEvent(
+                    game_id=game_id, pitch_sequence_after=anchor,
+                    is_our_team_batting=state["is_our_batting"], batting_squad=batting_squad,
+                    created_by_user_id=app_state.user_id(), created_at=now + timedelta(microseconds=i), **r,
+                ))
+            if runs:
+                if batting_squad == "A":
+                    game.our_score += runs
+                elif batting_squad == "B":
+                    game.opponent_score += runs
+                elif batting_squad == "C":
+                    game.squad_c_score += runs
+                elif state["is_our_batting"]:
+                    game.our_score += runs
+                else:
+                    game.opponent_score += runs
+            db.commit()
+            ui.notification_show(f"Saved {len(rows)} runner move{'s' if len(rows) != 1 else ''}.", type="message", duration=6)
+        except Exception:
+            db.rollback()
+            import traceback
+            traceback.print_exc()
+            ui.notification_show("Couldn't save those runner moves -- nothing was changed.", type="error", duration=10)
+            return
+        finally:
+            db.close()
+        _bump_pa()
+        _bump_refresh()
 
     @render.ui
     def runner_events_panel():
@@ -4268,9 +4802,17 @@ def game_tracking_server(input, output, session, app_state):
             arsenal_names = get_arsenal_pitch_type_names(db, current_pitcher_id, pitch_types) if current_pitcher_id else [pt.type_name for pt in pitch_types]
             pitch_type_choices = {name: name for name in arsenal_names}
 
+            # Oct 2026: number-key shortcut map (Ryker's pitch digits, same as
+            # his Level-Pitch-Zone calls) -> this pitcher's first matching type.
+            digit_map = {}
+            for name in arsenal_names:
+                d = PITCH_DIGIT.get(name)
+                if d and str(d) not in digit_map:
+                    digit_map[str(d)] = name
             children = [
                 ui.h5("Pitch Details", class_="gbo-section-title"),
                 ui.input_select("pitch_type_select", "Pitch type", choices=pitch_type_choices),
+                ui.tags.div(id=session.ns("gt_digit_map"), style="display:none", **{"data-map": json.dumps(digit_map)}),
             ]
 
             # Intended location is only meaningful when the pitcher throwing
@@ -4320,8 +4862,8 @@ def game_tracking_server(input, output, session, app_state):
                     class_="text-muted small",
                 ))
                 children.append(ui.layout_columns(
-                    ui.input_numeric("intended_x_input", "Intended plate side (ft, 0 = center, negative = 3B side)", value=0.0, min=strike_zone.X_MIN, max=strike_zone.X_MAX, step=0.1),
-                    ui.input_numeric("intended_z_input", "Intended plate height (ft off the ground)", value=2.5, min=strike_zone.Z_MIN, max=strike_zone.Z_MAX, step=0.1),
+                    ui.input_numeric("intended_x_input", "Intended plate side (ft, 0 = center, negative = 3B side)", value=None, min=strike_zone.X_MIN, max=strike_zone.X_MAX, step=0.1),
+                    ui.input_numeric("intended_z_input", "Intended plate height (ft off the ground)", value=None, min=strike_zone.Z_MIN, max=strike_zone.Z_MAX, step=0.1),
                 ))
 
             children.append(ui.input_select("pitch_outcome_select", "Pitch outcome", choices=PITCH_OUTCOMES))
@@ -4408,6 +4950,11 @@ def game_tracking_server(input, output, session, app_state):
             db.close()
         req("intended_x_input" in input)
         x, z = input.intended_x_input(), input.intended_z_input()
+        if x is None or z is None:
+            # Oct 2026: starts empty -- an untouched (0, 2.5) used to be saved
+            # as a real middle-middle target and counted in command stats.
+            return ui.p("Intended: not set — click the zone above, enter a pitch code, or type coordinates.",
+                        class_="text-muted small text-center")
         return ui.p(
             f"Intended: {x:+.2f} ft, {z:.2f} ft high — click the zone above, or type coordinates directly.",
             class_="text-muted small text-center",
@@ -4440,8 +4987,8 @@ def game_tracking_server(input, output, session, app_state):
                 class_="text-muted small",
             ))
             children.append(ui.layout_columns(
-                ui.input_numeric("batted_ball_x_input", "Feet right of the CF line (negative = left field side)", value=0.0, min=field_location.X_MIN, max=field_location.X_MAX, step=5.0),
-                ui.input_numeric("batted_ball_y_input", "Feet from home plate toward the outfield", value=150.0, min=field_location.Y_MIN, max=field_location.Y_MAX, step=5.0),
+                ui.input_numeric("batted_ball_x_input", "Feet right of the CF line (negative = left field side)", value=None, min=field_location.X_MIN, max=field_location.X_MAX, step=5.0),
+                ui.input_numeric("batted_ball_y_input", "Feet from home plate toward the outfield", value=None, min=field_location.Y_MIN, max=field_location.Y_MAX, step=5.0),
             ))
         if not children:
             return None
@@ -4475,6 +5022,9 @@ def game_tracking_server(input, output, session, app_state):
             return None
         req("batted_ball_x_input" in input)
         x, y = input.batted_ball_x_input(), input.batted_ball_y_input()
+        if x is None or y is None:
+            return ui.p("Landed: not set — click the field above, or type coordinates.",
+                        class_="text-muted small text-center")
         dist = field_location.distance_from_plate(x, y)
         return ui.p(
             f"Landed: {x:+.0f} ft, {y:.0f} ft deep ({dist:.0f} ft from home) — click the field above, or type coordinates directly.",
@@ -4483,6 +5033,12 @@ def game_tracking_server(input, output, session, app_state):
 
     @render.ui
     def result_ab_outcome_picker():
+        # Oct 2026: also redraw after every recorded pitch. Without this, a
+        # pitch whose outcome was the same as the last one (Ball -> Ball
+        # for ball four) never redrew this section, and the save read the
+        # PREVIOUS at-bat's leftover result/outs/bases (a walk was saved as
+        # the last batter's groundout).
+        _pa_tick()
         if not _access_ok() or not _can_edit():
             return None
         game_id = _active_game_id()
@@ -4523,9 +5079,13 @@ def game_tracking_server(input, output, session, app_state):
                 # coach is flagging manually -- don't assume "1B").
                 default_ab = None
             choices = {name: name for name in AB_OUTCOMES}
+            if default_ab is None:
+                # Oct 2026: a Shiny select with nothing selected shows its
+                # first option, so a forced at-bat end defaulted to "K".
+                choices = {"": "-- pick the result --", **choices}
             return ui.div(
                 ui.h5("Result", class_="gbo-section-title"),
-                ui.input_select("ab_outcome_select", "AB outcome", choices=choices, selected=default_ab if default_ab in AB_OUTCOMES else None),
+                ui.input_select("ab_outcome_select", "AB outcome", choices=choices, selected=default_ab if default_ab in AB_OUTCOMES else ""),
                 ui.p("Confirm or adjust the result -- suggested from the AB outcome, but real plays vary.", class_="text-muted small"),
             )
         finally:
@@ -4533,6 +5093,7 @@ def game_tracking_server(input, output, session, app_state):
 
     @render.ui
     def result_fields_body():
+        _pa_tick()  # Oct 2026: see result_ab_outcome_picker
         if not _access_ok() or not _can_edit():
             return None
         game_id = _active_game_id()
@@ -4567,7 +5128,15 @@ def game_tracking_server(input, output, session, app_state):
             return ui.div(
                 ui.layout_columns(
                     ui.input_numeric("final_outs_input", "Outs after", value=min(suggested_outs, 3), min=0, max=3, step=1),
-                    ui.input_text("final_bases_input", "Bases after (1st,2nd,3rd = 1/0)", value=suggested_bases),
+                    # Oct 2026: tap the bases instead of typing "101".
+                    ui.div(
+                        ui.input_checkbox_group(
+                            "final_bases_toggle", "Runners on after the play",
+                            choices={"1": "1st", "2": "2nd", "3": "3rd"},
+                            selected=[str(i + 1) for i, c in enumerate(suggested_bases) if c == "1"], inline=True,
+                        ),
+                        class_="gbo-base-toggle",
+                    ),
                     ui.input_numeric("final_runs_input", "Runs scored on play", value=suggested_runs, min=0, max=4, step=1),
                 ),
                 # Manual earned/unearned tagging (Ryker, Aug 31 2026) --
@@ -4610,7 +5179,7 @@ def game_tracking_server(input, output, session, app_state):
             ui.layout_columns(
                 ui.input_action_button("record_pitch_btn", "Record pitch", class_="btn-primary mt-2 w-100"),
                 ui.input_action_button(
-                    "undo_last_pitch_btn", "Undo Last Pitch",
+                    "undo_last_pitch_btn", "Undo last",
                     class_="btn-outline-danger mt-2 w-100", disabled=(last_pitch is None),
                 ),
                 col_widths=[8, 4],
@@ -4621,18 +5190,36 @@ def game_tracking_server(input, output, session, app_state):
             children.append(ui.p(f"Last recorded: pitch #{last_pitch.pitch_sequence} ({outcome_label}).", class_="text-muted small"))
         return ui.div(*children)
 
+    _last_click_at = {"record": 0.0, "undo": 0.0}
+
+    def _too_soon(kind, gap=1.0):
+        """Oct 2026: the old _is_submitting flag never caught a double-click
+        -- Shiny runs one handler at a time, so the flag was already back to
+        False when the second click was processed, and a double-click saved
+        two pitches (or undid two). A real second pitch can't come within a
+        second of the first, so a click that close is dropped."""
+        now = time.monotonic()
+        if now - _last_click_at[kind] < gap:
+            return True
+        _last_click_at[kind] = now
+        return False
+
     @reactive.effect
     @reactive.event(input.undo_last_pitch_btn)
     def _undo_last_pitch():
-        """Milestone 1 -- see module docstring. Deletes the single
-        most-recent GamePitch row for the active game. Only
-        game.our_score/opponent_score need a manual reversal here (they're
-        the one piece of state this page persists outside GamePitch
-        itself) -- everything else (outs/bases/count/inning) is
-        re-derived fresh from the remaining GamePitch rows by
-        compute_current_state() the next time anything on this page
-        renders, since _bump_pa()/_bump_refresh() below trigger exactly
-        that."""
+        """Undo the most recent thing logged on Live Tracking.
+
+        Oct 2026 rewrite: Undo used to delete only the last GamePitch. A
+        runner event or forced half-inning end logged AFTER that pitch was
+        left behind, and because the next pitch reuses the deleted pitch's
+        number, it re-attached after the wrong pitch (phantom runs, wrong
+        bases, an inning flipping early). Now Undo takes back the latest
+        action first -- a runner event or forced end after the last pitch,
+        else the pitch itself -- detaches any Rapsodo reading / video clip
+        matched to a deleted pitch (same FK fix as Pitch Log's delete), and
+        recomputes the score from the whole game with replay_game."""
+        if _too_soon("undo"):
+            return
         game_id = _active_game_id()
         if game_id is None:
             return
@@ -4647,29 +5234,51 @@ def game_tracking_server(input, output, session, app_state):
                 .order_by(GamePitch.pitch_sequence.desc())
                 .first()
             )
-            if last_pitch is None:
-                ui.notification_show("No pitches recorded yet in this game.", type="warning", duration=6)
+            anchor = last_pitch.pitch_sequence if last_pitch is not None else 0
+            after = (
+                [("event", e.created_at, e) for e in db.query(GameRunnerEvent).filter(
+                    GameRunnerEvent.game_id == game_id, GameRunnerEvent.pitch_sequence_after == anchor)]
+                + [("forced", f.created_at, f) for f in db.query(GameForcedHalfInningEnd).filter(
+                    GameForcedHalfInningEnd.game_id == game_id, GameForcedHalfInningEnd.pitch_sequence_after == anchor)]
+            )
+            if after:
+                kind, _ts, row = max(after, key=lambda t: t[1] or 0)
+                label = (f"runner event ({row.event_type})" if kind == "event"
+                         else "forced half-inning end")
+                db.delete(row)
+            elif last_pitch is not None:
+                label = f"pitch #{last_pitch.pitch_sequence} ({last_pitch.ab_outcome or last_pitch.pitch_outcome or '—'})"
+                pid = last_pitch.game_pitch_id
+                db.query(RapsodoPitch).filter(RapsodoPitch.game_pitch_id == pid).update({"game_pitch_id": None})
+                db.query(GameVideoClip).filter(GameVideoClip.matched_game_pitch_id == pid).update({"matched_game_pitch_id": None})
+                db.delete(last_pitch)
+            else:
+                ui.notification_show("Nothing to undo yet in this game.", type="warning", duration=6)
                 return
-            if last_pitch.ends_plate_appearance and last_pitch.runs_scored_on_play:
-                if last_pitch.batting_squad == "A":
-                    game.our_score = max(0, game.our_score - last_pitch.runs_scored_on_play)
-                elif last_pitch.batting_squad == "B":
-                    game.opponent_score = max(0, game.opponent_score - last_pitch.runs_scored_on_play)
-                elif last_pitch.batting_squad == "C":
-                    game.squad_c_score = max(0, game.squad_c_score - last_pitch.runs_scored_on_play)
-                elif last_pitch.is_our_team_batting:
-                    game.our_score = max(0, game.our_score - last_pitch.runs_scored_on_play)
-                else:
-                    game.opponent_score = max(0, game.opponent_score - last_pitch.runs_scored_on_play)
-            undone_seq = last_pitch.pitch_sequence
-            undone_outcome = last_pitch.ab_outcome or last_pitch.pitch_outcome or "—"
-            db.delete(last_pitch)
+            db.flush()
+            result = replay_game(
+                db.query(GamePitch).filter(GamePitch.game_id == game_id).all(),
+                db.query(GameRunnerEvent).filter(GameRunnerEvent.game_id == game_id).all(),
+                build_re_lookup(db),
+                db.query(GameForcedHalfInningEnd).filter(GameForcedHalfInningEnd.game_id == game_id).all(),
+                game=game,
+            )
+            game.our_score = result["our_score"]
+            game.opponent_score = result["opponent_score"]
+            game.squad_c_score = result["squad_c_score"]
             db.commit()
-            ui.notification_show(f"Undid pitch #{undone_seq} ({undone_outcome}).", type="message", duration=8)
-            _bump_pa()
-            _bump_refresh()
+            ui.notification_show(f"Undid {label}.", type="message", duration=8)
+        except Exception:
+            db.rollback()
+            import traceback
+            traceback.print_exc()
+            ui.notification_show("Couldn't undo -- nothing was changed. Please try again.", type="error", duration=10)
+            return
         finally:
             db.close()
+        _runner_event_form_open.set(False)
+        _bump_pa()
+        _bump_refresh()
 
     def _resolve_their_pitcher(db, game, hand):
         """Their pitcher from the "Their pitcher" picker / new-name box
@@ -4792,6 +5401,13 @@ def game_tracking_server(input, output, session, app_state):
                 opp_batting_order_choice = state.get("current_opp_order")
                 opp_player_choice = state.get("current_opp_player")
                 opp_our_player_choice = state.get("current_opp_our_player")
+                if not state["is_our_batting"]:
+                    # Oct 2026: a pitching change in the middle of an at-bat
+                    # -- the next pitch belongs to the new pitcher (the
+                    # pitch-type list already followed him; the save didn't).
+                    current_pitcher = get_current_pitcher_id(game)
+                    if current_pitcher is not None:
+                        our_player_choice = current_pitcher
                 if our_player_choice is None:
                     ui.notification_show("Couldn't determine who's up -- try refreshing the page.", type="error", duration=8)
                     return
@@ -4822,6 +5438,8 @@ def game_tracking_server(input, output, session, app_state):
             intended_x = intended_z = None
             if ((not state["is_our_batting"]) or game.is_intrasquad) and "intended_x_input" in input:
                 intended_x, intended_z = input.intended_x_input(), input.intended_z_input()
+                if intended_x is None or intended_z is None:
+                    intended_x = intended_z = None   # half-typed = not set
 
             # Actual location isn't captured live here either -- same as
             # the original, filled in afterward from game video via
@@ -4849,6 +5467,8 @@ def game_tracking_server(input, output, session, app_state):
                 bbt = raw_bbt if raw_bbt and raw_bbt != "-- N/A --" else None
                 if "batted_ball_x_input" in input:
                     batted_x, batted_y = input.batted_ball_x_input(), input.batted_ball_y_input()
+                    if batted_x is None or batted_y is None:
+                        batted_x = batted_y = None
 
             ab_outcome = final_outs = final_bases = final_runs = None
             unearned_runs = 0
@@ -4857,6 +5477,9 @@ def game_tracking_server(input, output, session, app_state):
                     ui.notification_show("Confirm the AB result before recording this pitch.", type="error", duration=8)
                     return
                 ab_outcome = input.ab_outcome_select()
+                if not ab_outcome:
+                    ui.notification_show("Pick the AB outcome before recording this pitch.", type="error", duration=8)
+                    return
                 if ab_outcome == "No Result":
                     # result_fields_body doesn't render the outs/bases/
                     # runs inputs for this outcome (it's a no-op by
@@ -4866,16 +5489,22 @@ def game_tracking_server(input, output, session, app_state):
                     final_bases = state["bases"]
                     final_runs = 0
                 else:
-                    final_outs = int(input.final_outs_input())
-                    final_bases = (input.final_bases_input() or "").strip()
-                    if not re.fullmatch(r"[01]{3}", final_bases):
-                        ui.notification_show(
-                            'Bases after must be exactly 3 characters of 0/1 (e.g. "010" = runner on 2nd only) -- pitch not recorded.',
-                            type="error", duration=10,
-                        )
+                    # Oct 2026: a cleared number box used to crash the
+                    # session (int(None)); check every field instead.
+                    raw_outs = input.final_outs_input() if "final_outs_input" in input else None
+                    raw_runs = input.final_runs_input() if "final_runs_input" in input else None
+                    raw_unearned = input.unearned_runs_input() if "unearned_runs_input" in input else 0
+                    if raw_outs is None or raw_runs is None or raw_unearned is None:
+                        ui.notification_show("Outs after, runs and unearned runs can't be blank -- pitch not recorded.",
+                                             type="error", duration=8)
                         return
-                    final_runs = int(input.final_runs_input())
-                    unearned_runs = int(input.unearned_runs_input()) if "unearned_runs_input" in input else 0
+                    final_outs, final_runs, unearned_runs = int(raw_outs), int(raw_runs), int(raw_unearned)
+                    on = set(input.final_bases_toggle() or ()) if "final_bases_toggle" in input else set()
+                    final_bases = "".join("1" if str(b) in on else "0" for b in (1, 2, 3))
+                    problem = check_after_state(state["outs"], state["bases"], final_outs, final_runs, unearned_runs)
+                    if problem:
+                        ui.notification_show(problem + " -- pitch not recorded.", type="error", duration=10)
+                        return
                     if unearned_runs > final_runs:
                         ui.notification_show(
                             "Unearned runs can't exceed runs scored on the play -- pitch not recorded.",
@@ -4965,11 +5594,17 @@ def game_tracking_server(input, output, session, app_state):
         arrives while the first is still being written is dropped
         rather than inserting a second pitch, instead of running
         _do_record_pitch directly off the button event."""
-        if _is_submitting():
+        if _is_submitting() or _too_soon("record"):
             return
         _is_submitting.set(True)
         try:
             _do_record_pitch()
+        except Exception:
+            # Never let one bad pitch take the whole session down mid-game.
+            import traceback
+            traceback.print_exc()
+            ui.notification_show("Couldn't record that pitch -- nothing was saved. Check the fields and try again.",
+                                 type="error", duration=10)
         finally:
             _is_submitting.set(False)
 

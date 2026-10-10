@@ -440,8 +440,10 @@ def register_game_tracking_video(input, output, session, _refresh_tick, _active_
             ]
             if p.video_url:
                 children.append(ui.tags.video(ui.tags.source(src=p.video_url), controls=True, style="max-width:100%;"))
-            x_default = float(p.actual_plate_x) if p.actual_plate_x is not None else 0.0
-            z_default = float(p.actual_plate_z) if p.actual_plate_z is not None else 2.5
+            # Oct 2026: start empty -- Save with the old (0, 2.5) default
+            # recorded a made-up middle-middle location.
+            x_default = float(p.actual_plate_x) if p.actual_plate_x is not None else None
+            z_default = float(p.actual_plate_z) if p.actual_plate_z is not None else None
             children.append(ui.layout_columns(
                 ui.input_numeric("vr_actual_x_input", "Actual plate side (ft, 0 = center, negative = 3B side)", value=x_default, min=strike_zone.X_MIN, max=strike_zone.X_MAX, step=0.1),
                 ui.input_numeric("vr_actual_z_input", "Actual plate height (ft off the ground)", value=z_default, min=strike_zone.Z_MIN, max=strike_zone.Z_MAX, step=0.1),
@@ -471,6 +473,8 @@ def register_game_tracking_video(input, output, session, _refresh_tick, _active_
             return None
         req("vr_actual_x_input" in input)
         x, z = input.vr_actual_x_input(), input.vr_actual_z_input()
+        if x is None or z is None:
+            return ui.p("Not marked yet — click where the pitch crossed the plate.", class_="text-muted small text-center")
         located = strike_zone.is_in_zone(x, z)
         return ui.p(
             f"Marked: {x:+.2f} ft, {z:.2f} ft high — {'In zone' if located else 'Out of zone'} — click the zone above, or type coordinates directly.",
@@ -533,6 +537,10 @@ def register_game_tracking_video(input, output, session, _refresh_tick, _active_
             return
         req("vr_actual_x_input" in input)
         x, z = input.vr_actual_x_input(), input.vr_actual_z_input()
+        if x is None or z is None:
+            ui.notification_show("Click where the pitch crossed the plate (or type both numbers) before saving.",
+                                 type="warning", duration=6)
+            return
         db = get_session()
         try:
             p = db.query(GamePitch).filter(GamePitch.game_pitch_id == pitch_id).first()

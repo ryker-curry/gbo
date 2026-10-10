@@ -257,6 +257,19 @@ def register_game_tracking_runner_events(
                     ui_helpers.empty_state("No runner events logged yet for this game -- steals, caught stealing, pickoffs, wild pitches, passed balls, and balks all show up here once logged from Live Tracking."),
                 )
 
+            # Oct 2026: runner events have no inning column (the old line read
+            # ev.inning and crashed this whole tab for any game with an event)
+            # -- take it from the pitch the event was logged after.
+            inning_by_seq = dict(db.query(GamePitch.pitch_sequence, GamePitch.inning)
+                                 .filter(GamePitch.game_id == game_id).all())
+            three_squad = bool(getattr(game, "uses_three_squad_intrasquad", False))
+
+            def _inn_label(seq):
+                raw = inning_by_seq.get(seq)
+                if raw is None:
+                    return "Start of game" if not seq else "Inn ?"
+                return f"Half-inning {raw}" if three_squad else f"Inn {(raw + 1) // 2}"
+
             can_edit = _can_edit()
             editing_id = _gt_re_editing_event_id() if can_edit else None
             pending_preview = _gt_re_pending_preview() if can_edit else None
@@ -282,7 +295,7 @@ def register_game_tracking_runner_events(
                         ui.h6(f"Editing runner event (after pitch #{ev.pitch_sequence_after})", class_="mt-2"),
                         ui.layout_columns(
                             ui.input_select("gt_re_edit_event_type", "Event", choices=RUNNER_EVENT_TYPES, selected=ev.event_type),
-                            ui.input_select("gt_re_edit_from_base", "Runner on", choices=BASE_LABEL, selected=str(ev.from_base)),
+                            ui.input_select("gt_re_edit_from_base", "Runner on", choices={str(k): v for k, v in BASE_LABEL.items()}, selected=str(ev.from_base)),
                             col_widths=[7, 5],
                         ),
                         ui.input_select(
@@ -308,7 +321,7 @@ def register_game_tracking_runner_events(
                     who = f"{ev.opponent_player.player_name} -- "
                 outcome = "out" if ev.is_out else TO_BASE_LABEL.get(ev.to_base, "?")
                 side = "Us batting" if ev.is_our_team_batting else "Opponent batting"
-                line1 = f"After #{ev.pitch_sequence_after} -- Inn {ev.inning}, {side} -- {ev.event_type}: {who or ''}{BASE_LABEL.get(ev.from_base, '?')} -> {outcome}"
+                line1 = f"After #{ev.pitch_sequence_after} -- {_inn_label(ev.pitch_sequence_after)}, {side} -- {ev.event_type}: {who or ''}{BASE_LABEL.get(ev.from_base, '?')} -> {outcome}"
                 summary_children = [ui.p(line1, class_="mb-0 small")]
                 if ev.notes:
                     summary_children.append(ui.p(ev.notes, class_="text-muted small mb-0 fst-italic"))

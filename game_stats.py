@@ -341,7 +341,7 @@ def get_runner_event_outs(session, player_id, season_id=None, game_id=None):
 #     runner who was put out, as the scoring rules say.
 #   - pickoff / caught-stealing outs -> the pitcher on the mound (IP).
 # ---------------------------------------------------------------------------
-EARNED_RUNNER_EVENTS = {"Wild Pitch", "Stolen Base", "Balk", "Defensive Indifference"}
+EARNED_RUNNER_EVENTS = {"Wild Pitch", "Stolen Base", "Balk", "Defensive Indifference", "Advanced on Throw"}
 REACH_OUTCOMES = {"1B", "2B", "3B", "BB", "HBP", "E", "FC"}
 
 

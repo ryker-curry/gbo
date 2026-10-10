@@ -134,6 +134,8 @@ def register_game_tracking_manage(input, output, session, _refresh_tick, _active
     @reactive.effect
     @reactive.event(input.save_away_squad_btn)
     def _save_away_squad():
+        if not _can_edit():
+            return
         game_id = _active_game_id()
         if game_id is None:
             return
@@ -151,6 +153,8 @@ def register_game_tracking_manage(input, output, session, _refresh_tick, _active
             db.close()
 
     def _set_game_status(new_status, message):
+        if not _can_edit():   # Oct 2026: check on the server too, not just by hiding buttons
+            return
         game_id = _active_game_id()
         if game_id is None:
             return
@@ -244,6 +248,8 @@ def register_game_tracking_manage(input, output, session, _refresh_tick, _active
         either. Detached the same way -- the RapsodoImport row (and its
         RapsodoPitch children, already handled above) survive, just no
         longer linked to a game that's gone."""
+        if not _can_edit():
+            return
         if not (input.confirm_delete_game() if "confirm_delete_game" in input else False):
             return
         game_id = _active_game_id()

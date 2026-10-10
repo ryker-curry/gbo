@@ -296,6 +296,37 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-back { padding: 10px 32px 0; }
 .gbo-back .gbo-back-btn { border: 1px solid var(--gbo-border-strong); border-radius: 999px; padding: .25rem .8rem; font-size: .8rem; }
 @media (max-width: 768px) { .gbo-back { padding: 10px 16px 0; } }
+/* Oct 2026: Game Tracking -- base toggles, shortcut flash, half-inning review */
+.gbo-base-toggle .shiny-options-group { display: flex; gap: 6px; flex-wrap: wrap; }
+.gbo-base-toggle .checkbox-inline { position: relative; margin: 0; padding: 0; }
+.gbo-base-toggle .checkbox-inline input { position: absolute; opacity: 0; pointer-events: none; }
+.gbo-base-toggle .checkbox-inline span { display: inline-block; min-width: 58px; text-align: center; padding: .45rem .8rem; border: 1px solid var(--gbo-border-strong); border-radius: 6px; cursor: pointer; font-weight: 600; user-select: none; }
+.gbo-base-toggle .checkbox-inline input:checked + span { background: var(--gbo-crimson); border-color: var(--gbo-crimson); color: #fff; }
+.gbo-base-toggle .checkbox-inline input:focus-visible + span { outline: 2px solid var(--gbo-gold-text); }
+/* Oct 2026: drag-and-drop bases (Game Tracking) */
+.gbo-dia-wrap { margin: 10px 0 6px; }
+.gbo-dia { position: relative; width: 320px; height: 280px; margin: 0 auto; touch-action: none; user-select: none; }
+.gbo-dia-field { position: absolute; left: 85px; top: 52px; width: 150px; height: 150px; transform: rotate(45deg); border: 2px solid var(--gbo-border-strong); background: linear-gradient(135deg, rgba(46,156,98,.10), rgba(46,156,98,.04)); border-radius: 4px; }
+.gbo-dia-base { position: absolute; width: 64px; height: 44px; margin-left: -32px; margin-top: -22px; display: flex; align-items: center; justify-content: center; border-radius: 8px; }
+.gbo-dia-base::before { content: ""; position: absolute; width: 18px; height: 18px; transform: rotate(45deg); background: var(--gbo-bg-raised); border: 2px solid var(--gbo-text-2); }
+.gbo-dia-b2 { left: 160px; top: 42px; }
+.gbo-dia-b1 { left: 266px; top: 127px; }
+.gbo-dia-b3 { left: 54px; top: 127px; }
+.gbo-dia-b4 { left: 160px; top: 222px; }
+.gbo-dia-b4 span { position: relative; top: 26px; font-size: .7rem; color: var(--gbo-text-muted); }
+.gbo-dia-out { position: absolute; right: 0; bottom: 0; width: 70px; height: 44px; border: 2px dashed var(--gbo-status-flag); color: var(--gbo-status-flag); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: .8rem; }
+.gbo-dia-over { outline: 3px solid var(--gbo-gold-text); outline-offset: 2px; }
+.gbo-dia-chip { position: relative; z-index: 2; flex: none; padding: 4px 9px; border-radius: 999px; background: var(--gbo-crimson); color: #fff; font-weight: 700; font-size: .75rem; cursor: grab; white-space: nowrap; max-width: 130px; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 2px 6px rgba(0,0,0,.35); }
+.gbo-dia-dragging { opacity: .35; }
+.gbo-dia-ghost { position: fixed; z-index: 9999; pointer-events: none; cursor: grabbing; }
+.gbo-dia-moves { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.gbo-dia-move { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.gbo-dia-move select { background: var(--gbo-bg-raised); color: var(--gbo-text); border: 1px solid var(--gbo-border-strong); border-radius: 6px; padding: .2rem .4rem; font-size: .85rem; }
+.gbo-dia-path { font-weight: 700; min-width: 96px; }
+.gbo-dia-bar { display: flex; gap: 8px; margin: 8px 0; }
+.gbo-key-flash { box-shadow: 0 0 0 3px var(--gbo-gold-text) !important; transition: box-shadow .1s; }
+.gbo-hi-review { border: 1px solid var(--gbo-status-watch); border-radius: 8px; padding: 10px 14px; margin: 12px 0; background: var(--gbo-bg-raised); }
+.gbo-hi-review ul { padding-left: 18px; margin-top: 6px; }
 .gbo-side-me { margin-top: auto; border-top: 1px solid var(--gbo-border); padding: 12px 0 0 8px; display: flex; gap: 10px; align-items: center; }
 .gbo-avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--gbo-bg-raised); border: 1px solid var(--gbo-border-strong); display: grid; place-items: center; font-family: var(--gbo-display); font-weight: 700; color: var(--gbo-text-2); flex: none; object-fit: cover; }
 .gbo-side-me-name { font-weight: 600; font-size: .82rem; color: var(--gbo-text); line-height: 1.2; }
