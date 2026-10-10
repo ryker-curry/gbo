@@ -45,7 +45,7 @@ def charted_line(db, game_id):
         field = "opp" if bat == "our" else "our"
         if e.to_base == 4 and not e.is_out:
             out[bat]["r"] += 1
-        if e.event_type == "Throwing Error":
+        if e.event_type in ("Throwing Error", "Fielding Error"):  # Oct 2026: fielding errors too
             out[field]["e"] += 1
     return out
 

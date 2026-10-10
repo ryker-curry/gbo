@@ -87,6 +87,7 @@ import re
 
 from shiny import ui, render, reactive, req
 from shinywidgets import output_widget, render_plotly
+from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
 from database import get_session
@@ -178,6 +179,19 @@ def _runner_choices_for_event(db, game, is_our_team_batting, batting_squad):
         return {str(p.player_id): f"{p.first_name} {p.last_name}" for p in players}, None
     opp_roster = game.opponent_team.roster if game.opponent_team else []
     return None, opp_roster
+
+
+def _pair(a, b):
+    """Both halves of a location, or neither (Oct 2026: a blank box used to
+    be saved alongside a real value, and untouched boxes used to default to
+    middle-middle / 150 ft to center and be saved as real data)."""
+    return (a, b) if a is not None and b is not None else (None, None)
+
+
+def _blank(*vals):
+    """True if any number box was left empty (Oct 2026: int(None) used to
+    crash the session)."""
+    return any(v is None for v in vals)
 
 
 def _apply_field_values(pitch, values):
@@ -590,18 +604,18 @@ def register_game_tracking_pitch_log(
 
                     edit_children = [
                         ui.h6(f"Editing pitch #{p.pitch_sequence}", class_="mt-2"),
-                        ui.input_select("gt_pl_edit_pitch_type", "Pitch type", choices=pitch_type_choices, selected=pt_name if pt_name in pitch_type_choices else None),
+                        ui.input_select("gt_pl_edit_pitch_type", "Pitch type", choices=(pitch_type_choices if pt_name in pitch_type_choices else {"": "-- not recorded --", **pitch_type_choices}), selected=pt_name if pt_name in pitch_type_choices else ""),
                         ui.input_select("gt_pl_edit_outcome", "Pitch outcome", choices=PITCH_OUTCOMES, selected=p.pitch_outcome if p.pitch_outcome in PITCH_OUTCOMES else None),
                     ]
                     if not p.is_our_team_batting:
                         edit_children.append(ui.layout_columns(
-                            ui.input_numeric("gt_pl_edit_ix", "Intended plate side (ft, 0 = center)", value=float(p.intended_plate_x) if p.intended_plate_x is not None else 0.0, min=strike_zone.X_MIN, max=strike_zone.X_MAX, step=0.1),
-                            ui.input_numeric("gt_pl_edit_iz", "Intended plate height (ft)", value=float(p.intended_plate_z) if p.intended_plate_z is not None else 2.5, min=strike_zone.Z_MIN, max=strike_zone.Z_MAX, step=0.1),
+                            ui.input_numeric("gt_pl_edit_ix", "Intended plate side (ft, 0 = center)", value=float(p.intended_plate_x) if p.intended_plate_x is not None else None, min=strike_zone.X_MIN, max=strike_zone.X_MAX, step=0.1),
+                            ui.input_numeric("gt_pl_edit_iz", "Intended plate height (ft)", value=float(p.intended_plate_z) if p.intended_plate_z is not None else None, min=strike_zone.Z_MIN, max=strike_zone.Z_MAX, step=0.1),
                         ))
                         edit_children.append(ui.input_checkbox("gt_pl_edit_has_actual", "Actual location recorded", value=p.actual_plate_x is not None))
                         edit_children.append(ui.layout_columns(
-                            ui.input_numeric("gt_pl_edit_ax", "Actual plate side (ft)", value=float(p.actual_plate_x) if p.actual_plate_x is not None else 0.0, min=strike_zone.X_MIN, max=strike_zone.X_MAX, step=0.1),
-                            ui.input_numeric("gt_pl_edit_az", "Actual plate height (ft)", value=float(p.actual_plate_z) if p.actual_plate_z is not None else 2.5, min=strike_zone.Z_MIN, max=strike_zone.Z_MAX, step=0.1),
+                            ui.input_numeric("gt_pl_edit_ax", "Actual plate side (ft)", value=float(p.actual_plate_x) if p.actual_plate_x is not None else None, min=strike_zone.X_MIN, max=strike_zone.X_MAX, step=0.1),
+                            ui.input_numeric("gt_pl_edit_az", "Actual plate height (ft)", value=float(p.actual_plate_z) if p.actual_plate_z is not None else None, min=strike_zone.Z_MIN, max=strike_zone.Z_MAX, step=0.1),
                         ))
                     # These three fields aren't conditionally shown/hidden based
                     # on the outcome dropdown the way live entry's
@@ -614,8 +628,8 @@ def register_game_tracking_pitch_log(
                     edit_children.append(ui.input_checkbox("gt_pl_edit_sword", "Sword (ugly, off-balance swing)", value=p.is_sword))
                     edit_children.append(ui.input_select("gt_pl_edit_bbt", "Batted ball type (optional -- only meaningful if In Play)", choices=["-- N/A --", "Ground Ball", "Line Drive", "Fly Ball", "Pop Up"], selected=p.batted_ball_type or "-- N/A --"))
                     edit_children.append(ui.layout_columns(
-                        ui.input_numeric("gt_pl_edit_bbx", "Feet right of CF line", value=float(p.batted_ball_x) if p.batted_ball_x is not None else 0.0, step=5.0),
-                        ui.input_numeric("gt_pl_edit_bby", "Feet from home toward OF", value=float(p.batted_ball_y) if p.batted_ball_y is not None else 150.0, step=5.0),
+                        ui.input_numeric("gt_pl_edit_bbx", "Feet right of CF line", value=float(p.batted_ball_x) if p.batted_ball_x is not None else None, step=5.0),
+                        ui.input_numeric("gt_pl_edit_bby", "Feet from home toward OF", value=float(p.batted_ball_y) if p.batted_ball_y is not None else None, step=5.0),
                     ))
                     edit_children.append(ui.input_text("gt_pl_edit_notes", "Notes (optional)", value=p.notes or ""))
 
@@ -823,7 +837,10 @@ def register_game_tracking_pitch_log(
                     if edit_btn_id not in _registered_pitch_row_ids:
                         _registered_pitch_row_ids.add(edit_btn_id)
                         _registered_pitch_row_ids.add(delete_btn_id)
-                        _register_pitch_row_handlers(p.game_pitch_id, can_end_here, can_add_runner_event_here, can_insert_here)
+                        # Oct 2026: register every button type up front -- a row's
+                        # buttons can change after an edit (e.g. runners now on base),
+                        # and a button added later used to have no handler.
+                        _register_pitch_row_handlers(p.game_pitch_id, True, True, True)
                 else:
                     rows.append(ui.div(*summary_children))
 
@@ -1028,10 +1045,9 @@ def register_game_tracking_pitch_log(
             values["notes"] = notes
 
             if not pitch.is_our_team_batting and "gt_pl_edit_ix" in input:
-                intended_x, intended_z = input.gt_pl_edit_ix(), input.gt_pl_edit_iz()
+                intended_x, intended_z = _pair(input.gt_pl_edit_ix(), input.gt_pl_edit_iz())
                 has_actual = bool(input.gt_pl_edit_has_actual()) if "gt_pl_edit_has_actual" in input else pitch.actual_plate_x is not None
-                actual_x = input.gt_pl_edit_ax() if has_actual else None
-                actual_z = input.gt_pl_edit_az() if has_actual else None
+                actual_x, actual_z = _pair(input.gt_pl_edit_ax(), input.gt_pl_edit_az()) if has_actual else (None, None)
                 values["intended_plate_x"] = intended_x
                 values["intended_plate_z"] = intended_z
                 values["actual_plate_x"] = actual_x
@@ -1050,8 +1066,9 @@ def register_game_tracking_pitch_log(
             if outcome == "In Play" and "gt_pl_edit_bbt" in input:
                 raw_bbt = input.gt_pl_edit_bbt()
                 values["batted_ball_type"] = raw_bbt if raw_bbt and raw_bbt != "-- N/A --" else None
-                values["batted_ball_x"] = input.gt_pl_edit_bbx() if "gt_pl_edit_bbx" in input else None
-                values["batted_ball_y"] = input.gt_pl_edit_bby() if "gt_pl_edit_bby" in input else None
+                values["batted_ball_x"], values["batted_ball_y"] = _pair(
+                    input.gt_pl_edit_bbx() if "gt_pl_edit_bbx" in input else None,
+                    input.gt_pl_edit_bby() if "gt_pl_edit_bby" in input else None)
             else:
                 values["batted_ball_type"] = None
                 values["batted_ball_x"] = None
@@ -1070,6 +1087,10 @@ def register_game_tracking_pitch_log(
                     ui.notification_show("Confirm the AB outcome before saving -- not saved.", type="error", duration=8)
                     return
                 ab_outcome_val = input.gt_pl_edit_ab_outcome()
+                if not ab_outcome_val or _blank(input.gt_pl_edit_outs_after(), input.gt_pl_edit_runs(),
+                                                input.gt_pl_edit_unearned() if "gt_pl_edit_unearned" in input else 0):
+                    ui.notification_show("AB outcome, outs after and runs can't be blank -- not saved.", type="error", duration=8)
+                    return
                 outs_after_val = int(input.gt_pl_edit_outs_after())
                 bases_after_val = (input.gt_pl_edit_bases_after() or "").strip()
                 if not re.fullmatch(r"[01]{3}", bases_after_val):
@@ -1369,8 +1390,8 @@ def register_game_tracking_pitch_log(
                     class_="text-muted small",
                 ))
                 children.append(ui.layout_columns(
-                    ui.input_numeric("gt_pl_insert_ix", "Intended plate side (ft, 0 = center, negative = 3B side)", value=0.0, min=strike_zone.X_MIN, max=strike_zone.X_MAX, step=0.1),
-                    ui.input_numeric("gt_pl_insert_iz", "Intended plate height (ft off the ground)", value=2.5, min=strike_zone.Z_MIN, max=strike_zone.Z_MAX, step=0.1),
+                    ui.input_numeric("gt_pl_insert_ix", "Intended plate side (ft, 0 = center, negative = 3B side)", value=None, min=strike_zone.X_MIN, max=strike_zone.X_MAX, step=0.1),
+                    ui.input_numeric("gt_pl_insert_iz", "Intended plate height (ft off the ground)", value=None, min=strike_zone.Z_MIN, max=strike_zone.Z_MAX, step=0.1),
                 ))
 
             children.append(ui.input_select("gt_pl_insert_outcome", "Pitch outcome", choices=PITCH_OUTCOMES))
@@ -1446,6 +1467,9 @@ def register_game_tracking_pitch_log(
             db.close()
         req("gt_pl_insert_ix" in input)
         x, z = input.gt_pl_insert_ix(), input.gt_pl_insert_iz()
+        if x is None or z is None:
+            return ui.p("Intended: not set — click the zone above, enter a pitch code, or type coordinates.",
+                        class_="text-muted small text-center")
         return ui.p(
             f"Intended: {x:+.2f} ft, {z:.2f} ft high — click the zone above, or type coordinates directly.",
             class_="text-muted small text-center",
@@ -1479,8 +1503,8 @@ def register_game_tracking_pitch_log(
                 class_="text-muted small",
             ))
             children.append(ui.layout_columns(
-                ui.input_numeric("gt_pl_insert_bbx", "Feet right of the CF line (negative = left field side)", value=0.0, min=field_location.X_MIN, max=field_location.X_MAX, step=5.0),
-                ui.input_numeric("gt_pl_insert_bby", "Feet from home plate toward the outfield", value=150.0, min=field_location.Y_MIN, max=field_location.Y_MAX, step=5.0),
+                ui.input_numeric("gt_pl_insert_bbx", "Feet right of the CF line (negative = left field side)", value=None, min=field_location.X_MIN, max=field_location.X_MAX, step=5.0),
+                ui.input_numeric("gt_pl_insert_bby", "Feet from home plate toward the outfield", value=None, min=field_location.Y_MIN, max=field_location.Y_MAX, step=5.0),
             ))
         if not children:
             return None
@@ -1510,6 +1534,9 @@ def register_game_tracking_pitch_log(
             return None
         req("gt_pl_insert_bbx" in input)
         x, y = input.gt_pl_insert_bbx(), input.gt_pl_insert_bby()
+        if x is None or y is None:
+            return ui.p("Landed: not set — click the field above, or type coordinates.",
+                        class_="text-muted small text-center")
         dist = field_location.distance_from_plate(x, y)
         return ui.p(
             f"Landed: {x:+.0f} ft, {y:.0f} ft deep ({dist:.0f} ft from home) — click the field above, or type coordinates directly.",
@@ -1657,7 +1684,7 @@ def register_game_tracking_pitch_log(
         # "actual location recorded" checkbox at all.
         show_intended = (not identity_pitch.is_our_team_batting) or game.is_intrasquad
         if show_intended and "gt_pl_insert_ix" in input:
-            intended_x, intended_z = input.gt_pl_insert_ix(), input.gt_pl_insert_iz()
+            intended_x, intended_z = _pair(input.gt_pl_insert_ix(), input.gt_pl_insert_iz())
             values["intended_plate_x"] = intended_x
             values["intended_plate_z"] = intended_z
             values["intended_zone"] = strike_zone.derive_old_zone(intended_x, intended_z)
@@ -1678,8 +1705,9 @@ def register_game_tracking_pitch_log(
         if outcome == "In Play" and "gt_pl_insert_bbt" in input:
             raw_bbt = input.gt_pl_insert_bbt()
             values["batted_ball_type"] = raw_bbt if raw_bbt and raw_bbt != "-- N/A --" else None
-            values["batted_ball_x"] = input.gt_pl_insert_bbx() if "gt_pl_insert_bbx" in input else None
-            values["batted_ball_y"] = input.gt_pl_insert_bby() if "gt_pl_insert_bby" in input else None
+            values["batted_ball_x"], values["batted_ball_y"] = _pair(
+                input.gt_pl_insert_bbx() if "gt_pl_insert_bbx" in input else None,
+                input.gt_pl_insert_bby() if "gt_pl_insert_bby" in input else None)
         else:
             values["batted_ball_type"] = None
             values["batted_ball_x"] = None
@@ -1696,6 +1724,9 @@ def register_game_tracking_pitch_log(
             if "gt_pl_insert_ab_outcome" not in input:
                 return None, "Confirm the AB outcome before inserting -- not saved."
             ab_outcome_val = input.gt_pl_insert_ab_outcome()
+            if not ab_outcome_val or _blank(input.gt_pl_insert_outs_after(), input.gt_pl_insert_runs(),
+                                            input.gt_pl_insert_unearned() if "gt_pl_insert_unearned" in input else 0):
+                return None, "AB outcome, outs after and runs can't be blank -- not saved."
             outs_after_val = int(input.gt_pl_insert_outs_after())
             bases_after_val = (input.gt_pl_insert_bases_after() or "").strip()
             if not re.fullmatch(r"[01]{3}", bases_after_val):
@@ -1897,17 +1928,6 @@ def register_game_tracking_pitch_log(
                 _bump_refresh()
                 return
             game = db.query(Game).filter(Game.game_id == pitch.game_id).first()
-            if game is not None and pitch.ends_plate_appearance and pitch.runs_scored_on_play:
-                if pitch.batting_squad == "A":
-                    game.our_score = max(0, game.our_score - pitch.runs_scored_on_play)
-                elif pitch.batting_squad == "B":
-                    game.opponent_score = max(0, game.opponent_score - pitch.runs_scored_on_play)
-                elif pitch.batting_squad == "C":
-                    game.squad_c_score = max(0, game.squad_c_score - pitch.runs_scored_on_play)
-                elif pitch.is_our_team_batting:
-                    game.our_score = max(0, game.our_score - pitch.runs_scored_on_play)
-                else:
-                    game.opponent_score = max(0, game.opponent_score - pitch.runs_scored_on_play)
             db.query(RapsodoPitch).filter(RapsodoPitch.game_pitch_id == pitch_id).update(
                 {"game_pitch_id": None}
             )
@@ -1915,7 +1935,39 @@ def register_game_tracking_pitch_log(
                 {"matched_game_pitch_id": None}
             )
             deleted_seq = pitch.pitch_sequence
+            # Oct 2026: runner events / forced half-inning ends logged right
+            # after the deleted pitch move to the pitch before it, instead of
+            # being orphaned (they used to vanish from the replay, or re-attach
+            # to whatever pitch next reused this number).
+            prev_seq = (db.query(func.max(GamePitch.pitch_sequence))
+                        .filter(GamePitch.game_id == pitch.game_id, GamePitch.pitch_sequence < deleted_seq)
+                        .scalar()) or 0
+            for model in (GameRunnerEvent, GameForcedHalfInningEnd):
+                db.query(model).filter(model.game_id == pitch.game_id,
+                                       model.pitch_sequence_after == deleted_seq).update({"pitch_sequence_after": prev_seq})
+            game_id_for_replay = pitch.game_id
             db.delete(pitch)
+            db.flush()
+            # ...and every later pitch's count/outs/bases/inning/RE plus the
+            # score are recomputed from the whole game (they used to keep
+            # their stale values after a mid-game delete).
+            all_pitches = db.query(GamePitch).filter(GamePitch.game_id == game_id_for_replay).all()
+            result = replay_game(
+                all_pitches,
+                db.query(GameRunnerEvent).filter(GameRunnerEvent.game_id == game_id_for_replay).all(),
+                build_re_lookup(db),
+                db.query(GameForcedHalfInningEnd).filter(GameForcedHalfInningEnd.game_id == game_id_for_replay).all(),
+                game=game,
+            )
+            for p2 in all_pitches:
+                r = result["by_pitch"].get(p2.game_pitch_id)
+                if r is not None:
+                    for field in REPLAY_OWNED_FIELDS:
+                        setattr(p2, field, r[field])
+            if game is not None:
+                game.our_score = result["our_score"]
+                game.opponent_score = result["opponent_score"]
+                game.squad_c_score = result["squad_c_score"]
             db.commit()
             ui.notification_show(f"Deleted pitch #{deleted_seq}.", type="message", duration=6)
         except Exception:
