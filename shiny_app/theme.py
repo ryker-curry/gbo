@@ -271,6 +271,31 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-side-link svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .gbo-side-link:hover { background: var(--gbo-bg-raised); color: var(--gbo-text); }
 .gbo-side-link.active { background: var(--gbo-crimson-soft); color: var(--gbo-gold-text); box-shadow: inset 3px 0 0 var(--gbo-crimson); }
+/* Oct 2026: simplified staff sidebar -- everything else in a collapsed group */
+.gbo-side-more { margin-top: 10px; border-top: 1px solid var(--gbo-border); padding-top: 6px; }
+.gbo-side-more > summary { list-style: none; color: var(--gbo-text-muted); }
+.gbo-side-more > summary::-webkit-details-marker { display: none; }
+.gbo-side-more > summary::after { content: ""; margin-left: auto; width: 6px; height: 6px; border-right: 1.6px solid currentColor; border-bottom: 1.6px solid currentColor; transform: rotate(-45deg); transition: transform .15s; }
+.gbo-side-more[open] > summary::after { transform: rotate(45deg); }
+.gbo-side-more[open] > .gbo-side-link:not(summary) { padding-left: 18px; }
+/* Oct 2026: Player Profile hub -- "Go to" buttons, recent games, back bar */
+.gbo-jump { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -4px 0 16px; }
+.gbo-jump-lbl { font-size: .68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--gbo-text-muted); margin-right: 4px; }
+.gbo-jump .gbo-jump-btn { border: 1px solid var(--gbo-border-strong); border-radius: 999px; padding: .25rem .8rem; font-size: .8rem; }
+.gbo-jump .gbo-jump-good { border-color: var(--gbo-status-good); color: var(--gbo-status-good); }
+.gbo-jump .gbo-jump-watch { border-color: var(--gbo-status-watch); color: var(--gbo-status-watch); }
+.gbo-jump .gbo-jump-flag { border-color: var(--gbo-status-flag); color: var(--gbo-status-flag); }
+.gbo-recent-row { display: grid; grid-template-columns: minmax(180px, 1.2fr) 2fr auto; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--gbo-border); }
+.gbo-recent-row:last-child { border-bottom: 0; }
+.gbo-recent-game { font-weight: 600; font-size: .85rem; }
+.gbo-recent-line { color: var(--gbo-text-2); font-size: .82rem; font-variant-numeric: tabular-nums; }
+.gbo-recent-acts { display: flex; gap: 12px; }
+.gbo-recent-link { font-size: .8rem; font-weight: 600; color: var(--gbo-gold-text); text-decoration: none; }
+.gbo-recent-link:hover { text-decoration: underline; }
+@media (max-width: 768px) { .gbo-recent-row { grid-template-columns: 1fr; gap: 4px; } }
+.gbo-back { padding: 10px 32px 0; }
+.gbo-back .gbo-back-btn { border: 1px solid var(--gbo-border-strong); border-radius: 999px; padding: .25rem .8rem; font-size: .8rem; }
+@media (max-width: 768px) { .gbo-back { padding: 10px 16px 0; } }
 .gbo-side-me { margin-top: auto; border-top: 1px solid var(--gbo-border); padding: 12px 0 0 8px; display: flex; gap: 10px; align-items: center; }
 .gbo-avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--gbo-bg-raised); border: 1px solid var(--gbo-border-strong); display: grid; place-items: center; font-family: var(--gbo-display); font-weight: 700; color: var(--gbo-text-2); flex: none; object-fit: cover; }
 .gbo-side-me-name { font-weight: 600; font-size: .82rem; color: var(--gbo-text); line-height: 1.2; }

@@ -122,6 +122,7 @@ from modules.roster import _flag_for
 import bucket_display
 
 import ui_helpers
+import deep_link
 from analytics import game_goals
 from modules import game_goal_form
 
@@ -321,6 +322,9 @@ def idp_ui():
 
 @module.server
 def idp_server(input, output, session, app_state):
+    # Oct 2026: opened from Player Profile with the player/game picked (shiny_app/deep_link.py).
+    _dl = deep_link.Pending(app_state, "IDP", on_arrive=lambda p: [ui.update_select("player_select", selected=str(p["pid"])) if "pid" in p else None])
+
     _refresh_tick = reactive.Value(0)
     _registered_goal_ids = set()
 
@@ -369,7 +373,7 @@ def idp_server(input, output, session, app_state):
                     "No players to show yet." if app_state.can_view_all_players() else "No players are currently assigned to you."
                 )
             choices = {str(p.player_id): f"{p.first_name} {p.last_name}" for p in players}
-            return ui.input_select("player_select", "Player", choices=choices)
+            return ui.input_select("player_select", "Player", choices=choices, selected=_dl.take("pid", choices))
         finally:
             db.close()
 
@@ -625,7 +629,7 @@ def idp_server(input, output, session, app_state):
                     _registered_goal_ids.add(goal.goal_id)
                     _register_goal_handlers(goal.goal_id)
 
-                panels.append(ui.accordion_panel(title, *body))
+                panels.append(ui.accordion_panel(title, *body, value=f"goal_{goal.goal_id}"))
 
             return ui.div(*header, ui.accordion(*panels, open=False, id=None))
         finally:

@@ -51,6 +51,7 @@ from game_stats import compute_pitching_line, get_pitching_extras_for_pitches
 from assessment_history import assessment_history_query, assessment_history_rows
 from pitch_type_config import FASTBALL_TYPES
 import bucket_display
+import profile_links
 import ui_helpers
 
 
@@ -134,6 +135,8 @@ def player_profile_server(input, output, session, app_state):
             ids = [a.player_id for a in db.query(StaffPlayerAssignment).filter(StaffPlayerAssignment.staff_user_id == app_state.user_id()).all()]
             q = q.filter(Player.player_id.in_(ids))
         return q.filter(Player.active.is_(True)).order_by(Player.last_name, Player.first_name).all()
+
+    profile_links.register_profile_links(input, output, session, app_state, _selected)
 
     _open_tab = reactive.Value(None)   # Oct 2026: deep link may be (pid, tab) -- Staff Compensation opens "Compensation"
 
@@ -326,7 +329,7 @@ def player_profile_server(input, output, session, app_state):
         hero = ui.div(card, ui.div(tiles, priorities), class_="gbo-profile-hero")
 
         # --- tabs ---
-        overview = _overview_tab(bd, summ, pitches, bullpen, goals, mode)
+        overview = ui.div(ui.output_ui("recent_games"), _overview_tab(bd, summ, pitches, bullpen, goals, mode))
         breakdown_block = bucket_display.build_full_breakdown(bd, key_prefix="profile", mode=mode,
                                                                      show_proposal=app_state.role_name() != "Player") if bd.get("total_score") is not None else ui_helpers.card(ui_helpers.empty_state("No scored assessments yet. Log Body Composition, Power, or Strength tests to populate the breakdown."))
         # Full History -- collapsed by default, same treatment the raw
@@ -364,7 +367,10 @@ def player_profile_server(input, output, session, app_state):
             id="profile_tabs",
             selected=_take_open_tab(p.player_id),
         )
-        return ui.div(header, hero, ui.div(tabs, style="margin-top:24px;"))
+        # Oct 2026, Ryker: the profile is the coach's hub -- "Go to" buttons
+        # and recent games open each page with this player already picked
+        # (shiny_app/profile_links.py).
+        return ui.div(header, ui.output_ui("jump_bar"), hero, ui.div(tabs, style="margin-top:24px;"))
 
     @render.ui
     def comp_tab():
