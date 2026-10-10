@@ -1991,6 +1991,9 @@ def pitcher_profile_server(input, output, session, app_state):
             ui.p("Run value / 100 is from the hitter's side: lower (more negative) is better for the pitcher.",
                  class_="text-muted small"),
             output_widget("pp_best_zone_chart"),
+            # Oct 2026 (Ryker): "All Batters" shows both hands -- each hand has its
+            # own best zone, so it's two charts (vs RHH, then vs LHH), not one.
+            output_widget("pp_best_zone_chart_l") if input.pp_zone_hand() == "All Batters" else None,
         ]
 
     @render_plotly
@@ -2017,14 +2020,34 @@ def pitcher_profile_server(input, output, session, app_state):
             if not scored:
                 return None
             choice = input.pp_zone_hand()
-            if choice == "vs RHH":
-                hand = "R"
-            elif choice == "vs LHH":
-                hand = "L"
-            else:
-                same = sum(1 for r in scored if r["matchup"] == "same")
-                hand = player.throws if same >= len(scored) - same else ("L" if player.throws == "R" else "R")
+            hand = "L" if choice == "vs LHH" else "R"      # All Batters: vs RHH here, vs LHH in the chart below
             return best_zone_figure(scored, maps, player.throws, hand)
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_best_zone_chart_l():
+        """Second chart (vs LHH) when "All Batters" is selected."""
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "zone":
+            return None
+        req("pp_zone_hand" in input)
+        req(input.pp_zone_hand() not in ("vs RHH", "vs LHH"))   # req (not return None) so the old chart clears
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            player = db.query(Player).filter(Player.player_id == pid).first() if pid else None
+            if player is None or player.throws not in ("R", "L"):
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"], game_id=f["game_id"],
+            )
+            scored, maps = best_zone.score_for_pitcher(db, game_pitches, player.throws)
+            return best_zone_figure(scored, maps, player.throws, "L") if scored else None
         finally:
             db.close()
 
