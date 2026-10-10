@@ -81,6 +81,43 @@ from format_helpers import (
 )
 
 
+def _count_situational_children(line):
+    """Count Control / Situational / Against KPI blocks (Oct 2026, Ryker:
+    its own View option instead of a fold-out under the line on every view)."""
+    return [
+        ui.p(ui.strong("Count Control")),
+        ui_helpers.render_kpi_cards([
+            {"label": "Strike %", "value": _fmt_pct(line["Strike %"])},
+            {"label": "Early", "value": str(line["Early"])},
+            {"label": "Ahead", "value": str(line["Ahead (PA)"])},
+            {"label": "E+A %", "value": _fmt_pct(line["E+A %"])},
+        ]),
+        ui.p(f"Pitches/Inning: {_fmt(line['Pitches/Inning'], 1)} · Balls: {line['Balls']} ({_fmt_pct(line['Ball %'])})", class_="text-muted small"),
+
+        ui.p(ui.strong("Situational")),
+        ui_helpers.render_kpi_cards([
+            {"label": "Leadoff Out %", "value": _fmt_pct(line["Leadoff Out %"])},
+            {"label": "Leadoff BB", "value": str(line["Leadoff BB"])},
+            {"label": "2 Out BB", "value": str(line["2 Out BB"])},
+            {"label": "XBH Allowed", "value": str(line["XBH"])},
+        ]),
+        ui.p(
+            f"0-2 Hits: {line['0-2 Hits']} · 0-2 Barrel: {line['0-2 Barrel']} · 1-2 Barrel: {line['1-2 Barrel']} · "
+            "\"Score\" versions (did that specific walked runner score) aren't computable yet -- "
+            "GBO tracks base occupancy, not individual runner identity.",
+            class_="text-muted small",
+        ),
+
+        ui.p(ui.strong("Against")),
+        ui_helpers.render_kpi_cards([
+            {"label": "OBA", "value": _fmt(line["OBA (opponent AVG)"], 3)},
+            {"label": "wOBA*", "value": _fmt(line["wOBA"], 3)},
+            {"label": "AB", "value": str(line["AB"])},
+        ]),
+        ui.p("*wOBA uses generic linear weights, not a season/league-specific set -- a relative read within your own games, not MLB-exact.", class_="text-muted small"),
+    ]
+
+
 def _fmt_grade(value):
     return f"{value:.1f}" if value is not None else "—"
 
@@ -688,6 +725,7 @@ def pitcher_game_report_ui():
         # function does internally, not whether it's wired up.
         ui.output_ui("report_section_picker"),
         ui.output_ui("pitch_type_breakdown_section"),
+        ui.output_ui("count_situational_section"),
         ui.output_ui("command_execution_section"),
         ui.output_ui("command_target_section"),
         ui.output_ui("pitch_locations_section"),
@@ -960,52 +998,6 @@ def pitcher_game_report_server(input, output, session, app_state):
             sections.append(ui.p(ui.strong("Plus stats vs D2 (2026)")))
             sections.append(ui_helpers.plus_stat_cards(league_baselines.pitching_plus(line), league_baselines.PITCHING_PLUS_ORDER, league_baselines.pitching_actuals(line)))
             sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
-            # Count Control/Situational/Against tucked behind one
-            # collapsed-by-default accordion panel -- Sept 2026, Ryker:
-            # "too much information ... want to track all of it but
-            # don't need to always see all of it." Line above stays
-            # always visible (the first thing anyone wants), everything
-            # still computes/renders exactly as before, just not open
-            # by default. Same ui.accordion(..., open=False, id=None)
-            # pattern already used for collapsed-by-default panels
-            # elsewhere in the app (assessments.py, bullpen_tracking.py,
-            # game_tracking.py, idp.py, opponent_teams.py).
-            more_children = [
-                ui.p(ui.strong("Count Control")),
-                ui_helpers.render_kpi_cards([
-                    {"label": "Strike %", "value": _fmt_pct(line["Strike %"])},
-                    {"label": "Early", "value": str(line["Early"])},
-                    {"label": "Ahead", "value": str(line["Ahead (PA)"])},
-                    {"label": "E+A %", "value": _fmt_pct(line["E+A %"])},
-                ]),
-                ui.p(f"Pitches/Inning: {_fmt(line['Pitches/Inning'], 1)} · Balls: {line['Balls']} ({_fmt_pct(line['Ball %'])})", class_="text-muted small"),
-
-                ui.p(ui.strong("Situational")),
-                ui_helpers.render_kpi_cards([
-                    {"label": "Leadoff Out %", "value": _fmt_pct(line["Leadoff Out %"])},
-                    {"label": "Leadoff BB", "value": str(line["Leadoff BB"])},
-                    {"label": "2 Out BB", "value": str(line["2 Out BB"])},
-                    {"label": "XBH Allowed", "value": str(line["XBH"])},
-                ]),
-                ui.p(
-                    f"0-2 Hits: {line['0-2 Hits']} · 0-2 Barrel: {line['0-2 Barrel']} · 1-2 Barrel: {line['1-2 Barrel']} · "
-                    "\"Score\" versions (did that specific walked runner score) aren't computable yet -- "
-                    "GBO tracks base occupancy, not individual runner identity.",
-                    class_="text-muted small",
-                ),
-
-                ui.p(ui.strong("Against")),
-                ui_helpers.render_kpi_cards([
-                    {"label": "OBA", "value": _fmt(line["OBA (opponent AVG)"], 3)},
-                    {"label": "wOBA*", "value": _fmt(line["wOBA"], 3)},
-                    {"label": "AB", "value": str(line["AB"])},
-                ]),
-                ui.p("*wOBA uses generic linear weights, not a season/league-specific set -- a relative read within your own games, not MLB-exact.", class_="text-muted small"),
-            ]
-            sections.append(ui.accordion(
-                ui.accordion_panel("More: Count Control, Situational, Against", *more_children),
-                open=False, id=None,
-            ))
 
             # Pitch Type Breakdown / Command Precision / Attack Zones /
             # Command Target Zones / Pitch Shape (Rapsodo) used to all be
@@ -1019,6 +1011,28 @@ def pitcher_game_report_server(input, output, session, app_state):
             return ui.div(*sections)
         finally:
             db.close()
+
+    @render.ui
+    def count_situational_section():
+        """Count Control / Situational / Against for the selected pitcher and
+        game (Oct 2026, Ryker: its own View option)."""
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("game_select" in input)
+        req("pitcher_select" in input)
+        req("report_section" in input)
+        if input.report_section() != "count_situational":
+            return None
+        db = get_session()
+        try:
+            pid, gid = int(input.pitcher_select()), int(input.game_select())
+            pitches = get_pitching_pitches(db, pid, game_id=gid)
+            if not pitches:
+                return None
+            line = pitching_line_for(db, pid, pitches)
+        finally:
+            db.close()
+        return ui.div(ui.hr(), *_count_situational_children(line))
 
     @render.ui
     def report_section_picker():
@@ -1047,6 +1061,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                     "report_section", "View",
                     choices={
                         "pitch_type_breakdown": "Pitch Type Breakdown",
+                        "count_situational": "Count Control & Situational",
                         "command_execution": "Command & Execution",
                         "pitch_locations": "Pitch Locations",
                         "pitch_shape": "Pitch Shape / Rapsodo",
