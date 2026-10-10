@@ -3486,48 +3486,22 @@ def game_tracking_server(input, output, session, app_state):
             else:
                 half_label = "Batting" if state["is_our_batting"] else "Pitching"
                 score_value = f"{game.our_score}-{game.opponent_score}"
-            children = [
-                ui.h5("Live Game Dashboard", class_="gbo-section-title"),
-                ui_helpers.render_kpi_cards([
-                    {"label": "Score", "value": score_value},
-                    {"label": "Inning", "value": f"{_inning_display(state['inning'], game, state)} — {half_label}"},
-                    {"label": "Outs", "value": str(state["outs"])},
-                    {"label": "Count", "value": f"{state['balls']}-{state['strikes']}"},
-                ]),
+            # Oct 2026, Ryker: trimmed to what a charter needs -- strike %,
+            # K/BB and the current hitter's game line were too much while
+            # tracking. One row: score, inning, outs, count, pitch count.
+            cards = [
+                {"label": "Score", "value": score_value},
+                {"label": "Inning", "value": f"{_inning_display(state['inning'], game, state)} — {half_label}"},
+                {"label": "Outs", "value": str(state["outs"])},
+                {"label": "Count", "value": f"{state['balls']}-{state['strikes']}"},
             ]
-
             pitcher_id = _resolve_current_pitcher_id_for_stats(game, state)
             if pitcher_id is not None:
                 p = db.query(Player).filter(Player.player_id == pitcher_id).first()
                 if p is not None:
-                    line = compute_pitching_line(get_pitching_pitches(db, pitcher_id, game_id=game_id))
-                    strike_pct = line["Strike %"]
-                    children.append(ui_helpers.render_kpi_cards([
-                        {"label": f"P — {p.first_name} {p.last_name}", "value": f"{line['Pitches']} pitches"},
-                        {"label": "Strike %", "value": f"{strike_pct}%" if strike_pct is not None else "—"},
-                        {"label": "K", "value": str(line["K"])},
-                        {"label": "BB", "value": str(line["BB"])},
-                    ]))
-            elif not state["is_our_batting"]:
-                # Shouldn't happen -- we always have a resolvable pitcher_id when we're the ones pitching.
-                pass
-            else:
-                children.append(ui.p("Opposing pitcher isn't one of our tracked players, so pitch stats aren't available for them.", class_="text-muted small"))
-
-            hitter_id = _resolve_current_hitter_id_for_stats(game, state, squad_a_slots, squad_b_slots, squad_c_slots)
-            if hitter_id is not None:
-                h = db.query(Player).filter(Player.player_id == hitter_id).first()
-                if h is not None:
-                    line = compute_batting_line(get_batting_pitches(db, hitter_id, game_id=game_id))
-                    children.append(ui_helpers.render_kpi_cards([
-                        {"label": f"AB — {h.first_name} {h.last_name}", "value": f"{line['PA']} PA"},
-                        {"label": "H", "value": str(line["H"])},
-                        {"label": "BB", "value": str(line["BB"])},
-                        {"label": "K", "value": str(line["K"])},
-                    ]))
-            else:
-                children.append(ui.p("Opposing batter isn't one of our tracked players, so batting stats aren't available for them.", class_="text-muted small"))
-
+                    n = len(get_pitching_pitches(db, pitcher_id, game_id=game_id))
+                    cards.append({"label": f"P — {p.first_name} {p.last_name}", "value": f"{n} pitches"})
+            children = [ui.h5("Live Game Dashboard", class_="gbo-section-title"), ui_helpers.render_kpi_cards(cards)]
             return ui.div(*children)
         finally:
             db.close()
