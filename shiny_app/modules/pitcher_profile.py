@@ -2614,29 +2614,17 @@ def pitcher_profile_server(input, output, session, app_state):
         if not _seq_gate():
             return None
         return ui.div(
-            ui.p(ui.strong("Sequencing: what follows what"), "  ", ui_helpers.how_to_link("sequencing"), style="margin-bottom:0;"),
-            ui.p("Each row is two back-to-back pitches to the same hitter (first → second), graded on what the SECOND "
-                 "pitch did. Share = of everything he threw right after the first pitch, how often it was this one. "
-                 "CSW % = called strikes + whiffs; Whiff % = of swings; Chase % = swings at located pitches outside "
-                 f"the zone. Team = the same pair across our whole staff. Gray rows have fewer than {sequencing.MIN_N} "
-                 "-- too few to trust yet. Charted games only; uses the date range above (the pitch-type filter is "
-                 "ignored here so pairs stay whole).", class_="text-muted small"),
-            ui.layout_columns(
-                ui.input_radio_buttons("pp_seq_side", "Hitters", {"all": "All", "R": "vs RHH", "L": "vs LHH"},
-                                       selected="all", inline=True),
-                ui.input_radio_buttons("pp_seq_count", "Count before the 2nd pitch", sequencing.COUNT_FILTERS,
-                                       selected="all", inline=True),
-                col_widths=[4, 8],
-            ),
+            ui.p(ui.strong("Sequencing"), "  ", ui_helpers.how_to_link("sequencing"), style="margin-bottom:0;"),
+            ui.p("How he strings pitches together, in four questions. Charted games only, with the date range above; "
+                 "locations come from Rapsodo. Faded = too few pitches to trust yet.", class_="text-muted small"),
+            ui.input_radio_buttons("pp_seq_side", "Hitters", {"all": "All", "R": "vs RHH", "L": "vs LHH"},
+                                   selected="all", inline=True),
             ui.output_ui("pp_seq_table"),
         )
 
-    @render.ui
-    def pp_seq_table():
-        if not _seq_gate():
-            return None
-        req("pp_seq_side" in input and "pp_seq_count" in input)
-        side, count = input.pp_seq_side(), input.pp_seq_count()
+    def _seq_data():
+        """This pitcher's and the staff's game pitches in range, batter hands,
+        and Rapsodo locations -- shared by every Sequencing section."""
         f = _current_filters()
         db = get_session()
         try:
@@ -2649,36 +2637,146 @@ def pitcher_profile_server(input, output, session, app_state):
             ) or []
             team = trends.team_pitches_in_range(db, f["date_from"], f["date_to"], pitching=True)
             hands = get_batter_hands(db, list(mine) + list(team))
+            ids = [p.game_pitch_id for p in list(mine) + list(team)]
+            loc = sequencing.loc_map(profile_queries.rapsodo_by_game_pitch_id(db, ids))
         finally:
             db.close()
-        res = sequencing.table(mine, hands, side, count)
-        if not res["rows"]:
-            return ui_helpers.empty_state("No back-to-back pitches in this range and filter yet.")
-        team_rows = sequencing.team_lookup(team, hands, side, count)
+        return mine, team, hands, loc
 
-        def pct(v):
-            return f"{v}%" if v is not None else "—"
-        rows = []
-        for r in res["rows"]:
-            t = team_rows.get((r["first"], r["second"]))
-            rows.append({
-                "Pair": r["label"], "Times": r["n"], "Share": pct(r["share"]),
-                "Strike %": pct(r["strike"]), "CSW %": pct(r["csw"]), "Whiff %": pct(r["whiff"]),
-                "Chase %": pct(r["chase"]), "In play (hits)": f"{r['in_play']} ({r['hits']})",
-                "Team CSW %": pct(t["csw"]) if t else "—",
-            })
-        table_html = ui_helpers.render_dict_table(rows)
-        # gray out thin rows (render_dict_table has no per-row class hook)
-        thin = [i for i, r in enumerate(res["rows"]) if not r["reliable"]]
-        style = "".join(f"#{session.ns('pp_seq_table')} tbody tr:nth-child({i + 1}){{opacity:.5}}" for i in thin)
-        notes = sequencing.takeaways(res["rows"])
-        return ui.div(
-            ui.tags.style(style) if style else None,
-            ui.p(f"{res['total']} pairs. " + " · ".join(sorted({f"{sequencing.short(x)} = {x}" for r in res["rows"] for x in (r["first"], r["second"])})),
-                 class_="text-muted small", style="margin:0 0 4px;"),
+    def _seq_head(title, how):
+        return ui.div(ui.h6(title, class_="gbo-seq-h"), ui.p(how, class_="text-muted small gbo-seq-how"))
+
+    def _seq_grid_html(g):
+        types = g["types"]
+        sh = sequencing.short
+        head = "".join(f"<th>{sh(t)}</th>" for t in types)
+        body = []
+        for a in types:
+            if not g["after"].get(a):
+                continue
+            tds = []
+            for b in types:
+                c = g["cells"].get((a, b))
+                if not c:
+                    tds.append('<td class="gbo-sg-empty">·</td>')
+                    continue
+                team = f" · staff {c['team_csw']}%" if c["team_csw"] is not None else ""
+                tip = f"{sh(a)} → {sh(b)}: {c['n']} times, {c['csw']}% CSW{team}"
+                tds.append(f'<td class="gbo-sg-{c["verdict"]}" title="{tip}"><b>{c["share"]}%</b>'
+                           f'<span>{c["n"]} · {c["csw"] if c["csw"] is not None else "—"}%</span></td>')
+            body.append(f'<tr><th class="gbo-sg-row">after {sh(a)}<span>{g["after"][a]} times</span></th>{"".join(tds)}</tr>')
+        return ui.HTML(f'<div class="gbo-sg-wrap"><table class="gbo-sg"><thead><tr><th class="gbo-sg-corner">next →</th>{head}</tr></thead>'
+                       f'<tbody>{"".join(body)}</tbody></table></div>')
+
+    @render.ui
+    def pp_seq_table():
+        if not _seq_gate():
+            return None
+        req("pp_seq_side" in input)
+        side = input.pp_seq_side()
+        data = _seq_data()
+        if data is None:
+            return None
+        mine, team, hands, loc = data
+        g = sequencing.grid(mine, hands, side, "all", team_pitches=team, loc=loc)
+        if not g["rows"]:
+            return ui_helpers.empty_state("No back-to-back pitches in this range yet -- sequencing needs charted games.")
+        sh = sequencing.short
+        legend = " · ".join(sorted({f"{sh(t)} = {t}" for t in g["types"]}))
+        notes = sequencing.takeaways(g["rows"])
+
+        # 1. What does he throw next?
+        s1 = ui.div(
+            _seq_head("1. What does he throw next?",
+                      "Read across a row: after that pitch, how often each pitch comes next (big number). Small numbers = "
+                      "times thrown · CSW % (called strikes + whiffs) on the next pitch. Green = that follow-up gets more "
+                      "CSW than the same pair across our staff, red = less, faded = fewer than "
+                      f"{sequencing.MIN_N} times."),
             *[ui.p(ui.strong(n), class_="small", style="margin:0 0 4px;") for n in notes],
-            table_html,
+            _seq_grid_html(g),
+            ui.p(legend, class_="text-muted small", style="margin:4px 0 0;"),
+            class_="gbo-seq-sec",
         )
+
+        # 2. Is he predictable?
+        pr = sequencing.predictability(mine, hands, side)
+        flags = [r for r in pr if r["flag"]]
+        rel = [r for r in pr if r["reliable"]][:12]
+        if flags:
+            flag_el = ui.div(*[ui.p(ui.HTML(
+                f'<span class="gbo-seq-flag">{r["count"]}</span> after a {sh(r["after"])}: '
+                f'<b>{sh(r["top"])} {r["top_share"]}%</b> of the time ({r["n"]} times) -- a hitter can sit on it.'),
+                class_="small", style="margin:0 0 4px;") for r in flags[:6]])
+        elif rel:
+            flag_el = ui.p("Nothing a hitter can sit on: no count + previous pitch where one pitch comes "
+                           f"{sequencing.PREDICTABLE_SHARE}%+ of the time.", class_="small text-success")
+        else:
+            flag_el = ui.p("Not enough pitches yet to judge.", class_="small text-muted")
+        s2 = ui.div(
+            _seq_head("2. Is he predictable?",
+                      "From the hitter's side: in this count, right after this pitch, what's coming? Flagged when one "
+                      f"pitch comes {sequencing.PREDICTABLE_SHARE}%+ of the time (at least {sequencing.PREDICTABLE_MIN_N} times)."),
+            flag_el,
+            ui_helpers.render_dict_table([
+                {"Count": r["count"], "After": sh(r["after"]), "Next pitch": r["mix"], "Times": r["n"]} for r in rel
+            ]) if rel else None,
+            class_="gbo-seq-sec",
+        )
+
+        # 3. Changing eye level / sides
+        mv = sequencing.location_moves(mine, loc, hands, side, "all")
+
+        def mv_rows(rows):
+            return [{"2nd pitch": r["label"], "Times": r["n"],
+                     "CSW %": f"{r['csw']}%" if r["csw"] is not None else "—",
+                     "Whiff %": f"{r['whiff']}%" if r["whiff"] is not None else "—",
+                     "Chase %": f"{r['chase']}%" if r["chase"] is not None else "—"} for r in rows]
+        s3 = ui.div(
+            _seq_head("3. Is changing eye level and sides working?",
+                      "Back-to-back pitches graded by where the 2nd one went compared to the 1st (Rapsodo location). "
+                      "Went down/up = at least 9 inches lower/higher; in/away is from the hitter's side. "
+                      f"{mv['pairs_used']} pairs had a Rapsodo location on both pitches."),
+            ui.layout_columns(
+                ui.div(ui.p(ui.strong("Up / down"), class_="small", style="margin:0 0 2px;"),
+                       ui_helpers.render_dict_table(mv_rows(mv["vertical"]))),
+                ui.div(ui.p(ui.strong("In / away"), class_="small", style="margin:0 0 2px;"),
+                       ui_helpers.render_dict_table(mv_rows(mv["horizontal"]))),
+                col_widths={"sm": [12, 12], "lg": [6, 6]},
+            ) if mv["pairs_used"] else ui.p("No back-to-back pitches with Rapsodo locations in this range yet.", class_="small text-muted"),
+            class_="gbo-seq-sec",
+        )
+
+        # 4. How does he finish hitters?
+        fin = sequencing.finishing(mine, loc, hands, side)
+        fin_rows = [r for r in fin["rows"] if r["reliable"]][:10] or fin["rows"][:6]
+        s4 = ui.div(
+            _seq_head("4. How does he finish hitters?",
+                      "At-bats that got to two strikes: the last two pitches (setup → finish) and how they ended. "
+                      "'up' / 'down' = top or bottom third of the zone and beyond (Rapsodo)."),
+            ui_helpers.render_dict_table([
+                {"Setup → finish": r["label"], "At-bats": r["n"], "K": r["k"],
+                 "K %": f"{r['k_pct']}%" if r["k_pct"] is not None else "—",
+                 "Hits": r["hit"], "BB/HBP": r["walk"], "Other outs": r["out"]} for r in fin_rows
+            ]) if fin_rows else ui.p("No two-strike at-bats in this range yet.", class_="small text-muted"),
+            ui.p(ui.strong("Most common strikeout sequences (last 3 pitches): "),
+                 " · ".join(f"{s} ({k})" for s, k in fin["k_seqs"]), class_="small", style="margin-top:6px;")
+            if fin["k_seqs"] else None,
+            class_="gbo-seq-sec",
+        )
+
+        # Details: the old pair table, trimmed
+        detail = ui.tags.details(
+            ui.tags.summary("All pairs (details)"),
+            ui_helpers.render_dict_table([{
+                "Pair": r["label"], "Times": r["n"], "Next-pitch share": f"{r['share']}%" if r["share"] is not None else "—",
+                "CSW %": f"{r['csw']}%" if r["csw"] is not None else "—",
+                "Whiff %": f"{r['whiff']}%" if r["whiff"] is not None else "—",
+                "Staff CSW %": (f"{g['cells'][(r['first'], r['second'])]['team_csw']}%"
+                                if g["cells"][(r["first"], r["second"])]["team_csw"] is not None else "—"),
+            } for r in g["rows"]]),
+            class_="gbo-seq-details",
+        )
+        return ui.div(s1, s2, s3, s4, detail)
 
     @render.ui
     def pp_count_leverage_section():

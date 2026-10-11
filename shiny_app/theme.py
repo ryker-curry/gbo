@@ -1005,6 +1005,24 @@ body { max-width: 100%; }
 .gbo-key-del { font-family: inherit; color: var(--gbo-text-muted); }
 .gbo-score-in { font-family: var(--gbo-mono); font-size: 1.4rem; font-weight: 700; text-transform: uppercase; margin-bottom: 8px; min-height: 52px; }
 .gbo-qr { min-height: 42px; font-family: var(--gbo-mono); }
+/* Pitcher Profile > Sequencing (Oct 2026 rebuild) */
+.gbo-seq-sec { border: 1px solid var(--gbo-border); border-radius: 10px; padding: 12px 14px; margin: 0 0 14px; background: var(--gbo-bg-card); }
+.gbo-seq-h { margin: 0 0 2px; font-weight: 700; color: var(--gbo-gold-text); }
+.gbo-seq-how { margin: 0 0 8px; }
+.gbo-seq-flag { display: inline-block; font-family: var(--gbo-mono); font-weight: 700; background: rgba(191,30,45,.2); color: var(--gbo-text); border-radius: 6px; padding: 0 6px; }
+.gbo-sg-wrap { overflow-x: auto; }
+.gbo-sg { border-collapse: separate; border-spacing: 4px; font-variant-numeric: tabular-nums; }
+.gbo-sg th { font-size: .72rem; color: var(--gbo-text-muted); font-weight: 600; text-align: center; padding: 2px 4px; }
+.gbo-sg th.gbo-sg-row { text-align: right; white-space: nowrap; color: var(--gbo-text); }
+.gbo-sg th.gbo-sg-row span { display: block; font-weight: 400; color: var(--gbo-text-muted); font-size: .65rem; }
+.gbo-sg td { min-width: 62px; height: 52px; text-align: center; border-radius: 8px; border: 1px solid var(--gbo-border); background: var(--gbo-bg-raised, #1D1D20); line-height: 1.1; }
+.gbo-sg td b { display: block; font-size: 1.05rem; }
+.gbo-sg td span { font-size: .65rem; color: var(--gbo-text-muted); }
+.gbo-sg td.gbo-sg-better { background: rgba(46,125,91,.32); border-color: rgba(46,125,91,.7); }
+.gbo-sg td.gbo-sg-worse { background: rgba(191,30,45,.28); border-color: rgba(191,30,45,.65); }
+.gbo-sg td.gbo-sg-thin { opacity: .45; }
+.gbo-sg td.gbo-sg-empty { background: none; border-color: transparent; color: var(--gbo-text-muted); }
+.gbo-seq-details > summary { cursor: pointer; color: var(--gbo-text-muted); font-size: .85rem; margin-bottom: 6px; }
 .gbo-swm { display: grid; grid-template-columns: minmax(0, 1fr) 58px; gap: 6px; }
 .gbo-step-grid .gbo-sb.gbo-sword { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 4px; font-size: .7rem; white-space: nowrap; overflow-wrap: normal; }
 .gbo-sword svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; }
