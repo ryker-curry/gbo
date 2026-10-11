@@ -378,6 +378,7 @@ import game_tracking_manage_display
 import game_tracking_video_display
 import game_tracking_pitch_log_display
 import game_tracking_runner_events_display
+import game_tracking_step_display
 
 ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
 
@@ -1915,6 +1916,10 @@ def game_tracking_ui():
         ui.output_ui("game_header"),
         ui.output_ui("game_tabs"),
         ui_helpers.page_footer(),
+        # Oct 2026: step-by-step Live Tracking on phones/tablets -- decides
+        # the mode once, as the page loads (see game_tracking_step_display).
+        ui.tags.script(game_tracking_step_display.STEP_JS),
+        ui.tags.script(f"gboStepModeInit('{module.resolve_id('step_mode')}');"),
     )
 
 
@@ -3314,6 +3319,9 @@ def game_tracking_server(input, output, session, app_state):
         finally:
             db.close()
 
+        step_mode = bool(input.step_mode()) if "step_mode" in input else False
+        if _can_edit() and status == "In Progress" and step_mode:
+            return _step_mode_body()
         if _can_edit() and status == "In Progress":
             # Static headers/dividers live here (not inside the individual
             # reactive blocks below) purely for visual grouping -- matches
@@ -3325,6 +3333,7 @@ def game_tracking_server(input, output, session, app_state):
             # page reads as consistent with everything else instead of a
             # denser, un-sectioned wall of widgets.
             return ui.div(
+                _mode_switch(False),
                 ui.output_ui("live_game_dashboard"),
                 ui.output_ui("half_inning_review"),
                 ui.hr(),
@@ -3367,6 +3376,51 @@ def game_tracking_server(input, output, session, app_state):
             return ui.p(f"Live tracking isn't active for a {status.lower()} game.", class_="text-muted")
         else:
             return ui.p("Live tracking status is only shown for edit-enabled roles today.", class_="text-muted")
+
+    def _mode_switch(on):
+        sid = session.ns("step_mode")
+        def b(label, val):
+            return ui.tags.button(label, type="button", class_="gbo-mode-seg" + (" sel" if on == val else ""),
+                                  onclick=f"gboSetStepMode('{sid}', {'true' if val else 'false'})")
+        return ui.div(b("Step-by-step", True), b("Full form", False), class_="gbo-mode-switch")
+
+    def _step_mode_body():
+        """Oct 2026, phones/tablets: one step at a time (game_tracking_step_display).
+        Who's Up stays on screen -- the pitch is saved with whoever is picked
+        there, same as the full form."""
+        def _drawer(title, *kids):
+            # Opening a <details> doesn't tell Shiny its outputs became
+            # visible; 'shown' does, so they render when opened.
+            return ui.tags.details(
+                ui.tags.summary(title), ui.div(*kids, class_="gbo-drawer-body"),
+                class_="gbo-drawer", ontoggle="if (window.jQuery) jQuery(this).find('.shiny-bound-output').trigger(this.open ? 'shown' : 'hidden');",
+            )
+        return ui.div(
+            _mode_switch(True),
+            ui.output_ui("step_status"),
+            ui.output_ui("half_inning_review"),
+            ui.output_ui("forced_half_inning_end_panel"),
+            ui.div(
+                ui.output_ui("who_is_up_identity_picker"),
+                ui.output_ui("who_is_up_three_squad_batter_and_pitcher"),
+                ui.output_ui("who_is_up_hand_and_order"),
+                class_="gbo-step-who",
+            ),
+            ui.output_ui("step_flow"),
+            _drawer("Runners -- steals, pickoffs, wild pitches",
+                    ui.output_ui("base_diamond"), ui.output_ui("runner_events_panel")),
+            _drawer("Lineup changes / scouting",
+                    ui.output_ui("opponent_scouting_card"), ui.output_ui("squad_a_lineup_moves"),
+                    ui.output_ui("squad_b_lineup_moves"), ui.output_ui("squad_c_lineup_moves")),
+            _drawer("This at-bat's pitches", ui.output_ui("live_pitch_sequence_display")),
+            ui.div(
+                ui.input_action_button("undo_last_pitch_btn", "Undo last", class_="btn-outline-danger btn-sm"),
+                ui.input_action_button("np_clock_pitcher_btn", "Pitcher clock (+ball)", class_="btn-outline-secondary btn-sm"),
+                ui.input_action_button("np_clock_batter_btn", "Batter clock (+strike)", class_="btn-outline-secondary btn-sm"),
+                ui.input_action_button("np_ibb_btn", "Intentional walk", class_="btn-outline-secondary btn-sm"),
+                class_="gbo-step-extras",
+            ),
+        )
 
     # Oct 2026 (TrackMan's "review at natural breaks" habit): after a
     # half-inning ends, list its pitches that are missing something, each
@@ -5288,10 +5342,16 @@ def game_tracking_server(input, output, session, app_state):
         raw = input.opp_their_pitcher_select() if "opp_their_pitcher_select" in input else ""
         return int(raw) if raw else None
 
-    def _do_record_pitch(non_pitch=None):
+    def _do_record_pitch(non_pitch=None, step=None):
         """non_pitch: one of NON_PITCH_OUTCOMES (clock violation / intentional
         walk) -- saved like a pitch for the count, but is_pitch=False and with
-        no pitch type, location or batted ball."""
+        no pitch type, location or batted ball.
+
+        step: Oct 2026 step-by-step (phone/tablet) mode -- a dict holding the
+        pitch instead of the full form's inputs: code, ptype, outcome, cq,
+        bbt, x, y, ab, outs, bases ("101"), runs, unearned. Batter/pitcher
+        still come from the Who's Up pickers, same as the full form.
+        Returns True once the pitch is saved."""
         game_id = _active_game_id()
         if game_id is None:
             return
@@ -5423,6 +5483,9 @@ def game_tracking_server(input, output, session, app_state):
 
             if non_pitch:
                 pitch_type_id = None
+            elif step is not None:
+                pitch_type_id = (db.query(PitchType.pitch_type_id).filter(PitchType.type_name == step.get("ptype")).scalar()
+                                 if step.get("ptype") else None)
             else:
                 req("pitch_type_select" in input)
                 pitch_type_name = input.pitch_type_select()
@@ -5430,7 +5493,14 @@ def game_tracking_server(input, output, session, app_state):
                 pitch_type_id = next((pt.pitch_type_id for pt in pitch_types if pt.type_name == pitch_type_name), None)
 
             intended_x = intended_z = None
-            if not non_pitch and ((not state["is_our_batting"]) or game.is_intrasquad) and "intended_x_input" in input:
+            if step is not None:
+                if not non_pitch and ((not state["is_our_batting"]) or game.is_intrasquad) and step.get("code"):
+                    try:
+                        intended_x, intended_z = strike_zone.decode_pitch_code(*strike_zone.parse_pitch_code(step["code"]))
+                    except ValueError as e:
+                        ui.notification_show(str(e), type="error", duration=8)
+                        return
+            elif not non_pitch and ((not state["is_our_batting"]) or game.is_intrasquad) and "intended_x_input" in input:
                 intended_x, intended_z = input.intended_x_input(), input.intended_z_input()
                 if intended_x is None or intended_z is None:
                     intended_x = intended_z = None   # half-typed = not set
@@ -5444,6 +5514,8 @@ def game_tracking_server(input, output, session, app_state):
 
             if non_pitch:
                 outcome, force_end_pa = non_pitch, False
+            elif step is not None:
+                outcome, force_end_pa = step["outcome"], False
             else:
                 req("pitch_outcome_select" in input)
                 outcome = input.pitch_outcome_select()
@@ -5452,14 +5524,21 @@ def game_tracking_server(input, output, session, app_state):
 
             cq = None
             is_sword = False
-            if outcome in ("In Play", "Foul", "Swing and Miss") and "contact_quality_select" in input:
+            if step is not None:
+                cq = step.get("cq") if outcome in ("In Play", "Foul", "Swing and Miss") else None
+            elif outcome in ("In Play", "Foul", "Swing and Miss") and "contact_quality_select" in input:
                 raw_cq = input.contact_quality_select()
                 cq = raw_cq if raw_cq and raw_cq != "-- N/A --" else None
                 is_sword = input.is_sword_checkbox() if "is_sword_checkbox" in input else False
 
             bbt = None
             batted_x = batted_y = None
-            if outcome == "In Play" and "batted_ball_type_select" in input:
+            if step is not None:
+                if outcome == "In Play":
+                    bbt = step.get("bbt")
+                    if step.get("x") is not None and step.get("y") is not None:
+                        batted_x, batted_y = float(step["x"]), float(step["y"])
+            elif outcome == "In Play" and "batted_ball_type_select" in input:
                 raw_bbt = input.batted_ball_type_select()
                 bbt = raw_bbt if raw_bbt and raw_bbt != "-- N/A --" else None
                 if "batted_ball_x_input" in input:
@@ -5474,6 +5553,24 @@ def game_tracking_server(input, output, session, app_state):
                 ab_outcome = "IBB" if non_pitch == IBB_OUTCOME else ("BB" if new_balls >= 4 else "K")
                 final_outs, final_bases, final_runs = suggest_after_state(ab_outcome, state["bases"], state["outs"])
                 final_outs = min(final_outs, 3)
+            elif ends_pa and step is not None:
+                ab_outcome = step.get("ab")
+                if not ab_outcome:
+                    ui.notification_show("Pick the AB outcome before saving.", type="error", duration=8)
+                    return
+                if ab_outcome == "No Result":
+                    final_outs, final_bases, final_runs = state["outs"], state["bases"], 0
+                else:
+                    final_outs, final_runs = int(step["outs"]), int(step["runs"])
+                    unearned_runs = int(step.get("unearned") or 0)
+                    final_bases = step["bases"]
+                    problem = check_after_state(state["outs"], state["bases"], final_outs, final_runs, unearned_runs)
+                    if problem:
+                        ui.notification_show(problem + " -- not saved.", type="error", duration=10)
+                        return
+                    if unearned_runs > final_runs:
+                        ui.notification_show("Unearned runs can't be more than runs scored -- not saved.", type="error", duration=8)
+                        return
             elif ends_pa:
                 if "ab_outcome_select" not in input:
                     ui.notification_show("Confirm the AB result before recording this pitch.", type="error", duration=8)
@@ -5514,7 +5611,10 @@ def game_tracking_server(input, output, session, app_state):
                         )
                         return
 
-            notes = ((input.pitch_notes_input() or "").strip() if "pitch_notes_input" in input else "")
+            if step is not None:
+                notes = (step.get("notes") or "").strip()
+            else:
+                notes = ((input.pitch_notes_input() or "").strip() if "pitch_notes_input" in input else "")
 
             next_seq = (max((p.pitch_sequence for p in pitches), default=0)) + 1
             re_lookup = build_re_lookup(db)
@@ -5586,6 +5686,7 @@ def game_tracking_server(input, output, session, app_state):
             _runner_event_form_open.set(False)  # fresh pitch -- collapse the runner-event form back down, see runner_events_panel
             _bump_pa()
             _bump_refresh()
+            return True
         finally:
             db.close()
 
@@ -5705,3 +5806,25 @@ def game_tracking_server(input, output, session, app_state):
     game_tracking_manage_display.register_game_tracking_manage(
         input, output, session, _refresh_tick, _active_game_id, _bump_refresh, _access_ok, _can_edit,
     )
+
+    # Step-by-step Live Tracking for phones/tablets (Oct 2026) -- same
+    # registration pattern; it saves through _do_record_pitch(step=...).
+    def _record_step(step):
+        if _too_soon("record"):
+            return False
+        try:
+            return bool(_do_record_pitch(step=step))
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            ui.notification_show("Couldn't save that pitch -- nothing was saved.", type="error", duration=10)
+            return False
+
+    from types import SimpleNamespace as _NS
+    game_tracking_step_display.register_step_mode(input, output, session, _NS(
+        active_game_id=_active_game_id, pa_tick=_pa_tick, can_edit=_can_edit, access_ok=_access_ok,
+        load_ctx=_load_tracking_context, record=_record_step,
+        resolve_pitcher=_resolve_actual_pitcher_id, stats_pitcher=_resolve_current_pitcher_id_for_stats,
+        arsenal=get_arsenal_pitch_type_names, inning_display=_inning_display,
+        ends_pa=_ends_plate_appearance, suggest=suggest_after_state,
+    ))
