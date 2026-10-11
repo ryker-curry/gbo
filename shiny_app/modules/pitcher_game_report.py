@@ -996,6 +996,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                 {"label": "K %", "value": _fmt_pct(line["K %"])},
                 {"label": "ERA", "value": _fmt(line["ERA"])},
                 {"label": "FIP", "value": _fmt(line["FIP"])},
+                {"label": "SIERA", "value": _fmt(line.get("SIERA"))},
                 {"label": "Command Execution %", "value": _cmd_fmt(cmd_scorecard["execution_pct"], "%")},
             ]))
 

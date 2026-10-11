@@ -920,6 +920,28 @@ WOBA_WEIGHTS = {"uBB": 0.69, "HBP": 0.72, "1B": 0.89, "2B": 1.27, "3B": 1.62, "H
 # is what FIP+ is measured against. The MIAA-only value was 4.47.
 FIP_CONSTANT = 4.72
 
+# SIERA (Skill-Interactive ERA, Matt Swartz / FanGraphs; Oct 2026, Ryker).
+# Like FIP it ignores what happens to balls in play, but it also credits
+# ground balls over fly balls / pop-ups and lets strikeouts, walks and
+# ground balls interact. Inputs are per batter faced: SO, BB (no HBP; GBO
+# doesn't split out intentional walks) and net ground balls = GB - FB - PU
+# from the charted batted-ball type (line drives count in none). MLB
+# coefficients; SIERA_D2_SHIFT moves it to the D2 run environment the same
+# way FIP_CONSTANT does: a D2-average pitcher (K 17.1%, BB 11.6%, net GB 0)
+# scores 4.79 on the MLB scale, and D2 ERA is 6.73, so +1.94.
+SIERA_D2_SHIFT = 1.94
+
+
+def siera(so, bb, gb, fb, pu, pa):
+    """D2-scaled SIERA, or None with no batters faced."""
+    if not pa:
+        return None
+    k, w, g = so / pa, bb / pa, (gb - fb - pu) / pa
+    raw = (6.145 - 16.986 * k + 11.434 * w - 1.858 * g + 7.653 * k * k
+           - 6.664 * g * abs(g)          # the "+/-" term: grows the edge of extreme ground-ball pitchers, and the penalty of extreme fly-ball ones
+           + 10.130 * k * g - 5.195 * w * g)
+    return round(raw + SIERA_D2_SHIFT, 2)
+
 
 def _innings_pitched(pa_pitches, extra_outs=0):
     """Outs recorded on this pitcher's own PA-ending pitches, converted
@@ -1068,6 +1090,9 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0, extra_unea
     hits_allowed = sum(1 for p in pa_pitches if p.ab_outcome in HIT_OUTCOMES)
     hr_allowed = sum(1 for p in pa_pitches if p.ab_outcome == "HR")
     xbh_allowed = sum(1 for p in pa_pitches if p.ab_outcome in ("2B", "3B", "HR"))
+    gb_n = sum(1 for p in pa_pitches if p.batted_ball_type == "Ground Ball")
+    fb_n = sum(1 for p in pa_pitches if p.batted_ball_type == "Fly Ball")
+    pu_n = sum(1 for p in pa_pitches if p.batted_ball_type == "Pop Up")
     runs_allowed = sum(p.runs_scored_on_play or 0 for p in pitches) + extra_earned_runs + extra_unearned_runs
     # Real earned runs, now that game_pitches.unearned_runs_on_play
     # exists (Aug 31 2026, manual per-play tagging -- see
@@ -1178,6 +1203,7 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0, extra_unea
         "ER Allowed": earned_runs_allowed,
         "ERA": round(earned_runs_allowed * 9 / ip_decimal, 2) if ip_decimal else None,
         "FIP": round((13 * hr_allowed + 3 * (bb + hbp) - 2 * k) / ip_decimal + FIP_CONSTANT, 2) if ip_decimal else None,
+        "SIERA": siera(k, bb, gb_n, fb_n, pu_n, batters_faced),
         "OBA (opponent AVG)": round(hits_allowed / ab, 3) if ab else None,
         "wOBA": round(woba_num / woba_den, 3) if woba_den else None,
         "Leadoff PAs": len(leadoff_pas), "Leadoff Outs": leadoff_outs,
