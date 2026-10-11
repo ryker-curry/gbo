@@ -930,12 +930,16 @@ PWA_INSTALL_JS = r"""
 """
 
 
+PWA_VERSION = "2"
+
+
 def pwa_head():
     """<head> tags that make GBO installable on phones (Oct 2026)."""
     return ui.TagList(
-        ui.tags.link(rel="manifest", href="/assets/pwa/manifest.json"),
-        ui.tags.link(rel="icon", type="image/png", sizes="32x32", href="/assets/pwa/favicon-32.png"),
-        ui.tags.link(rel="apple-touch-icon", href="/assets/pwa/apple-touch-icon.png"),
+        # ?v= forces phones to re-download after an icon change (they cache hard).
+        ui.tags.link(rel="manifest", href=f"/assets/pwa/manifest.json?v={PWA_VERSION}"),
+        ui.tags.link(rel="icon", type="image/png", sizes="32x32", href=f"/assets/pwa/favicon-32.png?v={PWA_VERSION}"),
+        ui.tags.link(rel="apple-touch-icon", sizes="180x180", href=f"/assets/pwa/apple-touch-icon.png?v={PWA_VERSION}"),
         ui.tags.meta(name="theme-color", content="#0A0A0B"),
         ui.tags.meta(name="mobile-web-app-capable", content="yes"),
         ui.tags.meta(name="apple-mobile-web-app-capable", content="yes"),
