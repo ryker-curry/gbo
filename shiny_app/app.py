@@ -502,6 +502,16 @@ _ICONS = {
 
 _SIDEBAR_JS = """
 (function(){
+  // The shell re-renders (log in/out, demo), which re-runs this script. Bind
+  // once: two document listeners made the phone menu open and shut on one tap.
+  if (window.__gboSideBound) return;
+  window.__gboSideBound = true;
+  function side(){ return document.querySelector('.gbo-side'); }
+  function setOpen(on){
+    var s = side(); if (!s) return;
+    s.classList.toggle('open', on);
+    document.body.classList.toggle('gbo-menu-open', on);
+  }
   function setActive(title){
     document.querySelectorAll('.gbo-side-link[data-title]').forEach(function(b){
       b.classList.toggle('active', b.getAttribute('data-title') === title);
@@ -513,20 +523,27 @@ _SIDEBAR_JS = """
     if (c) { c.innerHTML = '<b>' + title.replace(/</g,'&lt;') + '</b>'; }
   }
   document.addEventListener('click', function(e){
-    var b = e.target && e.target.closest ? e.target.closest('.gbo-side-link[data-title]') : null;
-    if (!b) return;
-    var t = b.getAttribute('data-title');
-    setActive(t);
-    if (window.Shiny) { Shiny.setInputValue('sidebar_go', t, {priority: 'event'}); }
-    var side = document.querySelector('.gbo-side'); if (side) side.classList.remove('open');
+    var el = e.target && e.target.closest ? e.target : null;
+    if (!el) return;
+    var b = el.closest('.gbo-side-link[data-title]');
+    if (b) {
+      var t = b.getAttribute('data-title');
+      setActive(t);
+      if (window.Shiny && Shiny.setInputValue) { Shiny.setInputValue('sidebar_go', t, {priority: 'event'}); }
+      setOpen(false);
+      return;
+    }
+    if (el.closest('.gbo-menu-btn')) { var s = side(); setOpen(!(s && s.classList.contains('open'))); return; }
+    if (el.closest('.gbo-side-backdrop')) { setOpen(false); }
   });
-  document.addEventListener('click', function(e){
-    var m = e.target && e.target.closest ? e.target.closest('.gbo-menu-btn') : null;
-    if (!m) return; var side = document.querySelector('.gbo-side'); if (side) side.classList.toggle('open');
-  });
-  if (window.Shiny) {
-    Shiny.addCustomMessageHandler('gbo-nav-active', function(msg){ setActive(msg.title); });
+  // Rotating to landscape (icon rail) or a wide screen: drop the phone menu.
+  window.addEventListener('resize', function(){ if (window.innerWidth > 768) setOpen(false); });
+  function bindShiny(){
+    if (window.Shiny && Shiny.addCustomMessageHandler) {
+      Shiny.addCustomMessageHandler('gbo-nav-active', function(msg){ setActive(msg.title); });
+    } else { setTimeout(bindShiny, 100); }
   }
+  bindShiny();
 })();
 """
 
@@ -633,7 +650,7 @@ def _app_shell_ui(app_state):
             panels.append(ui.nav_panel(page.title, _page_body(page)))
 
     topbar = ui.div(
-        ui.tags.button(ui.HTML('<svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2"><path d="M4 7h16M4 12h16M4 17h16"/></svg>'), class_="btn btn-outline-light gbo-menu-btn", type="button"),
+        ui.tags.button(ui.HTML('<svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2"><path d="M4 7h16M4 12h16M4 17h16"/></svg>'), class_="btn btn-outline-light gbo-menu-btn", type="button", **{"aria-label": "Menu"}),
         ui.div(ui.HTML(f"<b>{first_title}</b>"), class_="gbo-crumb", id="gbo-crumb"),
         ui.div(
             ui.div(ui.input_dark_mode(id="dark_mode", mode="dark"), class_="gbo-mode-toggle"),
@@ -645,6 +662,7 @@ def _app_shell_ui(app_state):
 
     return ui.div(
         sidebar,
+        ui.div(class_="gbo-side-backdrop"),
         ui.div(
             topbar,
             _guest_banner(app_state) if guest else None,
