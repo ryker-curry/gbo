@@ -318,12 +318,19 @@ GUIDE += [
     {
         "key": "sequencing", "title": "Sequencing (what follows what)", "who": "pitchers",
         "pages": ["Pitcher Profile", "My Pitcher Profile"],
-        "shows": "Pitcher Profile > Sequencing. Back-to-back pitches to the same hitter (FB -> SL, SL -> SL ...), graded "
-                 "on the second pitch: strike %, CSW %, whiff %, chase %, balls in play.",
-        "use": ["Filter by hitter hand and the count before the second pitch.",
-                "Compare his CSW % on a pair to the team's on the same pair.",
-                "Gray rows have fewer than 8 -- don't read into them yet."],
-        "good": ["His most-used pairs at or above the team's CSW %."],
+        "shows": "Pitcher Profile > Sequencing. How he strings pitches together, as four questions: what he throws "
+                 "next, whether a hitter can predict it, whether changing eye level and sides works, and how he "
+                 "finishes two-strike at-bats. Charted games only; locations come from Rapsodo.",
+        "use": ["What he throws next: read across a row -- after that pitch, how often each pitch comes next. Green "
+                "squares get more called strikes + whiffs (CSW) than the same pair across our staff, red get fewer.",
+                "Predictable: a count + previous pitch flagged in red means one pitch comes 70%+ of the time -- "
+                "something a hitter can sit on.",
+                "Eye level / sides: back-to-back pitches graded by where the 2nd went vs the 1st (9+ inches up or down, "
+                "in or away from the hitter's side).",
+                "Finishing: the last two pitches of two-strike at-bats, and how often each combo got the strikeout.",
+                "Faded squares and rows have too few pitches to trust yet."],
+        "good": ["His most-used follow-ups green, no red flags on predictability, and a two-strike finish that "
+                 "gets strikeouts more than hits."],
     },
     {
         "key": "tunnel_check", "title": "Tunnel check", "who": "pitchers",
