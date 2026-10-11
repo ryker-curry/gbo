@@ -901,6 +901,96 @@ input, textarea, select { accent-color: var(--gbo-crimson); }
   .gbo-content .shiny-input-radiogroup .shiny-options-group { display: flex; flex-wrap: wrap; gap: 2px 12px; }
   .gbo-content .gbo-card { padding: 12px; }
 }
+
+/* =========================================================
+   Oct 2026: phones. Nothing may widen the page -- on iPhone one
+   too-wide element made Safari zoom the whole app out (~60%).
+   ========================================================= */
+html { overflow-x: hidden; }
+body { max-width: 100%; }
+.gbo-app { overflow-x: clip; }  /* clip, not hidden: hidden would break the sticky top bar */
+.gbo-main, .gbo-content { min-width: 0; }
+.gbo-content select, .gbo-content .form-select, .gbo-content .shiny-input-container { max-width: 100%; }
+
+/* =========================================================
+   Game Tracking: step-by-step mode (phones/tablets, Oct 2026)
+   ========================================================= */
+.gbo-mode-switch { display: inline-flex; border: 1px solid var(--gbo-border-strong, #3A3A3E); border-radius: 8px; overflow: hidden; margin: 4px 0 12px; }
+.gbo-mode-seg { background: none; border: 0; color: var(--gbo-text-muted); padding: 6px 14px; font-size: .8rem; font-weight: 600; touch-action: manipulation; }
+.gbo-mode-seg.sel { background: var(--gbo-crimson); color: #fff; }
+.gbo-ss { position: sticky; top: 56px; z-index: 4; display: flex; align-items: center; gap: 12px; padding: 8px 12px; margin: 0 -4px 10px;
+  background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); border-radius: 10px; }
+.gbo-standalone .gbo-ss { top: calc(56px + env(safe-area-inset-top)); }
+.gbo-ss-inn { font-weight: 700; font-size: .85rem; line-height: 1.15; max-width: 92px; }
+.gbo-ss-mid { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.gbo-ss-count { font-family: var(--gbo-mono); font-weight: 700; font-size: 1.25rem; line-height: 1; }
+.gbo-ss-outs { display: flex; gap: 4px; }
+.gbo-ss-outs i { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--gbo-text-muted); display: block; }
+.gbo-ss-outs i.on { background: var(--gbo-crimson); border-color: var(--gbo-crimson); }
+.gbo-ss-dia { width: 44px; height: 33px; flex: none; }
+.gbo-ss-dia rect { fill: none; stroke: var(--gbo-text-muted); stroke-width: 1.6; }
+.gbo-ss-dia rect.on { fill: var(--gbo-gold, #E8B923); stroke: var(--gbo-gold, #E8B923); }
+.gbo-ss-right { margin-left: auto; text-align: right; }
+.gbo-ss-score { font-family: var(--gbo-mono); font-weight: 700; font-size: 1.05rem; }
+.gbo-ss-pc { font-size: .72rem; color: var(--gbo-text-muted); white-space: nowrap; }
+.gbo-step-who { background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); border-radius: 10px; padding: 8px 12px 0; margin-bottom: 10px; }
+.gbo-step-who .form-label, .gbo-step-who label { font-size: .7rem; margin-bottom: 2px; }
+.gbo-step-who .shiny-input-container { margin-bottom: 8px; width: 100%; }
+.gbo-step { background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+.gbo-step-q { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 12px 0 8px; font-size: .78rem;
+  text-transform: uppercase; letter-spacing: .06em; color: var(--gbo-gold-text); font-weight: 700; }
+.gbo-step-q:first-child { margin-top: 0; }
+.gbo-step-hint { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--gbo-text-muted); font-size: .72rem; }
+.gbo-step-sofar { font-size: .78rem; color: var(--gbo-text-muted); margin-bottom: 8px; }
+.gbo-step-grid { display: grid; gap: 8px; }
+.gbo-step-grid.g1 { grid-template-columns: 1fr; margin-top: 12px; }
+.gbo-step-grid.g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.gbo-step-grid.g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.gbo-sb { min-height: 48px; padding: 8px 6px; border-radius: 10px; border: 1px solid var(--gbo-border-strong, #3A3A3E);
+  background: var(--gbo-bg-raised, #1D1D20); color: var(--gbo-text); font-weight: 600; font-size: .9rem; line-height: 1.15;
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent; cursor: pointer; overflow-wrap: anywhere; }
+.gbo-sb:active { transform: scale(.97); }
+.gbo-sb.sel { background: var(--gbo-crimson); border-color: var(--gbo-crimson); color: #fff; }
+.gbo-step-grid.big .gbo-sb { min-height: 60px; font-size: 1rem; }
+.gbo-sb-primary { background: var(--gbo-crimson); border-color: var(--gbo-crimson); color: #fff; min-height: 54px; font-size: 1.05rem; }
+.gbo-sb-primary:disabled { opacity: .4; }
+.gbo-sb-ghost { background: none; min-height: 40px; color: var(--gbo-text-muted); font-weight: 500; padding: 6px 12px; }
+.gbo-sb-skip { margin-left: auto; color: var(--gbo-text); }
+.gbo-step-nav { display: flex; gap: 8px; margin-top: 12px; }
+.gbo-out-ball { border-color: #2E7D5B; }
+.gbo-out-strike { border-color: #B23A48; }
+.gbo-out-foul { border-color: #8A6D1F; }
+.gbo-out-inplay { border-color: #2F6FB0; background: rgba(47,111,176,.18); }
+.gbo-call-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; max-width: 420px; }
+.gbo-call { min-height: 42px; border-radius: 8px; border: 1px solid var(--gbo-border-strong, #3A3A3E); background: var(--gbo-bg-raised, #1D1D20);
+  color: var(--gbo-text-2); font-family: var(--gbo-mono); font-weight: 700; font-size: .95rem; touch-action: manipulation; }
+.gbo-call-grid .gbo-call:nth-child(5n+2), .gbo-call-grid .gbo-call:nth-child(5n+3), .gbo-call-grid .gbo-call:nth-child(5n+4) { background: rgba(255,255,255,.07); }
+.gbo-call-grid .gbo-call:nth-child(n+16) { opacity: .75; }
+.gbo-call.sel { background: var(--gbo-crimson) !important; border-color: var(--gbo-crimson); color: #fff; opacity: 1; }
+.gbo-step-more-pt { margin-top: 8px; }
+.gbo-step-more-pt > summary { color: var(--gbo-text-muted); font-size: .8rem; margin-bottom: 8px; }
+.gbo-field { width: 100%; max-width: 460px; display: block; margin: 0 auto; touch-action: manipulation; cursor: crosshair; }
+.gbo-field .grass { fill: #1E4D2B; }
+.gbo-field .dirt { fill: #6B4A2E; opacity: .55; }
+.gbo-field .infield { fill: #1E4D2B; }
+.gbo-field .foul, .gbo-field .fence { stroke: #FFFDE5; stroke-width: 3; fill: none; }
+.gbo-field .bases rect, .gbo-field .bases path { fill: #FFFDE5; }
+.gbo-field text { fill: rgba(255,253,229,.55); font-size: 22px; font-weight: 700; }
+.gbo-field .mark { fill: var(--gbo-crimson); stroke: #fff; stroke-width: 3; }
+.gbo-rs { display: flex; flex-direction: column; gap: 10px; }
+.gbo-rs.off { opacity: .35; pointer-events: none; }
+.gbo-rs-row { display: flex; align-items: center; gap: 10px; }
+.gbo-rs-lbl { width: 92px; flex: none; font-size: .8rem; color: var(--gbo-text-muted); }
+.gbo-rs-bases, .gbo-rs-outs { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; flex: 1; }
+.gbo-rs-step { display: flex; align-items: center; gap: 10px; }
+.gbo-num-btn { width: 48px; min-height: 44px; font-size: 1.3rem; padding: 0; }
+.gbo-num { min-width: 24px; text-align: center; font-family: var(--gbo-mono); font-weight: 700; font-size: 1.2rem; }
+.gbo-rs-notes { margin-top: 12px; }
+.gbo-drawer { border: 1px solid var(--gbo-border); border-radius: 10px; margin-bottom: 8px; background: var(--gbo-bg-card); }
+.gbo-drawer > summary { padding: 12px; font-weight: 600; font-size: .88rem; cursor: pointer; }
+.gbo-drawer-body { padding: 0 12px 12px; }
+.gbo-step-extras { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+.gbo-step-extras .btn { min-height: 40px; }
 """.replace("{FONT_STACK}", FONT_STACK).replace("{DISPLAY_STACK}", DISPLAY_STACK).replace("{MONO_STACK}", MONO_STACK)
 
 
