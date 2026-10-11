@@ -77,6 +77,7 @@ STAT_META = [
     ("WHIP", "WHIP", False, 2),
     ("TBIP", "TBIP", False, 2),   # Oct 2026: bases allowed per inning, lower is better
     ("FIP", "FIP", False, 2),
+    ("SIERA", "SIERA", False, 2),   # Oct 2026: skill-interactive ERA (D2-scaled)
     ("K/9", "K/9", True, 2),
     ("BB/9", "BB/9", False, 2),
     ("HR/9", "HR/9", False, 2),

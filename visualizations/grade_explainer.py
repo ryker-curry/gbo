@@ -35,6 +35,7 @@ FEATURE_WORDS = {
 PITCH_ORDER = ["4-Seam Fastball", "2-Seam Fastball", "Cutter", "Slider", "Curveball", "Changeup", "Splitter"]
 
 RESULTS_WORDS = {
+    "SIERA": ("SIERA", "strikeout rate, walk rate and ground balls vs fly balls/pop-ups (lower is better)"),
     "FIP": ("FIP", "strikeouts, walks, HBP and home runs -- the things a pitcher controls (lower is better)"),
     "WHIP": ("WHIP", "walks + hits per inning (lower is better)"),
     "K/BB": ("K/BB", "strikeouts for every walk"),
