@@ -670,4 +670,12 @@ def _page_body(page):
     )
 
 
-app = App(app_ui, server, static_assets={"/assets": theme.ASSETS_DIR})
+app = App(app_ui, server, static_assets={
+    "/assets": theme.ASSETS_DIR,
+    # Oct 2026: iPhones also look for the home-screen icon at the site root
+    # (and fall back to a plain letter if they can't get one).
+    "/apple-touch-icon.png": theme.ASSETS_DIR / "pwa" / "apple-touch-icon.png",
+    "/apple-touch-icon-precomposed.png": theme.ASSETS_DIR / "pwa" / "apple-touch-icon.png",
+    "/favicon.ico": theme.ASSETS_DIR / "pwa" / "favicon-32.png",
+    "/manifest.json": theme.ASSETS_DIR / "pwa" / "manifest.json",
+})
