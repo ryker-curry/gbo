@@ -269,7 +269,7 @@ def register_game_tracking_video(input, output, session, _refresh_tick, _active_
                 joinedload(GamePitch.opponent_our_player),
                 joinedload(GamePitch.opponent_player),
             )
-            .filter(GamePitch.game_id == game_id)
+            .filter(GamePitch.game_id == game_id, GamePitch.is_pitch.isnot(False))   # no clock violations / IBBs
             .order_by(GamePitch.pitch_sequence).all()
         )
         pitcher_key = input.vr_pitcher_select() if "vr_pitcher_select" in input else "all"

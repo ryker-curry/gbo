@@ -33,7 +33,7 @@ from pitch_type_config import FASTBALL_TYPES
 STRIKES = {"Called Strike", "Swing and Miss", "Foul", "In Play"}
 SWINGS = {"Swing and Miss", "Foul", "In Play"}
 HITS = {"1B", "2B", "3B", "HR"}
-NON_AB = {"BB", "HBP", "Sac Bunt", "Sac Fly"}
+NON_AB = {"BB", "IBB", "HBP", "Sac Bunt", "Sac Fly"}
 KS = {"K", "K (Looking)"}
 ROLES = ["", "Fri", "Sat", "Sun", "Starter", "Closer", "Setup", "Long", "Bullpen", "Not expected"]
 STARTER_ROLES = ("Fri", "Sat", "Sun", "Starter")

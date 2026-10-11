@@ -24,7 +24,7 @@ from plate_discipline import SWING_OUTCOMES
 
 KEY_COUNTS = ("2-0", "3-1", "2-1", "1-1")
 LENGTHS = (("1-2 pitches", 1, 2), ("3-6 pitches", 3, 6), ("7+ pitches", 7, 99))
-REACH = {"1B", "2B", "3B", "HR", "BB", "HBP"}
+REACH = {"1B", "2B", "3B", "HR", "BB", "IBB", "HBP"}
 NOT_PA = {None, "No Result"}
 
 

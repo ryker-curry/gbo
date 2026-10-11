@@ -34,7 +34,8 @@ def _game_pitch_dates(session, player_id, start_date=None, end_date=None):
         .join(Game, GamePitch.game_id == Game.game_id)
         .filter(
             ((GamePitch.is_our_team_batting.is_(False)) & (GamePitch.our_player_id == player_id))
-            | ((GamePitch.is_our_team_batting.is_(True)) & (GamePitch.opponent_our_player_id == player_id))
+            | ((GamePitch.is_our_team_batting.is_(True)) & (GamePitch.opponent_our_player_id == player_id)),
+            GamePitch.is_pitch.isnot(False),   # Oct 2026: clock violations / IBBs aren't pitches
         )
     )
     if start_date is not None:

@@ -1465,6 +1465,11 @@ class GamePitch(Base):
     # that was actually swung at (Swing and Miss/Foul/In Play); left
     # False on takes.
     is_sword = Column(Boolean, default=False, nullable=False)
+    # Oct 2026: False for a pitch clock violation or an intentional walk --
+    # it moves the count / ends the at-bat but no pitch was thrown, so it
+    # never counts toward pitch totals, strike % or pitch charts.
+    # (migrations/migrate_non_pitch_events.py)
+    is_pitch = Column(Boolean, default=True, server_default="true", nullable=False)
 
     ends_plate_appearance = Column(Boolean, default=False, nullable=False)
     ab_outcome = Column(String(30), nullable=True)  # only set when ends_plate_appearance -- "K", "K (Looking)", "BB", "1B", "2B", "3B", "HR", "HBP", "E", "FC", "Sac Bunt", "Sac Fly", "Groundout", "Flyout", "Lineout", etc.
