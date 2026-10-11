@@ -171,7 +171,7 @@ app_ui = ui.page_fluid(
     # the next time the server actually restarted. fig_to_img() no
     # longer needs plotly.js in the page at all, so this is just
     # removed rather than re-added.
-    ui.tags.head(theme.fonts_link(), ui.tags.style(theme.GLOBAL_CSS)),
+    ui.tags.head(theme.pwa_head(), theme.fonts_link(), ui.tags.style(theme.GLOBAL_CSS)),
     ui.tags.script(_NO_WHEEL_SCROLL_JS),
     ui.tags.script(theme.MOTION_JS),
     ui.tags.script(theme.PHONE_JS),
