@@ -5530,6 +5530,7 @@ def game_tracking_server(input, output, session, app_state):
             is_sword = False
             if step is not None:
                 cq = step.get("cq") if outcome in ("In Play", "Foul", "Swing and Miss") else None
+                is_sword = bool(step.get("sword")) and outcome == "Swing and Miss"
             elif outcome in ("In Play", "Foul", "Swing and Miss") and "contact_quality_select" in input:
                 raw_cq = input.contact_quality_select()
                 cq = raw_cq if raw_cq and raw_cq != "-- N/A --" else None

@@ -1005,6 +1005,9 @@ body { max-width: 100%; }
 .gbo-key-del { font-family: inherit; color: var(--gbo-text-muted); }
 .gbo-score-in { font-family: var(--gbo-mono); font-size: 1.4rem; font-weight: 700; text-transform: uppercase; margin-bottom: 8px; min-height: 52px; }
 .gbo-qr { min-height: 42px; font-family: var(--gbo-mono); }
+.gbo-swm { display: grid; grid-template-columns: minmax(0, 1fr) 58px; gap: 6px; }
+.gbo-step-grid .gbo-sb.gbo-sword { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 4px; font-size: .7rem; white-space: nowrap; overflow-wrap: normal; }
+.gbo-sword svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; }
 """.replace("{FONT_STACK}", FONT_STACK).replace("{DISPLAY_STACK}", DISPLAY_STACK).replace("{MONO_STACK}", MONO_STACK)
 
 

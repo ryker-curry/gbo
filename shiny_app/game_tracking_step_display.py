@@ -123,6 +123,29 @@ def parse_scoring(text):
     raise ValueError(f"Couldn't read '{text}'. Try 6-3, F7, L6, P4, 1B, 2B9, E5, FC6, SF8, 6-4-3.")
 
 
+# Oct 2026, Ryker: "a sword icon for swing and misses in case it was a sword"
+# (ugly, off-balance swing -- GamePitch.is_sword). Sits inside the
+# Swing & miss button so it's one tap either way.
+SWORD_SVG = ('<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 3 L10.5 12.5 M20 3 L20 7 M20 3 L16 3 '
+             'M8 11 L13 16 M9.5 14.5 L4.5 19.5 M3.5 18.5 L5.5 20.5"/></svg>')
+
+
+def outcome_buttons(ui_mod, grid_class):
+    kids = []
+    for val, label, kind in OUTCOME_BUTTONS:
+        btn = ui_mod.tags.button(label, type="button", class_=f"gbo-sb gbo-out gbo-out-{kind}", **{"data-out": val})
+        if val == "Swing and Miss":
+            btn = ui_mod.div(
+                btn,
+                ui_mod.tags.button(ui_mod.HTML(SWORD_SVG), ui_mod.span("Sword"), type="button",
+                                   class_="gbo-sb gbo-out gbo-out-strike gbo-sword", title="Swing & miss -- sword",
+                                   **{"data-out": val, "data-sword": "1"}),
+                class_="gbo-swm",
+            )
+        kids.append(btn)
+    return ui_mod.div(*kids, class_=grid_class)
+
+
 def _fresh():
     return {"step": "pitch", "hist": []}
 
@@ -228,7 +251,7 @@ def register_step_mode(input, output, session, d):
         return ui.div(*kids, class_="gbo-step-nav")
 
     def _so_far(w):
-        bits = [w.get("code") and f"Call {w['code']}", w.get("ptype"), w.get("outcome"),
+        bits = [w.get("code") and f"Call {w['code']}", w.get("ptype"), w.get("outcome"), w.get("sword") and "Sword",
                 w.get("cq"), w.get("bbt"), (w.get("x") is not None) and "landed ✓", w.get("ab")]
         bits = [b for b in bits if b]
         return ui.div(" · ".join(bits), class_="gbo-step-sofar") if bits else None
@@ -315,8 +338,7 @@ def register_step_mode(input, output, session, d):
             ))
         kids += [
             ui.h6("Outcome", class_="gbo-step-q"),
-            ui.div(*[ui.tags.button(label, type="button", class_=f"gbo-sb gbo-out gbo-out-{kind}", **{"data-out": val})
-                     for val, label, kind in OUTCOME_BUTTONS], class_="gbo-step-grid g2 big"),
+            outcome_buttons(ui, "gbo-step-grid g2 big"),
             ui.tags.script(f"gboPitchScreen('{wiz_id}', '{session.ns('step_pitch')}', '{key}');"),
         ]
         return ui.div(*kids, class_="gbo-step gbo-step-pitch", id=session.ns("step_pitch"))
@@ -358,9 +380,8 @@ def register_step_mode(input, output, session, d):
                        class_="gbo-step-grid g3"),
                 class_="gbo-step-more-pt",
             ),
-            ui.h6(ui.span("What happened"), ui.span("keyboard: 1-5 · B C S F X H", class_="gbo-step-hint"), class_="gbo-step-q"),
-            ui.div(*[ui.tags.button(label, type="button", class_=f"gbo-sb gbo-out gbo-out-{kind}", **{"data-out": val})
-                     for val, label, kind in OUTCOME_BUTTONS], class_="gbo-step-grid g3 big"),
+            ui.h6(ui.span("What happened"), ui.span("keyboard: 1-5 · B C S F X H · W sword", class_="gbo-step-hint"), class_="gbo-step-q"),
+            outcome_buttons(ui, "gbo-step-grid g3 big"),
             ui.tags.script(f"gboPaperPitch('{wiz_id}', '{session.ns('step_pitch')}', '{key}', "
                            f"{json.dumps({str(k): v for k, v in digit_type.items()})}, {json.dumps(bool(show_call))});"),
         ]
@@ -487,7 +508,8 @@ def register_step_mode(input, output, session, d):
                 state = ctx[5]
             finally:
                 db.close()
-            vals = {"code": ev.get("code") or None, "ptype": ev.get("ptype") or None, "outcome": outcome}
+            vals = {"code": ev.get("code") or None, "ptype": ev.get("ptype") or None, "outcome": outcome,
+                    "sword": bool(ev.get("sword")) and outcome == "Swing and Miss"}
             ends, nb, ns = d.ends_pa(state, outcome)
             if not ends:
                 if d.record({**vals}):
@@ -524,7 +546,7 @@ def register_step_mode(input, output, session, d):
         elif a == "ab":
             _go("result", ab=ev.get("v"))
         elif a == "save":
-            step = {k: w.get(k) for k in ("code", "ptype", "outcome", "cq", "bbt", "x", "y")}
+            step = {k: w.get(k) for k in ("code", "ptype", "outcome", "sword", "cq", "bbt", "x", "y")}
             step.update(ab=ev.get("ab") or w.get("ab"), outs=ev.get("outs"), bases=ev.get("bases"),
                         runs=ev.get("runs"), unearned=ev.get("unearned"), notes=ev.get("notes"))
             if step["ab"] != "No Result" and (step["outs"] is None or step["runs"] is None or not step["bases"]):
@@ -574,7 +596,7 @@ STEP_JS = r"""
       else if (b.dataset.out) {
         if (root.dataset.busy) return;
         root.dataset.busy = '1'; setTimeout(function(){ delete root.dataset.busy; }, 1200);
-        gboWiz(id, {a: 'pitch', code: sel.code, ptype: sel.pt, outcome: b.dataset.out});
+        gboWiz(id, {a: 'pitch', code: sel.code, ptype: sel.pt, outcome: b.dataset.out, sword: !!b.dataset.sword});
       }
     });
     paint();
@@ -611,7 +633,7 @@ STEP_JS = r"""
         if (!dc.ok) return;
         if (root.dataset.busy) return;
         root.dataset.busy = '1'; setTimeout(function(){ delete root.dataset.busy; }, 1200);
-        gboWiz(id, {a: 'pitch', code: dc.code, ptype: dc.ptype, outcome: b.dataset.out});
+        gboWiz(id, {a: 'pitch', code: dc.code, ptype: dc.ptype, outcome: b.dataset.out, sword: !!b.dataset.sword});
       }
     });
     paint();
@@ -628,7 +650,8 @@ STEP_JS = r"""
         var k = e.key.toLowerCase(), btn = null;
         if (/^[1-5]$/.test(k)) btn = r.querySelector('.gbo-key[data-key="' + k + '"]');
         else if (k === 'backspace') btn = r.querySelector('.gbo-key-del');
-        else if (OUT[k]) btn = r.querySelector('.gbo-out[data-out="' + OUT[k] + '"]');
+        else if (k === 'w') btn = r.querySelector('.gbo-sword');
+        else if (OUT[k]) btn = r.querySelector('.gbo-out[data-out="' + OUT[k] + '"]:not(.gbo-sword)');
         if (btn) { e.preventDefault(); btn.click(); }
       });
     }
