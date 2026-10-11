@@ -316,6 +316,22 @@ GUIDE += [
         "good": ["Held velo (under 0.5 mph per 25) through his normal pitch count."],
     },
     {
+        "key": "results", "title": "Results (how hitters did vs each pitch)", "who": "pitchers",
+        "pages": ["Pitcher Profile", "My Pitcher Profile"],
+        "shows": "Pitcher Profile > Results. How hitters did against each of his pitches, graded against our staff "
+                 "on that same pitch, plus how hard balls were hit and where hitters did damage (Rapsodo location).",
+        "use": ["Scorecard: green = better than our staff on that pitch, red = worse. Hover a number to see the "
+                "staff's. RV/100 = runs per 100 pitches -- minus is good for him.",
+                "Contact bars: blue side (weak, jammed, off the end, clipped) is good for him, orange/red (solid, "
+                "barreled) is good for the hitter.",
+                "Damage grid: catcher's view -- the middle 3x3 is the zone, the ring is out of the zone. Red = "
+                "hitters did damage there, blue = good for him, gray = too few pitches.",
+                "The Batters filter (Both / RHH / LHH) changes everything on the page; the Pitch Type filter "
+                "above narrows the damage grid to one pitch."],
+        "good": ["Mostly green on his main pitches, the bar weighted to the blue side, and red squares only where "
+                 "he rarely throws."],
+    },
+    {
         "key": "sequencing", "title": "Sequencing (what follows what)", "who": "pitchers",
         "pages": ["Pitcher Profile", "My Pitcher Profile"],
         "shows": "Pitcher Profile > Sequencing. How he strings pitches together, as four questions: what he throws "

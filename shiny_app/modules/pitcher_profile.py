@@ -98,7 +98,6 @@ from analytics.pitch_grading import (
 # hitter_game_report.py/hitter_profile.py.
 from modules.pitcher_game_report import _pitch_type_breakdown_with_stuff, _pitch_type_breakdown_view
 from visualizations import command_charts, profile_charts
-from visualizations.pitch_results_chart import pitch_results_chart
 from visualizations.count_leverage_chart import count_leverage_chart
 from visualizations.pitch_location_heatmap import pitch_location_heatmaps, MIN_FOR_CONTOUR
 # Sept 2026, Ryker: "an opposing hitters heat map for each of my
@@ -106,8 +105,6 @@ from visualizations.pitch_location_heatmap import pitch_location_heatmaps, MIN_F
 # results section" -- run-value-by-zone, reusing this page's own
 # existing Pitch Type filter (no separate dropdown needed, see
 # pp_zone_damage_chart's own comment).
-from analytics.pitcher_zone_damage import compute_zone_damage
-from visualizations.zone_damage_chart import zone_damage_heatmap_by_hand
 import plotly.graph_objects as go
 from visualizations.chart_theme import apply_gbo_theme
 import glossary_content
@@ -117,6 +114,7 @@ import velo_fade_display
 from analytics import velo_fade
 from services.pitch_type_switch import apply_switches, undo_switches
 from models import PitchTypeChange, ArsenalTarget
+from analytics import results_view
 from analytics import approach_angles, best_zone, arsenal_plan, stuff_breakdown, trends, ivb_expected, slider_fit, sequencing, tunnel_check, outperform, arsenal_breadth, outcome_profile, bauer_units, release_consistency
 from visualizations import trend_charts
 from visualizations.stuff_breakdown_chart import trait_impact_figure, strip_figure, outcome_figure, ordinal, fmt_value
@@ -1544,27 +1542,10 @@ def pitcher_profile_server(input, output, session, app_state):
 
     @render.ui
     def pp_results_section():
-        """Sept 2026, Ryker (reference: mlbpitchprofiler.com's own
-        Results tab) -- quality of contact ALLOWED per pitch type, plus
-        Hard Hit %/Whiff %/Chase % alongside. Built entirely from
-        game_stats.compute_pitch_type_breakdown()'s rows, which grew the
-        contact-quality columns (Weak/Jammed/Off the End/Clipped/Solid/
-        Barreled %, Hard Hit %) specifically for this section -- GBO's
-        own contact_quality vocabulary, not Statcast's Topped/Under/
-        Flare-Burner labels, same six-bucket idea.
-
-        A pitch type qualifies for a row here with EITHER a ball in play
-        OR a swing (so whiffs/fouls-only pitch types still show up, not
-        just BIP > 0) -- Whiff %/SwStr % are computed straight off
-        pitch_outcome == "Swing and Miss" (game_stats.WHIFF_OUTCOMES),
-        never off contact_quality, and a whiff by definition has no
-        contact_quality to record (Ryker, Sept 2026: "it should show
-        whiffs based on swing and miss. Don't need to click swing and
-        miss for contact quality because there was no contact"). The
-        contact-quality stack columns (Weak/Jammed/etc.) still correctly
-        show "--" for a 0-BIP pitch type -- format_pct(None) -- so a
-        whiff-only row never claims a contact-quality rate it has no
-        balls in play to support."""
+        """Oct 2026 rebuild (Ryker: "results chart/graph needs work"): pitch
+        scorecards graded vs our staff, contact-quality bars, and a bigger
+        Damage by Zone on Rapsodo location. One Batters filter drives all of
+        it. Math in analytics/results_view.py."""
         if not app_state.is_authenticated():
             return None
         role = app_state.role_name()
@@ -1573,110 +1554,19 @@ def pitcher_profile_server(input, output, session, app_state):
         req("pp_view" in input)
         if input.pp_view() != "results":
             return None
-        f = _current_filters()
-        db = get_session()
-        try:
-            pid = _current_player_id(db)
-            if pid is None:
-                return None
-            game_pitches = profile_queries.get_pitcher_profile_pitches(
-                db, pid, date_from=f["date_from"], date_to=f["date_to"],
-                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
-                game_id=f["game_id"],
-            )
-            if not game_pitches:
-                return ui.p("No game pitches in this range yet.", class_="text-muted small")
-            rows = compute_pitch_type_breakdown(game_pitches)
-            type_rows = [
-                r for r in rows
-                if r["Pitch Type"] != "Total" and ((r["Balls in Play"] or 0) > 0 or (r["Total Swings"] or 0) > 0)
-            ]
-            if not type_rows:
-                return ui.p(
-                    "No swings recorded in this range yet -- Results needs at least one swing (in play, foul, or a "
-                    "miss) per pitch type.",
-                    class_="text-muted small",
-                )
-            return ui.div(
-                ui.div(
-                    ui.p(ui.strong("Results"), style="margin-bottom:0;"),
-                    ui_helpers.glossary_link("pp_glossary_results", "Results Glossary"),
-                    style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
-                ),
-                ui.p(
-                    "Quality of contact allowed (Weak/Jammed/Off the End/Clipped/Solid/Barreled, stacked to 100% of "
-                    "that pitch type's own balls in play), plus Hard Hit %/Whiff %/Chase % shown alongside as their "
-                    "own rates -- not part of the stack, each against its own denominator (Hard Hit % of balls in "
-                    "play, Whiff % of swings, Chase % of pitches out of the zone).",
-                    class_="text-muted small",
-                ),
-                # Oct 2026, Ryker: see Pitch Results vs both hands, RHH, or
-                # LHH -- same "Batters" dropdown pattern as Damage by Zone.
-                # Chart + table are their own renders so switching hands
-                # doesn't rebuild this section (or reset the dropdown).
-                ui.input_select(
-                    "pp_results_hand", "Batters",
-                    choices={"all": "Both (All Batters)", "R": "vs RHH", "L": "vs LHH"},
-                    selected=_current_results_hand(),
-                    width="220px",
-                ),
-                output_widget("pp_results_chart"),
-                ui.output_ui("pp_results_table"),
-                ui.hr(),
-                ui.p(ui.strong("Damage by Zone"), style="margin-bottom:0;"),
-                ui.p(
-                    "Where opposing hitters do the most damage against this pitch selection (Pitch Type filter "
-                    "above -- pick one pitch type or leave it on All Pitches), every charted pitch re-sliced "
-                    "spatially into the same 1-9 zone grid used everywhere else in GBO. Use the Batters "
-                    "dropdown to see both hands together, or just vs RHH / vs LHH. Colored by average run value per zone (red = favors the hitter, blue = favors "
-                    "the pitcher), centered on break-even -- the same RV number behind this page's own RV/100 "
-                    "column, not a separate wOBA or contact-quality-only score. Contact quality and hits "
-                    "allowed show on hover. Needs Video Review, same as the Zone tab's location heatmaps -- "
-                    "zones with fewer than a handful of pitches are grayed out rather than colored, and a hand "
-                    "this pitcher hasn't faced yet in this window shows a short note instead of a chart.",
-                    class_="text-muted small",
-                ),
-                # Oct 2026, Ryker: "select both, rhh, or lhh in a
-                # dropdown so you would only see one at a time." Lives
-                # here (static content), read by pp_zone_damage_chart --
-                # a separate render, so no same-render input issue.
-                # isolate() keeps the current pick when this section
-                # re-renders after a filter change.
-                ui.input_select(
-                    "pp_damage_hand", "Batters",
-                    choices={"all": "Both (All Batters)", "R": "vs RHH", "L": "vs LHH"},
-                    selected=_current_damage_hand(),
-                    width="220px",
-                ),
-                output_widget("pp_zone_damage_chart"),
-            )
-        finally:
-            db.close()
-
-    @render_plotly
-    def pp_results_chart():
-        if not app_state.is_authenticated():
-            return None
-        req("pp_view" in input)
-        if input.pp_view() != "results":
-            return None
-        f = _current_filters()
-        db = get_session()
-        try:
-            pid = _current_player_id(db)
-            if pid is None:
-                return None
-            game_pitches = profile_queries.get_pitcher_profile_pitches(
-                db, pid, date_from=f["date_from"], date_to=f["date_to"],
-                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
-                game_id=f["game_id"],
-            )
-            game_pitches = _results_hand_pitches(db, game_pitches)
-            req(game_pitches)
-            rows = compute_pitch_type_breakdown(game_pitches)
-            return pitch_results_chart(rows)
-        finally:
-            db.close()
+        return ui.div(
+            ui.div(
+                ui.p(ui.strong("Results"), "  ", ui_helpers.how_to_link("results"), style="margin-bottom:0;"),
+                ui_helpers.glossary_link("pp_glossary_results", "Results Glossary"),
+                style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+            ),
+            ui.p("How hitters did against each of his pitches. Charted games only, with the date range above; "
+                 "locations come from Rapsodo.", class_="text-muted small"),
+            ui.input_select("pp_results_hand", "Batters",
+                            choices={"all": "Both (All Batters)", "R": "vs RHH", "L": "vs LHH"},
+                            selected=_current_results_hand(), width="220px"),
+            ui.output_ui("pp_results_body"),
+        )
 
     def _current_results_hand():
         with reactive.isolate():
@@ -1686,137 +1576,166 @@ def pitcher_profile_server(input, output, session, app_state):
                 choice = "all"
         return choice if choice in ("all", "R", "L") else "all"
 
-    def _results_hand_pitches(db, game_pitches):
-        """Filter to the batter hand picked in Results' "Batters" dropdown
-        (get_batter_hands -- switch-hitter aware, never raw opponent_hand)."""
-        choice = input.pp_results_hand() if "pp_results_hand" in input else "all"
-        if choice not in ("R", "L"):
-            return game_pitches
-        hands = get_batter_hands(db, game_pitches)
-        return [p for p in game_pitches if hands.get(p.game_pitch_id) == choice]
+    def _fmt_rate(v, kind):
+        if v is None:
+            return "—"
+        if kind in ("avg", "slg"):
+            return f"{v:.3f}".lstrip("0") if v < 1 else f"{v:.3f}"
+        if kind == "rv100":
+            return f"{v:+.2f}"
+        return f"{v:.0f}%"
+
+    def _rv_color(v):
+        """Per-pitch run value -> red (hitter) / blue (pitcher) background."""
+        if v is None:
+            return "transparent"
+        a = min(abs(v) / 0.08, 1.0) * 0.75 + 0.1
+        return f"rgba(191,30,45,{a:.2f})" if v > 0 else f"rgba(47,111,176,{a:.2f})"
+
+    def _damage_html(grid, hand):
+        cells = grid["cells"]
+        rows = []
+        for r in range(5):
+            tds = []
+            for c in range(5):
+                d = cells.get((r, c))
+                zone = 1 <= r <= 3 and 1 <= c <= 3
+                cls = "gbo-dz-zone" if zone else "gbo-dz-out"
+                if not d:
+                    tds.append(f'<td class="{cls} gbo-dz-none"></td>')
+                    continue
+                bg = "transparent" if d["thin"] else _rv_color(d["avg_rv"])
+                hit = f'{d["hits"]} H / {d["bip"]} BIP' if d["bip"] else (f'{d["k"]} K' if d["k"] else "")
+                tip = (f'{d["n"]} pitches · avg run value {d["avg_rv"]:+.3f}' if d["avg_rv"] is not None else f'{d["n"]} pitches')
+                tip += f' · {d["hits"]} hits ({d["hr"]} HR) on {d["bip"]} balls in play · {d["k"]} strikeouts'
+                tds.append(f'<td class="{cls}{" gbo-dz-thin" if d["thin"] else ""}" style="background:{bg}" title="{tip}">'
+                           f'<b>{d["n"]}</b><span>{hit}</span></td>')
+            rows.append(f'<tr>{"".join(tds)}</tr>')
+        side = ""
+        if hand == "R":
+            side = '<div class="gbo-dz-bat gbo-dz-bat-l">RHH</div>'
+        elif hand == "L":
+            side = '<div class="gbo-dz-bat gbo-dz-bat-r">LHH</div>'
+        return ui.HTML(f'<div class="gbo-dz-wrap">{side}<table class="gbo-dz"><tbody>{"".join(rows)}</tbody></table></div>')
 
     @render.ui
-    def pp_results_table():
+    def pp_results_body():
         if not app_state.is_authenticated():
             return None
         req("pp_view" in input)
         if input.pp_view() != "results":
             return None
         f = _current_filters()
+        hand = input.pp_results_hand() if "pp_results_hand" in input else "all"
         db = get_session()
         try:
             pid = _current_player_id(db)
             if pid is None:
                 return None
-            game_pitches = profile_queries.get_pitcher_profile_pitches(
+            mine = profile_queries.get_pitcher_profile_pitches(
                 db, pid, date_from=f["date_from"], date_to=f["date_to"],
-                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
-                game_id=f["game_id"],
-            )
-            game_pitches = _results_hand_pitches(db, game_pitches)
-            hand = input.pp_results_hand() if "pp_results_hand" in input else "all"
-            who = {"R": "right-handed", "L": "left-handed"}.get(hand)
-            if not game_pitches:
-                return ui.p(f"No pitches vs {who} hitters in this range yet." if who else "No game pitches in this range yet.",
-                            class_="text-muted small")
-            rows = compute_pitch_type_breakdown(game_pitches)
-            type_rows = [
-                r for r in rows
-                if r["Pitch Type"] != "Total" and ((r["Balls in Play"] or 0) > 0 or (r["Total Swings"] or 0) > 0)
-            ]
-            if not type_rows:
-                return ui.p(f"No swings vs {who} hitters in this range yet." if who else "No swings in this range yet.",
-                            class_="text-muted small")
-            note = ui.p(f"Only pitches to {who} hitters ({len(game_pitches)} pitches). % Thrown is out of those pitches.",
-                        class_="text-muted small") if who else None
-            return ui.div(note, ui_helpers.render_dict_table([
-                {
-                    "Pitch Type": r["Pitch Type"], "% Thrown": _fmt_pct(r["Pitch Usage %"]), "BIP": r["Balls in Play"],
-                    "Weak %": _fmt_pct(r["Weak %"]), "Jammed %": _fmt_pct(r["Jammed %"]),
-                    "Off the End %": _fmt_pct(r["Off the End %"]), "Clipped %": _fmt_pct(r["Clipped %"]),
-                    "Solid %": _fmt_pct(r["Solid Contact %"]), "Barreled %": _fmt_pct(r["Barreled %"]),
-                    "Hard Hit %": _fmt_pct(r["Hard Hit %"]), "Whiff %": _fmt_pct(r["Whiff %"]),
-                    "SwStr %": _fmt_pct(r["SwStr %"]), "Chase %": _fmt_pct(r["Chase %"]),
-                    "RV/100": r["RV/100"] if r["RV/100"] is not None else "—",
-                }
-                for r in type_rows
-            ]))
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"], game_id=f["game_id"],
+            ) or []
+            team = trends.team_pitches_in_range(db, f["date_from"], f["date_to"], pitching=True)
+            hands = get_batter_hands(db, list(mine) + list(team))
+            loc = sequencing.loc_map(profile_queries.rapsodo_by_game_pitch_id(
+                db, [p.game_pitch_id for p in list(mine) + list(team)]))
         finally:
             db.close()
+        if hand in ("R", "L"):
+            mine = [p for p in mine if hands.get(p.game_pitch_id) == hand]
+            team = [p for p in team if hands.get(p.game_pitch_id) == hand]
+        who = {"R": "right-handed", "L": "left-handed"}.get(hand)
+        if not mine:
+            return ui_helpers.empty_state(f"No pitches to {who} hitters in this range yet." if who
+                                          else "No game pitches in this range yet.")
+        sc = results_view.scorecard(mine, team, loc)
 
-    def _current_damage_hand():
-        with reactive.isolate():
-            try:
-                choice = input.pp_damage_hand() if "pp_damage_hand" in input else "all"
-            except Exception:
-                choice = "all"
-        return choice if choice in ("all", "R", "L") else "all"
+        # 1. Scorecard
+        head = "".join(f"<th>{h}</th>" for h in ["Pitch", "Thrown"] + [lbl for _k, lbl, *_ in results_view.METRICS]
+                       + ["K", "BB", "Hits"])
+        body = []
+        for r in sc["rows"]:
+            tds = [f'<th class="gbo-rc-pt">{r["type"]}<span>{r["n"]} pitches</span></th>',
+                   f'<td>{_fmt_rate(r["usage"], "pct")}</td>']
+            for key, label, *_ in results_view.METRICS:
+                g = r["grade"].get(key)
+                staff = r["staff"].get(key)
+                tip = f"Staff {r['type']}: {_fmt_rate(staff, key)}" if staff is not None else "No staff comparison"
+                tds.append(f'<td class="gbo-rc-{g or "none"}" title="{tip}">{_fmt_rate(r[key], key)}</td>')
+            tds += [f'<td>{r["k"]}</td>', f'<td>{r["bb"]}</td>', f'<td title="{r["hr"]} HR">{r["hits"]}</td>']
+            body.append(f'<tr class="{"gbo-rc-thin" if r["thin"] else ""}">{"".join(tds)}</tr>')
+        t = sc["total"]
+        if t:
+            body.append('<tr class="gbo-rc-total"><th class="gbo-rc-pt">All pitches<span>'
+                        f'{t["n"]} pitches</span></th><td></td>'
+                        + "".join(f'<td>{_fmt_rate(t[k], k)}</td>' for k, *_ in results_view.METRICS)
+                        + f'<td>{t["k"]}</td><td>{t["bb"]}</td><td>{t["hits"]}</td></tr>')
+        s1 = ui.div(
+            ui.h6("How each pitch did", class_="gbo-seq-h"),
+            ui.p("Green = better than our staff on that same pitch, red = worse (hover a number to see the staff's). "
+                 "Weak % = weak, jammed, off the end or clipped contact. RV/100 = runs per 100 pitches, minus is good for "
+                 f"him. AVG/SLG are against. Faded rows have fewer than {results_view.MIN_PITCHES} pitches"
+                 + (f"; only pitches to {who} hitters." if who else "."), class_="text-muted small gbo-seq-how"),
+            ui.HTML(f'<div class="gbo-sg-wrap"><table class="gbo-rc"><thead><tr>{head}</tr></thead>'
+                    f'<tbody>{"".join(body)}</tbody></table></div>'),
+            class_="gbo-seq-sec",
+        )
 
-    @render_plotly
-    def pp_zone_damage_chart():
-        """Sept 2026, Ryker: "an opposing hitters heat map for each of
-        my pitchers ... select a pitch type from a drop down then see
-        a strikezone that has red zones ... under pitcher profile it
-        would go under the results section." Deliberately reuses this
-        page's own existing "Pitch Type" filter (input.pp_pitch_type,
-        via f["pitch_type"]/_current_filters) rather than adding a
-        second, competing pitch-type dropdown just for this chart --
-        it's the exact same filter pp_results_chart above and every
-        other section on this page already honors, so "All Pitches"
-        shows every pitch type blended into one zone map and picking
-        one type from that same dropdown narrows this chart (and only
-        this chart re-slices spatially instead of by pitch type -- see
-        analytics/pitcher_zone_damage.py's own docstring for the RV
-        vs. wOBA vs. contact-quality-alone reasoning). Sept 2026,
-        Ryker: "add damage by zone for left and right hitters as
-        well" -- draws All Batters/vs RHH/vs LHH side by side
-        (zone_damage_heatmap_by_hand), with the batter's hand resolved
-        via game_stats.get_batter_hands (roster Player.bats, with the
-        switch-hitter and three-squad fixes already established for
-        every other hand split in this app) rather than trusted from
-        GamePitch.opponent_hand directly."""
-        if not app_state.is_authenticated():
-            return None
-        req("pp_view" in input)
-        if input.pp_view() != "results":
-            return None
-        f = _current_filters()
-        db = get_session()
-        try:
-            pid = _current_player_id(db)
-            if pid is None:
-                return None
-            game_pitches = profile_queries.get_pitcher_profile_pitches(
-                db, pid, date_from=f["date_from"], date_to=f["date_to"],
-                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
-                game_id=f["game_id"],
-            )
-            if not game_pitches:
-                return None
-            label = f["pitch_type"] or "All Pitch Types"
-            # One panel at a time, picked from the Batters dropdown
-            # (Oct 2026) -- "all" = both hands combined, no silhouette.
-            hand_choice = input.pp_damage_hand() if "pp_damage_hand" in input else "all"
-            if hand_choice in ("R", "L"):
-                hands = get_batter_hands(db, game_pitches)
-                subset = [p for p in game_pitches if hands.get(p.game_pitch_id) == hand_choice]
-                panel_label, hand = ("vs RHH", "R") if hand_choice == "R" else ("vs LHH", "L")
-            else:
-                subset, panel_label, hand = game_pitches, "All Batters", None
-            fig = zone_damage_heatmap_by_hand([(panel_label, compute_zone_damage(subset), hand)], label)
-            if fig is None:
-                # No located pitches against that hand in this window.
-                fig = go.Figure()
-                fig.add_annotation(
-                    text=f"No located pitches {panel_label.lower()} in this selection yet.",
-                    x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False,
-                )
-                fig.update_xaxes(visible=False)
-                fig.update_yaxes(visible=False)
-                fig = apply_gbo_theme(fig, title=f"{label} — Damage by Zone", height=200)
-            return fig
-        finally:
-            db.close()
+        # 2. Contact quality
+        mix = results_view.contact_mix(mine)
+        bars = []
+        for m in mix:
+            segs = "".join(f'<span class="gbo-cq-{lbl.split()[0].lower()}" style="width:{pct}%" title="{lbl} {pct:.0f}%">'
+                           f'{lbl if pct >= 22 else ""}</span>' for lbl, pct in m["parts"] if pct)
+            if m["unrated"] >= 1:
+                segs += f'<span class="gbo-cq-none" style="width:{m["unrated"]}%" title="Not rated {m["unrated"]:.0f}%"></span>'
+            bars.append(f'<div class="gbo-cq-row"><div class="gbo-cq-lbl">{m["type"]}<span>{m["bip"]} in play</span></div>'
+                        f'<div class="gbo-cq-bar">{segs}</div></div>')
+        legend = "".join(f'<span><i class="gbo-cq-{lbl.split()[0].lower()}"></i>{lbl}</span>' for _k, lbl in results_view.CONTACT_ORDER)
+        s2 = ui.div(
+            ui.h6("How hard they hit it", class_="gbo-seq-h"),
+            ui.p("Every ball in play on that pitch, by contact quality -- left side (weak, jammed, off the end, "
+                 "clipped) is good for him, right side (solid, barreled) is good for the hitter.",
+                 class_="text-muted small gbo-seq-how"),
+            ui.HTML("".join(bars) + f'<div class="gbo-cq-legend">{legend}</div>') if bars
+            else ui.p("No balls in play yet.", class_="small text-muted"),
+            class_="gbo-seq-sec",
+        )
+
+        # 3. Damage by zone
+        label = f["pitch_type"] or "All pitches"
+        grid = results_view.damage_grid(mine, loc)
+        s3 = ui.div(
+            ui.h6(f"Where hitters did damage — {label}", class_="gbo-seq-h"),
+            ui.p("Catcher's view. The middle 3x3 is the strike zone, the outer ring is out of the zone. Big number = "
+                 "pitches there; red = hitters did damage (run value for the hitter), blue = good for him, "
+                 f"gray = fewer than {results_view.MIN_CELL} pitches. Use the Pitch Type filter above for one pitch. "
+                 f"{grid['located']} of {grid['total']} pitches have a Rapsodo location.",
+                 class_="text-muted small gbo-seq-how"),
+            _damage_html(grid, hand) if grid["located"] else ui.p("No Rapsodo locations in this range yet.", class_="small text-muted"),
+            ui.HTML('<div class="gbo-dz-key"><span><i style="background:rgba(47,111,176,.8)"></i>good for him</span>'
+                    '<span><i style="background:rgba(191,30,45,.8)"></i>good for the hitter</span></div>'),
+            class_="gbo-seq-sec",
+        )
+
+        # Details: the full table
+        rows = compute_pitch_type_breakdown(results_view._real(mine))
+        detail = ui.tags.details(
+            ui.tags.summary("All stats (details)"),
+            ui_helpers.render_dict_table([
+                {"Pitch Type": r["Pitch Type"], "% Thrown": _fmt_pct(r["Pitch Usage %"]), "BIP": r["Balls in Play"],
+                 "Weak %": _fmt_pct(r["Weak %"]), "Jammed %": _fmt_pct(r["Jammed %"]),
+                 "Off the End %": _fmt_pct(r["Off the End %"]), "Clipped %": _fmt_pct(r["Clipped %"]),
+                 "Solid %": _fmt_pct(r["Solid Contact %"]), "Barreled %": _fmt_pct(r["Barreled %"]),
+                 "Hard Hit %": _fmt_pct(r["Hard Hit %"]), "Whiff %": _fmt_pct(r["Whiff %"]),
+                 "SwStr %": _fmt_pct(r["SwStr %"]), "CSW %": _fmt_pct(r["CSW %"]),
+                 "RV/100": r["RV/100"] if r["RV/100"] is not None else "—"}
+                for r in rows
+            ]),
+            class_="gbo-seq-details",
+        )
+        return ui.div(s1, s2, s3, detail)
 
     @render.ui
     def pp_zone_hand_filter():

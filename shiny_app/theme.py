@@ -1023,6 +1023,41 @@ body { max-width: 100%; }
 .gbo-sg td.gbo-sg-thin { opacity: .45; }
 .gbo-sg td.gbo-sg-empty { background: none; border-color: transparent; color: var(--gbo-text-muted); }
 .gbo-seq-details > summary { cursor: pointer; color: var(--gbo-text-muted); font-size: .85rem; margin-bottom: 6px; }
+/* Pitcher Profile > Results (Oct 2026 rebuild) */
+.gbo-rc { border-collapse: separate; border-spacing: 0 4px; width: 100%; font-variant-numeric: tabular-nums; }
+.gbo-rc th { font-size: .64rem; text-transform: uppercase; letter-spacing: .04em; color: var(--gbo-text-muted); font-weight: 600; text-align: center; padding: 2px 4px; line-height: 1.15; }
+.gbo-rc td { text-align: center; padding: 8px 4px; background: var(--gbo-bg-raised, #1D1D20); font-weight: 600; font-size: .85rem; white-space: nowrap; }
+.gbo-rc th.gbo-rc-pt { text-align: left; text-transform: none; letter-spacing: 0; font-size: .85rem; color: var(--gbo-text); background: var(--gbo-bg-raised, #1D1D20); border-radius: 8px 0 0 8px; padding: 6px 10px; }
+.gbo-rc th.gbo-rc-pt span { display: block; font-size: .68rem; color: var(--gbo-text-muted); font-weight: 400; }
+.gbo-rc tr td:last-child { border-radius: 0 8px 8px 0; }
+.gbo-rc td.gbo-rc-better { background: rgba(46,125,91,.35); }
+.gbo-rc td.gbo-rc-worse { background: rgba(191,30,45,.32); }
+.gbo-rc tr.gbo-rc-thin { opacity: .5; }
+.gbo-rc tr.gbo-rc-total td, .gbo-rc tr.gbo-rc-total th { background: none; border-top: 1px solid var(--gbo-border); font-weight: 500; color: var(--gbo-text-muted); }
+.gbo-cq-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 10px; align-items: center; margin-bottom: 8px; }
+.gbo-cq-lbl { font-weight: 600; font-size: .85rem; }
+.gbo-cq-lbl span { display: block; font-size: .68rem; color: var(--gbo-text-muted); font-weight: 400; }
+.gbo-cq-bar { display: flex; height: 30px; border-radius: 6px; overflow: hidden; background: var(--gbo-bg-raised, #1D1D20); }
+.gbo-cq-bar span { display: flex; align-items: center; justify-content: center; font-size: .68rem; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; }
+.gbo-cq-weak { background: #2F6FB0; } .gbo-cq-jammed { background: #4A86C5; } .gbo-cq-off { background: #6E9FD3; }
+.gbo-cq-clipped { background: #8FA3B8; } .gbo-cq-solid { background: #D9822B; } .gbo-cq-barreled { background: #BF1E2D; }
+.gbo-cq-none { background: repeating-linear-gradient(45deg, #333 0 4px, #222 4px 8px); }
+.gbo-cq-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: .72rem; color: var(--gbo-text-muted); margin-top: 4px; }
+.gbo-cq-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.gbo-dz-wrap { position: relative; display: flex; justify-content: center; padding: 6px 40px; }
+.gbo-dz { border-collapse: separate; border-spacing: 3px; }
+.gbo-dz td { width: 64px; height: 64px; text-align: center; vertical-align: middle; border-radius: 6px; line-height: 1.1; }
+.gbo-dz td b { display: block; font-size: 1.05rem; }
+.gbo-dz td span { font-size: .62rem; color: rgba(255,255,255,.8); }
+.gbo-dz td.gbo-dz-zone { border: 1.5px solid rgba(255,253,229,.55); }
+.gbo-dz td.gbo-dz-out { border: 1px dashed var(--gbo-border-strong, #3A3A3E); }
+.gbo-dz td.gbo-dz-thin { color: var(--gbo-text-muted); background: rgba(128,128,128,.12) !important; }
+.gbo-dz td.gbo-dz-none { background: none; }
+.gbo-dz-bat { position: absolute; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; font-size: .7rem; font-weight: 700; color: var(--gbo-text-muted); letter-spacing: .1em; }
+.gbo-dz-bat-l { left: 8px; } .gbo-dz-bat-r { right: 8px; }
+.gbo-dz-key { display: flex; justify-content: center; gap: 16px; font-size: .72rem; color: var(--gbo-text-muted); margin-top: 6px; }
+.gbo-dz-key i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+@media (max-width: 520px) { .gbo-dz td { width: 52px; height: 52px; } .gbo-dz-wrap { padding: 6px 22px; } .gbo-cq-row { grid-template-columns: 92px minmax(0, 1fr); } }
 .gbo-swm { display: grid; grid-template-columns: minmax(0, 1fr) 58px; gap: 6px; }
 .gbo-step-grid .gbo-sb.gbo-sword { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 4px; font-size: .7rem; white-space: nowrap; overflow-wrap: normal; }
 .gbo-sword svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; }
