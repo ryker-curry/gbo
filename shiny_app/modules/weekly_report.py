@@ -129,7 +129,8 @@ def weekly_report_server(input, output, session, app_state):
                         .group_by(RapsodoPitch.player_id).all())
             gp = dict(db.query(GamePitch.our_player_id, func.count(GamePitch.game_pitch_id))
                       .join(Game, GamePitch.game_id == Game.game_id)
-                      .filter(GamePitch.is_our_team_batting.is_(False), Game.game_date >= w0, Game.game_date < w1)
+                      .filter(GamePitch.is_our_team_batting.is_(False), GamePitch.is_pitch.isnot(False),
+                              Game.game_date >= w0, Game.game_date < w1)
                       .group_by(GamePitch.our_player_id).all())
             try:
                 notes = {n.player_id for n in db.query(WeeklyReportNote).filter(WeeklyReportNote.week_start == w0) if n.note}

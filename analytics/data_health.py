@@ -69,7 +69,9 @@ def check_game(db, game, players=None, opp_players=None):
         ids = {p.opponent_player_id for p in pitches if p.opponent_player_id}
         opp_players = {o.opponent_player_id: o for o in db.query(OpponentPlayer).filter(
             OpponentPlayer.opponent_player_id.in_(ids)).all()} if ids else {}
-    n = len(pitches)
+    # Oct 2026: clock violations / IBBs (is_pitch=False) have no pitch to chart.
+    thrown = [p for p in pitches if getattr(p, "is_pitch", True) is not False]
+    n = len(thrown)
     bip = [p for p in pitches if p.pitch_outcome == "In Play"]
     # external games: our pitchers = not batting; our hitters = batting
     our_pitching = [p for p in pitches if not p.is_our_team_batting]
@@ -88,8 +90,8 @@ def check_game(db, game, players=None, opp_players=None):
 
     raw = {
         "final": (0 if game.status == "Final" else 1, 1),
-        "location": (sum(1 for p in pitches if p.actual_plate_x is None or p.actual_plate_z is None), n),
-        "pitch_type": (sum(1 for p in pitches if not p.pitch_type_id), n),
+        "location": (sum(1 for p in thrown if p.actual_plate_x is None or p.actual_plate_z is None), n),
+        "pitch_type": (sum(1 for p in thrown if not p.pitch_type_id), n),
         "contact": (sum(1 for p in bip if not p.contact_quality), len(bip)),
         "bb_type": (sum(1 for p in bip if not p.batted_ball_type), len(bip)),
         "their_pitcher": (sum(1 for p in our_batting if not _their_pitcher_known(p, players, opp_players)), len(our_batting)),

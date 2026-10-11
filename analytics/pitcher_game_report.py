@@ -61,7 +61,7 @@ K_OUTCOMES = {"K", "K (Looking)"}
 OUT_AB_OUTCOMES = {"Groundout", "Flyout", "Lineout", "Double Play", "Sac Bunt", "Sac Fly"} | K_OUTCOMES
 HIT_AB_OUTCOMES = {"1B", "2B", "3B", "HR"}
 XBH_AB_OUTCOMES = {"2B", "3B", "HR"}
-NON_AB_OUTCOMES = {"BB", "HBP", "Sac Bunt", "Sac Fly"}  # excluded from the standard AB count, per the official scoring rule
+NON_AB_OUTCOMES = {"BB", "IBB", "HBP", "Sac Bunt", "Sac Fly"}  # excluded from the standard AB count, per the official scoring rule
 
 # Generic, commonly-cited linear weights -- NOT season/park-adjusted.
 # See module docstring. Kept as named constants (not inline magic
@@ -207,9 +207,10 @@ def _compute_header_stats(all_pitches, completed_pas, extras=None):
     stealing outs, runner-event and forced-end runs, inherited runners.
     Without it (no db handy) the line is pitch-only, as before."""
     x_er, x_outs, x_ue = extras or (0, 0, 0)
-    total_pitches = len(all_pitches)
-    strikes = sum(1 for p in all_pitches if p.pitch_outcome in STRIKE_OUTCOMES)
-    balls = sum(1 for p in all_pitches if p.pitch_outcome == "Ball")
+    thrown = [p for p in all_pitches if getattr(p, "is_pitch", True) is not False]  # Oct 2026: no clock violations / IBBs
+    total_pitches = len(thrown)
+    strikes = sum(1 for p in thrown if p.pitch_outcome in STRIKE_OUTCOMES)
+    balls = sum(1 for p in thrown if p.pitch_outcome == "Ball")
 
     # IP: outs recorded on THIS pitcher's own PA-ending pitches. Each
     # ending pitch's outs_after/outs_before is the real recorded delta
@@ -256,7 +257,7 @@ def _compute_header_stats(all_pitches, completed_pas, extras=None):
 
     whip = round((bb + hits) / ip_decimal, 2) if ip_decimal else None
     # TBIP (Oct 2026): bases handed out at the plate per inning -- see game_stats.compute_pitching_line.
-    _bw = {"BB": 1, "HBP": 1, "1B": 1, "2B": 2, "3B": 3, "HR": 4}
+    _bw = {"BB": 1, "IBB": 1, "HBP": 1, "1B": 1, "2B": 2, "3B": 3, "HR": 4}
     bases = sum(_bw.get(pa[-1].ab_outcome, 0) for pa in completed_pas)
     tbip = round(bases / ip_decimal, 2) if ip_decimal else None
     k_bb = round(ks / bb, 2) if bb else None
@@ -377,7 +378,7 @@ def _compute_pitch_type_breakdown(pitches, completed_pas, pitch_types):
     types. Zone-dependent columns (Zone Swings/Whiffs, Chase%, Zone
     Whiff%, Execution%) are None for any pitch type with no reviewed
     (actual-location-set) pitches yet."""
-    total_pitches = len(pitches)
+    total_pitches = sum(1 for p in pitches if getattr(p, "is_pitch", True) is not False)
     rows = {}
     type_ids = sorted({p.pitch_type_id for p in pitches if p.pitch_type_id is not None})
 
@@ -390,6 +391,7 @@ def _compute_pitch_type_breakdown(pitches, completed_pas, pitch_types):
 
 
 def _pitch_type_row(type_pitches, completed_pas, type_id, total_pitches_all_types, is_total_row=False):
+    type_pitches = [p for p in type_pitches if getattr(p, "is_pitch", True) is not False]  # Oct 2026: thrown pitches only
     n = len(type_pitches)
     strikes = sum(1 for p in type_pitches if p.pitch_outcome in STRIKE_OUTCOMES)
     balls = sum(1 for p in type_pitches if p.pitch_outcome == "Ball")

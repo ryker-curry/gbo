@@ -382,8 +382,28 @@ import game_tracking_runner_events_display
 ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
 
 PITCH_OUTCOMES = ["Ball", "Called Strike", "Swing and Miss", "Foul", "In Play", "HBP"]
+# Oct 2026, Ryker: things that change the count / end the at-bat WITHOUT a
+# pitch being thrown. Saved as GamePitch rows with is_pitch=False so the
+# count, replay, undo and Pitch Log all work as for a pitch, but they never
+# add to a pitch count, strike % or any pitch chart.
+CLOCK_BALL = "Clock Violation - Pitcher"     # pitcher violation: adds a ball
+CLOCK_STRIKE = "Clock Violation - Batter"    # batter violation: adds a strike
+IBB_OUTCOME = "Intentional Walk"             # ends the at-bat as IBB, no pitches
+NON_PITCH_OUTCOMES = (CLOCK_BALL, CLOCK_STRIKE, IBB_OUTCOME)
+
+
+def count_after(outcome, balls, strikes):
+    """(balls, strikes) after this pitch / non-pitch event."""
+    balls, strikes = balls or 0, strikes or 0
+    if outcome in ("Ball", CLOCK_BALL):
+        balls += 1
+    elif outcome in ("Called Strike", "Swing and Miss", CLOCK_STRIKE):
+        strikes += 1
+    elif outcome == "Foul" and strikes < 2:
+        strikes += 1
+    return balls, strikes
 AB_OUTCOMES = [
-    "K", "K (Looking)", "BB", "HBP", "1B", "2B", "3B", "HR", "E", "FC",
+    "K", "K (Looking)", "BB", "IBB", "HBP", "1B", "2B", "3B", "HR", "E", "FC",
     "Sac Bunt", "Sac Fly", "Groundout", "Flyout", "Lineout", "Double Play",
     "No Result",
 ]
@@ -431,7 +451,7 @@ RUNNER_EVENT_TYPES = ["Stolen Base", "Caught Stealing", "Picked Off", "Wild Pitc
                       "Fielding Error", "Advanced on Throw", "Obstruction", "Interference", "Out on Bases"]
 RUNNER_EVENT_OUT_TYPES = ("Caught Stealing", "Picked Off", "Interference", "Out on Bases")
 RUNNER_ADVANCE_TYPES = [t for t in RUNNER_EVENT_TYPES if t not in RUNNER_EVENT_OUT_TYPES]
-BATTER_REACH_BASE = {"1B": 1, "BB": 1, "HBP": 1, "E": 1, "FC": 1, "2B": 2, "3B": 3}
+BATTER_REACH_BASE = {"1B": 1, "BB": 1, "IBB": 1, "HBP": 1, "E": 1, "FC": 1, "2B": 2, "3B": 3}
 
 
 def runners_on_base(pitches, runner_events):
@@ -958,7 +978,7 @@ def suggest_after_state(ab_outcome, bases_before, outs_before):
         outs += 2
         if b[0] == "1":
             b[0] = "0"
-    elif ab_outcome in ("BB", "HBP"):
+    elif ab_outcome in ("BB", "IBB", "HBP"):
         force_advance()
     elif ab_outcome == "1B":
         if b[2] == "1":
@@ -1135,12 +1155,7 @@ def compute_current_state(pitches, runner_events=None, forced_ends=None, game=No
         last = pitches[-1]
         anchor = last.pitch_sequence
         if not last.ends_plate_appearance:
-            balls = (last.balls_before or 0) + (1 if last.pitch_outcome == "Ball" else 0)
-            strikes = (last.strikes_before or 0)
-            if last.pitch_outcome in ("Called Strike", "Swing and Miss"):
-                strikes += 1
-            elif last.pitch_outcome == "Foul" and strikes < 2:
-                strikes += 1
+            balls, strikes = count_after(last.pitch_outcome, last.balls_before, last.strikes_before)
             state = {
                 "inning": last.inning, "is_our_batting": last.is_our_team_batting,
                 "outs": last.outs_before, "bases": last.bases_before,
@@ -1472,12 +1487,7 @@ def replay_game(pitches, runner_events, re_lookup, forced_ends=None, game=None):
         if ends_pa:
             new_balls = new_strikes = None
         else:
-            new_balls = state["balls"] + (1 if p.pitch_outcome == "Ball" else 0)
-            new_strikes = state["strikes"]
-            if p.pitch_outcome in ("Called Strike", "Swing and Miss"):
-                new_strikes += 1
-            elif p.pitch_outcome == "Foul" and new_strikes < 2:
-                new_strikes += 1
+            new_balls, new_strikes = count_after(p.pitch_outcome, state["balls"], state["strikes"])
 
         re_before, re_after, run_value = compute_re_and_rv(
             re_lookup, state["outs"], state["bases"], state["balls"], state["strikes"],
@@ -1717,13 +1727,9 @@ def _ends_plate_appearance(state, outcome, force=False):
     already cover (Ryker, Sept 2026: needed a guaranteed way to record
     a hit-by-pitch, or confirm a walk, no matter what count it
     happened on)."""
-    new_balls = state["balls"] + (1 if outcome == "Ball" else 0)
-    new_strikes = state["strikes"]
-    if outcome in ("Called Strike", "Swing and Miss"):
-        new_strikes += 1
-    elif outcome == "Foul" and new_strikes < 2:
-        new_strikes += 1
-    ends_pa = force or outcome == "In Play" or outcome == "HBP" or new_balls >= 4 or (new_strikes >= 3 and outcome != "Foul")
+    new_balls, new_strikes = count_after(outcome, state["balls"], state["strikes"])
+    ends_pa = (force or outcome in ("In Play", "HBP", IBB_OUTCOME) or new_balls >= 4
+               or (new_strikes >= 3 and outcome != "Foul"))
     return ends_pa, new_balls, new_strikes
 
 
@@ -3381,7 +3387,7 @@ def game_tracking_server(input, output, session, app_state):
             return None, []
         rows = []
         for p in pitches:
-            if p.inning != target:
+            if p.inning != target or p.is_pitch is False:
                 continue
             miss = []
             if p.pitch_type_id is None:
@@ -3499,7 +3505,7 @@ def game_tracking_server(input, output, session, app_state):
             if pitcher_id is not None:
                 p = db.query(Player).filter(Player.player_id == pitcher_id).first()
                 if p is not None:
-                    n = len(get_pitching_pitches(db, pitcher_id, game_id=game_id))
+                    n = sum(1 for gp in get_pitching_pitches(db, pitcher_id, game_id=game_id) if gp.is_pitch is not False)
                     cards.append({"label": f"P — {p.first_name} {p.last_name}", "value": f"{n} pitches"})
             children = [ui.h5("Live Game Dashboard", class_="gbo-section-title"), ui_helpers.render_kpi_cards(cards)]
             return ui.div(*children)
@@ -5159,6 +5165,14 @@ def game_tracking_server(input, output, session, app_state):
                 col_widths=[8, 4],
             ),
         ]
+        # Oct 2026, Ryker: no-pitch events -- change the count / end the at-bat
+        # without adding to the pitch count.
+        children.append(ui.div(
+            ui.input_action_button("np_clock_pitcher_btn", "Pitcher clock violation (+ball)", class_="btn-outline-secondary btn-sm"),
+            ui.input_action_button("np_clock_batter_btn", "Batter clock violation (+strike)", class_="btn-outline-secondary btn-sm"),
+            ui.input_action_button("np_ibb_btn", "Intentional walk", class_="btn-outline-secondary btn-sm"),
+            class_="d-flex flex-wrap gap-2 mt-2",
+        ))
         if last_pitch is not None:
             outcome_label = last_pitch.ab_outcome or last_pitch.pitch_outcome or "—"
             children.append(ui.p(f"Last recorded: pitch #{last_pitch.pitch_sequence} ({outcome_label}).", class_="text-muted small"))
@@ -5274,7 +5288,10 @@ def game_tracking_server(input, output, session, app_state):
         raw = input.opp_their_pitcher_select() if "opp_their_pitcher_select" in input else ""
         return int(raw) if raw else None
 
-    def _do_record_pitch():
+    def _do_record_pitch(non_pitch=None):
+        """non_pitch: one of NON_PITCH_OUTCOMES (clock violation / intentional
+        walk) -- saved like a pitch for the count, but is_pitch=False and with
+        no pitch type, location or batted ball."""
         game_id = _active_game_id()
         if game_id is None:
             return
@@ -5404,13 +5421,16 @@ def game_tracking_server(input, output, session, app_state):
             elif game.is_intrasquad:
                 batting_slot_id = _resolve_current_batting_slot(squad_b_slots, opp_our_player_choice)
 
-            req("pitch_type_select" in input)
-            pitch_type_name = input.pitch_type_select()
-            pitch_types = db.query(PitchType).all()
-            pitch_type_id = next((pt.pitch_type_id for pt in pitch_types if pt.type_name == pitch_type_name), None)
+            if non_pitch:
+                pitch_type_id = None
+            else:
+                req("pitch_type_select" in input)
+                pitch_type_name = input.pitch_type_select()
+                pitch_types = db.query(PitchType).all()
+                pitch_type_id = next((pt.pitch_type_id for pt in pitch_types if pt.type_name == pitch_type_name), None)
 
             intended_x = intended_z = None
-            if ((not state["is_our_batting"]) or game.is_intrasquad) and "intended_x_input" in input:
+            if not non_pitch and ((not state["is_our_batting"]) or game.is_intrasquad) and "intended_x_input" in input:
                 intended_x, intended_z = input.intended_x_input(), input.intended_z_input()
                 if intended_x is None or intended_z is None:
                     intended_x = intended_z = None   # half-typed = not set
@@ -5422,9 +5442,12 @@ def game_tracking_server(input, output, session, app_state):
             # the Video Review section below.
             actual_x = actual_z = None
 
-            req("pitch_outcome_select" in input)
-            outcome = input.pitch_outcome_select()
-            force_end_pa = input.force_end_pa_checkbox() if "force_end_pa_checkbox" in input else False
+            if non_pitch:
+                outcome, force_end_pa = non_pitch, False
+            else:
+                req("pitch_outcome_select" in input)
+                outcome = input.pitch_outcome_select()
+                force_end_pa = input.force_end_pa_checkbox() if "force_end_pa_checkbox" in input else False
             ends_pa, new_balls, new_strikes = _ends_plate_appearance(state, outcome, force=force_end_pa)
 
             cq = None
@@ -5446,7 +5469,12 @@ def game_tracking_server(input, output, session, app_state):
 
             ab_outcome = final_outs = final_bases = final_runs = None
             unearned_runs = 0
-            if ends_pa:
+            if ends_pa and non_pitch:
+                # Automatic result: IBB, or the walk / strikeout a violation caused.
+                ab_outcome = "IBB" if non_pitch == IBB_OUTCOME else ("BB" if new_balls >= 4 else "K")
+                final_outs, final_bases, final_runs = suggest_after_state(ab_outcome, state["bases"], state["outs"])
+                final_outs = min(final_outs, 3)
+            elif ends_pa:
                 if "ab_outcome_select" not in input:
                     ui.notification_show("Confirm the AB result before recording this pitch.", type="error", duration=8)
                     return
@@ -5538,6 +5566,7 @@ def game_tracking_server(input, output, session, app_state):
                 re_after=re_after,
                 run_value=run_value,
                 notes=notes or None,
+                is_pitch=non_pitch is None,
             ))
             if ends_pa and final_runs:
                 if batting_squad == "A":
@@ -5552,12 +5581,38 @@ def game_tracking_server(input, output, session, app_state):
                     game.opponent_score += final_runs
             db.commit()
 
-            ui.notification_show("Pitch recorded.", type="message", duration=6)
+            ui.notification_show(f"{non_pitch} recorded." + (f" ({ab_outcome})" if non_pitch and ab_outcome else "")
+                                 if non_pitch else "Pitch recorded.", type="message", duration=6)
             _runner_event_form_open.set(False)  # fresh pitch -- collapse the runner-event form back down, see runner_events_panel
             _bump_pa()
             _bump_refresh()
         finally:
             db.close()
+
+    def _record_non_pitch(kind):
+        if _too_soon("record"):
+            return
+        try:
+            _do_record_pitch(non_pitch=kind)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            ui.notification_show("Couldn't record that -- nothing was saved.", type="error", duration=10)
+
+    @reactive.effect
+    @reactive.event(input.np_clock_pitcher_btn)
+    def _np_clock_pitcher():
+        _record_non_pitch(CLOCK_BALL)
+
+    @reactive.effect
+    @reactive.event(input.np_clock_batter_btn)
+    def _np_clock_batter():
+        _record_non_pitch(CLOCK_STRIKE)
+
+    @reactive.effect
+    @reactive.event(input.np_ibb_btn)
+    def _np_ibb():
+        _record_non_pitch(IBB_OUTCOME)
 
     @reactive.effect
     @reactive.event(input.record_pitch_btn)

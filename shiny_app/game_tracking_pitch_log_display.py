@@ -765,7 +765,7 @@ def register_game_tracking_pitch_log(
                 # actual is pending, see _vr_save/video_review_body), or it's
                 # genuinely both missing. A plain dash for the "pending"
                 # case looked identical to "no data" and was confusing.
-                if p.is_our_team_batting:
+                if p.is_our_team_batting or p.is_pitch is False:
                     loc = "—"
                 else:
                     intended_str = f"{float(p.intended_plate_x):+.2f}, {float(p.intended_plate_z):.2f}" if p.intended_plate_x is not None else "—"
@@ -814,6 +814,10 @@ def register_game_tracking_pitch_log(
                         ui.input_action_button(edit_btn_id, "Edit", class_="btn-outline-primary btn-sm"),
                         ui.input_action_button(delete_btn_id, "Delete", class_="btn-outline-danger btn-sm"),
                     ]
+                    if p.is_pitch is False:
+                        # Oct 2026: a clock violation / intentional walk has no
+                        # pitch fields to edit -- delete it and re-log instead.
+                        buttons = buttons[1:]
                     if can_end_here:
                         forced_end_btn_id = f"gt_pl_forced_end_btn_{p.game_pitch_id}"
                         forced_end_same_side_btn_id = f"gt_pl_forced_end_same_side_btn_{p.game_pitch_id}"

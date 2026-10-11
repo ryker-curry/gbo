@@ -33,7 +33,7 @@ from strike_zone import classify_attack_zone, is_in_zone
 
 TB = {"1B": 1, "2B": 2, "3B": 3, "HR": 4}
 HARD_CONTACT = {"Barreled/Squared Up", "Solid"}
-NON_AB = {"BB", "HBP", "Sac Bunt", "Sac Fly", "No Result", "CI"}
+NON_AB = {"BB", "IBB", "HBP", "Sac Bunt", "Sac Fly", "No Result", "CI"}
 
 FAMILIES = ("Fastball", "Breaking", "Offspeed")
 _BREAKING = {"Slider", "Curveball", "Sweeper", "Knuckle Curve", "Slurve"}

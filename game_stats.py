@@ -342,7 +342,7 @@ def get_runner_event_outs(session, player_id, season_id=None, game_id=None):
 #   - pickoff / caught-stealing outs -> the pitcher on the mound (IP).
 # ---------------------------------------------------------------------------
 EARNED_RUNNER_EVENTS = {"Wild Pitch", "Stolen Base", "Balk", "Defensive Indifference", "Advanced on Throw"}
-REACH_OUTCOMES = {"1B", "2B", "3B", "BB", "HBP", "E", "FC"}
+REACH_OUTCOMES = {"1B", "2B", "3B", "BB", "IBB", "HBP", "E", "FC"}
 
 
 def _pitcher_of(p):
@@ -522,7 +522,7 @@ def get_pitches_thrown_to_opponent_batter(session, opponent_player_id, season_id
 
 
 HIT_OUTCOMES = {"1B", "2B", "3B", "HR"}
-NON_AB_OUTCOMES = {"BB", "HBP", "Sac Bunt", "Sac Fly"}
+NON_AB_OUTCOMES = {"BB", "IBB", "HBP", "Sac Bunt", "Sac Fly"}  # IBB: Oct 2026, own stat
 # Both count as a strikeout for every stat below -- "K (Looking)" is a
 # separate AB_OUTCOMES value (game_tracking.py) purely so a strikeout
 # looking shows as its own result on the sheet; it's still a K for
@@ -626,7 +626,7 @@ def _is_quality_at_bat(pa):
     caller filters to pa[-1].ends_plate_appearance first, same as
     every other situational split in this module)."""
     last = pa[-1]
-    if last.ab_outcome in ("BB", "HBP"):
+    if last.ab_outcome in ("BB", "IBB", "HBP"):
         return True
     if (last.runs_scored_on_play or 0) >= 1 and last.ab_outcome not in ("E", "Double Play"):
         return True
@@ -656,10 +656,11 @@ def _batting_slice(completed_pas):
     pa = len(completed_pas)
     endings = [p[-1] for p in completed_pas]
     bb = sum(1 for p in endings if p.ab_outcome == "BB")
+    ibb = sum(1 for p in endings if p.ab_outcome == "IBB")   # Oct 2026: kept apart from BB
     hbp = sum(1 for p in endings if p.ab_outcome == "HBP")
     sf = sum(1 for p in endings if p.ab_outcome == "Sac Fly")
     sac = sum(1 for p in endings if p.ab_outcome in ("Sac Bunt", "Sac Fly"))
-    ab = pa - bb - hbp - sac
+    ab = pa - bb - ibb - hbp - sac
     singles = sum(1 for p in endings if p.ab_outcome == "1B")
     doubles = sum(1 for p in endings if p.ab_outcome == "2B")
     triples = sum(1 for p in endings if p.ab_outcome == "3B")
@@ -668,11 +669,12 @@ def _batting_slice(completed_pas):
     k = sum(1 for p in endings if p.ab_outcome in K_OUTCOMES)
     total_bases = singles + 2 * doubles + 3 * triples + 4 * hr
     avg = round(hits / ab, 3) if ab else None
-    obp = round((hits + bb + hbp) / (ab + bb + hbp + sf), 3) if (ab + bb + hbp + sf) else None
+    on = hits + bb + ibb + hbp            # an IBB is still a time on base
+    obp = round(on / (ab + bb + ibb + hbp + sf), 3) if (ab + bb + ibb + hbp + sf) else None
     slg = round(total_bases / ab, 3) if ab else None
     return {
         "PA": pa, "AB": ab, "H": hits, "1B": singles, "2B": doubles, "3B": triples, "HR": hr,
-        "BB": bb, "HBP": hbp, "K": k, "SF": sf,
+        "BB": bb, "IBB": ibb, "HBP": hbp, "K": k, "SF": sf,
         "AVG": avg, "OBP": obp, "SLG": slg,
         "OPS": round(obp + slg, 3) if obp is not None and slg is not None else None,
         "ISO": round(slg - avg, 3) if slg is not None and avg is not None else None,
@@ -789,12 +791,12 @@ def compute_batting_line(pitches):
 
     return {
         "PA": pa, "AB": ab, "H": base["H"], "1B": singles, "2B": doubles, "3B": triples, "HR": hr,
-        "BB": bb, "HBP": hbp, "K": k, "SF": sf,
+        "BB": bb, "IBB": base["IBB"], "HBP": hbp, "K": k, "SF": sf,
         "AVG": base["AVG"],
         "Total RV": round(sum(rv_values), 3) if rv_values else None,
         # Oct 2026 audit: was divided by PITCHES despite the label.
         "Avg RV/PA": round(sum(rv_values) / pa, 3) if rv_values and pa else None,
-        "pitch_count": len(pitches),
+        "pitch_count": sum(1 for p in pitches if getattr(p, "is_pitch", True) is not False),
         # Slash line & rate stats
         "OBP": base["OBP"], "SLG": base["SLG"], "OPS": base["OPS"], "ISO": base["ISO"],
         "wOBA": round(woba_num / woba_den, 3) if woba_den else None,
@@ -1086,7 +1088,11 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0, extra_unea
     batters_faced = len(pa_pitches)
     k = sum(1 for p in pa_pitches if p.ab_outcome in K_OUTCOMES)
     bb = sum(1 for p in pa_pitches if p.ab_outcome == "BB")
+    ibb = sum(1 for p in pa_pitches if p.ab_outcome == "IBB")   # Oct 2026: own stat, not in BB/BB9/FIP/SIERA
     hbp = sum(1 for p in pa_pitches if p.ab_outcome == "HBP")
+    # Oct 2026: clock violations / intentional walks are rows with
+    # is_pitch=False -- they count for the at-bat, never as pitches.
+    thrown = [p for p in pitches if getattr(p, "is_pitch", True) is not False]
     hits_allowed = sum(1 for p in pa_pitches if p.ab_outcome in HIT_OUTCOMES)
     hr_allowed = sum(1 for p in pa_pitches if p.ab_outcome == "HR")
     xbh_allowed = sum(1 for p in pa_pitches if p.ab_outcome in ("2B", "3B", "HR"))
@@ -1106,7 +1112,7 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0, extra_unea
     earned_runs_allowed = sum(p.earned_runs_on_play for p in pitches) + extra_earned_runs
     sac = sum(1 for p in pa_pitches if p.ab_outcome in ("Sac Bunt", "Sac Fly"))
     sf = sum(1 for p in pa_pitches if p.ab_outcome == "Sac Fly")
-    ab = batters_faced - bb - hbp - sac
+    ab = batters_faced - bb - ibb - hbp - sac
 
     # Oct 2026: Zone Execution % = landed in the called cell or within
     # strike_zone.HIT_SPOT_CUSHION_IN of it (was the old clamped 1-9 grid).
@@ -1115,8 +1121,8 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0, extra_unea
     exec_hits = sum(1 for f in exec_attempts if f)
     rv_values = [float(p.run_value) for p in pitches if p.run_value is not None]
 
-    strikes = sum(1 for p in pitches if p.pitch_outcome in STRIKE_OUTCOMES)
-    balls_thrown = sum(1 for p in pitches if p.pitch_outcome == "Ball")
+    strikes = sum(1 for p in thrown if p.pitch_outcome in STRIKE_OUTCOMES)
+    balls_thrown = sum(1 for p in thrown if p.pitch_outcome == "Ball")
     ip_display, ip_decimal = _innings_pitched(pa_pitches, extra_outs=extra_outs)
 
     # PA groups, needed for Early/Ahead/Leadoff/situational-count stats
@@ -1132,7 +1138,9 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0, extra_unea
     # put in play; a HBP or Ball on pitch 1 doesn't count). pa[0] is the
     # first pitch of that PA per _group_into_plate_appearances' own
     # ordering.
-    first_pitch_strikes = sum(1 for pa in completed_pas if pa[0].pitch_outcome in STRIKE_OUTCOMES)
+    first_thrown = [next((p for p in pa if getattr(p, "is_pitch", True) is not False), None) for pa in completed_pas]
+    first_thrown = [p for p in first_thrown if p is not None]   # an IBB with no pitch isn't a "first pitch"
+    first_pitch_strikes = sum(1 for p in first_thrown if p.pitch_outcome in STRIKE_OUTCOMES)
 
     early_pas = 0
     ahead_pas = 0
@@ -1163,19 +1171,19 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0, extra_unea
     woba_den = ab + bb + sf + hbp
 
     return {
-        "Batters Faced": batters_faced, "Pitches": len(pitches), "K": k, "BB": bb,
+        "Batters Faced": batters_faced, "Pitches": len(thrown), "K": k, "BB": bb, "IBB": ibb,
         "H Allowed": hits_allowed, "HR Allowed": hr_allowed, "Runs Allowed": runs_allowed,
         "Zone Execution %": round(100 * exec_hits / len(exec_attempts), 1) if exec_attempts else None,
         "Total RV Allowed": round(sum(rv_values), 3) if rv_values else None,
         "Avg RV Allowed/Pitch": round(sum(rv_values) / len(rv_values), 3) if rv_values else None,
         # New box-score-style stats, added to match Ryker's Game Stat Sheet:
         "IP": ip_display, "IP (decimal)": round(ip_decimal, 3),
-        "Strikes": strikes, "Strike %": _rate(strikes, len(pitches)),
-        "First Pitch Strikes": first_pitch_strikes, "First Pitch Strike %": _rate(first_pitch_strikes, len(completed_pas)),
-        "Balls": balls_thrown, "Ball %": _rate(balls_thrown, len(pitches)),
-        "Pitches/Inning": round(len(pitches) / ip_decimal, 1) if ip_decimal else None,
+        "Strikes": strikes, "Strike %": _rate(strikes, len(thrown)),
+        "First Pitch Strikes": first_pitch_strikes, "First Pitch Strike %": _rate(first_pitch_strikes, len(first_thrown)),
+        "Balls": balls_thrown, "Ball %": _rate(balls_thrown, len(thrown)),
+        "Pitches/Inning": round(len(thrown) / ip_decimal, 1) if ip_decimal else None,
         "AB": ab, "Hits": hits_allowed, "HBP": hbp, "XBH": xbh_allowed,
-        "WHIP": round((bb + hits_allowed) / ip_decimal, 2) if ip_decimal else None,
+        "WHIP": round((bb + ibb + hits_allowed) / ip_decimal, 2) if ip_decimal else None,   # official WHIP counts IBB
         # Oct 2026, Ryker: TBIP (SABR Tooth Tigers, "One simple pitching
         # statistic can predict runs allowed in college baseball") -- every
         # base handed out at the plate per inning: BB + HBP + 1B + 2x2B +
@@ -1427,6 +1435,7 @@ def _compute_a3p_attribution(pitches):
 
 
 def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0, early_pas=0, ahead_pas=0, bf_for_early=0):
+    pitches = [p for p in pitches if getattr(p, "is_pitch", True) is not False]  # Oct 2026: thrown pitches only
     n = len(pitches)
     strikes = [p for p in pitches if p.pitch_outcome in STRIKE_OUTCOMES]
     balls = [p for p in pitches if p.pitch_outcome == "Ball"]
