@@ -3319,9 +3319,9 @@ def game_tracking_server(input, output, session, app_state):
         finally:
             db.close()
 
-        step_mode = bool(input.step_mode()) if "step_mode" in input else False
-        if _can_edit() and status == "In Progress" and step_mode:
-            return _step_mode_body()
+        mode = input.step_mode() if "step_mode" in input else "full"
+        if _can_edit() and status == "In Progress" and mode in ("steps", "paper"):
+            return _step_mode_body(mode)
         if _can_edit() and status == "In Progress":
             # Static headers/dividers live here (not inside the individual
             # reactive blocks below) purely for visual grouping -- matches
@@ -3333,7 +3333,7 @@ def game_tracking_server(input, output, session, app_state):
             # page reads as consistent with everything else instead of a
             # denser, un-sectioned wall of widgets.
             return ui.div(
-                _mode_switch(False),
+                _mode_switch("full"),
                 ui.output_ui("live_game_dashboard"),
                 ui.output_ui("half_inning_review"),
                 ui.hr(),
@@ -3377,14 +3377,16 @@ def game_tracking_server(input, output, session, app_state):
         else:
             return ui.p("Live tracking status is only shown for edit-enabled roles today.", class_="text-muted")
 
-    def _mode_switch(on):
+    def _mode_switch(mode):
+        """Live step-by-step / Paper chart (after the fact) / Full form --
+        remembered per device (game_tracking_step_display.STEP_JS)."""
         sid = session.ns("step_mode")
         def b(label, val):
-            return ui.tags.button(label, type="button", class_="gbo-mode-seg" + (" sel" if on == val else ""),
-                                  onclick=f"gboSetStepMode('{sid}', {'true' if val else 'false'})")
-        return ui.div(b("Step-by-step", True), b("Full form", False), class_="gbo-mode-switch")
+            return ui.tags.button(label, type="button", class_="gbo-mode-seg" + (" sel" if mode == val else ""),
+                                  onclick=f"gboSetTrackMode('{sid}', '{val}')")
+        return ui.div(b("Live steps", "steps"), b("Paper chart", "paper"), b("Full form", "full"), class_="gbo-mode-switch")
 
-    def _step_mode_body():
+    def _step_mode_body(mode):
         """Oct 2026, phones/tablets: one step at a time (game_tracking_step_display).
         Who's Up stays on screen -- the pitch is saved with whoever is picked
         there, same as the full form."""
@@ -3396,7 +3398,9 @@ def game_tracking_server(input, output, session, app_state):
                 class_="gbo-drawer", ontoggle="if (window.jQuery) jQuery(this).find('.shiny-bound-output').trigger(this.open ? 'shown' : 'hidden');",
             )
         return ui.div(
-            _mode_switch(True),
+            _mode_switch(mode),
+            ui.p("Entering a game from the Coach Chart and Location Tracker: type each pitch's call, tap what happened, "
+                 "and write the result like on the chart (6-3, F7, 1B).", class_="text-muted small") if mode == "paper" else None,
             ui.output_ui("step_status"),
             ui.output_ui("half_inning_review"),
             ui.output_ui("forced_half_inning_end_panel"),

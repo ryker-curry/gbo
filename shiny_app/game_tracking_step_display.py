@@ -16,6 +16,14 @@ One screen at a time, big buttons, Back on every step:
           editable, then Save. A strikeout, walk or HBP comes straight
           here with the result already picked.
 
+Paper chart mode (same screens, for entering a game afterwards from the
+Coach Chart + Intended Location Tracker): the pitch screen is a 1-5 keypad
+for the tracker's 3-digit call (214 = level 2, FB, zone 4 -- sets location
+AND pitch type) with the pitcher's tracker row number shown, keyboard
+shortcuts on a computer, and a ball in play is the chart's shorthand
+(6-3, F7, 1B9...) read by parse_scoring() into AB outcome, batted ball type
+and a fielder-position landing spot the coach can move.
+
 Skipped details show up in the half-inning review and can be filled in
 from the Pitch Log later, same as the full form.
 
@@ -36,6 +44,7 @@ from shiny import ui, render, reactive
 from database import get_session
 from models import Player, PitchType
 from game_stats import get_pitching_pitches
+from analytics.pitch_card import PITCH_DIGIT
 
 STEP_ORDER_IN_PLAY = ["pitch", "cq", "bbt", "spray", "ab", "result"]
 
@@ -54,6 +63,65 @@ IN_PLAY_AB = ["Groundout", "Flyout", "Lineout", "1B", "2B", "3B", "HR", "E", "FC
 NON_IN_PLAY_AB = ["K", "K (Looking)", "BB", "HBP", "No Result"]
 ZONE_LABELS = {1: "chalk", 2: "in", 3: "mid", 4: "away", 5: "chalk"}
 
+# Paper chart mode (entering a game after the fact from the Coach Chart +
+# Intended Location Tracker). Ryker's pitch digits (analytics.pitch_card):
+# 1 FB, 2 CB, 3 SL, 4 CH, 5 CT -- used when a pitcher's arsenal has nothing
+# with that digit.
+DEFAULT_DIGIT_TYPE = {1: "4-Seam Fastball", 2: "Curveball", 3: "Slider", 4: "Changeup", 5: "Cutter"}
+# Where a fielder stands, in field_location's feet (x right of the CF line,
+# y toward the outfield). "F7" drops the landing spot here -- position-level,
+# not exact; the coach can move it on the field screen.
+FIELDER_SPOT = {1: (0, 55), 2: (0, 8), 3: (68, 100), 4: (38, 140), 5: (-68, 100),
+                6: (-38, 140), 7: (-160, 250), 8: (0, 300), 9: (160, 250)}
+QUICK_RESULTS = ["6-3", "4-3", "5-3", "F8", "F7", "F9", "L6", "P4", "1B", "2B", "3B", "HR", "E6", "FC6", "SF8", "6-4-3"]
+
+
+def parse_scoring(text):
+    """Scorebook shorthand -> {"ab", "bbt", "fielder"} (bbt/fielder may be None),
+    or raises ValueError with a message to show. Covers what the Coach Chart
+    uses: K, KL, BB, IBB, HBP, 1B/2B/3B/HR (+ optional fielder: 1B7),
+    E5, FC6, SF8, SH/SAC (+fielder), 6-3, 3U, 6-4-3 / DP6-4-3, F7, P4, L6, FF2, G6."""
+    import re
+    t = re.sub(r"[\s.]", "", (text or "").upper()).replace("ꓘ", "KL")
+    if not t:
+        raise ValueError("Type the result, e.g. 6-3, F7, 1B.")
+    simple = {"K": "K", "KS": "K", "KL": "K (Looking)", "KC": "K (Looking)", "BB": "BB", "W": "BB",
+              "IBB": "IBB", "IW": "IBB", "HBP": "HBP", "HP": "HBP", "NR": "No Result"}
+    if t in simple:
+        return {"ab": simple[t], "bbt": None, "fielder": None}
+    m = re.fullmatch(r"(1B|2B|3B|HR)([1-9])?", t)
+    if m:
+        f = int(m.group(2)) if m.group(2) else None
+        return {"ab": m.group(1), "bbt": "Fly Ball" if m.group(1) == "HR" else None, "fielder": f}
+    m = re.fullmatch(r"E([1-9])", t)
+    if m:
+        f = int(m.group(1))
+        return {"ab": "E", "bbt": "Ground Ball" if f <= 6 else "Fly Ball", "fielder": f}
+    m = re.fullmatch(r"FC([1-9])?", t)
+    if m:
+        return {"ab": "FC", "bbt": "Ground Ball", "fielder": int(m.group(1)) if m.group(1) else None}
+    m = re.fullmatch(r"SF([1-9])?", t)
+    if m:
+        return {"ab": "Sac Fly", "bbt": "Fly Ball", "fielder": int(m.group(1)) if m.group(1) else None}
+    m = re.fullmatch(r"(?:SH|SAC|SB?UNT)([1-9])?(?:-[1-9])*", t)
+    if m:
+        return {"ab": "Sac Bunt", "bbt": "Ground Ball", "fielder": int(m.group(1)) if m.group(1) else None}
+    m = re.fullmatch(r"(DP|GDP)?([1-9])(?:-[1-9]){2,}", t)
+    if m:
+        return {"ab": "Double Play", "bbt": "Ground Ball", "fielder": int(m.group(2))}
+    m = re.fullmatch(r"(?:DP|GDP)([1-9])(?:-[1-9])?U?", t)
+    if m:
+        return {"ab": "Double Play", "bbt": "Ground Ball", "fielder": int(m.group(1))}
+    m = re.fullmatch(r"G?([1-9])(?:-[1-9]|U)?|U([1-9])", t)
+    if m:
+        return {"ab": "Groundout", "bbt": "Ground Ball", "fielder": int(m.group(1) or m.group(2))}
+    m = re.fullmatch(r"(FF|F|P|L)([1-9])", t)
+    if m:
+        kind = {"F": ("Flyout", "Fly Ball"), "FF": ("Flyout", "Fly Ball"), "P": ("Flyout", "Pop Up"),
+                "L": ("Lineout", "Line Drive")}[m.group(1)]
+        return {"ab": kind[0], "bbt": kind[1], "fielder": int(m.group(2))}
+    raise ValueError(f"Couldn't read '{text}'. Try 6-3, F7, L6, P4, 1B, 2B9, E5, FC6, SF8, 6-4-3.")
+
 
 def _fresh():
     return {"step": "pitch", "hist": []}
@@ -67,6 +135,9 @@ def register_step_mode(input, output, session, d):
     ends_pa(state, outcome), suggest(ab, bases, outs)."""
     _wiz = reactive.value(_fresh())
     wiz_id = session.ns("wiz")
+
+    def _paper():
+        return ("step_mode" in input) and input.step_mode() == "paper"
 
     @reactive.effect
     def _reset_on_game_change():
@@ -195,6 +266,8 @@ def register_step_mode(input, output, session, d):
                 ui.div(*[_btn(c, {"a": "bbt", "v": c}) for c in BBT], class_="gbo-step-grid g2 big"),
                 _nav(skip="spray"), class_="gbo-step",
             )
+        if step == "score":
+            return _score_screen(w)
         if step == "spray":
             return _spray_screen(w)
         if step == "ab":
@@ -216,6 +289,8 @@ def register_step_mode(input, output, session, d):
         n_in_pa = (state.get("pa_pitch_number") or 1)
         key = f"{game.game_id}-{len(pitches)}"
         kids = [ui.div(f"Pitch {n_in_pa} of the at-bat", class_="gbo-step-sofar")]
+        if _paper():
+            return _paper_pitch_screen(db, game, state, pid, arsenal, pitch_types, show_call, key, n_in_pa)
         if show_call:
             rows = []
             for level in (4, 3, 2, 1):
@@ -245,6 +320,72 @@ def register_step_mode(input, output, session, d):
             ui.tags.script(f"gboPitchScreen('{wiz_id}', '{session.ns('step_pitch')}', '{key}');"),
         ]
         return ui.div(*kids, class_="gbo-step gbo-step-pitch", id=session.ns("step_pitch"))
+
+    def _paper_pitch_screen(db, game, state, pid, arsenal, pitch_types, show_call, key, n_in_pa):
+        """Paper chart: one keypad for the sheet's call. 3 digits = the
+        Location Tracker's Level-Pitch-Zone (214); 1 digit = pitch type only
+        (no tracker row, or their pitcher); 2 digits = Level-Zone with the
+        type picked below. Then tap what happened."""
+        digit_type = {}
+        for name in arsenal:
+            dg = PITCH_DIGIT.get(name)
+            if dg and dg not in digit_type:
+                digit_type[dg] = name
+        for dg, name in DEFAULT_DIGIT_TYPE.items():
+            digit_type.setdefault(dg, name)
+        head = []
+        if pid is not None:
+            p = db.query(Player).filter(Player.player_id == pid).first()
+            n = sum(1 for gp in get_pitching_pitches(db, pid, game_id=game.game_id) if gp.is_pitch is not False)
+            if p is not None:
+                head.append(ui.div(ui.span(f"{p.first_name} {p.last_name}", class_="gbo-trk-name"),
+                                   ui.span("Location Tracker row", class_="gbo-trk-lbl"),
+                                   ui.span(f"#{n + 1}", class_="gbo-trk-n"), class_="gbo-trk"))
+        head.append(ui.div(f"Pitch {n_in_pa} of the at-bat", class_="gbo-step-sofar"))
+        pad = [ui.tags.button(str(k), type="button", class_="gbo-sb gbo-key", **{"data-key": str(k)}) for k in range(1, 6)]
+        pad.append(ui.tags.button("⌫", type="button", class_="gbo-sb gbo-key gbo-key-del", **{"data-key": "del"}))
+        kids = head + [
+            ui.h6(ui.span("Call" if show_call else "Pitch"),
+                  ui.span("214 = level 2 · FB · zone 4   ·   one digit = pitch type only" if show_call
+                          else "one digit = pitch type (1 FB 2 CB 3 SL 4 CH 5 CT)", class_="gbo-step-hint"),
+                  class_="gbo-step-q"),
+            ui.div(ui.span("", class_="gbo-code-val"), ui.span("", class_="gbo-code-means"), class_="gbo-code"),
+            ui.div(*pad, class_="gbo-keypad"),
+            ui.tags.details(
+                ui.tags.summary("Pick the pitch type instead"),
+                ui.div(*[ui.tags.button(t, type="button", class_="gbo-sb gbo-pt", **{"data-pt": t})
+                         for t in arsenal + [pt.type_name for pt in pitch_types if pt.type_name not in arsenal]],
+                       class_="gbo-step-grid g3"),
+                class_="gbo-step-more-pt",
+            ),
+            ui.h6(ui.span("What happened"), ui.span("keyboard: 1-5 · B C S F X H", class_="gbo-step-hint"), class_="gbo-step-q"),
+            ui.div(*[ui.tags.button(label, type="button", class_=f"gbo-sb gbo-out gbo-out-{kind}", **{"data-out": val})
+                     for val, label, kind in OUTCOME_BUTTONS], class_="gbo-step-grid g3 big"),
+            ui.tags.script(f"gboPaperPitch('{wiz_id}', '{session.ns('step_pitch')}', '{key}', "
+                           f"{json.dumps({str(k): v for k, v in digit_type.items()})}, {json.dumps(bool(show_call))});"),
+        ]
+        return ui.div(*kids, class_="gbo-step gbo-step-pitch", id=session.ns("step_pitch"))
+
+    def _score_screen(w):
+        """Paper chart, ball in play: the result as written on the Coach
+        Chart (6-3, F7, 1B...) plus optional contact quality."""
+        return ui.div(
+            _so_far(w),
+            ui.h6(ui.span("Result"), ui.span("as on the chart: 6-3, F7, L6, P4, 1B, 2B9, E5, FC6, SF8", class_="gbo-step-hint"),
+                  class_="gbo-step-q"),
+            ui.tags.input(type="text", class_="form-control gbo-score-in", placeholder="e.g. 6-3",
+                          autocomplete="off", autocapitalize="characters", spellcheck="false",
+                          value=w.get("score_text") or ""),
+            ui.div(*[ui.tags.button(r, type="button", class_="gbo-sb gbo-qr", **{"data-qr": r}) for r in QUICK_RESULTS],
+                   class_="gbo-step-grid g4"),
+            ui.h6(ui.span("Contact quality"), ui.span("optional", class_="gbo-step-hint"), class_="gbo-step-q"),
+            ui.div(*[ui.tags.button(c, type="button", class_="gbo-sb gbo-cq", **{"data-cq": c}) for c in IN_PLAY_CQ],
+                   class_="gbo-step-grid g3"),
+            ui.div(ui.tags.button("Next ›", type="button", class_="gbo-sb gbo-sb-primary gbo-score-next"), class_="gbo-step-grid g1"),
+            _nav(),
+            ui.tags.script(f"gboScoreScreen('{wiz_id}', '{session.ns('step_score')}', {json.dumps(w.get('cq'))});"),
+            class_="gbo-step", id=session.ns("step_score"),
+        )
 
     def _spray_screen(w):
         x, y = w.get("x"), w.get("y")
@@ -329,7 +470,10 @@ def register_step_mode(input, output, session, d):
             _wiz.set(w)
             return
         if a == "skip":
-            _go(ev.get("to"))
+            if ev.get("to") == "ab" and w.get("ab"):
+                _go("result", x=None, y=None)   # paper chart: result already known
+            else:
+                _go(ev.get("to"))
             return
         if a == "pitch":
             outcome = ev.get("outcome")
@@ -350,7 +494,7 @@ def register_step_mode(input, output, session, d):
                     _wiz.set(_fresh())
                 return
             if outcome == "In Play":
-                _go("cq", **vals)
+                _go("score" if _paper() else "cq", **vals)
                 return
             ab = "BB" if nb >= 4 else ("HBP" if outcome == "HBP" else ("K (Looking)" if outcome == "Called Strike" else "K"))
             _go("result", ab=ab, **vals)
@@ -363,7 +507,20 @@ def register_step_mode(input, output, session, d):
             if ev.get("x") is None or ev.get("y") is None:
                 ui.notification_show("Tap the field first, or Skip.", type="warning", duration=4)
                 return
-            _go("ab", x=float(ev["x"]), y=float(ev["y"]))
+            _go("result" if w.get("ab") else "ab", x=float(ev["x"]), y=float(ev["y"]))
+        elif a == "score":
+            try:
+                r = parse_scoring(ev.get("text"))
+            except ValueError as e:
+                ui.notification_show(str(e), type="warning", duration=6)
+                return
+            if r["ab"] in ("K", "K (Looking)", "BB", "IBB", "HBP"):
+                ui.notification_show(f"{r['ab']} isn't a ball in play -- go Back and pick what the pitch was.",
+                                     type="warning", duration=6)
+                return
+            spot = FIELDER_SPOT.get(r["fielder"])
+            _go("spray", ab=r["ab"], bbt=r["bbt"], cq=ev.get("cq") or None, score_text=ev.get("text"),
+                x=spot[0] if spot else None, y=spot[1] if spot else None)
         elif a == "ab":
             _go("result", ab=ev.get("v"))
         elif a == "save":
@@ -420,6 +577,76 @@ STEP_JS = r"""
         gboWiz(id, {a: 'pitch', code: sel.code, ptype: sel.pt, outcome: b.dataset.out});
       }
     });
+    paint();
+  };
+  window.gboPaperPitch = function(id, rootId, key, digitType, showCall){
+    var root = document.getElementById(rootId);
+    if (!root || root.dataset.bound) return;
+    root.dataset.bound = '1';
+    if (sel.key !== key) sel = {key: key, digits: '', pt: null};
+    sel.digits = sel.digits || '';
+    var val = root.querySelector('.gbo-code-val'), means = root.querySelector('.gbo-code-means');
+    function decode(){
+      var dg = sel.digits, out = {code: null, ptype: sel.pt, ok: true, text: ''};
+      if (dg.length === 1) { out.ptype = digitType[dg]; out.text = out.ptype; }
+      else if (dg.length === 2) { out.code = dg; out.text = 'level ' + dg[0] + ' · zone ' + dg[1] + (sel.pt ? ' · ' + sel.pt : ' · pick the type below'); }
+      else if (dg.length === 3) { out.code = dg[0] + dg[2]; out.ptype = digitType[dg[1]]; out.text = 'level ' + dg[0] + ' · ' + out.ptype + ' · zone ' + dg[2]; }
+      if (!showCall && dg.length > 1) { out.ok = false; out.text = 'one digit only -- no location for this pitcher'; }
+      return out;
+    }
+    function paint(){
+      val.textContent = sel.digits || '—';
+      means.textContent = decode().text;
+      root.querySelectorAll('.gbo-pt').forEach(function(b){ b.classList.toggle('sel', b.dataset.pt === sel.pt); });
+    }
+    root.addEventListener('click', function(e){
+      var b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.key) {
+        if (b.dataset.key === 'del') sel.digits = sel.digits.slice(0, -1);
+        else if (sel.digits.length < 3) sel.digits += b.dataset.key;
+        paint();
+      } else if (b.dataset.pt) { sel.pt = sel.pt === b.dataset.pt ? null : b.dataset.pt; paint(); }
+      else if (b.dataset.out) {
+        var dc = decode();
+        if (!dc.ok) return;
+        if (root.dataset.busy) return;
+        root.dataset.busy = '1'; setTimeout(function(){ delete root.dataset.busy; }, 1200);
+        gboWiz(id, {a: 'pitch', code: dc.code, ptype: dc.ptype, outcome: b.dataset.out});
+      }
+    });
+    paint();
+    // Keyboard (entering from the paper on a computer): 1-5 and Backspace for
+    // the call; B ball, C called, S swinging, F foul, X in play, H HBP.
+    if (!window.__gboPaperKeys) {
+      window.__gboPaperKeys = true;
+      var OUT = {b: 'Ball', c: 'Called Strike', s: 'Swing and Miss', f: 'Foul', x: 'In Play', h: 'HBP'};
+      document.addEventListener('keydown', function(e){
+        var r = document.getElementById(rootId);
+        if (!r || !r.isConnected || e.metaKey || e.ctrlKey || e.altKey) return;
+        var t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+        var k = e.key.toLowerCase(), btn = null;
+        if (/^[1-5]$/.test(k)) btn = r.querySelector('.gbo-key[data-key="' + k + '"]');
+        else if (k === 'backspace') btn = r.querySelector('.gbo-key-del');
+        else if (OUT[k]) btn = r.querySelector('.gbo-out[data-out="' + OUT[k] + '"]');
+        if (btn) { e.preventDefault(); btn.click(); }
+      });
+    }
+  };
+  window.gboScoreScreen = function(id, rootId, cq0){
+    var root = document.getElementById(rootId);
+    if (!root || root.dataset.bound) return;
+    root.dataset.bound = '1';
+    var inp = root.querySelector('.gbo-score-in'), cq = cq0;
+    function paint(){ root.querySelectorAll('.gbo-cq').forEach(function(b){ b.classList.toggle('sel', b.dataset.cq === cq); }); }
+    function go(){ gboWiz(id, {a: 'score', text: inp.value, cq: cq}); }
+    root.addEventListener('click', function(e){
+      var b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.qr) { inp.value = b.dataset.qr; }
+      else if (b.dataset.cq) { cq = cq === b.dataset.cq ? null : b.dataset.cq; paint(); }
+      else if (b.classList.contains('gbo-score-next')) { go(); }
+    });
+    inp.addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); go(); } });
     paint();
   };
   window.gboSprayScreen = function(id, rootId, x0, y0){
@@ -490,17 +717,18 @@ STEP_JS = r"""
     }, 30);
   };
   // Phone/tablet: step mode by default; the switch on Live Tracking remembers a choice.
+  // Mode: 'steps' (live), 'paper' (after the fact from the paper charts) or 'full'.
   window.gboStepModeInit = function(id){
-    var pref = null;
-    try { pref = localStorage.getItem('gboStepMode'); } catch (e) {}
+    var pref = null, old = null;
+    try { pref = localStorage.getItem('gboTrackMode'); old = localStorage.getItem('gboStepMode'); } catch (e) {}
     var touch = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || window.innerWidth < 900;
-    var on = pref === null ? touch : pref === '1';
-    function send(){ if (window.Shiny && Shiny.setInputValue) Shiny.setInputValue(id, on); else setTimeout(send, 100); }
+    var mode = pref || (old === '1' ? 'steps' : old === '0' ? 'full' : (touch ? 'steps' : 'full'));
+    function send(){ if (window.Shiny && Shiny.setInputValue) Shiny.setInputValue(id, mode); else setTimeout(send, 100); }
     send();
   };
-  window.gboSetStepMode = function(id, on){
-    try { localStorage.setItem('gboStepMode', on ? '1' : '0'); } catch (e) {}
-    if (window.Shiny) Shiny.setInputValue(id, on);
+  window.gboSetTrackMode = function(id, mode){
+    try { localStorage.setItem('gboTrackMode', mode); } catch (e) {}
+    if (window.Shiny) Shiny.setInputValue(id, mode);
   };
 })();
 """
