@@ -991,6 +991,20 @@ body { max-width: 100%; }
 .gbo-drawer-body { padding: 0 12px 12px; }
 .gbo-step-extras { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
 .gbo-step-extras .btn { min-height: 40px; }
+.gbo-step-grid.g4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.gbo-trk { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.gbo-trk-name { font-weight: 700; }
+.gbo-trk-lbl { font-size: .72rem; color: var(--gbo-text-muted); margin-left: auto; }
+.gbo-trk-n { font-family: var(--gbo-mono); font-weight: 700; font-size: 1.4rem; color: var(--gbo-gold-text); }
+.gbo-code { display: flex; align-items: baseline; gap: 12px; padding: 8px 12px; border: 1px solid var(--gbo-border-strong, #3A3A3E);
+  border-radius: 10px; background: var(--gbo-bg, #0B0B0C); margin-bottom: 8px; min-height: 52px; }
+.gbo-code-val { font-family: var(--gbo-mono); font-size: 1.8rem; font-weight: 700; letter-spacing: .12em; min-width: 72px; }
+.gbo-code-means { font-size: .8rem; color: var(--gbo-text-muted); }
+.gbo-keypad { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+.gbo-key { min-height: 58px; font-family: var(--gbo-mono); font-size: 1.4rem; }
+.gbo-key-del { font-family: inherit; color: var(--gbo-text-muted); }
+.gbo-score-in { font-family: var(--gbo-mono); font-size: 1.4rem; font-weight: 700; text-transform: uppercase; margin-bottom: 8px; min-height: 52px; }
+.gbo-qr { min-height: 42px; font-family: var(--gbo-mono); }
 """.replace("{FONT_STACK}", FONT_STACK).replace("{DISPLAY_STACK}", DISPLAY_STACK).replace("{MONO_STACK}", MONO_STACK)
 
 
