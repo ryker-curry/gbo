@@ -350,6 +350,7 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-mode-toggle { display: inline-flex; }
 .gbo-mode-toggle .bslib-input-dark-mode, .gbo-mode-toggle bslib-input-dark-mode { --text-1: var(--gbo-text-2); }
 .gbo-menu-btn { display: none; }
+.gbo-side-backdrop { display: none; }
 @media (max-width: 1200px) {
   .gbo-app { grid-template-columns: 64px 1fr; }
   .gbo-brand-title, .gbo-brand-sub, .gbo-side-group, .gbo-side-link span, .gbo-side-me > div { display: none; }
@@ -358,8 +359,19 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 }
 @media (max-width: 768px) {
   .gbo-app { grid-template-columns: 1fr; }
-  .gbo-side { display: none; position: fixed; z-index: 50; width: 240px; }
+  /* Phone portrait: the sidebar is a slide-over menu. Pinned to the screen
+     edges (iOS Safari mis-places taps on a fixed panel left at its "auto"
+     spot), above everything, scrolls on its own, backdrop closes it. */
+  .gbo-side { display: none; position: fixed; top: 0; left: 0; bottom: 0; height: auto; width: min(280px, 85vw);
+              z-index: 1050; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+              padding-bottom: calc(14px + env(safe-area-inset-bottom)); box-shadow: 0 0 24px rgba(0,0,0,.45); }
   .gbo-side.open { display: flex; }
+  .gbo-side-backdrop { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 1040; background: rgba(0,0,0,.45); }
+  body.gbo-menu-open .gbo-side-backdrop { display: block; }
+  body.gbo-menu-open { overflow: hidden; }
+  body.gbo-menu-open .gbo-install { display: none; }
+  .gbo-side-link, .gbo-menu-btn, .gbo-side-backdrop { touch-action: manipulation; -webkit-tap-highlight-color: transparent; cursor: pointer; }
+  .gbo-side.open .gbo-side-link { padding: 11px 12px; font-size: .95rem; }
   .gbo-side.open .gbo-brand-title, .gbo-side.open .gbo-brand-sub, .gbo-side.open .gbo-side-group, .gbo-side.open .gbo-side-link span, .gbo-side.open .gbo-side-me > div { display: block; }
   .gbo-side.open .gbo-side-link { justify-content: flex-start; }
   .gbo-menu-btn { display: inline-flex; }
