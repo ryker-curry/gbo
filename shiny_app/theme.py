@@ -327,6 +327,16 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-key-flash { box-shadow: 0 0 0 3px var(--gbo-gold-text) !important; transition: box-shadow .1s; }
 .gbo-hi-review { border: 1px solid var(--gbo-status-watch); border-radius: 8px; padding: 10px 14px; margin: 12px 0; background: var(--gbo-bg-raised); }
 .gbo-hi-review ul { padding-left: 18px; margin-top: 6px; }
+/* Oct 2026: installable app -- install tip, and room for the notch / home bar when opened from the home screen */
+.gbo-install { position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 2000; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--gbo-bg-raised, #1D1D20); color: var(--gbo-text, #fff); border: 1px solid var(--gbo-border-strong, #3A3A3E); box-shadow: 0 6px 24px rgba(0,0,0,.45); font-size: .85rem; }
+.gbo-install img { width: 40px; height: 40px; border-radius: 9px; flex: none; }
+.gbo-install-text { flex: 1; line-height: 1.3; }
+.gbo-install-go { background: var(--gbo-crimson, #BF1E2D); color: #fff; border: 0; border-radius: 8px; padding: .4rem .8rem; font-weight: 700; }
+.gbo-install-x { background: none; border: 0; color: inherit; font-size: 1.4rem; line-height: 1; padding: 0 4px; opacity: .7; }
+.gbo-share-ic { display: inline-block; border: 1px solid currentColor; border-radius: 3px; padding: 0 3px; font-size: .75rem; }
+.gbo-standalone .gbo-top { padding-top: env(safe-area-inset-top); height: calc(56px + env(safe-area-inset-top)); }
+.gbo-standalone .gbo-side { padding-top: calc(14px + env(safe-area-inset-top)); }
+.gbo-standalone .gbo-content { padding-bottom: calc(48px + env(safe-area-inset-bottom)); }
 .gbo-side-me { margin-top: auto; border-top: 1px solid var(--gbo-border); padding: 12px 0 0 8px; display: flex; gap: 10px; align-items: center; }
 .gbo-avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--gbo-bg-raised); border: 1px solid var(--gbo-border-strong); display: grid; place-items: center; font-family: var(--gbo-display); font-weight: 700; color: var(--gbo-text-2); flex: none; object-fit: cover; }
 .gbo-side-me-name { font-weight: 600; font-size: .82rem; color: var(--gbo-text); line-height: 1.2; }
@@ -880,6 +890,60 @@ input, textarea, select { accent-color: var(--gbo-crimson); }
   .gbo-content .gbo-card { padding: 12px; }
 }
 """.replace("{FONT_STACK}", FONT_STACK).replace("{DISPLAY_STACK}", DISPLAY_STACK).replace("{MONO_STACK}", MONO_STACK)
+
+
+# Oct 2026, Ryker: installable web app (PWA) -- "Add to Home Screen" gives
+# GBO its own icon and opens it full-screen. Manifest + icons live in
+# assets/pwa/ (served at /assets/pwa/).
+PWA_INSTALL_JS = r"""
+(function(){
+  var standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
+  if (standalone) { document.documentElement.classList.add('gbo-standalone'); return; }
+  var ua = navigator.userAgent || '';
+  var ios = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  var mobile = ios || /Android/.test(ua);
+  function dismissed(){ try { return localStorage.getItem('gboInstallDismissed') === '1'; } catch (e) { return false; } }
+  function dismiss(){ try { localStorage.setItem('gboInstallDismissed', '1'); } catch (e) {} var b = document.getElementById('gbo-install'); if (b) b.remove(); }
+  function banner(html, onInstall){
+    if (dismissed() || document.getElementById('gbo-install')) return;
+    var d = document.createElement('div'); d.id = 'gbo-install'; d.className = 'gbo-install';
+    d.innerHTML = '<img src="/assets/pwa/icon-192.png" alt=""><div class="gbo-install-text">' + html + '</div>' +
+      (onInstall ? '<button type="button" class="gbo-install-go">Install</button>' : '') +
+      '<button type="button" class="gbo-install-x" aria-label="Dismiss">&times;</button>';
+    document.body.appendChild(d);
+    d.querySelector('.gbo-install-x').onclick = dismiss;
+    if (onInstall) d.querySelector('.gbo-install-go').onclick = onInstall;
+  }
+  window.addEventListener('beforeinstallprompt', function(e){
+    e.preventDefault();
+    var ev = e;
+    banner('<b>Get the GBO app</b><br>Install it on your home screen.', function(){
+      ev.prompt(); ev.userChoice.then(function(){ dismiss(); });
+    });
+  });
+  window.addEventListener('appinstalled', dismiss);
+  if (ios) {
+    var go = function(){ banner('<b>Get the GBO app</b><br>Tap <b>Share</b> <span class="gbo-share-ic">&#x2191;</span> then <b>Add to Home Screen</b>.'); };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go); else go();
+  }
+})();
+"""
+
+
+def pwa_head():
+    """<head> tags that make GBO installable on phones (Oct 2026)."""
+    return ui.TagList(
+        ui.tags.link(rel="manifest", href="/assets/pwa/manifest.json"),
+        ui.tags.link(rel="icon", type="image/png", sizes="32x32", href="/assets/pwa/favicon-32.png"),
+        ui.tags.link(rel="apple-touch-icon", href="/assets/pwa/apple-touch-icon.png"),
+        ui.tags.meta(name="theme-color", content="#0A0A0B"),
+        ui.tags.meta(name="mobile-web-app-capable", content="yes"),
+        ui.tags.meta(name="apple-mobile-web-app-capable", content="yes"),
+        ui.tags.meta(name="apple-mobile-web-app-title", content="GBO"),
+        ui.tags.meta(name="apple-mobile-web-app-status-bar-style", content="black-translucent"),
+        ui.tags.meta(name="viewport", content="width=device-width, initial-scale=1, viewport-fit=cover"),
+        ui.tags.script(PWA_INSTALL_JS),
+    )
 
 
 def fonts_link():
