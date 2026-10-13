@@ -66,7 +66,7 @@ def test_read_only(dbs):
 
 
 def test_login_check(monkeypatch):
-    assert scout_mode.matches("Scout@GBO.app ", "Password")
-    assert not scout_mode.matches("scout@gbo.app", "password")
+    assert scout_mode.matches("Guest@GBO.app ", "Password")
+    assert not scout_mode.matches("guest@gbo.app", "password")
     monkeypatch.setenv("GBO_SCOUT_PASSWORD", "off")
-    assert not scout_mode.matches("scout@gbo.app", "off")
+    assert not scout_mode.matches("guest@gbo.app", "off")
