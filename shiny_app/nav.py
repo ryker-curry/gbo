@@ -219,6 +219,17 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             my_dev_pages.append(NavPage("hitting_leaderboard", "Hitting Leaderboard", "trophy"))
         sections.append(NavSection("My Development", my_dev_pages))
 
+    # Oct 2026: the shared Scout login only sees scout_mode.SCOUT_PAGES.
+    try:
+        import scout_mode
+        scout = scout_mode.is_scout()
+    except ImportError:
+        scout = False
+    if scout:
+        keep = set(scout_mode.SCOUT_PAGES)
+        sections = [NavSection(s.title, [p for p in s.pages if p.key in keep]) for s in sections]
+        sections = [s for s in sections if s.pages]
+
     return sections
 
 
@@ -272,4 +283,10 @@ MORE_TOOLS = "More tools"
 def simple_sidebar_groups(role_name):
     """Core (group, keys) list for a role, or None = full sidebar
     (Administrator, Player, unknown roles)."""
+    try:
+        import scout_mode
+        if scout_mode.is_scout():
+            return None   # Scouts get their short list in full, no 'More tools'
+    except ImportError:
+        pass
     return SIMPLE_SIDEBAR.get(role_name)
