@@ -847,7 +847,15 @@ def pitcher_game_report_server(input, output, session, app_state):
                 _goal_tile("Secondary Strike %", staff["secondary_strike_pct"], SECONDARY_STRIKE_GOAL_PCT),
                 class_="gbo-kpi-row",
             )
+            # Oct 2026 ("Get Ahead, Then Miss Bats"): what winning / losing
+            # the first pitch turned into this game.
+            from analytics import team_report as _tr, pitch_insights as _pins
+            _ga = _pins.get_ahead(_tr.pitching_pitches(db, [selected_game_id]))
+            _ga_k = (f"{_ga['ahead']['k']:.0f}% vs {_ga['behind']['k']:.0f}%"
+                     if _ga["ahead"]["k"] is not None and _ga["behind"]["k"] is not None else "—")
             plain_tiles = ui.div(
+                ui_helpers.kpi_tile("K% after 0-1 vs 1-0", _ga_k,
+                                    delta=f"{_ga['ahead']['pa']} PA ahead · {_ga['behind']['pa']} PA behind"),
                 ui_helpers.kpi_tile("AB ≤ 4 Pitches %", _fmt_pct(staff["ab4_pct"])),
                 ui_helpers.kpi_tile("Leadoff Out %", _fmt_pct(staff["leadoff_out_pct"])),
                 ui_helpers.kpi_tile(

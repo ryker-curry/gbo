@@ -275,6 +275,7 @@ def pitcher_profile_ui():
         ui.output_ui("pp_fastball_shape_section"),
         ui.output_ui("pp_pitch_type_check_section"),
         ui.output_ui("pp_arsenal_plan_section"),
+        ui.output_ui("pp_insights_section"),
         ui_helpers.page_footer(),
     )
 
@@ -553,10 +554,12 @@ def pitcher_profile_server(input, output, session, app_state):
             view_choices = {
                 "Summary": {"overview": "Overview", "trends": "Trends"},
                 "Stuff & Shape": {"metrics": "Metrics (Physical Profile)", "arsenal": "Arsenal",
-                                  "tunneling": "Tunneling+", "arsenal_plan": "Arsenal Plan"},
+                                  "tunneling": "Tunneling+", "arsenal_plan": "Arsenal Plan",
+                                  "plane": "Plane & Preference", "seam_shift": "Seam Shift"},
                 "Command": {"command": "Command & Execution", "zone": "Zone"},
                 "Usage & Results": {"results": "Results", "count_leverage": "Count Leverage",
-                                    "sequencing": "Sequencing"},
+                                    "sequencing": "Sequencing", "get_ahead": "Get Ahead, Miss Bats",
+                                    "usage_split": "Usage Split"},
             }
             # Oct 2026, Ryker: "i don't want guys to see it" -- the
             # label checks are staff-only data-cleanup tools.
@@ -1735,7 +1738,136 @@ def pitcher_profile_server(input, output, session, app_state):
             ]),
             class_="gbo-seq-details",
         )
-        return ui.div(s1, s2, s3, detail)
+        # 4. Outs per extra-base hit (Driveline, Oct 2026)
+        from analytics import pitch_insights as pins
+        import pitch_insights_display as pid_html
+        s4 = ui.HTML(pid_html.outs_xbh_html(
+            pins.outs_per_xbh(mine), "Outs per extra-base hit",
+            "How many outs each pitch got for every double, triple or homer it gave up (Driveline's 2026 MLB "
+            "table: splitter 11.8, changeup 11.2, sweeper/curve 9.9, sinker 9.6, slider 9.1, 4-seam 8.0, cutter 7.5). "
+            "Outs = strikeouts plus outs made on balls in play on the last pitch of the at-bat."
+            + (f" Only pitches to {who} hitters." if who else "")))
+        s5 = ui.tags.details(
+            ui.tags.summary("Our staff: outs per XBH by pitch"),
+            ui.HTML(pid_html.outs_xbh_html(pins.outs_per_xbh(team), "Staff, same date range", "Every pitcher on staff.")),
+            class_="gbo-seq-details",
+        )
+        return ui.div(s1, s2, s3, s4, s5, detail)
+
+    # -------------------------------------------------------------------
+    # Oct 2026 reading-list views (analytics/pitch_insights.py,
+    # pitch_insights_display.py): Plane & Preference, Seam Shift,
+    # Get Ahead / Miss Bats, Usage Split.
+    # -------------------------------------------------------------------
+    _INSIGHT_VIEWS = ("plane", "seam_shift", "get_ahead", "usage_split")
+
+    @render.ui
+    def pp_insights_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        view = input.pp_view()
+        if view not in _INSIGHT_VIEWS:
+            return None
+        extra = None
+        if view == "usage_split":
+            f = _current_filters()
+            db = get_session()
+            try:
+                pid = _current_player_id(db)
+                dates = sorted({p.game.game_date for p in (profile_queries.get_pitcher_profile_pitches(
+                    db, pid, date_from=f["date_from"], date_to=f["date_to"], game_scope=f["game_scope"]) or [])
+                    if p.game is not None and p.game.game_date is not None}) if pid is not None else []
+            finally:
+                db.close()
+            if len(dates) < 2:
+                return ui_helpers.empty_state("Usage Split needs games on at least two dates in this range.")
+            mid = dates[len(dates) // 2]
+            extra = ui.input_date("pp_split_at", "Split at (first day of the 'after' period)", value=mid,
+                                  min=dates[0], max=dates[-1], width="260px")
+        return ui.div(extra, ui.output_ui("pp_insights_body"))
+
+    @render.ui
+    def pp_insights_body():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        view = input.pp_view()
+        if view not in _INSIGHT_VIEWS:
+            return None
+        import pitch_insights_display as pid_html
+        from analytics import pitch_insights as pins
+        from game_stats import _pitcher_of
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            player = db.query(Player).filter(Player.player_id == pid).first() if pid is not None else None
+            if player is None:
+                return None
+            throws = player.throws
+            if view in ("plane", "seam_shift"):
+                raps = profile_queries.get_pitcher_rapsodo_pitches(
+                    db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+                    game_scope=f["game_scope"], game_id=f["game_id"]) or []
+                if view == "plane":
+                    arm, _n = average_estimated_arm_angle(raps, player)
+                    return ui.HTML(pid_html.plane_html(pins.plane(raps, throws, arm)))
+                q = db.query(RapsodoPitch).options(joinedload(RapsodoPitch.pitch_type))
+                if f["date_from"] is not None:
+                    q = q.filter(RapsodoPitch.pitch_date >= f["date_from"])
+                if f["date_to"] is not None:
+                    q = q.filter(RapsodoPitch.pitch_date <= f["date_to"])
+                staff_raps = {}
+                for r in q.all():
+                    staff_raps.setdefault(r.player_id, []).append(r)
+                staff_raps[pid] = raps
+                throws_by = {p.player_id: p.throws for p in db.query(Player).filter(Player.player_id.in_(list(staff_raps))).all()}
+                gids = [r.game_pitch_id for rs in staff_raps.values() for r in rs if r.game_pitch_id is not None]
+                game_by = {}
+                for i in range(0, len(gids), 500):
+                    for g in db.query(GamePitch).filter(GamePitch.game_pitch_id.in_(gids[i:i + 500])).all():
+                        game_by[g.game_pitch_id] = g
+                names = {p.player_id: f"{p.first_name} {p.last_name}" for p in
+                         db.query(Player).filter(Player.player_id.in_(list(staff_raps))).all()}
+                staff = pins.seam_shift_staff(staff_raps, throws_by, game_by)
+                return ui.HTML(pid_html.seam_shift_html(pins.seam_shift_by_type(raps, throws), staff,
+                                                        lambda x: names.get(x, "?"), pid))
+            mine = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+                game_scope=f["game_scope"], game_id=f["game_id"]) or []
+            if view == "get_ahead":
+                team = trends.team_pitches_in_range(db, f["date_from"], f["date_to"], pitching=True)
+                loc = sequencing.loc_map(profile_queries.rapsodo_by_game_pitch_id(
+                    db, [p.game_pitch_id for p in list(mine) + list(team)]))
+                by = {}
+                for p in team:
+                    who = _pitcher_of(p)
+                    if who is not None:
+                        by.setdefault(who, []).append(p)
+                by[pid] = list(mine)
+                staff = pins.get_ahead_staff(by, loc)
+                if not mine:
+                    return ui_helpers.empty_state("No charted game pitches in this range yet.")
+                return ui.HTML(pid_html.get_ahead_html(pins.get_ahead(mine, loc), staff, pid))
+            # usage split
+            req("pp_split_at" in input)
+            cut = input.pp_split_at()
+            if cut is None:
+                return None
+            a = [p for p in mine if p.game is not None and p.game.game_date < cut]
+            b = [p for p in mine if p.game is not None and p.game.game_date >= cut]
+            raps = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], game_scope=f["game_scope"]) or []
+            ra = [r for r in raps if r.pitch_date is not None and r.pitch_date.date() < cut]
+            rb = [r for r in raps if r.pitch_date is not None and r.pitch_date.date() >= cut]
+            sp = pins.usage_split(a, b, ra, rb, throws)
+            return ui.HTML(pid_html.usage_split_html(sp, f"Before {cut:%b %d}", f"From {cut:%b %d}"))
+        finally:
+            db.close()
 
     @render.ui
     def pp_zone_hand_filter():

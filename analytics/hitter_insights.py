@@ -18,8 +18,11 @@ Zone tiers come from strike_zone.classify_attack_zone (Heart / Shadow /
 Chase / Waste -- the same Savant-style tiers Plate Discipline already
 shows). Decision rules:
   Heart  : swing = good swing,  take = taken strike (bad)
-  Shadow : borderline -- not graded either way, EXCEPT with 2 strikes,
-           where taking a borderline pitch is the bad outcome (protect)
+  Shadow : before 2 strikes, a TAKE is a good take (Oct 2026, from Hayden
+           Lewis / Driveline "Where hitters do damage, by count": edge
+           strikes aren't pitches you can drive -- "can you hit it vs.
+           should you hit it"); a swing there stays borderline. With 2
+           strikes, taking it is the bad outcome (protect)
   Chase / Waste : swing = chase (bad), take = good take
 Swing Decision % = good / graded.
 """
@@ -125,7 +128,7 @@ def decision_of(p):
     if tier == "Shadow":
         if two_k:
             return "Good swing" if swung else "Taken strike"
-        return "Borderline"
+        return "Borderline" if swung else "Good take"
     return "Chase" if swung else "Good take"
 
 
@@ -595,4 +598,79 @@ def count_tendencies(db, pitches, hand=None):
             out.append({"count": label, "family": fam, "where": where, "pct": pct, "k": k, "n": g["n"],
                         "group": len(cs) > 1,
                         "text": f"{', '.join(cs)}: {word} {where} ({pct}%, {k} of {g['n']}){share}"})
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Damage by count (Oct 2026, Hayden Lewis / Driveline "Where hitters do
+# damage, by count": even in hitter's counts the damage is over the middle,
+# not on the edges). Counts grouped -- our samples are far smaller than
+# Statcast's.
+# ---------------------------------------------------------------------------
+DAMAGE_COUNT_GROUPS = (
+    ("first", "First pitch (0-0)"),
+    ("hitter", "Hitter's counts (1-0, 2-0, 3-0, 2-1, 3-1)"),
+    ("even", "Even / behind (0-1, 1-1)"),
+    ("two", "Two strikes"),
+)
+ZONE_GROUPS = (("Heart", "Heart"), ("Shadow", "Edges"), ("Off", "Off the plate"))
+
+
+def count_group(b, s):
+    b, s = b or 0, s or 0
+    if s >= 2:
+        return "two"
+    if b == 0 and s == 0:
+        return "first"
+    if b > s:
+        return "hitter"
+    return "even"
+
+
+def count_damage(pitches):
+    """{(count group, zone group): {"n", "swing", "whiff", "ab", "slg", "hard"}}
+    for located pitches (actual_plate_x/z)."""
+    cells = defaultdict(lambda: {"n": 0, "sw": 0, "wh": 0, "ab": 0, "tb": 0, "bip": 0, "hard": 0})
+    for p in pitches:
+        loc = _loc(p)
+        if loc is None or p.pitch_outcome is None or p.pitch_outcome == "HBP":
+            continue
+        tier = classify_attack_zone(*loc)
+        z = tier if tier in ("Heart", "Shadow") else "Off"
+        c = cells[(count_group(p.balls_before, p.strikes_before), z)]
+        c["n"] += 1
+        if _swung(p):
+            c["sw"] += 1
+            c["wh"] += p.pitch_outcome in WHIFF_OUTCOMES
+        if p.pitch_outcome == "In Play":
+            c["bip"] += 1
+            c["hard"] += (p.contact_quality in HARD_CONTACT)
+        if p.ends_plate_appearance and p.ab_outcome and p.ab_outcome not in NON_AB:
+            c["ab"] += 1
+            c["tb"] += TB.get(p.ab_outcome, 0)
+    out = {}
+    for k, c in cells.items():
+        out[k] = {"n": c["n"], "swing": _pct(c["sw"], c["n"]), "whiff": _pct(c["wh"], c["sw"]),
+                  "ab": c["ab"], "slg": _rate(c["tb"], c["ab"]), "hard": _pct(c["hard"], c["bip"])}
+    return out
+
+
+def count_damage_lines(mine, team):
+    """Plain read: is he hunting the heart before 2 strikes and laying off edges?"""
+    out = []
+    def g(d, cg, z, k):
+        return (d.get((cg, z)) or {}).get(k)
+    for cg, lbl in (("hitter", "hitter's counts"), ("first", "the first pitch")):
+        hs, es = g(mine, cg, "Heart", "swing"), g(mine, cg, "Shadow", "swing")
+        ths, tes = g(team, cg, "Heart", "swing"), g(team, cg, "Shadow", "swing")
+        if hs is not None and es is not None and (g(mine, cg, "Heart", "n") or 0) >= 5:
+            out.append(f"In {lbl} he swings at {hs:.0f}% of heart pitches (team {ths or 0:.0f}%) and {es:.0f}% of "
+                       f"edge pitches (team {tes or 0:.0f}%).")
+            if es >= hs - 10 and es >= 45:
+                out.append(f"He's chasing edges in {lbl} -- those are strikes he can't drive. Hunt the middle.")
+            elif hs < 55:
+                out.append(f"He's letting heart pitches go in {lbl} -- that's the pitch to do damage on.")
+    hs, es = g(mine, "hitter", "Heart", "slg"), g(mine, "hitter", "Shadow", "slg")
+    if hs is not None and es is not None:
+        out.append(f"Ahead in the count he slugs {hs:.3f} on heart pitches vs {es:.3f} on the edges.".replace("0.", "."))
     return out

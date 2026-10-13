@@ -252,7 +252,8 @@ def hitter_profile_server(input, output, session, app_state):
                     # (_MERGED below), the rest keep their keys.
                     choices={
                         "Summary": {"overview": "Overview", "ranks": "Team Percentile Ranks", "trends": "Trends"},
-                        "Approach": {"discipline": "Discipline & Decisions", "situational": "Counts & Situations"},
+                        "Approach": {"discipline": "Discipline & Decisions", "situational": "Counts & Situations",
+                                     "count_damage": "Damage by Count"},
                         "Matchups": {"attack": "How Pitchers Attack Me", "pitch_type": "Results by Pitch Type",
                                      "pitch_shape": "Results by Pitch Shape"},
                         "Contact": {"batted_ball": "Batted Ball", "hot_zones": "Hot Zones",
@@ -926,7 +927,7 @@ def hitter_profile_server(input, output, session, app_state):
     # Ranks. One section output switches on the view; each chart is its
     # own render_plotly. Math in analytics/hitter_insights.py.
     # -------------------------------------------------------------------
-    _INSIGHT_VIEWS = ("swing_decisions", "attack", "pitch_type", "fp_two", "ranks", "trends")
+    _INSIGHT_VIEWS = ("swing_decisions", "attack", "pitch_type", "fp_two", "ranks", "trends", "count_damage")
     _HAND_CHOICES = {"all": "All pitchers", "R": "vs RHP", "L": "vs LHP"}
 
     # Oct 2026 reorganization: views folded into another view's page.
@@ -1016,7 +1017,8 @@ def hitter_profile_server(input, output, session, app_state):
             return ui.div(
                 ui.p(ui.strong("Swing Decisions"), "  ", ui_helpers.how_to_link("swing_decisions"), style="margin-bottom:0;"),
                 ui.p("Every located pitch graded on the decision, not the result. Heart of the plate: swing. Way off the "
-                     "plate: take. The edges are your call -- except with two strikes, when you protect. "
+                     "plate: take. The edges: taking one before two strikes is a good take (a strike you can't drive); "
+                     "with two strikes you protect. "
                      "Catcher's view (left = third-base side).", class_="text-muted small"),
                 hand_select("hp_sd_hand"),
                 ui.output_ui("hp_sd_summary"),
@@ -1063,6 +1065,17 @@ def hitter_profile_server(input, output, session, app_state):
                      "(changeup, splitter), split by pitcher hand. AVG/SLG count the at-bats that ended on that pitch.",
                      class_="text-muted small"),
                 ui.output_ui("hp_pt_body"),
+            )
+        if view == "count_damage":
+            return ui.div(
+                ui.p(ui.strong("Damage by Count"), style="margin-bottom:0;"),
+                ui.p("\"Can you hit it vs. should you hit it.\" Even in hitter's counts, damage happens over the middle "
+                     "of the plate, not on the corners (Driveline / Hayden Lewis). Each box: how often you swing, how "
+                     "often you miss, and your slugging on at-bats that ended on that pitch, with the team in gray "
+                     "underneath. Color = slugging (blue .200 → red .900). Counts are grouped because our samples "
+                     "are small. Locations come from Video Review.", class_="text-muted small"),
+                hand_select("hp_cd_hand"),
+                ui.output_ui("hp_cd_body"),
             )
         if view == "fp_two":
             return ui.div(
@@ -1120,7 +1133,7 @@ def hitter_profile_server(input, output, session, app_state):
                  "delta_positive": (sd["chase_pct"] or 0) < 25},
                 {"label": "Took a hittable strike", "value": _fmtp(sd["heart_take_pct"]),
                  "delta": f"{c['Taken strike']} taken", "delta_positive": (sd["heart_take_pct"] or 0) < 20},
-                {"label": "Borderline pitches", "value": str(c["Borderline"]), "delta": "your call -- not graded"},
+                {"label": "Borderline pitches", "value": str(c["Borderline"]), "delta": "edge swings before 2 strikes -- not graded"},
             ])
         finally:
             db.close()
@@ -1436,6 +1449,61 @@ def hitter_profile_server(input, output, session, app_state):
             db.close()
 
     # ---- 4. First pitch & two strikes ----
+    @render.ui
+    def hp_cd_body():
+        if not _insight_gate("count_damage"):
+            return None
+        db = get_session()
+        try:
+            _pid, pitches = _current_pitches(db)
+            if not pitches:
+                return ui.p("No pitches seen in this range.", class_="text-muted small")
+            f = _current_filters()
+            mine = hitter_insights.count_damage(_hand_pitches(db, pitches, "hp_cd_hand"))
+            team_p = trends.team_pitches_in_range(db, f["date_from"], f["date_to"], pitching=False)
+            team = hitter_insights.count_damage(_hand_pitches(db, team_p, "hp_cd_hand"))
+        finally:
+            db.close()
+        if not any(c["n"] for c in mine.values()):
+            return ui.p("No located pitches yet (locations come from Video Review).", class_="text-muted small")
+
+        def color(slg):
+            if slg is None:
+                return "transparent"
+            t = max(0.0, min(1.0, (slg - 0.2) / 0.7))
+            if t < 0.5:
+                a = (0.5 - t) * 2
+                return f"rgba(47,111,176,{0.15 + 0.6 * a:.2f})"
+            a = (t - 0.5) * 2
+            return f"rgba(191,30,45,{0.15 + 0.6 * a:.2f})"
+
+        head = "".join(f"<th>{z}</th>" for _k, z in hitter_insights.ZONE_GROUPS)
+        rows = []
+        for cg, label in hitter_insights.DAMAGE_COUNT_GROUPS:
+            tds = []
+            for z, _zl in hitter_insights.ZONE_GROUPS:
+                c = mine.get((cg, z)) or {"n": 0}
+                t = team.get((cg, z)) or {}
+                if not c["n"]:
+                    tds.append('<td class="gbo-cd-cell"><span class="text-muted">—</span></td>')
+                    continue
+                slg = _fmt3(c["slg"]) if c.get("ab") else "—"
+                tds.append(
+                    f'<td class="gbo-cd-cell" style="background:{color(c["slg"] if c.get("ab", 0) >= 3 else None)}" '
+                    f'title="{c["n"]} pitches, {c["ab"]} at-bats ended here">'
+                    f'<b>{slg}</b><span>SLG · {c["ab"]} AB</span>'
+                    f'<span>Swing {_fmtp(c["swing"])} · Whiff {_fmtp(c["whiff"])}</span>'
+                    f'<span class="gbo-cd-team">Team {_fmt3(t.get("slg"))} · swing {_fmtp(t.get("swing"))}</span></td>')
+            rows.append(f'<tr><th class="gbo-cd-row">{label}</th>{"".join(tds)}</tr>')
+        css = ("<style>.gbo-cd{border-collapse:separate;border-spacing:4px;width:100%}.gbo-cd th{font-size:.7rem;"
+               "color:var(--gbo-text-muted);text-transform:uppercase;letter-spacing:.04em}.gbo-cd th.gbo-cd-row{text-align:left;"
+               "text-transform:none;font-size:.8rem;color:var(--gbo-text);max-width:170px}.gbo-cd-cell{border:1px solid "
+               "var(--gbo-border);border-radius:8px;padding:8px;text-align:center;vertical-align:top}.gbo-cd-cell b{display:block;"
+               "font-size:1.15rem}.gbo-cd-cell span{display:block;font-size:.72rem}.gbo-cd-team{color:var(--gbo-text-muted)}</style>")
+        table = f'{css}<div class="gbo-sg-wrap"><table class="gbo-cd"><thead><tr><th></th>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+        lines = hitter_insights.count_damage_lines(mine, team)
+        return ui.div(ui.HTML(table), ui.tags.ul(*[ui.tags.li(x) for x in lines], class_="small") if lines else None)
+
     @render.ui
     def hp_fp_body():
         if not _insight_gate("fp_two"):
