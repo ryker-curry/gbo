@@ -50,7 +50,7 @@ SHEET_CSS = """
 .gbo-sheet .sw{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:middle}
 .gbo-sheet ul{margin:2px 0 0;padding-left:15px}
 .gbo-sheet li{margin-bottom:3px}
-.gbo-sheet .well{border-left:4px solid var(--good);padding-left:8px}
+.gbo-sheet .went{border-left:4px solid var(--good);padding-left:8px}  /* not ".well": Bootstrap's .well turned the text white on the white sheet */
 .gbo-sheet .work{border-left:4px solid var(--bad);padding-left:8px}
 .gbo-sheet .notes{border:1px solid var(--line);border-radius:4px;padding:5px 8px;min-height:60px;white-space:pre-wrap}
 .gbo-sheet .ruled{height:16px;border-bottom:1px solid var(--line)}
@@ -292,7 +292,7 @@ def render_sheet(r, notes=None, team_name="Pitt State Baseball"):
     <div style="flex:1"><h2>Where they went</h2>{location_svg(r["locations"]) if r["locations"] else '<div class="small">No pitch locations yet (added during video review).</div>'}</div>
   </div>
   <div class="row sec">
-    <div class="well"><h2 style="color:#1e8a4c;border-color:#1e8a4c">What went well</h2><ul>{"".join(f"<li>{_e(t)}</li>" for t in r["good"])}</ul></div>
+    <div class="went"><h2 style="color:#1e8a4c;border-color:#1e8a4c">What went well</h2><ul>{"".join(f"<li>{_e(t)}</li>" for t in r["good"])}</ul></div>
     <div class="work"><h2 style="color:#c0392b;border-color:#c0392b">What to work on</h2><ul>{"".join(f"<li>{_e(t)}</li>" for t in r["bad"])}</ul></div>
   </div>
   {_stuff_why(r)}
