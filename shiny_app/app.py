@@ -246,7 +246,7 @@ def server(input, output, session):
         app_state.auth_error.set(None)
         app_state.user_id.set(None)
         app_state.first_name.set("Guest")
-        app_state.last_name.set("Scout")
+        app_state.last_name.set("")
         # Runs as a read-only staff role (no edit rights); nav.py trims the
         # pages to scout_mode.SCOUT_PAGES.
         app_state.role_name.set("Sports Scientist")
@@ -666,7 +666,7 @@ def _guest_banner(app_state):
 
 def _scout_banner():
     return ui.div(
-        ui.div(ui.strong("Scout view"), " · real Pittsburg State data · player names hidden · read-only",
+        ui.div(ui.strong("Guest"), " · real Pittsburg State data · player names hidden · view only",
                class_="gbo-guest-text"),
         class_="gbo-guest-banner",
     )

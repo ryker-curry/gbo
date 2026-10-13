@@ -3,7 +3,8 @@ GBO -- Scout login (Oct 2026, Ryker: "create a user login for potential
 employers in mlb org ... able to be sent to anybody ... use our real data
 but black out the names").
 
-One shared login (SCOUT_EMAIL / GBO_SCOUT_PASSWORD, default "Password")
+One shared login (SCOUT_EMAIL = guest@gbo.app / GBO_SCOUT_PASSWORD,
+default "Password"; shown to the user as "Guest", never "Scout")
 that opens the REAL Pittsburg State data with three protections:
 
   1. Names hidden. A Scout session reads through its own SQLAlchemy engine
@@ -34,8 +35,8 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm.attributes import set_committed_value
 
-SCOUT_EMAIL = "scout@gbo.app"
-SCOUT_TITLE = "Scout (read-only)"
+SCOUT_EMAIL = "guest@gbo.app"
+SCOUT_TITLE = "Guest (view only)"
 
 # Page keys a Scout can open (nav.build_nav_sections keys).
 SCOUT_PAGES = [
@@ -76,9 +77,9 @@ def matches(email, pw):
 def _read_only_guard(conn, cursor, statement, parameters, context, executemany):
     head = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else ""
     if head not in ("SELECT", "WITH", "SHOW", "SET", "BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT", "RELEASE", "PRAGMA"):
-        raise PermissionError("Scout view is read-only.")
+        raise PermissionError("Guest login is view only (read-only).")
     if head == "WITH" and any(w in statement.upper() for w in (" INSERT ", " UPDATE ", " DELETE ")):
-        raise PermissionError("Scout view is read-only.")
+        raise PermissionError("Guest login is view only (read-only).")
 
 
 def use_engine(engine):
