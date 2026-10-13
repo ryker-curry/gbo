@@ -75,15 +75,26 @@ def _pas(pitches):
     return [pa for pa in out if pa[-1].ends_plate_appearance and pa[-1].ab_outcome != "No Result"]
 
 
-def _grid(pitches, hands, bat):
+def _xy(p, loc=None):
+    """(plate_x, plate_z): from `loc` ({game_pitch_id: (x, z)}, Rapsodo -- used
+    when the pitcher is ours) when given, else the video-review location."""
+    if loc is not None:
+        return loc.get(p.game_pitch_id)
+    if p.actual_plate_x is None or p.actual_plate_z is None:
+        return None
+    return float(p.actual_plate_x), float(p.actual_plate_z)
+
+
+def _grid(pitches, hands, bat, loc=None):
     """3x3 % of located pitches vs one hitter hand: rows up/mid/down,
     cols in/mid/away (relative to the hitter)."""
     cells = Counter()
     n = 0
     for p in pitches:
-        if hands.get(p.game_pitch_id) != bat or p.actual_plate_x is None or p.actual_plate_z is None:
+        xy = _xy(p, loc)
+        if hands.get(p.game_pitch_id) != bat or xy is None:
             continue
-        x, z = float(p.actual_plate_x), float(p.actual_plate_z)
+        x, z = xy
         in_side = -x if bat == "R" else x  # + = toward the hitter (RHH stands on the 3B side, plate_x < 0)
         col = 0 if in_side > X_THIRD else (2 if in_side < -X_THIRD else 1)
         row = 0 if z > Z_HIGH else (2 if z < Z_LOW else 1)
@@ -94,11 +105,12 @@ def _grid(pitches, hands, bat):
     return {"n": n, "pct": [[round(cells[(r, c)] / n * 100) for c in range(3)] for r in range(3)]}
 
 
-def _rel_cell(p, bat):
+def _rel_cell(p, bat, loc=None):
     """(row, col) relative to the hitter: rows up/mid/down, cols in/mid/away."""
-    if bat not in ("R", "L") or p.actual_plate_x is None or p.actual_plate_z is None:
+    xy = _xy(p, loc)
+    if bat not in ("R", "L") or xy is None:
         return None
-    x, z = float(p.actual_plate_x), float(p.actual_plate_z)
+    x, z = xy
     in_side = -x if bat == "R" else x
     col = 0 if in_side > X_THIRD else (2 if in_side < -X_THIRD else 1)
     row = 0 if z > Z_HIGH else (2 if z < Z_LOW else 1)
@@ -115,7 +127,7 @@ def _family(p):
     return family(p)
 
 
-def whiff_grids(pitches, hands):
+def whiff_grids(pitches, hands, loc=None):
     """Approach panel (Oct 2026, Paradigm's "How to Beat an Ace"): where his
     pitches get swings and misses. {family: {"cells": 3x3 [whiffs, swings],
     "chase": %, "n"}}; hitter-relative, both hitter hands pooled."""
@@ -128,18 +140,30 @@ def whiff_grids(pitches, hands):
         cells = [[[0, 0] for _c in range(3)] for _r in range(3)]
         oz = osw = 0
         for p in ps:
-            rc = _rel_cell(p, hands.get(p.game_pitch_id))
+            rc = _rel_cell(p, hands.get(p.game_pitch_id), loc)
             if rc is None:
                 continue
             if p.pitch_outcome in SWINGS:
                 cells[rc[0]][rc[1]][1] += 1
                 if p.pitch_outcome == "Swing and Miss":
                     cells[rc[0]][rc[1]][0] += 1
-            if not is_in_zone(float(p.actual_plate_x), float(p.actual_plate_z)):
+            if not is_in_zone(*_xy(p, loc)):
                 oz += 1
                 osw += p.pitch_outcome in SWINGS
         out[fam] = {"cells": cells, "chase": _pct(osw, oz), "n": len(ps)}
     return out
+
+
+def _batter_key(p):
+    """Who was hitting: our hitter when we bat; theirs (or the intrasquad
+    hitter) when we pitch."""
+    if p.is_our_team_batting:
+        return ("us", p.our_player_id)
+    if p.opponent_player_id is not None:
+        return ("opp", p.opponent_player_id)
+    if getattr(p, "opponent_our_player_id", None) is not None:
+        return ("us", p.opponent_our_player_id)
+    return ("order", p.opponent_batting_order)
 
 
 def times_through(pitches):
@@ -147,7 +171,7 @@ def times_through(pitches):
     seen = defaultdict(int)
     by = defaultdict(list)
     for pa in _pas(pitches):
-        key = (pa[0].game_id, pa[0].our_player_id)
+        key = (pa[0].game_id, _batter_key(pa[0]))
         seen[key] += 1
         by[min(seen[key], 3)].extend(pa)
     out = []
@@ -217,9 +241,11 @@ def approach_points(prof, damage, hand):
     return pts
 
 
-def pitcher_profile(db, pitches, hand_label=None):
+def pitcher_profile(db, pitches, hand_label=None, loc=None):
     """Everything the report shows for one of their pitchers (or one
-    team-level 'Unidentified' group)."""
+    team-level 'Unidentified' group). loc = Rapsodo locations when the
+    pitcher is ours (Self-scout); their pitchers use video review."""
+    pitches = [p for p in pitches if getattr(p, "is_pitch", True) is not False]
     hands = get_batter_hands(db, pitches)
     n = len(pitches)
     pas = _pas(pitches)
@@ -271,8 +297,9 @@ def pitcher_profile(db, pitches, hand_label=None):
         "strike": _pct(sum(1 for p in pitches if p.pitch_outcome in STRIKES), n),
         "arsenal": arsenal, "first": mix(first), "ahead": mix(ahead), "behind": mix(behind), "two_k": mix(two_k),
         "first_swing": first_swing,
-        "fb_grid": {"R": _grid(fbs, hands, "R"), "L": _grid(fbs, hands, "L")},
-        "whiff_grids": whiff_grids(pitches, hands), "tto": times_through(pitches),
+        "fb_grid": {"R": _grid(fbs, hands, "R", loc), "L": _grid(fbs, hands, "L", loc)},
+        "whiff_grids": whiff_grids(pitches, hands, loc), "tto": times_through(pitches),
+        "count_hand": count_hand_table(pitches, hands),
         "pitches_per_inning": round(n / len(innings), 1) if innings else None,
     }
 
@@ -303,7 +330,6 @@ def draft_points(prof, name="He", damage=None):
         g = prof["fb_grid"].get(bat)
         if not g or g["n"] < 8:
             continue
-        cells = [(g["pct"][r][c], r, c) for r in range(3) for c in range(3)]
         rows = [sum(g["pct"][r]) for r in range(3)]
         cols = [sum(g["pct"][r][c] for r in range(3)) for c in range(3)]
         r_i = max(range(3), key=lambda i: rows[i])
@@ -323,9 +349,11 @@ def draft_points(prof, name="He", damage=None):
     return [t for _s, t in sorted(pts, key=lambda x: -x[0])][:4]
 
 
-def build(db, opponent_team_id, roles=None):
-    """{team, pitchers: [{player|None, name, hand, role, notes, profile, points}], team_rhp, team_lhp}"""
+def build(db, opponent_team_id, roles=None, lines=None):
+    """{team, pitchers: [{player|None, name, hand, role, notes, profile, points, line}], unidentified, ...}
+    lines = coach-edited one-liners {'p:<id>': text} (AdvanceReport.lines)."""
     roles = {int(k): v for k, v in (roles or {}).items() if v}
+    lines = lines or {}
     team = db.query(OpponentTeam).filter(OpponentTeam.team_id == opponent_team_id).first()
     ps = team_pitches(db, opponent_team_id)
     by_pitcher = defaultdict(list)
@@ -345,8 +373,10 @@ def build(db, opponent_team_id, roles=None):
         if op is None:
             continue
         prof = pitcher_profile(db, by_pitcher[pid], op.throws) if by_pitcher.get(pid) else None
+        auto = pitcher_line(prof)
         pitchers.append({"id": pid, "player": op, "name": op.player_name, "hand": op.throws, "role": roles.get(pid, ""),
-                         "notes": op.notes, "profile": prof, "points": draft_points(prof, op.player_name, damage)})
+                         "notes": op.notes, "profile": prof, "points": draft_points(prof, op.player_name, damage),
+                         "auto_line": auto, "line": lines.get(f"p:{pid}") or auto})
     order = {r: i for i, r in enumerate(ROLES[1:])}
     pitchers.sort(key=lambda x: (order.get(x["role"], 99), -(x["profile"]["n"] if x["profile"] else 0), x["name"]))
     unident = []
@@ -354,7 +384,8 @@ def build(db, opponent_team_id, roles=None):
         if unknown[h]:
             prof = pitcher_profile(db, unknown[h], h)
             unident.append({"id": None, "player": None, "name": f"Unidentified {h}HP (before 'Their pitcher' tracking)",
-                            "hand": h, "role": "", "notes": None, "profile": prof, "points": draft_points(prof, damage=damage)})
+                            "hand": h, "role": "", "notes": None, "profile": prof, "points": draft_points(prof, damage=damage),
+                            "auto_line": pitcher_line(prof), "line": pitcher_line(prof)})
     games = sorted({p.game for p in ps if p.game is not None}, key=lambda g: g.game_date)
     return {"team": team, "pitchers": pitchers, "unidentified": unident, "games": games, "n": len(ps),
             "damage": damage}
@@ -379,3 +410,352 @@ def draft_series_plan(rep):
         if n0 >= 15 and fbn / n0 >= 0.65:
             lines.append(f"As a staff they start hitters with a fastball {fbn / n0 * 100:.0f}% of the time -- be on time for it.")
     return "\n".join(f"{i}. {l}" for i, l in enumerate(lines[:4], 1))
+
+
+# =====================================================================
+# Oct 2026 upgrades (Ryker, from Paradigm's "How to Build the Perfect
+# Scouting Report"): count x hand usage, one-line plans, their hitters,
+# self-scout and the post-series check.
+# =====================================================================
+
+COUNT_ROWS = [("0-0", "First pitch"), ("ahead", "Ahead"), ("even", "Even"), ("behind", "Behind"), ("two", "2 strikes")]
+MIN_CELL_PITCHES = 10
+PREDICTABLE_PCT = 70
+MIN_HITTER_PAS = 8
+HARD_CONTACT = ("Barreled/Squared Up", "Solid")
+FAMILY_WORDS = {"Fastball": "fastballs", "Breaking": "breaking balls", "Offspeed": "changeups"}
+
+
+def _count_key(p):
+    b, s = p.balls_before or 0, p.strikes_before or 0
+    keys = []
+    if (b, s) == (0, 0):
+        keys.append("0-0")
+    if s == 2:
+        keys.append("two")
+    if s > b:
+        keys.append("ahead")
+    elif s == b:
+        keys.append("even")
+    else:
+        keys.append("behind")
+    return keys
+
+
+def count_hand_table(pitches, hands):
+    """{count_key: {"R": cell|None, "L": cell|None}} -- cell = {n, top, top_pct,
+    fb, thin}; the pitch he goes to in each count, split by OUR hitter's hand."""
+    by = defaultdict(list)
+    for p in pitches:
+        h = hands.get(p.game_pitch_id)
+        if h not in ("R", "L"):
+            continue
+        for k in _count_key(p):
+            by[(k, h)].append(p)
+    out = {}
+    for key, _label_ in COUNT_ROWS:
+        out[key] = {}
+        for h in ("R", "L"):
+            sub = by.get((key, h), [])
+            if not sub:
+                out[key][h] = None
+                continue
+            c = Counter(_label(p) for p in sub)
+            top, k = c.most_common(1)[0]
+            out[key][h] = {"n": len(sub), "top": top, "top_pct": _pct(k, len(sub)),
+                           "fb": _pct(sum(1 for p in sub if _label(p) in FASTBALL_TYPES), len(sub)),
+                           "thin": len(sub) < MIN_CELL_PITCHES}
+    return out
+
+
+def predictable_spots(prof):
+    """Count x hand cells where one pitch comes PREDICTABLE_PCT+ of the time."""
+    out = []
+    for key, label in COUNT_ROWS:
+        for h in ("R", "L"):
+            c = ((prof or {}).get("count_hand") or {}).get(key, {}).get(h)
+            if c and not c["thin"] and (c["top_pct"] or 0) >= PREDICTABLE_PCT:
+                out.append({"count": label, "hand": h, "pitch": c["top"], "pct": c["top_pct"], "n": c["n"]})
+    out.sort(key=lambda r: -r["pct"])
+    return out
+
+
+def _short(name):
+    return (name or "").replace("4-Seam Fastball", "FB").replace("2-Seam Fastball", "2S").replace("Fastball", "FB")
+
+
+def pitcher_line(prof):
+    """One instruction for our hitters vs this pitcher (coach edits it)."""
+    if not prof or prof["n"] < MIN_PLAN_PITCHES:
+        return ""
+    bits = []
+    f, t = prof.get("first") or {}, prof.get("two_k") or {}
+    if f.get("n", 0) >= 6:
+        if (f.get("fb") or 0) >= 60:
+            bits.append(f"Sit FB early ({f['fb']:.0f}% of first pitches)")
+        elif f["top"] not in FASTBALL_TYPES and (f.get("top_pct") or 0) >= 35:
+            bits.append(f"He steals strike one with the {_short(f['top'])} ({f['top_pct']:.0f}%)")
+    if t.get("n", 0) >= 6:
+        if t["top"] in FASTBALL_TYPES:
+            bits.append(f"with 2 strikes he comes with the FB ({t['top_pct']:.0f}%) -- be on time")
+        elif (t.get("ball") or 0) >= 45:
+            bits.append(f"with 2 strikes it's the {_short(t['top'])} ({t['top_pct']:.0f}%) -- spit on it down")
+        else:
+            bits.append(f"with 2 strikes it's the {_short(t['top'])} ({t['top_pct']:.0f}%) -- shorten up")
+    spots = predictable_spots(prof)
+    if spots and len(bits) < 2:
+        sp = spots[0]
+        bits.append(f"{sp['count'].lower()} vs {sp['hand']}HH it's the {_short(sp['pitch'])} {sp['pct']:.0f}%")
+    if not bits:
+        return "Mixes his pitches in every count -- hunt mistakes over the plate."
+    text = "; ".join(bits)
+    return text[:1].upper() + text[1:] + "."
+
+
+# ---------------------------------------------------------------- their hitters
+
+def their_hitting_pitches(db, opponent_team_id):
+    """Every pitch OUR pitchers threw to this team's hitters (we're in the field)."""
+    return (db.query(GamePitch).join(Game, GamePitch.game_id == Game.game_id)
+            .options(joinedload(GamePitch.pitch_type), joinedload(GamePitch.game))
+            .filter(Game.opponent_team_id == opponent_team_id, Game.is_intrasquad.is_(False),
+                    GamePitch.is_our_team_batting.is_(False))
+            .order_by(Game.game_date, GamePitch.pitch_sequence).all())
+
+
+def _rapsodo_loc(db, pitches):
+    from analytics import profile_queries, sequencing
+    return sequencing.loc_map(profile_queries.rapsodo_by_game_pitch_id(db, [p.game_pitch_id for p in pitches]))
+
+
+def hitter_profile(pitches, bats, loc):
+    """One of their hitters vs our pitchers. bats = his hand ('R'/'L'/'S'/None);
+    a switch hitter is placed by the pitcher's hand (opposite side)."""
+    from strike_zone import is_in_zone
+    pitches = [p for p in pitches if getattr(p, "is_pitch", True) is not False]
+    pas = _pas(pitches)
+    res = [pa[-1].ab_outcome for pa in pas]
+    ab = sum(1 for r in res if r not in NON_AB)
+    hits = sum(1 for r in res if r in HITS)
+    tb = sum({"1B": 1, "2B": 2, "3B": 3, "HR": 4}.get(r, 0) for r in res)
+    bb = sum(1 for r in res if r in ("BB", "IBB", "HBP"))
+    ks = sum(1 for r in res if r in KS)
+    first = [p for p in pitches if (p.balls_before, p.strikes_before) == (0, 0)]
+    located = [p for p in pitches if p.game_pitch_id in loc]
+    out_zone = [p for p in located if not is_in_zone(*loc[p.game_pitch_id])]
+    two_out = [p for p in out_zone if p.strikes_before == 2]
+
+    def side(p):
+        if bats in ("R", "L"):
+            return bats
+        if bats == "S":
+            return "L" if (p.opponent_hand or "R") == "R" else "R"   # opponent_hand = our pitcher's hand here
+        return None
+    fam = {}
+    for f in ("Fastball", "Breaking", "Offspeed"):
+        ps = [p for p in pitches if _family(p) == f]
+        if not ps:
+            continue
+        sw = [p for p in ps if p.pitch_outcome in SWINGS]
+        bip = [p for p in ps if p.pitch_outcome == "In Play"]
+        ftb = sum({"1B": 1, "2B": 2, "3B": 3, "HR": 4}.get(p.ab_outcome, 0) for p in bip)
+        fam[f] = {"n": len(ps), "whiff": _pct(sum(1 for p in sw if p.pitch_outcome == "Swing and Miss"), len(sw)),
+                  "swings": len(sw), "bip": len(bip), "slg_bip": round(ftb / len(bip), 3) if bip else None,
+                  "hard": _pct(sum(1 for p in bip if p.contact_quality in HARD_CONTACT), len(bip)),
+                  "hits": sum(1 for p in bip if p.ab_outcome in HITS)}
+    grid = [[[0, 0] for _c in range(3)] for _r in range(3)]     # [total bases, balls in play]
+    wgrid = [[[0, 0] for _c in range(3)] for _r in range(3)]    # [whiffs, swings]
+    for p in pitches:
+        rc = _rel_cell(p, side(p), loc)
+        if rc is None:
+            continue
+        if p.pitch_outcome in SWINGS:
+            wgrid[rc[0]][rc[1]][1] += 1
+            wgrid[rc[0]][rc[1]][0] += p.pitch_outcome == "Swing and Miss"
+        if p.pitch_outcome == "In Play" and p.ab_outcome not in ("Sac Bunt", "Sac Fly"):
+            grid[rc[0]][rc[1]][0] += {"1B": 1, "2B": 2, "3B": 3, "HR": 4}.get(p.ab_outcome, 0)
+            grid[rc[0]][rc[1]][1] += 1
+    return {
+        "pa": len(pas), "ab": ab, "hits": hits, "hr": sum(1 for r in res if r == "HR"),
+        "avg": round(hits / ab, 3) if ab else None, "slg": round(tb / ab, 3) if ab else None,
+        "obp": round((hits + bb) / len(pas), 3) if pas else None,
+        "k_pct": _pct(ks, len(pas)), "bb_pct": _pct(bb, len(pas)),
+        "first_swing": _pct(sum(1 for p in first if p.pitch_outcome in SWINGS), len(first)),
+        "chase": _pct(sum(1 for p in out_zone if p.pitch_outcome in SWINGS), len(out_zone)),
+        "two_chase": _pct(sum(1 for p in two_out if p.pitch_outcome in SWINGS), len(two_out)),
+        "located": len(located), "n": len(pitches), "families": fam, "damage": grid, "whiff_grid": wgrid,
+        "games": sorted({p.game for p in pitches if p.game is not None}, key=lambda g: g.game_date),
+    }
+
+
+def hitter_line(prof):
+    """'Get him out with ___' (coach edits it)."""
+    if not prof or prof["pa"] < MIN_HITTER_PAS:
+        return ""
+    fams = [(f, d) for f, d in prof["families"].items() if d["swings"] >= 5 or d["bip"] >= 3]
+    if not fams:
+        return ""
+
+    def weakness(d):
+        w = (d["whiff"] or 0) / 100
+        s = d["slg_bip"] if d["slg_bip"] is not None else 0.35
+        return w - s / 2
+    best_f, best = max(fams, key=lambda fd: weakness(fd[1]))
+    worst_f, worst = min(fams, key=lambda fd: weakness(fd[1]))
+    slg = best["slg_bip"]
+    clear = ((best["whiff"] or 0) >= 25 and (slg is None or slg <= 0.500)) or (slg is not None and slg <= 0.300)
+    where = ""
+    cells = [(prof["whiff_grid"][r][c], r, c) for r in range(3) for c in range(3)]
+    good = [(wh / sw, r, c) for (wh, sw), r, c in cells if sw >= 4]
+    if good:
+        rate, r, c = max(good)
+        if rate >= 0.35:
+            where = f" {ROW_WORDS[r]} and {COL_WORDS[c]}" if (r, c) != (1, 1) else ""
+    stats = []
+    if best["whiff"] is not None:
+        stats.append(f"{best['whiff']:.0f}% whiff")
+    if best["slg_bip"] is not None:
+        stats.append(f"{best['slg_bip']:.3f} SLG in play".replace("0.", ".", 1))
+    if clear:
+        line = f"Get him out with {FAMILY_WORDS[best_f]}{where}"
+    else:
+        line = f"No clear hole yet -- least damage vs {FAMILY_WORDS[best_f]}"
+    if stats:
+        line += f" ({', '.join(stats)})"
+    if worst_f != best_f and (worst["slg_bip"] or 0) >= 0.5:
+        line += f"; he damages {FAMILY_WORDS[worst_f]}"
+    if (prof["chase"] or 0) >= 35:
+        line += f"; chases {prof['chase']:.0f}%, expand late"
+    return line + "."
+
+
+def usual_order(db, opponent_team_id):
+    """{opponent_player_id: most common batting-order spot} from their lineups."""
+    from models import OpponentLineupSlot
+    rows = (db.query(OpponentLineupSlot).join(Game, OpponentLineupSlot.game_id == Game.game_id)
+            .filter(Game.opponent_team_id == opponent_team_id).all())
+    spots = defaultdict(Counter)
+    for r in rows:
+        spots[r.opponent_player_id][r.batting_order] += 1
+    return {pid: c.most_common(1)[0][0] for pid, c in spots.items()}
+
+
+def build_hitters(db, opponent_team_id, lines=None):
+    """[{id, name, bats, order, profile, line, small}] for their hitters we've faced,
+    lineup order first. lines = coach-edited one-liners {'h:<id>': text}."""
+    lines = lines or {}
+    ps = their_hitting_pitches(db, opponent_team_id)
+    by = defaultdict(list)
+    for p in ps:
+        if p.opponent_player_id is not None:
+            by[p.opponent_player_id].append(p)
+    if not by:
+        return []
+    loc = _rapsodo_loc(db, ps)
+    roster = {op.opponent_player_id: op for op in
+              db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id.in_(list(by))).all()}
+    order = usual_order(db, opponent_team_id)
+    out = []
+    for pid, pitches in by.items():
+        op = roster.get(pid)
+        if op is None:
+            continue
+        prof = hitter_profile(pitches, op.bats, loc)
+        auto = hitter_line(prof)
+        out.append({"id": pid, "name": op.player_name, "bats": op.bats, "order": order.get(pid),
+                    "profile": prof, "auto_line": auto, "line": lines.get(f"h:{pid}") or auto,
+                    "small": prof["pa"] < MIN_HITTER_PAS, "notes": op.notes})
+    out.sort(key=lambda h: (h["order"] or 99, -h["profile"]["pa"], h["name"]))
+    return out
+
+
+# ---------------------------------------------------------------- self-scout
+
+def self_scout(db, player_id, date_from=None, date_to=None):
+    """One of OUR pitchers seen the way an opponent would: the same pitcher
+    page, every game (intrasquads too), Rapsodo locations, plus the counts
+    a hitter could sit on."""
+    from analytics import profile_queries
+    from models import Player
+    pl = db.query(Player).filter(Player.player_id == player_id).first()
+    ps = profile_queries.get_pitcher_profile_pitches(db, player_id, date_from=date_from, date_to=date_to) or []
+    if pl is None or not ps:
+        return None
+    loc = _rapsodo_loc(db, ps)
+    prof = pitcher_profile(db, ps, pl.throws, loc=loc)
+    return {"player": pl, "name": f"{pl.first_name} {pl.last_name}", "hand": pl.throws, "profile": prof,
+            "line": pitcher_line(prof), "spots": predictable_spots(prof), "points": draft_points(prof, pl.first_name)}
+
+
+# ---------------------------------------------------------------- post-series check
+
+SERIES_DAYS = 6
+
+
+def series_check(db, opponent_team_id, series_date, lines=None):
+    """After the series is charted: their pitchers' plan vs what they did, our
+    hitters vs the plan, and our pitchers vs their hitters' one-liners.
+    Series = games vs this team from series_date through SERIES_DAYS later;
+    'before' = everything we had charted before series_date."""
+    import datetime as _dt
+    if series_date is None:
+        return None
+    end = series_date + _dt.timedelta(days=SERIES_DAYS)
+    allp = team_pitches(db, opponent_team_id)
+    before = [p for p in allp if p.game and p.game.game_date < series_date]
+    during = [p for p in allp if p.game and series_date <= p.game.game_date <= end]
+    if not during:
+        return {"games": [], "pitchers": [], "hitting": None, "their_hitters": []}
+    names = {op.opponent_player_id: op.player_name for op in
+             db.query(OpponentPlayer).filter(OpponentPlayer.team_id == opponent_team_id).all()}
+    pitchers = []
+    for pid in sorted({p.opponent_player_id for p in during if p.opponent_player_id is not None}):
+        b = [p for p in before if p.opponent_player_id == pid]
+        d = [p for p in during if p.opponent_player_id == pid]
+        pb = pitcher_profile(db, b) if len(b) >= MIN_PLAN_PITCHES else None
+        pd = pitcher_profile(db, d)
+
+        def summ(pr):
+            if not pr:
+                return None
+            f, t = pr.get("first") or {}, pr.get("two_k") or {}
+            return {"n": pr["n"], "fb0": f.get("fb"), "two_top": t.get("top"), "two_pct": t.get("top_pct"),
+                    "mix": [(a["pitch"], a["usage"]) for a in pr["arsenal"][:3]]}
+        pitchers.append({"name": names.get(pid, f"#{pid}"), "planned": summ(pb), "actual": summ(pd)})
+
+    def hit_summary(ps):
+        first = [p for p in ps if (p.balls_before, p.strikes_before) == (0, 0)]
+        first_fb = [p for p in first if _label(p) in FASTBALL_TYPES]
+        two = [p for p in ps if p.strikes_before == 2]
+        two_sw = [p for p in two if p.pitch_outcome in SWINGS]
+        return {"first_fb_swing": _pct(sum(1 for p in first_fb if p.pitch_outcome in SWINGS), len(first_fb)),
+                "first_fb_n": len(first_fb),
+                "two_whiff": _pct(sum(1 for p in two_sw if p.pitch_outcome == "Swing and Miss"), len(two_sw)),
+                "two_n": len(two)}
+    hitting = {"before": hit_summary(before), "during": hit_summary(during)}
+
+    lines = lines or {}
+    theirs = []
+    ours = their_hitting_pitches(db, opponent_team_id)
+    pre = [p for p in ours if p.game and p.game.game_date < series_date]
+    ser = [p for p in ours if p.game and series_date <= p.game.game_date <= end]
+    if ser:
+        loc = _rapsodo_loc(db, pre)
+        bats = {op.opponent_player_id: op.bats for op in
+                db.query(OpponentPlayer).filter(OpponentPlayer.team_id == opponent_team_id).all()}
+        for pid in sorted({p.opponent_player_id for p in ser if p.opponent_player_id is not None}):
+            pp = [p for p in pre if p.opponent_player_id == pid]
+            prof = hitter_profile(pp, bats.get(pid), loc) if pp else None
+            line = lines.get(f"h:{pid}") or hitter_line(prof)
+            fams = [f for f, w in FAMILY_WORDS.items() if line and w in line.split(";")[0]]
+            planned = fams[0] if fams else None
+            sp = [p for p in ser if p.opponent_player_id == pid]
+            pas = _pas(sp)
+            fin = [pa[-1] for pa in pas]
+            on_plan = [p for p in fin if planned and _family(p) == planned]
+            theirs.append({"name": names.get(pid, f"#{pid}"), "planned": planned, "pa": len(pas),
+                           "finished_with_plan": len(on_plan),
+                           "outs_with_plan": sum(1 for p in on_plan if p.ab_outcome not in HITS and p.ab_outcome not in NON_AB),
+                           "hits": sum(1 for p in fin if p.ab_outcome in HITS)})
+    games = sorted({p.game for p in during if p.game is not None}, key=lambda g: g.game_date)
+    return {"games": games, "pitchers": pitchers, "hitting": hitting, "their_hitters": theirs}

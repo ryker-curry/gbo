@@ -8,7 +8,7 @@ staff + series plan, then one page per pitcher with enough pitches seen.
 from html import escape
 
 from pitch_type_config import get_pitch_color
-from analytics.advance_scouting import MIN_PLAN_PITCHES, STARTER_ROLES
+from analytics.advance_scouting import MIN_PLAN_PITCHES, STARTER_ROLES, COUNT_ROWS, MIN_HITTER_PAS
 
 CSS = """
 .gbo-adv{--ink:#1b1f24;--muted:#5d6670;--line:#d6dbe0;--soft:#f3f5f7;--brand:#7a1f2b;--blue:#2f6fd6;
@@ -50,6 +50,15 @@ CSS = """
   .gbo-adv .bar .l{width:110px}
   .gbo-adv table{display:block;overflow-x:auto;white-space:nowrap}
 }
+.gbo-adv .oneline{background:#fff7e0;border-left:4px solid #b7860b;padding:5px 8px;font-weight:600;font-size:11.5px;margin:0 0 8px}
+.gbo-adv .ch td.thin{color:#9aa3ad}
+.gbo-adv .ch td.hot{color:#c0392b;font-weight:700}
+.gbo-adv .flag{color:#c0392b;font-weight:700}
+.gbo-adv .hcards{display:grid;grid-template-columns:1fr 1fr;gap:12px 18px}
+.gbo-adv .hcard{border:1px solid var(--line);border-radius:6px;padding:8px 10px;break-inside:avoid}
+.gbo-adv .card-row td{vertical-align:top}
+.gbo-adv .card-line{font-weight:600}
+@media screen and (max-width:700px){.gbo-adv .hcards{grid-template-columns:1fr}}
 @media print{.gbo-adv{box-shadow:none;padding:0;max-width:none}}
 """
 
@@ -160,19 +169,39 @@ def _approach_panel(prof, damage, hand):
   </div>"""
 
 
+def _short(name):
+    return (name or "").replace("4-Seam Fastball", "FB").replace("2-Seam Fastball", "2S").replace("Fastball", "FB")
+
+
+def _count_hand_table(prof):
+    """Count x our-hitter-hand: the pitch he goes to and how often."""
+    ch = prof.get("count_hand") or {}
+    rows = []
+    for key, label in COUNT_ROWS:
+        tds = []
+        for h in ("R", "L"):
+            c = (ch.get(key) or {}).get(h)
+            if not c:
+                tds.append('<td class="thin">—</td>')
+                continue
+            cls = "thin" if c["thin"] else ("hot" if (c["top_pct"] or 0) >= 70 else "")
+            tds.append(f'<td class="{cls}" title="{c["n"]} pitches · FB {_p(c["fb"])}">{_e(_short(c["top"]))} {_p(c["top_pct"])}'
+                       f' <span class="small muted">({c["n"]})</span></td>')
+        rows.append(f"<tr><td>{label}</td>{''.join(tds)}</tr>")
+    return ('<table class="ch"><tr><th>Count</th><th>vs RHH</th><th>vs LHH</th></tr>' + "".join(rows) + "</table>"
+            '<div class="small muted">Top pitch and how often · red = 70%+ (sit on it) · gray = under 10 pitches.</div>')
+
+
 def _pitcher_page(p, damage=None):
     prof = p["profile"]
     rows = "".join(
         f'<tr><td><span class="sw" style="background:{get_pitch_color(a["pitch"])}"></span>{_e(a["pitch"])}</td>'
         f'<td>{a["n"]}</td><td><b>{_p(a["usage"])}</b></td><td>{_p(a["vs_r"])}</td><td>{_p(a["vs_l"])}</td>'
         f'<td>{_p(a["strike"])}</td><td>{_p(a["whiff"])}</td></tr>' for a in prof["arsenal"])
-    f, b, t = prof["first"] or {}, prof["behind"] or {}, prof["two_k"] or {}
-    bars = (_bar("0-0 fastball", f.get("fb"), f"{f.get('n', 0)} first pitches")
-            + _bar("0-0 strike rate", f.get("strike"))
-            + _bar("Our 0-0 swing rate", prof.get("first_swing"))
-            + _bar("Behind in count: fastball", b.get("fb"), f"{b.get('n', 0)} pitches")
-            + _bar(f"2 strikes: {t.get('top', '—')}", t.get("top_pct"), f"{t.get('n', 0)} pitches")
-            + _bar("2 strikes: ball rate", t.get("ball")))
+    f, t = prof["first"] or {}, prof["two_k"] or {}
+    bars = (_count_hand_table(prof)
+            + f'<div class="small muted" style="margin-top:4px">0-0 strikes {_p(f.get("strike"))} · '
+              f'our 0-0 swings {_p(prof.get("first_swing"))} · 2-strike balls {_p(t.get("ball"))}</div>')
     pts = "".join(f"<li>{_e(x)}</li>" for x in p["points"]) or '<li class="muted">Not enough pitches seen to draft an approach.</li>'
     notes = f'<div class="notes"><b>Notes:</b> {_e(p["notes"])}</div>' if p["notes"] else ""
     games = ", ".join(g.game_date.strftime("%b %d") for g in prof["games"])
@@ -183,10 +212,11 @@ def _pitcher_page(p, damage=None):
     <h3>{_e(p['name'])} <span class="muted" style="font-size:12px;font-weight:400">{role}{_e(p['hand'] or '?')}HP</span></h3>
     <div class="small muted">{prof['n']} pitches · {prof['bf']} batters · {prof['innings']} inn. seen ({_e(games)}) · AVG vs us {('%.3f' % prof['avg']).lstrip('0') if prof['avg'] is not None else '—'} · K {_p(prof['k_pct'])} · BB {_p(prof['bb_pct'])}</div>
   </div>
+  {('<div class="oneline">Plan vs him: ' + _e(p.get("line")) + '</div>') if p.get("line") else ''}
   <div class="cols">
     <div style="flex:1.2"><h2>Arsenal</h2>
       <table><tr><th>Pitch</th><th>#</th><th>Use</th><th>vs RHH</th><th>vs LHH</th><th>Strike</th><th>Whiff</th></tr>{rows}</table>
-      <h2 style="margin-top:10px">Count tendencies</h2>{bars}</div>
+      <h2 style="margin-top:10px">What he throws by count</h2>{bars}</div>
     <div style="flex:1"><h2>Fastball location</h2>
       <div style="display:flex;gap:22px">{_grid(prof['fb_grid'].get('R'), 'vs RHH')}{_grid(prof['fb_grid'].get('L'), 'vs LHH')}</div>
       <div class="small muted" style="margin-top:4px">% of his located fastballs by zone, catcher's view relative to the hitter.</div>
@@ -195,7 +225,7 @@ def _pitcher_page(p, damage=None):
 </div>"""
 
 
-def render_sheet(rep, report=None, team_name="Pitt State Baseball"):
+def render_sheet(rep, report=None, team_name="Pitt State Baseball", hitters=None):
     team = rep["team"].team_name if rep["team"] else "Opponent"
     title = report.title if report else f"vs {team}"
     when = report.series_date.strftime("%A, %b %d, %Y") if report and report.series_date else ""
@@ -214,5 +244,165 @@ def render_sheet(rep, report=None, team_name="Pitt State Baseball"):
     <div class="plan"><h2>Series plan</h2><div class="planbox">{_e(plan)}</div></div>
   </div>
   {pages}
+  {_hitters_pages(hitters) if hitters else ''}
   <div class="foot">Every number comes from pitches we charted against this team in Game Tracking -- small samples, especially vs pitchers we've seen once. Pitches thrown before GBO tracked which of their pitchers was in are grouped as "Unidentified".</div>
+</div>"""
+
+
+
+# ------------------------------------------------------------------ their hitters
+
+def _avg(v):
+    return "—" if v is None else (("%.3f" % v).lstrip("0") if v < 1 else "%.3f" % v)
+
+
+def _hdamage(grid):
+    cells = []
+    for row in grid:
+        for tb, n in row:
+            if n < 2:
+                cells.append('<div style="background:#e9edf1;color:#9aa3ad">·</div>')
+                continue
+            v = tb / n
+            a = 0.12 + 0.88 * min(v, 1.0)
+            cells.append(f'<div style="background:rgba(194,58,58,{a:.2f})" title="{tb} TB on {n} balls in play">{_avg(v)}</div>')
+    return f'<div class="grid">{"".join(cells)}</div>'
+
+
+def _hitters_lineup(hitters):
+    rows = []
+    for h in hitters:
+        pr = h["profile"]
+        line = '<span class="muted">small sample</span>' if h["small"] else _e(h["line"])
+        rows.append(f'<tr><td>{h["order"] or ""}</td><td><b>{_e(h["name"])}</b> <span class="muted">{_e(h["bats"] or "?")}</span></td>'
+                    f'<td>{pr["pa"]}</td><td>{_avg(pr["avg"])}/{_avg(pr["obp"])}/{_avg(pr["slg"])}</td>'
+                    f'<td>{_p(pr["k_pct"])}</td><td>{_p(pr["bb_pct"])}</td><td>{_p(pr["first_swing"])}</td>'
+                    f'<td>{_p(pr["chase"])}</td><td style="text-align:left;white-space:normal">{line}</td></tr>')
+    return ('<table class="card-row"><tr><th>#</th><th>Hitter</th><th>PA</th><th>AVG/OBP/SLG</th><th>K</th><th>BB</th>'
+            '<th>0-0 swing</th><th>Chase</th><th style="text-align:left">Plan</th></tr>' + "".join(rows) + "</table>")
+
+
+def _hitter_card(h):
+    pr = h["profile"]
+    fam = "".join(f'<tr><td>{_e(f)}</td><td>{d["n"]}</td><td>{_p(d["whiff"])}</td><td>{_avg(d["slg_bip"])}</td>'
+                  f'<td>{_p(d["hard"])}</td><td>{d["hits"]}</td></tr>' for f, d in pr["families"].items())
+    note = f'<div class="notes small">{_e(h["notes"])}</div>' if h.get("notes") else ""
+    return f"""<div class="hcard">
+  <div style="display:flex;justify-content:space-between;align-items:baseline"><b>{_e(h['name'])}</b>
+    <span class="small muted">bats {_e(h['bats'] or '?')} · {pr['pa']} PA · {_avg(pr['avg'])}/{_avg(pr['obp'])}/{_avg(pr['slg'])}</span></div>
+  <div class="oneline" style="margin:4px 0 6px">{_e(h['line']) or 'No plan drafted yet.'}</div>
+  <div class="cols"><div style="flex:1.4">
+    <table><tr><th>vs</th><th>#</th><th>Whiff</th><th>SLG in play</th><th>Hard</th><th>Hits</th></tr>{fam}</table>
+    <div class="small muted" style="margin-top:3px">0-0 swing {_p(pr['first_swing'])} · chase {_p(pr['chase'])} · 2-strike chase {_p(pr['two_chase'])}</div></div>
+    <div><b class="small">Damage by zone</b>{_hdamage(pr['damage'])}<div class="small muted">SLG in play, from his side</div></div></div>{note}
+</div>"""
+
+
+def _hitters_pages(hitters):
+    full = [h for h in hitters if not h["small"]]
+    cards = "".join(_hitter_card(h) for h in full)
+    return f"""
+<div class="page">
+  <h2>Their hitters -- what our pitchers have seen</h2>
+  {_hitters_lineup(hitters)}
+  <div class="small muted" style="margin-top:4px">From every pitch our staff threw them in Game Tracking; chase and zones use Rapsodo location. Hitters with fewer than {MIN_HITTER_PAS} PA get no plan yet.</div>
+  {('<h2 style="margin-top:14px">Hitter by hitter</h2><div class="hcards">' + cards + '</div>') if cards else ''}
+</div>"""
+
+
+# ------------------------------------------------------------------ dugout card
+
+def render_card(rep, report=None, hitters=None, team_name="Pitt State Baseball"):
+    """One printable page for the dugout binder: their arms + their lineup."""
+    team = rep["team"].team_name if rep["team"] else "Opponent"
+    title = report.title if report else f"vs {team}"
+    arms = []
+    for p in rep["pitchers"] + rep["unidentified"]:
+        if p["role"] == "Not expected":
+            continue
+        prof = p["profile"]
+        mix = _e(_mixline(prof)) if prof else '<span class="muted">not seen</span>'
+        arms.append(f'<tr><td>{_role(p["role"])}</td><td><b>{_e(p["name"])}</b> <span class="muted">{_e(p["hand"] or "?")}HP</span></td>'
+                    f'<td style="text-align:left">{mix}</td><td class="card-line" style="text-align:left;white-space:normal">{_e(p.get("line"))}</td></tr>')
+    lineup = []
+    for h in hitters or []:
+        pr = h["profile"]
+        line = '<span class="muted">small sample</span>' if h["small"] else _e(h["line"])
+        lineup.append(f'<tr><td>{h["order"] or ""}</td><td><b>{_e(h["name"])}</b> <span class="muted">{_e(h["bats"] or "?")}</span></td>'
+                      f'<td>{_avg(pr["avg"])}</td><td>{_p(pr["k_pct"])}</td><td>{_p(pr["chase"])}</td>'
+                      f'<td class="card-line" style="text-align:left;white-space:normal">{line}</td></tr>')
+    plan = (report.plan_text if report and report.plan_text else "")
+    return f"""
+<div class="gbo-adv" id="gbo-advance-card"><style>{CSS}</style>
+  <div class="top"><div><div class="kicker">{_e(team_name)} · Dugout card</div><h1>{_e(title)}</h1></div>
+    <div class="small muted">{_e(team)}</div></div>
+  <div class="cols">
+    <div style="flex:1"><h2>Their arms -- plan for our hitters</h2>
+      <table class="card-row"><tr><th></th><th>Pitcher</th><th style="text-align:left">Mix</th><th style="text-align:left">Plan</th></tr>{''.join(arms) or '<tr><td colspan="4" class="muted">No pitchers yet.</td></tr>'}</table>
+      {('<h2 style="margin-top:10px">Series plan</h2><div class="planbox">' + _e(plan) + '</div>') if plan else ''}</div>
+    <div style="flex:1"><h2>Their lineup -- plan for our pitchers</h2>
+      <table class="card-row"><tr><th>#</th><th>Hitter</th><th>AVG</th><th>K</th><th>Chase</th><th style="text-align:left">Plan</th></tr>{''.join(lineup) or '<tr><td colspan="6" class="muted">No hitters charted yet.</td></tr>'}</table></div>
+  </div>
+</div>"""
+
+
+# ------------------------------------------------------------------ self-scout
+
+def render_self_scout(ss, team_name="Pitt State Baseball"):
+    """Our pitcher, seen the way an opponent would see him."""
+    prof = ss["profile"]
+    spots = "".join(f'<li><span class="flag">{_e(sp["count"])} vs {sp["hand"]}HH: {_e(_short(sp["pitch"]))} {_p(sp["pct"])}</span>'
+                    f' <span class="muted">({sp["n"]} pitches)</span></li>' for sp in ss["spots"])
+    spots_html = (f'<ul>{spots}</ul>' if spots else
+                  '<div class="small">Nothing a hitter could sit on -- no count where one pitch comes 70%+ of the time.</div>')
+    page = _pitcher_page({"name": ss["name"], "hand": ss["hand"], "role": "", "points": ss["points"], "notes": None,
+                          "profile": prof, "line": ss["line"]}).replace('<div class="page">', '<div>', 1)
+    return f"""
+<div class="gbo-adv" id="gbo-advance-self"><style>{CSS}</style>
+  <div class="top"><div><div class="kicker">{_e(team_name)} · Self-scout</div><h1>{_e(ss['name'])}</h1>
+    <div class="sub">How an opponent's advance report would read him -- every charted game, Rapsodo locations.</div></div></div>
+  <h2>What a hitter could sit on</h2>{spots_html}
+  <div style="margin-top:10px">{page}</div>
+  <div class="foot">"Plan vs him" and the approach points are written the way an opposing hitting coach would use them.</div>
+</div>"""
+
+
+# ------------------------------------------------------------------ post-series check
+
+def render_series_check(chk):
+    if chk is None:
+        return '<p class="muted">Set the series start date to check the series.</p>'
+    if not chk["games"]:
+        return '<p class="muted">No games against them charted in the series window yet.</p>'
+
+    def mix(m):
+        return " · ".join(f"{_e(_short(a))} {_p(b)}" for a, b in m) if m else "—"
+    prow = []
+    for p in chk["pitchers"]:
+        pl, ac = p["planned"], p["actual"]
+        prow.append(f'<tr><td><b>{_e(p["name"])}</b></td>'
+                    f'<td>{_p(pl["fb0"]) if pl else "—"} → {_p(ac["fb0"])}</td>'
+                    f'<td>{(_e(_short(pl["two_top"])) + " " + _p(pl["two_pct"])) if pl and pl["two_top"] else "—"} → '
+                    f'{_e(_short(ac["two_top"])) if ac["two_top"] else "—"} {_p(ac["two_pct"])}</td>'
+                    f'<td style="text-align:left">{mix(pl["mix"]) if pl else "<span class=muted>not seen before</span>"} → {mix(ac["mix"])}</td></tr>')
+    h = chk["hitting"]
+    b, d = h["before"], h["during"]
+    hrow = (f'<tr><td>Swing at the 0-0 fastball</td><td>{_p(b["first_fb_swing"])} ({b["first_fb_n"]})</td><td>{_p(d["first_fb_swing"])} ({d["first_fb_n"]})</td></tr>'
+            f'<tr><td>2-strike whiff rate</td><td>{_p(b["two_whiff"])} ({b["two_n"]})</td><td>{_p(d["two_whiff"])} ({d["two_n"]})</td></tr>')
+    trow = "".join(f'<tr><td><b>{_e(t["name"])}</b></td><td>{_e(t["planned"] or "—")}</td><td>{t["pa"]}</td>'
+                   f'<td>{t["finished_with_plan"]}</td><td>{t["outs_with_plan"]}</td><td>{t["hits"]}</td></tr>' for t in chk["their_hitters"])
+    games = ", ".join(g.game_date.strftime("%b %d") for g in chk["games"])
+    return f"""
+<div class="gbo-adv" id="gbo-advance-check"><style>{CSS}</style>
+  <div class="top"><div><div class="kicker">Post-series check</div><h1>Plan vs. what happened</h1>
+    <div class="sub">Series games: {_e(games)} · "before" = everything charted before the series</div></div></div>
+  <h2>Their pitchers -- did they pitch the way we planned?</h2>
+  <table><tr><th>Pitcher</th><th>0-0 fastball %</th><th>2-strike pitch</th><th style="text-align:left">Top 3 mix</th></tr>{''.join(prow)}</table>
+  <div class="cols" style="margin-top:12px">
+    <div style="flex:1"><h2>Our hitters vs the plan</h2>
+      <table><tr><th></th><th>Before</th><th>Series</th></tr>{hrow}</table>
+      <div class="small muted">More 0-0 fastball swings = hunting it early; a lower 2-strike whiff rate = spitting on their put-away pitch.</div></div>
+    <div style="flex:1"><h2>Their hitters vs our plan</h2>
+      <table><tr><th>Hitter</th><th>Planned</th><th>PA</th><th>Finished with it</th><th>Outs with it</th><th>Hits</th></tr>{trow or '<tr><td colspan="6" class="muted">No identified hitters in the series.</td></tr>'}</table></div>
+  </div>
 </div>"""

@@ -16,9 +16,9 @@ from shiny import module, ui, render, reactive, req
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import OpponentTeam, OpponentPlayer, AdvanceReport
+from models import OpponentTeam, OpponentPlayer, AdvanceReport, Player
 from analytics import advance_scouting as adv
-from visualizations.advance_report_sheet import render_sheet
+from visualizations.advance_report_sheet import render_sheet, render_card, render_self_scout, render_series_check
 
 import ui_helpers
 
@@ -27,7 +27,7 @@ EDIT_ROLES = ("Administrator", "Head Coach", "Coach", "Data Analyst", "Video Coo
 NEW = "__new__"
 
 PRINT_JS = """
-(function(){var el=document.getElementById('gbo-advance-sheet');if(!el){return;}
+(function(){var el=document.querySelector('.gbo-adv');if(!el){return;}
 var w=window.open('','_blank');if(!w){alert('Allow pop-ups for this site to print the report.');return;}
 w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Advance Report</title><style>@page{size:letter landscape;margin:.35in} body{margin:0;background:#fff}</style></head><body>'+el.outerHTML+'</body></html>');
 w.document.close();w.focus();setTimeout(function(){w.print();},300);})();
@@ -39,6 +39,7 @@ def advance_scouting_ui():
     return ui.div(
         ui_helpers.page_header("Advance Scouting", "Their staff from our own charting, plus your notes and a series plan.",
                                actions=ui_helpers.how_to_link("approach_panel", "How to read the approach panel")),
+        ui.output_ui("view_picker"),
         ui.div(
             ui.output_ui("pickers"),
             ui.tags.button("Print / save as PDF", type="button", class_="btn btn-primary btn-sm", onclick=PRINT_JS,
@@ -64,11 +65,35 @@ def advance_scouting_server(input, output, session, app_state):
     def _can_edit():
         return _role() in EDIT_ROLES
 
+    VIEWS = {"report": "Report", "card": "Dugout card", "check": "Post-series check", "self": "Self-scout"}
+
+    def _view():
+        if not _staff():
+            return "report"
+        return input.adv_view() if "adv_view" in input else "report"
+
+    @render.ui
+    def view_picker():
+        # Oct 2026: dugout card, post-series check and self-scout are staff views.
+        if not _staff():
+            return None
+        return ui.input_radio_buttons("adv_view", None, VIEWS, selected="report", inline=True)
+
     @render.ui
     def pickers():
         if not app_state.is_authenticated():
             return None
         tick()
+        if _view() == "self":
+            db = get_session()
+            try:
+                ps = (db.query(Player).filter(Player.is_pitcher.is_(True), Player.active.is_(True))
+                      .order_by(Player.last_name, Player.first_name).all())
+            finally:
+                db.close()
+            if not ps:
+                return ui_helpers.empty_state("No active pitchers on the roster.")
+            return ui.input_select("adv_self_pid", "Our pitcher", {str(p.player_id): f"{p.first_name} {p.last_name}" for p in ps})
         db = get_session()
         try:
             try:
@@ -109,7 +134,7 @@ def advance_scouting_server(input, output, session, app_state):
 
     @render.ui
     def editor():
-        if not _can_edit():
+        if not _can_edit() or _view() != "report":
             return None
         req("adv_team" in input and "adv_report" in input)
         team_id = int(input.adv_team())
@@ -130,7 +155,9 @@ def advance_scouting_server(input, output, session, app_state):
             rep_row = db.query(AdvanceReport).filter(AdvanceReport.report_id == _report_id()).first()
             if rep_row is None:
                 return None
-            data = adv.build(db, team_id, rep_row.roles or {})
+            lines = rep_row.lines or {}
+            data = adv.build(db, team_id, rep_row.roles or {}, lines)
+            hitters = adv.build_hitters(db, team_id, lines)
             prow = []
             for p in data["pitchers"]:
                 seen = f'{p["profile"]["n"]} pitches seen' if p["profile"] else "not seen yet"
@@ -138,9 +165,24 @@ def advance_scouting_server(input, output, session, app_state):
                     ui.div(ui.strong(p["name"]), ui.span(f' {p["hand"] or "?"}HP · {seen}', class_="text-muted small"),
                            style="min-width:220px;"),
                     ui.input_select(f"role_{p['id']}", None, {r: (r or "Role") for r in adv.ROLES}, selected=p["role"], width="140px"),
-                    ui.input_text_area(f"pnote_{p['id']}", None, value=p["notes"] or "", rows=1, width="100%",
-                                       placeholder="Scouting notes (velo, tells, holds runners...) -- saved to his roster entry"),
+                    ui.div(
+                        ui.input_text(f"pline_{p['id']}", None, value=p["line"] or "", width="100%",
+                                      placeholder="One-line plan for our hitters (auto-drafted once we've seen him)"),
+                        ui.input_text_area(f"pnote_{p['id']}", None, value=p["notes"] or "", rows=1, width="100%",
+                                           placeholder="Scouting notes (velo, tells, holds runners...) -- saved to his roster entry"),
+                        style="flex:1;min-width:0;",
+                    ),
                     style="display:flex;gap:10px;align-items:flex-start;border-bottom:1px solid rgba(255,255,255,.08);padding:6px 0;",
+                ))
+            hrow = []
+            for h in hitters:
+                pr = h["profile"]
+                hrow.append(ui.div(
+                    ui.div(ui.strong(h["name"]), ui.span(f' bats {h["bats"] or "?"} · {pr["pa"]} PA', class_="text-muted small"),
+                           style="min-width:220px;"),
+                    ui.input_text(f"hline_{h['id']}", None, value=h["line"] or "", width="100%",
+                                  placeholder="Small sample -- write your own plan" if h["small"] else "Get him out with..."),
+                    style="display:flex;gap:10px;align-items:center;border-bottom:1px solid rgba(255,255,255,.08);padding:4px 0;",
                 ))
             plan = rep_row.plan_text if rep_row.plan_text else adv.draft_series_plan(data)
             return ui_helpers.card(
@@ -152,6 +194,10 @@ def advance_scouting_server(input, output, session, app_state):
                 ),
                 ui.p(ui.strong("Their pitchers"), class_="mb-1 mt-2"),
                 *(prow or [ui.p("No pitchers on their roster yet -- add them on Opponent Teams, or they'll appear as we chart them.",
+                               class_="text-muted small")]),
+                ui.p(ui.strong("Their hitters"), " ", ui.span("one-line plan for our pitchers", class_="text-muted small"),
+                     class_="mb-1 mt-3"),
+                *(hrow or [ui.p("None of their hitters charted yet -- they appear once we've pitched to them.",
                                class_="text-muted small")]),
                 ui.p(ui.strong("Series plan"), class_="mb-1 mt-3"),
                 ui.input_text_area("adv_plan", None, value=plan, rows=6, width="100%"),
@@ -202,12 +248,26 @@ def advance_scouting_server(input, output, session, app_state):
                 return
             roster = db.query(OpponentPlayer).filter(OpponentPlayer.team_id == r.opponent_team_id).all()
             roles = {}
+            lines = dict(r.lines or {})
+            # Auto drafts, so a line left as drafted isn't frozen as custom.
+            auto = {f"p:{p['id']}": p.get("auto_line") for p in adv.build(db, r.opponent_team_id, r.roles or {}, {}).get("pitchers", [])}
+            auto.update({f"h:{h['id']}": h.get("auto_line") for h in adv.build_hitters(db, r.opponent_team_id, {})})
             for op in roster:
-                rid, nid = f"role_{op.opponent_player_id}", f"pnote_{op.opponent_player_id}"
+                oid = op.opponent_player_id
+                rid, nid = f"role_{oid}", f"pnote_{oid}"
                 if rid in input and input[rid]():
-                    roles[str(op.opponent_player_id)] = input[rid]()
+                    roles[str(oid)] = input[rid]()
                 if nid in input:
                     op.notes = (input[nid]() or "").strip() or None
+                # One-line plans: kept only when the coach changed the draft,
+                # so an untouched line keeps updating with new games.
+                for kind, key in (("p", f"pline_{oid}"), ("h", f"hline_{oid}")):
+                    if key in input:
+                        val = (input[key]() or "").strip()
+                        lines.pop(f"{kind}:{oid}", None)
+                        if val and val != (auto.get(f"{kind}:{oid}") or "").strip():
+                            lines[f"{kind}:{oid}"] = val
+            r.lines = lines
             r.roles = roles
             r.title = (input.adv_title() or r.title).strip()
             r.series_date = input.adv_date()
@@ -247,6 +307,17 @@ def advance_scouting_server(input, output, session, app_state):
     def sheet():
         if not (_staff() or _role() == "Player"):
             return None
+        view = _view()
+        if view == "self":
+            req("adv_self_pid" in input)
+            db = get_session()
+            try:
+                ss = adv.self_scout(db, int(input.adv_self_pid()))
+            finally:
+                db.close()
+            if ss is None or ss["profile"]["n"] < adv.MIN_PLAN_PITCHES:
+                return ui_helpers.empty_state("Not enough charted pitches for him yet.")
+            return ui.div(ui.HTML(render_self_scout(ss)), style="padding:8px 0 24px;overflow-x:auto;")
         rid = _report_id()
         tick()
         db = get_session()
@@ -254,7 +325,16 @@ def advance_scouting_server(input, output, session, app_state):
             r = db.query(AdvanceReport).filter(AdvanceReport.report_id == rid).first()
             if r is None or (not _staff() and not r.published):
                 return None
-            data = adv.build(db, r.opponent_team_id, r.roles or {})
-            return ui.div(ui.HTML(render_sheet(data, r)), style="padding:8px 0 24px;overflow-x:auto;")
+            lines = r.lines or {}
+            if view == "check":
+                html = render_series_check(adv.series_check(db, r.opponent_team_id, r.series_date, lines))
+                return ui.div(ui.HTML(html), style="padding:8px 0 24px;overflow-x:auto;")
+            data = adv.build(db, r.opponent_team_id, r.roles or {}, lines)
+            # Their-hitter pages are for our pitchers/staff; hitters reading a
+            # published report see their pitchers only.
+            hitters = adv.build_hitters(db, r.opponent_team_id, lines) if _staff() else None
+            if view == "card":
+                return ui.div(ui.HTML(render_card(data, r, hitters)), style="padding:8px 0 24px;overflow-x:auto;")
+            return ui.div(ui.HTML(render_sheet(data, r, hitters=hitters)), style="padding:8px 0 24px;overflow-x:auto;")
         finally:
             db.close()
