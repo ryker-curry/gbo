@@ -60,6 +60,7 @@ import error_log  # noqa: E402
 # bursts + a daily summary -- see error_log.py.
 error_log.install()
 from types import SimpleNamespace  # noqa: E402
+import scout_mode  # noqa: E402
 from auth import do_login, do_logout, _load_gbo_role  # noqa: E402
 import database  # noqa: E402
 import demo_db  # noqa: E402
@@ -232,7 +233,31 @@ def server(input, output, session):
     @reactive.effect
     @reactive.event(input.login_submit)
     def _on_login_submit():
+        # Oct 2026: shared Scout login (MLB/outside people) -- real data,
+        # names hidden, read-only. See scout_mode.py.
+        if scout_mode.matches(input.login_email(), input.login_password()):
+            _scout_login()
+            return
         do_login(app_state, input.login_email(), input.login_password())
+
+    def _scout_login():
+        scout_mode.start(session)
+        app_state.auth_user.set(SimpleNamespace(email=scout_mode.SCOUT_EMAIL))
+        app_state.auth_error.set(None)
+        app_state.user_id.set(None)
+        app_state.first_name.set("Guest")
+        app_state.last_name.set("Scout")
+        # Runs as a read-only staff role (no edit rights); nav.py trims the
+        # pages to scout_mode.SCOUT_PAGES.
+        app_state.role_name.set("Sports Scientist")
+        app_state.role_title.set(scout_mode.SCOUT_TITLE)
+        app_state.can_view_all_players.set(True)
+        app_state.can_edit_assessments.set(False)
+        app_state.can_edit_sessions.set(False)
+        app_state.coach_specialty.set(None)
+        app_state.is_pitcher.set(False)
+
+    session.on_ended(lambda: scout_mode.stop(session))
 
     # --- Continue as Guest (Oct 2026, Ryker: midterm progress report) --
     # A guest gets the REAL app shell, logged in as a demo user, on a
@@ -276,6 +301,10 @@ def server(input, output, session):
     @reactive.effect
     @reactive.event(input.logout_button)
     def _on_logout():
+        if scout_mode.is_scout(session):
+            app_state.reset()
+            scout_mode.stop(session)
+            return
         if app_state.is_guest():          # no Supabase login to sign out of
             app_state.reset()
             _end_guest()
@@ -635,6 +664,14 @@ def _guest_banner(app_state):
     )
 
 
+def _scout_banner():
+    return ui.div(
+        ui.div(ui.strong("Scout view"), " · real Pittsburg State data · player names hidden · read-only",
+               class_="gbo-guest-text"),
+        class_="gbo-guest-banner",
+    )
+
+
 def _app_shell_ui(app_state):
     sections = nav.build_nav_sections(
         app_state.role_name(), app_state.coach_specialty(), app_state.is_pitcher()
@@ -666,6 +703,7 @@ def _app_shell_ui(app_state):
         ui.div(
             topbar,
             _guest_banner(app_state) if guest else None,
+            _scout_banner() if scout_mode.is_scout() else None,
             ui.output_ui("gbo_back_bar"),
             ui.div(ui.navset_hidden(*panels, id="main_nav", selected=first_title), class_="gbo-content"),
             class_="gbo-main",
