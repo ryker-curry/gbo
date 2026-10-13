@@ -97,36 +97,69 @@ def classify_spray_direction(x, y, bats=None):
     return "Center"
 
 
-def draw_field_diagram(fig, *, line_dist=400, arc_radius_ft=350, base_dist=90, color=GBO_CREAM, line_width=2):
-    """Draws the shared field background -- foul lines, outfield arc,
-    infield base dots -- onto an existing figure, in place. Factored
-    out of build_field_selector_figure (Sept 2026, adding
-    visualizations/spray_chart.py's hit_spray_chart) so any Cartesian
-    field chart gets the IDENTICAL background without a second copy of
-    this drawing math to keep in sync. Same feet-from-home-plate
-    convention as the rest of this module (see module docstring);
-    line_dist/arc_radius_ft/base_dist/color/line_width all default to
-    build_field_selector_figure's own original values, so calling this
-    with no keyword args reproduces exactly what it always drew."""
+# Field colors -- the same look as the Game Tracking paper-chart field
+# (game_tracking_step_display._FIELD_SVG / theme.py .gbo-field), so every
+# field in the app reads as one field (Oct 2026, Ryker: "i want it to look
+# like that everywhere the field is").
+FIELD_GRASS = "#1E4D2B"
+FIELD_DIRT = "#6B4A2E"
+FIELD_DIRT_OPACITY = 0.55
+FIELD_LINE = GBO_CREAM
+FIELD_LABEL = "rgba(255,253,229,.55)"
+FENCE_FT = 380          # fence arc (and foul-line length) on the full field
+DIRT_FT = 150           # infield dirt arc
+BASE_FT = 90
+
+
+def _arc_points(radius, deg_from=-45, deg_to=45, step=1):
+    pts = []
+    d = deg_from
+    while d <= deg_to + 1e-9:
+        r = math.radians(d)
+        pts.append((radius * math.sin(r), radius * math.cos(r)))
+        d += step
+    return pts
+
+
+def _path(points, close=True):
+    head, *rest = points
+    out = f"M {head[0]:.1f},{head[1]:.1f} " + " ".join(f"L {x:.1f},{y:.1f}" for x, y in rest)
+    return out + (" Z" if close else "")
+
+
+def draw_field_diagram(fig, *, line_dist=FENCE_FT, arc_radius_ft=FENCE_FT, base_dist=BASE_FT, color=FIELD_LINE,
+                       line_width=2.5, labels=True):
+    """Draws the shared field background onto an existing figure, in place:
+    grass fan to the fence, infield dirt arc, infield grass diamond, foul
+    lines, fence, bases + home plate and LF/CF/RF labels -- the paper-chart
+    field from Game Tracking. Everything is a layout shape on the "below"
+    layer, so dots and click grids always sit on top. Same feet-from-home-
+    plate convention as the rest of this module. arc_radius_ft trims the
+    grass/fence (the infield slice chart passes 220); dirt and bases stay
+    true scale."""
+    R = arc_radius_ft
+    below = dict(layer="below")
+    fan = [(0, 0)] + _arc_points(R)
+    fig.add_shape(type="path", path=_path(fan), fillcolor=FIELD_GRASS, line=dict(width=0), **below)
+    dr = min(DIRT_FT, R)
+    fig.add_shape(type="path", path=_path([(0, 0)] + _arc_points(dr)), fillcolor=FIELD_DIRT,
+                  opacity=FIELD_DIRT_OPACITY, line=dict(width=0), **below)
+    h = base_dist / math.sqrt(2)
+    fig.add_shape(type="path", path=_path([(0, 0), (h, h), (0, 2 * h), (-h, h)]), fillcolor=FIELD_GRASS,
+                  line=dict(width=0), **below)
     for sign in (-1, 1):
-        end_x = sign * line_dist * math.sin(math.radians(45))
-        end_y = line_dist * math.cos(math.radians(45))
-        fig.add_shape(type="line", x0=0, y0=0, x1=end_x, y1=end_y, line=dict(color=color, width=line_width))
-
-    # Outfield arc, drawn as a dense path of small line segments (Plotly
-    # shapes don't support a true arc primitive like PIL does)
-    arc_x, arc_y = [], []
-    for deg in range(-45, 46):
-        rad = math.radians(deg)
-        arc_x.append(arc_radius_ft * math.sin(rad))
-        arc_y.append(arc_radius_ft * math.cos(rad))
-    fig.add_trace(go.Scatter(x=arc_x, y=arc_y, mode="lines", line=dict(color=color, width=line_width), showlegend=False, hoverinfo="skip", name="arc"))
-
-    base_x, base_y = [], []
-    for angle in (45, 135, 225, 315):
-        base_x.append(base_dist * math.sin(math.radians(angle)))
-        base_y.append(base_dist * math.cos(math.radians(angle)))
-    fig.add_trace(go.Scatter(x=base_x, y=base_y, mode="markers", marker=dict(size=6, color=color), showlegend=False, hoverinfo="skip", name="bases"))
+        end = line_dist * math.sin(math.radians(45))
+        fig.add_shape(type="line", x0=0, y0=0, x1=sign * end, y1=end, line=dict(color=color, width=line_width), **below)
+    fig.add_shape(type="path", path=_path(_arc_points(R), close=False), line=dict(color=color, width=line_width), **below)
+    s = 6  # base half-size, feet
+    for bx, by in ((h, h), (0, 2 * h), (-h, h)):
+        fig.add_shape(type="rect", x0=bx - s, y0=by - s, x1=bx + s, y1=by + s, fillcolor=color, line=dict(width=0), **below)
+    fig.add_shape(type="path", path=_path([(-7, 4), (7, 4), (7, -3), (0, -9)]), fillcolor=color, line=dict(width=0), **below)
+    if labels:
+        k = R / FENCE_FT
+        for txt, x, y in (("LF", -203, 160), ("CF", 0, 300), ("RF", 203, 160)):
+            fig.add_annotation(x=x * k, y=y * k, text=txt, showarrow=False,
+                               font=dict(color=FIELD_LABEL, size=15, family="IBM Plex Sans, system-ui, sans-serif"))
 
 
 def build_field_selector_figure(marker_x=None, marker_y=None):

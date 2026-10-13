@@ -2014,6 +2014,10 @@ class AdvanceReport(Base):
     series_date = Column(Date, nullable=True)
     roles = Column(JSON, nullable=True)
     plan_text = Column(Text, nullable=True)
+    # Oct 2026: coach-edited one-line plans, {"p:<opponent_player_id>": "...",
+    # "h:<opponent_player_id>": "..."} (their pitchers / their hitters).
+    # migrations.migrate_advance_lines adds the column.
+    lines = Column(JSON, nullable=True)
     published = Column(Boolean, default=False, nullable=False)
     created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

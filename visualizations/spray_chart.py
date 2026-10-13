@@ -89,7 +89,7 @@ def hit_spray_chart(pitches, title=None):
         dists = [distance_from_plate(x, y) for x, y in zip(xs, ys)]
         fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="markers",
-            marker=dict(size=9, color=HIT_TYPE_COLORS[hit_type], opacity=0.85, line=dict(color=BG_DARK, width=0.5)),
+            marker=dict(size=9, color=HIT_TYPE_COLORS[hit_type], opacity=0.85, line=dict(color=GBO_CREAM, width=1)),
             name=HIT_TYPE_LABELS[hit_type],
             legendgroup=hit_type,
             customdata=dists,
@@ -113,10 +113,12 @@ def hit_spray_chart(pitches, title=None):
 # hollow rings in their own hues (also distinct from the pitch-type
 # palette) so hit vs out reads at a glance.
 OUT_TYPE_COLORS = {
-    "Groundout": "#2BB3A3",
-    "Flyout": "#C9CED6",
-    "Lineout": "#6DBE45",
-    "Other": "#8A8F98",
+    # Oct 2026: brightened for the green paper-chart field (each >= 4.5:1
+    # against the grass; the old green lineout ring vanished into it).
+    "Groundout": "#5FE0D0",
+    "Flyout": "#E6E9EE",
+    "Lineout": "#F2C14E",
+    "Other": "#B4B9C2",
 }
 OUT_TYPE_LABELS = {"Groundout": "Groundout", "Flyout": "Flyout", "Lineout": "Lineout",
                    "Other": "Other (DP / FC / E / Sac)"}
@@ -159,8 +161,8 @@ def all_bip_spray_chart(pitches, title=None):
         label = HIT_TYPE_LABELS[key] if hit else OUT_TYPE_LABELS[key]
         xs = [float(p.batted_ball_x) for p in group]
         ys = [float(p.batted_ball_y) for p in group]
-        marker = (dict(size=9, color=color, opacity=0.9, line=dict(color=BG_DARK, width=0.5)) if hit
-                  else dict(size=9, color="rgba(0,0,0,0)", line=dict(color=color, width=2)))
+        marker = (dict(size=9, color=color, opacity=0.9, line=dict(color=GBO_CREAM, width=1)) if hit
+                  else dict(size=9, color="rgba(0,0,0,0)", line=dict(color=color, width=2.5)))
         fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="markers", marker=marker, name=label, legendgroup=key,
             customdata=[[HIT_TYPE_LABELS.get(p.ab_outcome) or p.ab_outcome or "In play",
@@ -222,7 +224,7 @@ def infield_slice_chart(pitches, title=None):
 
     max_count = max(counts) or 1
     fig = go.Figure()
-    draw_field_diagram(fig, line_dist=INFIELD_SLICE_DISPLAY_RADIUS_FT, arc_radius_ft=INFIELD_SLICE_DISPLAY_RADIUS_FT)
+    draw_field_diagram(fig, line_dist=INFIELD_SLICE_DISPLAY_RADIUS_FT, arc_radius_ft=INFIELD_SLICE_DISPLAY_RADIUS_FT, labels=False)
 
     label_x, label_y, label_text = [], [], []
     for i in range(_SLICE_COUNT):
