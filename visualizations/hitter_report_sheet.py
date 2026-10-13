@@ -253,7 +253,7 @@ def render_sheet(r, notes=None, team_name="Pitt State Baseball"):
       <h2 style="margin-top:8px">How they pitch you</h2>{_attack_block(r)}</div>
   </div>
   <div class="row sec">
-    <div class="well"><h2 style="color:#1e8a4c;border-color:#1e8a4c">What went well</h2><ul>{"".join(f"<li>{_e(t)}</li>" for t in r["good"])}</ul></div>
+    <div class="went"><h2 style="color:#1e8a4c;border-color:#1e8a4c">What went well</h2><ul>{"".join(f"<li>{_e(t)}</li>" for t in r["good"])}</ul></div>
     <div class="work"><h2 style="color:#c0392b;border-color:#c0392b">What to work on</h2><ul>{"".join(f"<li>{_e(t)}</li>" for t in r["bad"])}</ul></div>
   </div>
   {_pa_log(r)}{_game_log(r)}
