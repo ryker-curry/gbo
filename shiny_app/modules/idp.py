@@ -305,6 +305,7 @@ def idp_ui():
         ui_helpers.page_header("Individual Development Plan", "Flags, priorities, and lowest-hanging fruit -- click a row below to start a goal for that metric.", actions=ui_helpers.how_to_link("goals")),
         ui.div(ui.output_ui("player_picker"), class_="gbo-filter"),
         ui.output_ui("player_flags_panel"),
+        ui.output_ui("training_order"),
         ui.output_ui("goals_section"),
         # Oct 2026: goals on game stats (chase %, strike %, OPS+, ...).
         game_goal_form.game_goal_form_ui("game_goal"),
@@ -382,6 +383,29 @@ def idp_server(input, output, session, app_state):
     # -------------------------------------------------------------------
 
     _pending_prefill = reactive.Value(None)  # (category_name, metric_name) or None -- see module docstring
+
+    @render.ui
+    def training_order():
+        """Mobility -> stability -> strength (Oct 2026, analytics/training_stage.py) --
+        which stage a pitcher's goals should start at. Staff only."""
+        _refresh_tick()
+        if not app_state.is_authenticated() or app_state.role_name() == "Player":
+            return None
+        pid = _selected_pid()
+        if pid is None:
+            return None
+        from analytics import training_stage as ts
+        import archetype_display as ad
+        db = get_session()
+        try:
+            data, raw, stab = ts.load(db)
+            lad = ts.ladder(pid, data, raw, stab)
+        except Exception:
+            db.rollback()
+            return None
+        finally:
+            db.close()
+        return ui.HTML(ad.ladder_card(lad)) if lad else None
 
     @render.ui
     def player_flags_panel():

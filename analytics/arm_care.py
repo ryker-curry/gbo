@@ -121,7 +121,16 @@ def pitcher_row(db, player, as_of):
         ratio_label = "Caution"
     else:
         ratio_label = "Spike"
+    # Oct 2026 ("Pitch Counts Don't Measure Stress"): stress-weighted ACWR
+    # next to the pitch-count one (analytics/stress_load.py).
+    try:
+        from analytics import stress_load
+        stress = stress_load.pitcher_summary(db, pid, as_of)
+    except Exception:
+        db.rollback()
+        stress = None
     return {
+        "stress": stress,
         "player": player, "last": last, "last_pitches": last_n, "last_was_game": bool(last and last in _game_days(db, pid, last, last)),
         "required_rest": req if last else None, "days_rest": days_rest, "ready_on": ready_on,
         "seven_day": seven, "ratio": ratio, "ratio_label": ratio_label,

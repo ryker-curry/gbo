@@ -344,7 +344,7 @@ def player_profile_server(input, output, session, app_state):
             )
             if history_panels else None
         )
-        assessments_tab = ui.div(breakdown_block, history_block)
+        assessments_tab = ui.div(ui.output_ui("archetype_card"), breakdown_block, history_block)
         rom = bd.get("mobility_rom_report") or []
         mobility_tab = ui.div(
             ui.div(bucket_display.build_movement_flag_ring(mf, rom, key_prefix="profile", mode=mode) if mf else None, style="margin-bottom:16px;"),
@@ -421,6 +421,7 @@ def player_profile_server(input, output, session, app_state):
                 ui.p("How he gets his results: what he leans on, what he lacks, whether that pattern is a known arm-stress "
                      "risk, and whether fixing the limiter has paid off. Staff only.", class_="text-muted small"),
                 cd.strengths_card(doms),
+                _ladder_html(db, pid),
                 cd.idp_buttons(weak, specs, "comp_idp"),
                 cd.velo_card(pid, data["model"], data["velo"].get(pid)),
                 cd.flags_card(fl),
@@ -433,6 +434,34 @@ def player_profile_server(input, output, session, app_state):
             db.close()
 
     _comp_ctx = reactive.Value({})
+
+    def _ladder_html(db, pid):
+        """Mobility -> stability -> strength (analytics/training_stage.py)."""
+        from analytics import training_stage as ts
+        import archetype_display as ad
+        try:
+            data, raw, stab = ts.load(db)
+            return ui.HTML(ad.ladder_card(ts.ladder(pid, data, raw, stab)))
+        except Exception:
+            db.rollback()
+            return None
+
+    @render.ui
+    def archetype_card():
+        """Force-plate / jump archetype (analytics/athlete_archetype.py)."""
+        if not app_state.is_authenticated():
+            return None
+        req("profile_tabs" in input and input.profile_tabs() == "Assessments")
+        from analytics import athlete_archetype as aa
+        import archetype_display as ad
+        db = get_session()
+        try:
+            pid = _selected()
+            if pid is None:
+                return None
+            return ui.HTML(ad.archetype_card(aa.load(db, pid)))
+        finally:
+            db.close()
 
     def _take_open_tab(pid):
         """Tab to open for this player from a (pid, tab) deep link -- kept

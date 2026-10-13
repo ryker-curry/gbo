@@ -152,8 +152,9 @@ GUIDE = [
         "use": [
             "Heart of the plate: swing = Good swing, take = Taken strike (a hittable pitch you let go).",
             "Way off the plate: take = Good take, swing = Chase.",
-            "The edges (shadow) are your call -- Borderline, not graded -- except with two strikes, when you "
-            "protect and a swing is the good decision.",
+            "The edges (shadow): before two strikes, taking one is a Good take -- an edge strike is rarely a pitch "
+            "you can drive (\"can you hit it vs. should you hit it\"); swinging at one is Borderline, not graded. "
+            "With two strikes you protect, and a swing is the good decision.",
             "Swing decision % = good swings + good takes out of everything graded.",
         ],
         "good": ["Swing decision % in the 60s or higher.", "Chase % under about 25%.",

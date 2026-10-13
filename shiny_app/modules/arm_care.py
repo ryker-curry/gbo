@@ -42,7 +42,11 @@ def arm_care_ui():
         ui.output_ui("editor"),
         ui.p("Rest chart (days off after an outing): 1-30 pitches 0 · 31-45 1 · 46-60 2 · 61-75 3 · 76+ 4. "
              "Workload ratio = last 7 days vs his normal week over the last 4 (0.8-1.3 normal, 1.3-1.5 caution, "
-             "over 1.5 spike). Guidance only -- the trainer and coaches make the call.",
+             "over 1.5 spike). Stress ratio (from \"Pitch Counts Don't Measure Stress\"): every pitch weighted by "
+             "effort -- (velo / his max fastball)^2, game pitches x1.2 -- then a 9-day weighted average over his 28-day "
+             "average (under 1.3 green, 1.3-1.5 caution, over 1.5 red). Can throw today = pitches before that ratio "
+             "crosses 1.3. Week vs last: build about 20% a week at most. Long toss, plyos and catch play aren't "
+             "logged, so real load is higher than shown. Guidance only -- the trainer and coaches make the call.",
              class_="text-muted small", style="margin-top:14px;"),
     )
 
@@ -98,7 +102,10 @@ def arm_care_server(input, output, session, app_state):
         as_of = input.as_of()
         head = ("<tr><th style='text-align:left'>Pitcher</th><th>Status</th><th style='text-align:left'>Why</th>"
                 "<th>Last outing</th><th>Pitches</th><th>Days rest</th><th>Needs</th><th>Ready</th>"
-                "<th>Last 7 days</th><th>Workload</th><th style='text-align:left'>Plans</th></tr>")
+                "<th>Last 7 days</th><th>Workload</th><th title='Velo-weighted stress units: 9-day weighted acute over 28-day chronic'>"
+                "Stress ratio</th><th title='Pitches before the stress ratio crosses 1.3'>Can throw today</th>"
+                "<th title='Stress units, last 7 days vs the 7 before'>Week vs last</th>"
+                "<th style='text-align:left'>Plans</th></tr>")
         body = []
         for r in rows:
             p = r["player"]
@@ -118,10 +125,25 @@ def arm_care_server(input, output, session, app_state):
                 f"<td>{'—' if r['days_rest'] is None else r['days_rest']}</td>"
                 f"<td>{'—' if r['required_rest'] is None else r['required_rest']}</td><td>{ready}</td>"
                 f"<td>{r['seven_day']}</td><td style='color:{rcolor}'>{escape(ratio)}</td>"
+                + _stress_cells(r.get("stress")) +
                 f"<td style='text-align:left' class='small'>{plans}</td></tr>")
         html = (f"<div class='table-responsive'><table class='table table-sm' style='text-align:center'>"
                 f"{head}{''.join(body)}</table></div>")
         return ui_helpers.card(ui.HTML(html), title="Pitching staff", right=f"as of {as_of.strftime('%a %b %d')}")
+
+    def _stress_cells(st):
+        if not st:
+            return "<td>—</td><td>—</td><td>—</td>"
+        if not st["full"] or st["ratio"] is None:
+            ratio = "<span class='text-muted small'>Building</span>"
+        else:
+            c = {"Red": "#D94F3D", "Caution": "#B58A22", "Low": "#5B8DEF"}.get(st["zone"], "#3FB27F")
+            ratio = f"<span style='color:{c};font-weight:700'>{st['ratio']:.2f}</span> <span class='small'>{st['zone']}</span>"
+        b = st.get("budget")
+        bud = "—" if not b else (f"~{b['pitches']}" if b["pitches"] is not None else "—")
+        g = st.get("growth")
+        gr = "—" if not g else (f"<span style='color:{'#D94F3D' if g['flag'] else 'inherit'}'>{g['pct']:+.0f}%</span>")
+        return f"<td>{ratio}</td><td>{bud}</td><td>{gr}</td>"
 
     # ---------------- editor ----------------
     @render.ui
