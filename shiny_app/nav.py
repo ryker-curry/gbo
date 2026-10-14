@@ -134,7 +134,7 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             # snapshot above. Same key reused for the Player-facing 'My
             # Pitcher/Hitter Profile' entries below -- one module,
             # self-scoped by role, same pattern as player_profile.py.
-            NavPage("pitcher_profile", "Pitcher Profile", "graph-up-arrow"),
+            NavPage("pitcher_profile", "Pitcher Deep Dive", "graph-up-arrow"),
             # Oct 2026, Ryker: compensation profiles across the staff.
             NavPage("staff_compensation", "Staff Compensation", "diagram-3"),
             NavPage("hitter_profile", "Hitter Profile", "graph-up-arrow"),
@@ -189,7 +189,7 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
         # won't be used.)
         if is_pitcher_player:
             my_dev_pages.append(NavPage("player_bullpens", "My Bullpens", "trophy"))
-            my_dev_pages.append(NavPage("pitcher_profile", "My Pitcher Profile", "graph-up-arrow"))
+            my_dev_pages.append(NavPage("pitcher_profile", "My Pitcher Deep Dive", "graph-up-arrow"))
             # My Game Breakdown (Sept 2026, Ryker: players should be able to
             # see game reports for themselves) -- same shared-module,
             # self-scoped pattern as My Pitcher/Hitter Profile just above:

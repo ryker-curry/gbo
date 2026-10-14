@@ -32,7 +32,7 @@ N_RECENT = 5
 
 # (button id, label, page title, what it needs) -- pitchers then hitters.
 PITCHER_LINKS = [
-    ("pl_profile", "Pitcher Profile", "Pitcher Profile", "pid"),
+    ("pl_profile", "Pitcher Deep Dive", "Pitcher Deep Dive", "pid"),
     ("pl_last", "Last outing", "Pitcher Game Breakdown", "game"),
     ("pl_report", "Pitcher Report", "Pitcher Report", "game"),
     ("pl_week", "Weekly Report", "Weekly Reports", "pid"),
@@ -132,9 +132,9 @@ def register_profile_links(input, output, session, app_state, _selected):
             spec = next(x for x in ALL_LINKS if x[0] == bid)
             _id, _label, title, need = spec
             back = (p.player_id, f"{p.first_name} {p.last_name}")
-            if title == "Pitcher Profile":
+            if title == "Pitcher Deep Dive":
                 app_state.back_to.set(back)
-                app_state.deep_link_pitcher.set((p.player_id, "overview"))
+                app_state.deep_link_pitcher.set((p.player_id, "summary"))
                 ui.update_navs("main_nav", selected=title, session=session.root_scope())
                 return
             if need == "bullpen":

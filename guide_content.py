@@ -49,8 +49,8 @@ GUIDE = [
                  "Coaches: charting at 95%+ and no box-score mismatches."],
     },
     {
-        "key": "pitcher_profile", "title": "Pitcher Profile", "who": "pitchers",
-        "pages": ["Pitcher Profile", "My Pitcher Profile"],
+        "key": "pitcher_profile", "title": "Pitcher Deep Dive", "who": "pitchers",
+        "pages": ["Pitcher Deep Dive", "My Pitcher Deep Dive"],
         "shows": "Everything about a pitcher in one place, filtered by dates, pitch type and game type. The View "
                  "menu is grouped: Summary (Overview, Trends), Stuff & Shape (Metrics, Arsenal, Tunneling+, Arsenal "
                  "Plan), Command (Command & Execution, Zone) and Usage & Results (Results, Count Leverage, Sequencing).",
@@ -74,18 +74,18 @@ GUIDE = [
     },
     {
         "key": "grades", "title": "How the pitching grades are built (Stuff+, Location+, Command+ ...)",
-        "who": "pitchers", "pages": ["Pitcher Profile", "My Pitcher Profile"], "html": "grade_explainer",
+        "who": "pitchers", "pages": ["Pitcher Deep Dive", "My Pitcher Deep Dive"], "html": "grade_explainer",
         "shows": "What goes into each grade and how much each ingredient counts, in plain words.",
         "use": [
             "Stuff+ has a different recipe for each pitch -- tap a pitch to see what matters most for it.",
             "Use the biggest bars to decide what to train: they move your grade the most.",
-            "To see which ingredients helped or hurt YOUR pitch, open Pitcher Profile > Arsenal > Stuff+ Breakdown.",
+            "To see which ingredients helped or hurt YOUR pitch, open Pitcher Deep Dive > Arsenal > Stuff+ Breakdown.",
         ],
         "good": ["100 is our team average. 110+ is clearly above it."],
     },
     {
         "key": "stuff_breakdown", "title": "Why your stuff grades what it does (Stuff+ breakdown)", "who": "pitchers",
-        "pages": ["Pitcher Profile", "My Pitcher Profile"],
+        "pages": ["Pitcher Deep Dive", "My Pitcher Deep Dive"],
         "shows": "Stuff+ starts at a baseline and each trait (velo, vertical break, horizontal break, spin, "
                  "release, velo gap off your fastball for changeups) adds or subtracts points. The pieces add up "
                  "exactly to your grade.",
@@ -100,8 +100,8 @@ GUIDE = [
     },
     {
         "key": "zone_execution", "title": "Zone Execution % (hitting your spot)", "who": "pitchers",
-        "pages": ["Pitcher Profile", "My Pitcher Profile"],
-        "shows": "How often you put the pitch where the catcher called it. Find it on Pitcher Profile > Command & "
+        "pages": ["Pitcher Deep Dive", "My Pitcher Deep Dive"],
+        "shows": "How often you put the pitch where the catcher called it. Find it on Pitcher Deep Dive > Command & "
                  "Execution (also called Hit-the-spot % on the reports).",
         "use": [
             "A pitch hits its spot if it lands in the called box or within 6 inches (half a foot) of it.",
@@ -185,7 +185,7 @@ GUIDE = [
         "good": ["54% or better is our team goal."],
     },
     {
-        "key": "trends", "title": "Trends", "who": "all", "pages": ["Pitcher Profile", "Hitter Profile", "My Pitcher Profile", "My Hitter Profile"],
+        "key": "trends", "title": "Trends", "who": "all", "pages": ["Pitcher Deep Dive", "Hitter Profile", "My Pitcher Deep Dive", "My Hitter Profile"],
         "shows": "Your key stats game by game (or week by week) so you can see whether you're getting better.",
         "use": [
             "Dots are single games; the thick line is a rolling average that smooths out one-game noise.",
@@ -286,8 +286,8 @@ BY_KEY = {s["key"]: s for s in GUIDE}
 GUIDE += [
     {
         "key": "ivb_expected", "title": "IVB over expected (ride vs. arm slot)", "who": "pitchers",
-        "pages": ["Pitcher Profile", "My Pitcher Profile"],
-        "shows": "Pitcher Profile > Metrics. How much more (or less) ride a pitch has than pitchers with the same arm "
+        "pages": ["Pitcher Deep Dive", "My Pitcher Deep Dive"],
+        "shows": "Pitcher Deep Dive > Metrics. How much more (or less) ride a pitch has than pitchers with the same arm "
                  "slot get on our staff. Ride mostly follows slot, so the leftover is what surprises hitters.",
         "use": ["Fastballs: + means it carries more than hitters expect from that arm -- it plays up in the zone. "
                 "- means it sinks or runs more -- live lower in the zone.",
@@ -297,8 +297,8 @@ GUIDE += [
     },
     {
         "key": "slider_fit", "title": "Slider type & fit", "who": "pitchers",
-        "pages": ["Pitcher Profile", "My Pitcher Profile"],
-        "shows": "Pitcher Profile > Arsenal Plan. What his breaking ball actually is (gyro, traditional, sweeper, "
+        "pages": ["Pitcher Deep Dive", "My Pitcher Deep Dive"],
+        "shows": "Pitcher Deep Dive > Arsenal Plan. What his breaking ball actually is (gyro, traditional, sweeper, "
                  "carry sweeper, curveball, slurve) and which slider his fastball suggests he'll spin best.",
         "use": ["Fastball spin efficiency 93%+ leans pronator -- usually a hard gyro slider. 85% or less leans "
                 "supinator -- usually a sweeper. In between, either can work.",
@@ -308,8 +308,8 @@ GUIDE += [
     },
     {
         "key": "velo_fade", "title": "Velo fade", "who": "pitchers",
-        "pages": ["Bullpen Dashboard", "Pitcher Game Breakdown", "Pitcher Profile"],
-        "shows": "Fastball velo by pitch number through a bullpen or a Rapsodo game, with a trend line. Pitcher Profile > "
+        "pages": ["Bullpen Dashboard", "Pitcher Game Breakdown", "Pitcher Deep Dive"],
+        "shows": "Fastball velo by pitch number through a bullpen or a Rapsodo game, with a trend line. Pitcher Deep Dive > "
                  "Trends shows one bar per outing.",
         "use": ["The headline is mph lost per 25 pitches. Under 0.5 = held, 0.5-1.5 = mild fade, more = notable.",
                 "Needs 15+ fastballs with a Rapsodo velo. Game velo only exists when Rapsodo was running.",
@@ -318,8 +318,8 @@ GUIDE += [
     },
     {
         "key": "results", "title": "Results (how hitters did vs each pitch)", "who": "pitchers",
-        "pages": ["Pitcher Profile", "My Pitcher Profile"],
-        "shows": "Pitcher Profile > Results. How hitters did against each of his pitches, graded against our staff "
+        "pages": ["Pitcher Deep Dive", "My Pitcher Deep Dive"],
+        "shows": "Pitcher Deep Dive > Results. How hitters did against each of his pitches, graded against our staff "
                  "on that same pitch, plus how hard balls were hit and where hitters did damage (Rapsodo location).",
         "use": ["Scorecard: green = better than our staff on that pitch, red = worse. Hover a number to see the "
                 "staff's. RV/100 = runs per 100 pitches -- minus is good for him.",
@@ -334,8 +334,8 @@ GUIDE += [
     },
     {
         "key": "sequencing", "title": "Sequencing (what follows what)", "who": "pitchers",
-        "pages": ["Pitcher Profile", "My Pitcher Profile"],
-        "shows": "Pitcher Profile > Sequencing. How he strings pitches together, as four questions: what he throws "
+        "pages": ["Pitcher Deep Dive", "My Pitcher Deep Dive"],
+        "shows": "Pitcher Deep Dive > Sequencing. How he strings pitches together, as four questions: what he throws "
                  "next, whether a hitter can predict it, whether changing eye level and sides works, and how he "
                  "finishes two-strike at-bats. Charted games only; locations come from Rapsodo.",
         "use": ["What he throws next: read across a row -- after that pitch, how often each pitch comes next. Green "
@@ -351,8 +351,8 @@ GUIDE += [
     },
     {
         "key": "tunnel_check", "title": "Tunnel check", "who": "pitchers",
-        "pages": ["Pitcher Profile", "My Pitcher Profile"],
-        "shows": "Pitcher Profile > Tunneling+. Pairs more than about 20\" apart in movement or 10 mph apart in velo "
+        "pages": ["Pitcher Deep Dive", "My Pitcher Deep Dive"],
+        "shows": "Pitcher Deep Dive > Tunneling+. Pairs more than about 20\" apart in movement or 10 mph apart in velo "
                  "can't look like his fastball out of the hand.",
         "use": ["Those pitches still work -- as a change of speed or shape. Judge them on whiffs and results, not "
                 "tunnel numbers."],
@@ -360,8 +360,8 @@ GUIDE += [
     },
     {
         "key": "outperform", "title": "Release & results vs. stuff", "who": "pitchers",
-        "pages": ["Pitcher Profile", "My Pitcher Profile", "Pitching Leaderboard"],
-        "shows": "Pitcher Profile > Overview card, plus Beats Stuff / Release Outlier on the leaderboard. How unusual his "
+        "pages": ["Pitcher Deep Dive", "My Pitcher Deep Dive", "Pitching Leaderboard"],
+        "shows": "Pitcher Deep Dive > Overview card, plus Beats Stuff / Release Outlier on the leaderboard. How unusual his "
                  "release is on our staff, and whether his results beat what his Stuff+ predicts.",
         "use": ["Release: his release height, side and extension as a percentile of our staff; tagged when he's in "
                 "roughly the top or bottom 10%.",
@@ -371,8 +371,8 @@ GUIDE += [
     },
     {
         "key": "arsenal_extras", "title": "Outcome profile & Arsenal Breadth+", "who": "pitchers",
-        "pages": ["Pitcher Profile", "My Pitcher Profile"],
-        "shows": "Pitcher Profile > Arsenal. Outcome profile: what the 60 most similar pitches thrown by other staff "
+        "pages": ["Pitcher Deep Dive", "My Pitcher Deep Dive"],
+        "shows": "Pitcher Deep Dive > Arsenal. Outcome profile: what the 60 most similar pitches thrown by other staff "
                  "pitchers got (whiff %, CSW %, ground-ball %). Arsenal Breadth+: how much speed and movement range "
                  "his arsenal covers (100 = staff average).",
         "use": ["If his actual rates beat 'like it', he's getting more from location or sequencing than the shape alone.",
@@ -448,7 +448,7 @@ GUIDE += [
     },
     {
         "key": "bauer_units", "title": "Bauer units", "who": "pitchers",
-        "pages": ["Pitcher Profile", "My Pitcher Profile", "Bullpen Dashboard"],
+        "pages": ["Pitcher Deep Dive", "My Pitcher Deep Dive", "Bullpen Dashboard"],
         "shows": "Spin divided by velo (rpm per mph). Spin climbs when you throw harder, so this separates natural "
                  "spin ability from arm speed. In the Metrics table (with a vs-team column) and on Trends.",
         "use": ["Most telling on breaking balls: high Bauer units = a natural spinner.",
@@ -472,8 +472,8 @@ GUIDE += [
     },
     {
         "key": "release_consistency", "title": "Release angle consistency", "who": "pitchers",
-        "pages": ["Pitcher Profile", "My Pitcher Profile", "Bullpen Dashboard"],
-        "shows": "Pitcher Profile > Command & Execution, and each Bullpen Dashboard session. How much the angle the ball "
+        "pages": ["Pitcher Deep Dive", "My Pitcher Deep Dive", "Bullpen Dashboard"],
+        "shows": "Pitcher Deep Dive > Command & Execution, and each Bullpen Dashboard session. How much the angle the ball "
                  "leaves your hand (up/down and side to side) varies pitch to pitch within an outing, from Rapsodo.",
         "use": ["The release angle sets where the pitch goes, so a tight spread is the root of command -- and it needs "
                 "no charting, every bullpen measures it.",
@@ -485,8 +485,8 @@ GUIDE += [
     },
     {
         "key": "pitch_mix_trend", "title": "Pitch mix over time", "who": "pitchers",
-        "pages": ["Pitcher Profile", "My Pitcher Profile"],
-        "shows": "Pitcher Profile > Trends. Usage % of each pitch per game or week, from charted games -- or from "
+        "pages": ["Pitcher Deep Dive", "My Pitcher Deep Dive"],
+        "shows": "Pitcher Deep Dive > Trends. Usage % of each pitch per game or week, from charted games -- or from "
                  "Rapsodo bullpens, to see a new pitch being worked in before it shows up in games.",
         "use": ["The line above the chart calls out any pitch whose usage moved 8+ points over the last few games.",
                 "Pair it with Results / Stuff+ trends: is the pitch he's throwing more actually working?"],

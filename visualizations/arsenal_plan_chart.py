@@ -59,7 +59,7 @@ def plan_movement_figure(plan):
     fig.add_annotation(x=-EXTENT + 2, y=-EXTENT + 1.5, text="← glove side", showarrow=False, font=dict(color=TEXT_CREAM, size=10), xanchor="left")
     fig.add_annotation(x=EXTENT - 2, y=-EXTENT + 1.5, text="arm side →", showarrow=False, font=dict(color=TEXT_CREAM, size=10), xanchor="right")
     return apply_gbo_theme(
-        fig, title="Arsenal plan -- pitcher's view (● now, ○ target, ◇ add)", height=520,
+        fig, title="Arsenal plan -- movement, his arm side to the right (● now, ○ target, ◇ add)", height=520,
         x_title="Horizontal break, + = arm side (in)", y_title="Induced vertical break (in)",
         xaxis=dict(range=[-EXTENT, EXTENT], gridcolor=GRID_GRAY, zeroline=False, dtick=5, constrain="domain"),
         yaxis=dict(range=[-EXTENT, EXTENT], gridcolor=GRID_GRAY, zeroline=False, dtick=5, scaleanchor="x", scaleratio=1, constrain="domain"),

@@ -561,7 +561,7 @@ def data_health_server(input, output, session, app_state):
 
     def _open_pitcher(pid, view):
         app_state.deep_link_pitcher.set((int(pid), view))
-        ui.update_navs("main_nav", selected="Pitcher Profile", session=session.root_scope())
+        ui.update_navs("main_nav", selected="Pitcher Deep Dive", session=session.root_scope())
 
     @reactive.effect
     @reactive.event(input.dh_lbl_fs)
