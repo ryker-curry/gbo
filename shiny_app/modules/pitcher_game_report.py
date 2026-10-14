@@ -1111,10 +1111,9 @@ def pitcher_game_report_server(input, output, session, app_state):
             return ui.div(
                 ui.p(ui.strong("Pitch Type Breakdown")),
                 ui.p(
-                    f"Stuff+ is team-relative (100 = your staff's average, 10 points = 1 SD) and only populates for "
-                    f"pitches with a Rapsodo reading linked to this outing. 'Reliable' needs at least "
-                    f"{MIN_BASELINE_PITCHES} pitches of that type in this game -- shown either way, just flagged below "
-                    f"that floor.",
+                    f"Stuff+ grades how nasty each pitch is (velo, movement, spin): 100 = our staff's average for "
+                    f"that pitch, ~110 clearly better, ~90 clearly worse. Needs Rapsodo readings from this outing. "
+                    f"Fewer than {MIN_BASELINE_PITCHES} of a pitch is flagged as a small sample.",
                     class_="text-muted small",
                 ),
                 ui.navset_tab(
@@ -1409,7 +1408,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                         "at a glance. Same Command+ scale as the KPI above (100 = team average for that pitch "
                         "type), just broken out per pitch. A single game's count of one pitch type is a small "
                         "sample -- read this as a rough sense, not a settled one, until you can compare across a "
-                        "stretch of appearances (Pitcher Profile's version of this table covers more games at once).",
+                        "stretch of appearances (Pitcher Deep Dive's version of this table covers more games at once).",
                         class_="text-muted small",
                     ))
                 rows = []
@@ -1663,7 +1662,7 @@ def pitcher_game_report_server(input, output, session, app_state):
         return [
             ui.p(ui.strong("Best Zone"), class_="mt-3 mb-1"),
             ui.p("How far each pitch landed from the area where that pitch plays best (by batter hand) -- see "
-                 "Pitcher Profile → Zone for the full breakdown and results by distance.", class_="text-muted small"),
+                 "Pitcher Deep Dive → Zone for the full breakdown and results by distance.", class_="text-muted small"),
             ui_helpers.render_dict_table(rows),
         ]
 

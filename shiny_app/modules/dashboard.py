@@ -1416,7 +1416,7 @@ def _strategist_section(db, players, ns):
     cards.append(ui_helpers.card(
         ui_helpers.render_dict_table(rows, empty_message="No velo shifts or open arsenal targets."),
         ui.p(f"Velo shift = Rapsodo fastballs in the last 14 days vs his season average (±{VELO_SHIFT} mph or more). "
-             "Arsenal targets = coach overrides on Pitcher Profile → Arsenal Plan.", class_="text-muted small"),
+             "Arsenal targets = coach overrides on Pitcher Deep Dive → Arsenal Plan.", class_="text-muted small"),
         title="Arsenal watch"))
 
     # --- Compensation flags ---

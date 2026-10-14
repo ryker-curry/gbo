@@ -96,18 +96,18 @@ def _fmt_goal_value(v):
 
 
 def location_svg(points, width=230, height=232):
-    """Pitcher's view (his view from the mound): plate_x is the catcher's-
-    view coordinate, so it's flipped here. 1B side on the left."""
+    """Catcher's view (Oct 2026: every location chart in GBO uses the
+    catcher's view). plate_x is already catcher's-view; 3B side on the left."""
     x0, x1, z0, z1 = -2.0, 2.0, 0.6, 4.4
     pad_b = 18
 
     def sx(x):
-        return (-x - x0) / (x1 - x0) * width
+        return (x - x0) / (x1 - x0) * width
 
     def sz(z):
         return (z1 - z) / (z1 - z0) * (height - pad_b)
 
-    zl, zr = sx(ZONE_HALF_WIDTH), sx(-ZONE_HALF_WIDTH)
+    zl, zr = sx(-ZONE_HALF_WIDTH), sx(ZONE_HALF_WIDTH)
     zt, zb = sz(ZONE_TOP), sz(ZONE_BOTTOM)
     parts = [f'<svg viewBox="0 0 {width} {height}" width="100%" style="max-width:{width}px" xmlns="http://www.w3.org/2000/svg">',
              f'<rect x="0" y="0" width="{width}" height="{height - pad_b}" fill="#f7f8fa" stroke="#d6dbe0"/>']
@@ -116,22 +116,22 @@ def location_svg(points, width=230, height=232):
         parts.append(f'<line x1="{zl + w3 * i:.1f}" y1="{zt:.1f}" x2="{zl + w3 * i:.1f}" y2="{zb:.1f}" stroke="#c9ced4" stroke-width="0.8"/>')
         parts.append(f'<line x1="{zl:.1f}" y1="{zt + h3 * i:.1f}" x2="{zr:.1f}" y2="{zt + h3 * i:.1f}" stroke="#c9ced4" stroke-width="0.8"/>')
     parts.append(f'<rect x="{zl:.1f}" y="{zt:.1f}" width="{zr - zl:.1f}" height="{zb - zt:.1f}" fill="none" stroke="#1b1f24" stroke-width="1.6"/>')
-    # Plate, pitcher's view: flat front edge nearest the viewer (bottom), point toward the zone.
+    # Plate, catcher's view: flat edge toward the zone (pitcher side), point toward the viewer.
     gy = sz(0.95)
     pw = zr - zl
     parts.append(
-        f'<path d="M {zl:.1f} {gy + 10:.1f} L {zr:.1f} {gy + 10:.1f} L {zr:.1f} {gy + 4:.1f} '
-        f'L {zl + pw / 2:.1f} {gy - 3:.1f} L {zl:.1f} {gy + 4:.1f} Z" fill="#ffffff" stroke="#1b1f24" stroke-width="1.2"/>')
+        f'<path d="M {zl:.1f} {gy - 3:.1f} L {zr:.1f} {gy - 3:.1f} L {zr:.1f} {gy + 3:.1f} '
+        f'L {zl + pw / 2:.1f} {gy + 10:.1f} L {zl:.1f} {gy + 3:.1f} Z" fill="#ffffff" stroke="#1b1f24" stroke-width="1.2"/>')
     for x, z, label, _outcome in points:
-        if not (x0 - 0.5 <= -x <= x1 + 0.5 and z0 - 0.5 <= z <= z1 + 0.5):
+        if not (x0 - 0.5 <= x <= x1 + 0.5 and z0 - 0.5 <= z <= z1 + 0.5):
             continue
         cx = min(max(sx(x), 3), width - 3)
         cy = min(max(sz(z), 3), height - pad_b - 3)
         parts.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="3.6" fill="{get_pitch_color(label)}" '
                      f'fill-opacity="0.8" stroke="#ffffff" stroke-width="0.6"/>')
-    parts.append(f'<text x="4" y="{height - 5}" font-size="9" fill="#5d6670">&#8592; 1B side</text>')
-    parts.append(f'<text x="{width - 4}" y="{height - 5}" font-size="9" fill="#5d6670" text-anchor="end">3B side &#8594;</text>')
-    parts.append(f'<text x="{width / 2}" y="{height - 5}" font-size="9" fill="#5d6670" text-anchor="middle">your view from the mound</text>')
+    parts.append(f'<text x="4" y="{height - 5}" font-size="9" fill="#5d6670">&#8592; 3B side</text>')
+    parts.append(f'<text x="{width - 4}" y="{height - 5}" font-size="9" fill="#5d6670" text-anchor="end">1B side &#8594;</text>')
+    parts.append(f'<text x="{width / 2}" y="{height - 5}" font-size="9" fill="#5d6670" text-anchor="middle">catcher&#39;s view</text>')
     parts.append("</svg>")
     return "".join(parts)
 

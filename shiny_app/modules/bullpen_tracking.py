@@ -670,7 +670,7 @@ def bullpen_tracking_server(input, output, session, app_state):
         _refresh_tick()
         if not _access_ok() or _active_bullpen_id() is None:
             return None
-        return ui.input_radio_buttons("bp_zone_view", "Grid perspective", choices=["Pitcher's view", "Catcher's view"], selected="Pitcher's view", inline=True)
+        return ui.input_radio_buttons("bp_zone_view", "Grid perspective", choices=["Pitcher's view", "Catcher's view"], selected="Catcher's view", inline=True)
 
     @render.ui
     def record_pitch_section():
@@ -1224,7 +1224,7 @@ def bullpen_tracking_server(input, output, session, app_state):
                 # "Grid perspective" toggle above is currently set to
                 # (Sept 2026, Ryker), so the two don't disagree about
                 # which way the coach is meant to be looking.
-                zone_view = "catcher" if ("bp_zone_view" in input and input.bp_zone_view() == "Catcher's view") else "pitcher"
+                zone_view = "pitcher" if ("bp_zone_view" in input and input.bp_zone_view() == "Pitcher's view") else "catcher"
                 children.append(_render_strike_zone_plot("Actual Pitch Locations", movement_data, view=zone_view))
                 children.append(ui.p("Where pitches actually crossed the plate -- from real Rapsodo Plate Side/Height, not the called intended zone.", class_="text-muted small"))
             children.append(ui.p("Bold labeled markers are the average per pitch type; smaller dots are individual pitches.", class_="text-muted small"))

@@ -89,12 +89,11 @@ def seam_shift_html(mine, staff, name_of, pid):
     head = "<tr><th>Pitch</th><th>Axis gap (white line = staff)</th><th>What the seams add</th><th>Whiff %</th><th>GB %</th></tr>"
     body = f'<div class="gbo-sg-wrap"><table class="gbo-rc"><thead>{head}</thead><tbody>{"".join(rows)}</tbody></table></div>'
     s1 = _sec("Seam shift -- his pitches",
-              "Axis gap = how far the ball's real movement direction sits from what its spin alone explains, in clock "
-              "minutes (1 hour = 30°). Rapsodo measures both. A big gap means the seams are moving the ball "
-              f"(seam-shifted wake). Tagged seam-shifted at {pi.SSW_MIN}+ min with {pi.SSW_MIN_IN:.0f}+ in of non-spin "
-              "movement -- set from our staff's Rapsodo spread (Driveline's MLB cut is 50 min on Hawk-Eye, which "
-              "measures the axis differently). Fastballs and changeups only: breaking balls are too gyro-heavy for "
-              "Rapsodo's spin direction to mean much. Whiff and GB % come from charted games.", body)
+              "Does the ball move more than its spin explains? When it does, the seams are moving it (\"seam-shifted "
+              "wake\") -- usually extra sink or run that's hard for hitters to read. Rapsodo measures both, and the "
+              "gap is shown in clock minutes like a spin-axis reading (30 min = half an hour on the clock). Tagged "
+              f"seam-shifted at {pi.SSW_MIN}+ min with {pi.SSW_MIN_IN:.0f}+ in of extra movement. Fastballs and "
+              "changeups only. Whiff and ground-ball % come from charted games.", body)
     split_rows = []
     for fam, d in staff["split"].items():
         a, b = d["ssw"], d["trad"]
@@ -298,3 +297,64 @@ def outs_xbh_html(rows, title, how):
                    f'<div class="gbo-pi-bar" style="width:{w:.0f}%"></div></div><b>{val}</b></div></td></tr>')
     return CSS + _sec(title, how, '<table class="gbo-rc"><thead><tr><th>Pitch</th><th>Pitches</th><th>Outs</th><th>XBH</th>'
                       f'<th>Outs / XBH</th></tr></thead><tbody>{"".join(trs)}</tbody></table>')
+
+
+# ---------------------------------------------------------------------------
+# Coach Summary (default Pitcher Deep Dive view)
+# ---------------------------------------------------------------------------
+
+_MARK = {"good": ("▲", "#3FB27F", "better than"), "bad": ("▼", "#D64545", "below"), "ok": ("●", "#C9A227", "about")}
+
+
+def _tile(r):
+    v = r.get("you")
+    if v is None:
+        val = "—"
+    else:
+        val = f"{v:.0f}%" if r.get("unit") == "%" else f"{v:.1f}"
+    ref = None
+    if r.get("goal") is not None:
+        ref = f"goal {r['goal']:.0f}%"
+    elif r.get("d2") is not None:
+        ref = f"D2 avg {r['d2']:.0f}%" if r.get("unit") == "%" else f"D2 avg {r['d2']:.1f}"
+    elif r.get("team") is not None:
+        ref = f"team {r['team']:.0f}%" if r.get("unit") == "%" else f"team {r['team']:.1f}"
+    m = _MARK.get(r.get("mark"))
+    badge = (f'<span style="color:{m[1]};font-weight:700">{m[0]}</span> ' if m else "")
+    small = "small sample" if r.get("mark") is None and v is not None else (ref or "")
+    return (f'<div class="gbo-pi-tile" title="{_e(r.get("means", ""))}"><b>{badge}{val}</b>'
+            f'<span>{_e(r["label"])}<br>{_e(small)}</span></div>')
+
+
+def coach_summary_html(s, name, label):
+    if not s["n"]:
+        return CSS + _sec("Coach summary", "", "<p class='small text-muted'>No charted game pitches in this range yet.</p>")
+    head = (f'<p class="text-muted small gbo-seq-how">{_e(name)} · {_e(label)}'
+            + (f' · {_e(s["ip"])} IP' if s.get("ip") else "") + (f' · {s["bf"]} batters' if s.get("bf") else "")
+            + '. ▲ better than the goal (or D2 average, or team), ▼ below it, ● about the same. '
+              'Hover a box for what it means.</p>')
+    tiles = '<div class="gbo-pi-tiles">' + "".join(_tile(r) for r in s["tiles"]) + "</div>"
+
+    def lst(items, empty):
+        return ('<ul class="gbo-pi-lines">' + "".join(f"<li>{_e(x)}</li>" for x in items) + "</ul>") if items \
+            else f"<p class='small text-muted'>{empty}</p>"
+
+    pitches = ""
+    if s.get("best") or s.get("worst"):
+        pitches = ('<div class="gbo-pi-vs">'
+                   + (f'<div><div class="small" style="font-weight:700;color:#3FB27F">BEST PITCH RIGHT NOW</div>'
+                      f'<p class="small">{_e(s["best"])}</p></div>' if s.get("best") else "")
+                   + (f'<div><div class="small" style="font-weight:700;color:#D64545">GETTING HIT</div>'
+                      f'<p class="small">{_e(s["worst"])}</p></div>' if s.get("worst") else "")
+                   + "</div>")
+    work = list(s["bad"])
+    arsenal = (f'<div class="small" style="margin-top:6px"><b>Pitch shape to chase:</b> {_e(s["arsenal"])}</div>'
+               if s.get("arsenal") else "")
+    body = (head + tiles + pitches
+            + '<div class="gbo-pi-vs" style="margin-top:6px">'
+            + f'<div style="border-left:3px solid #3FB27F;padding-left:10px"><div class="small" style="font-weight:700">'
+              f'WHAT\'S WORKING</div>{lst(s["good"], "Nothing stands out above the goal or team yet.")}</div>'
+            + f'<div style="border-left:3px solid #D64545;padding-left:10px"><div class="small" style="font-weight:700">'
+              f'WHAT TO WORK ON</div>{lst(work, "Nothing stands out as a problem in the numbers.")}{arsenal}</div>'
+            + "</div>")
+    return CSS + _sec("Coach summary", "", body)

@@ -123,7 +123,7 @@ def _fastball_shape_note(db, import_record):
         if not parts:
             return ""
         return (f" Heads-up: {' and '.join(parts)} -- "
-                f"review them in Pitcher Profile → Fastball Shape Check.")
+                f"review them in Pitcher Deep Dive → Fastball Shape Check.")
     except Exception:
         return ""
 

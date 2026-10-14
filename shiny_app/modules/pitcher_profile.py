@@ -245,10 +245,13 @@ def _zone_hand_filtered(db, pitches, hand_choice):
     return [p for p in pitches if hands.get(p.game_pitch_id) == target]
 
 
+PLUS_MIN_IP = 15   # Oct 2026 coach pass: plus stats hidden below this
+
+
 @module.ui
 def pitcher_profile_ui():
     return ui.div(
-        ui_helpers.page_header("Pitcher Profile", actions=ui_helpers.how_to_link("pitcher_profile")),
+        ui_helpers.page_header("Pitcher Deep Dive", "Everything on one pitcher -- start with the Coach Summary, then open a view for the detail.", actions=ui_helpers.how_to_link("pitcher_profile")),
         ui.output_ui("pp_player_picker"),
         ui.output_ui("pp_filters"),
         # Sept 2026, Ryker: a "View" dropdown instead of every section
@@ -551,15 +554,18 @@ def pitcher_profile_server(input, output, session, app_state):
                 return None
             # Oct 2026 reorganization (Ryker approved): grouped menu (optgroups);
             # the view keys themselves are unchanged.
+            # Oct 2026 coach-usability pass (Ryker): a plain-language Coach
+            # Summary opens first; research-grade views sit under Advanced.
             view_choices = {
-                "Summary": {"overview": "Overview", "trends": "Trends"},
+                "Start here": {"summary": "Coach Summary"},
+                "Summary": {"overview": "Overview (grades)", "trends": "Trends"},
                 "Stuff & Shape": {"metrics": "Metrics (Physical Profile)", "arsenal": "Arsenal",
-                                  "tunneling": "Tunneling+", "arsenal_plan": "Arsenal Plan",
-                                  "plane": "Plane & Preference", "seam_shift": "Seam Shift"},
+                                  "arsenal_plan": "Arsenal Plan"},
                 "Command": {"command": "Command & Execution", "zone": "Zone"},
-                "Usage & Results": {"results": "Results", "count_leverage": "Count Leverage",
-                                    "sequencing": "Sequencing", "get_ahead": "Get Ahead, Miss Bats",
+                "Usage & Results": {"results": "Results", "get_ahead": "Get Ahead, Miss Bats",
+                                    "sequencing": "Sequencing", "count_leverage": "Count Leverage",
                                     "usage_split": "Usage Split"},
+                "Advanced (deep dive)": {"tunneling": "Tunneling+", "seam_shift": "Seam Shift"},
             }
             # Oct 2026, Ryker: "i don't want guys to see it" -- the
             # label checks are staff-only data-cleanup tools.
@@ -568,7 +574,7 @@ def pitcher_profile_server(input, output, session, app_state):
                                                "pitch_type_check": "Pitch Type Check"}
             return ui.div(
                 ui.hr(),
-                ui.input_select("pp_view", "View", choices=view_choices, selected=_take_pending_view()),
+                ui.input_select("pp_view", "View", choices=view_choices, selected=_take_pending_view() or "summary"),
             )
         finally:
             db.close()
@@ -750,38 +756,41 @@ def pitcher_profile_server(input, output, session, app_state):
                     {"label": "K", "value": str(line["K"])},
                     {"label": "BB", "value": str(line["BB"])},
                     {"label": "WHIP", "value": _fmt(line["WHIP"])},
-                    {"label": "TBIP", "value": _fmt(line["TBIP"])},
                     {"label": "FIP", "value": _fmt(line["FIP"])},
-                    {"label": "SIERA", "value": _fmt(line.get("SIERA"))},
-                ]))
-                sections.append(ui_helpers.render_kpi_cards([
                     {"label": "Strike %", "value": _fmt_pct(line["Strike %"])},
-                    {"label": "Zone Execution %", "value": _fmt_pct(line["Zone Execution %"])},
-                    {"label": "OBA", "value": _fmt(line["OBA (opponent AVG)"], 3)},
-                    {"label": "wOBA*", "value": _fmt(line["wOBA"], 3)},
+                    {"label": "Hit-the-spot %", "value": _fmt_pct(line["Zone Execution %"])},
                 ]))
-                sections.append(ui.p("*wOBA uses generic linear weights, a relative read within your own games, not MLB-exact.", class_="text-muted small"))
+                # Oct 2026 coach pass: the rarely-used rate stats sit behind a
+                # click, each with a one-line meaning.
+                sections.append(ui.tags.details(
+                    ui.tags.summary("More stats"),
+                    ui_helpers.render_kpi_cards([
+                        {"label": "TBIP", "value": _fmt(line["TBIP"]), "delta": "bases allowed per inning"},
+                        {"label": "SIERA", "value": _fmt(line.get("SIERA")), "delta": "ERA his K / BB / grounders predict"},
+                        {"label": "OBA", "value": _fmt(line["OBA (opponent AVG)"], 3), "delta": "hitters' average off him"},
+                        {"label": "wOBA", "value": _fmt(line["wOBA"], 3), "delta": "overall damage per hitter (.320 ~ avg)"},
+                    ]),
+                    class_="gbo-seq-details",
+                ))
 
-                sections.append(ui.p(ui.strong("Plus stats vs D2 (2026)")))
-                sections.append(ui_helpers.plus_stat_cards(league_baselines.pitching_plus(line), league_baselines.PITCHING_PLUS_ORDER, league_baselines.pitching_actuals(line)))
-                sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
+                ip_dec = line.get("IP (decimal)") or 0
+                plus = ui_helpers.plus_stat_cards(league_baselines.pitching_plus(line), league_baselines.PITCHING_PLUS_ORDER,
+                                                  league_baselines.pitching_actuals(line))
+                sections.append(ui.p(ui.strong("Compared with D2 (100 = D2 average, higher is better)")))
+                if ip_dec < PLUS_MIN_IP:
+                    sections.append(ui.p(f"Only {line['IP']} innings -- these swing wildly until about {PLUS_MIN_IP} "
+                                         "innings, so they're hidden. Open to see them anyway.", class_="text-muted small"))
+                    sections.append(ui.tags.details(ui.tags.summary("Show anyway"), plus, class_="gbo-seq-details"))
+                else:
+                    sections.append(plus)
 
             sections.append(ui.hr())
             sections.append(ui.p(ui.strong("Overview")))
             sections.append(ui.p(
-                "Stuff+/Location+/Pitching+: 100 = your own team's average across every graded pitch, 10 points = 1 "
-                "standard deviation. Team-relative only -- GBO has no access to league-wide pitch data to compare "
-                "against a real MLB Stuff+ number.",
+                "Grades: 100 = our staff's average. Around 110 is clearly better than most of the staff, 90 clearly "
+                "worse. Each pitch is only compared with the same pitch on our staff (his fastball vs our fastballs). "
+                "Stuff = how nasty the pitch is (velo, movement, spin), Location = where it ends up, Pitching = both.",
                 class_="text-muted small",
-            ))
-            sections.append(ui.p(
-                "\"Overall\" below is blended across every pitch type thrown in this window (each pitch type "
-                "counted once, not weighted by how often it's thrown), not a single pitch's grade -- the "
-                "per-pitch-type breakdown underneath it grades each pitch against the team's own population of "
-                "that SAME pitch type (a 4-Seam Fastball's Stuff+ never blends with sliders or changeups). The "
-                "Arsenal tab has the same per-pitch-type numbers as a compact table, with Usage % and pitch "
-                "counts alongside them.",
-                class_="text-muted small fst-italic",
             ))
 
             bundle = profile_queries.compute_grading_bundle(db, game_pitches, rapsodo_pitches)
@@ -859,17 +868,9 @@ def pitcher_profile_server(input, output, session, app_state):
                 sections.append(ui.hr())
                 sections.append(ui.p(ui.strong("Performance")))
                 sections.append(ui.p(
-                    "Equal-weighted blend of Stuff+, Location+, Command+, Arsenal (usage-weighted Pitching+ across "
-                    "the mix), and Results (FIP/WHIP/K-BB/CSW%/Execution%, team-relative) -- game production, kept "
-                    "separate from the Bucket System's physical/athletic score. Not adjusted for the overlap this "
-                    "creates between Arsenal and Stuff+/Location+ (Arsenal is itself built from them) -- a V1 "
-                    "formula, same treatment as every other composite in this build.",
+                    "One overall number: his stuff, location, command, pitch mix and game results blended together. "
+                    "100 = staff average.",
                     class_="text-muted small",
-                ))
-                sections.append(ui.p(
-                    "Stuff+/Location+ here are the same blended-across-pitch-types numbers as the Grades section "
-                    "above (Arsenal below them IS usage-weighted, per pitch type -- see the Arsenal tab).",
-                    class_="text-muted small fst-italic",
                 ))
                 performance_bars = ui_helpers.render_percentile_bars([
                     ("Stuff+", stuff_plus_value),
@@ -1193,11 +1194,11 @@ def pitcher_profile_server(input, output, session, app_state):
                 ]))
             if trajectory_children:
                 trajectory_children.append(ui.p(
-                    "HAVAA (Height-Adjusted VAA): how many standard deviations flatter (+) or steeper (-) than a "
-                    "typical pitch of the SAME type crossing the plate at the SAME height, against a team-wide "
-                    "baseline -- isolates true ride/carry from the geometric fact that raw VAA is naturally "
-                    "flatter high in the zone and steeper low. Estimated VAA/Arm Angle are geometric estimates "
-                    "from release point and plate-crossing data, not direct biomechanical measurements.",
+                    "Approach angle = how flat or steep the pitch comes into the zone. HAVAA adjusts that for where "
+                    "the pitch crosses (pitches up in the zone are naturally flatter): + = flatter than our staff's "
+                    "same pitch at that height (good for a riding fastball up), - = steeper (good for sinkers and "
+                    "breaking balls down). Arm angle and approach angle are estimates from Rapsodo release and "
+                    "plate data.",
                     class_="text-muted small",
                 ))
 
@@ -1423,25 +1424,12 @@ def pitcher_profile_server(input, output, session, app_state):
                     children.append(ui_helpers.render_kpi_cards(context_cards, accent=True))
             if children:
                 children.append(ui.p(
-                    f"Tunnel: how far apart (in inches) this pitch and the {primary_fb} still are ~167ms "
-                    "before THIS pitch would cross the plate -- roughly when a hitter must commit to swing. "
-                    "Plate: how far apart they end up at the plate. Late Break: the difference (separation "
-                    "added after the decision point). Ratio: Plate/Tunnel -- GBO's own metric, higher means "
-                    "the pitches looked more alike early and diverged more late. Break:Tunnel % (BP): Late "
-                    "Break / Tunnel as a percentage -- this is the actual formula Baseball Prospectus "
-                    "published as their \"Break:Tunnel Ratio\" (GBO's own Ratio field above shares a similar "
-                    "name but isn't the same formula). Release (Combined): separation between the two "
-                    "pitches' real release points -- a pitcher who releases two pitch types from visibly "
-                    "different slots is telegraphing before the ball even leaves his hand, regardless of how "
-                    "well the flight paths converge afterward. Release Height Diff/Release Side Diff break that "
-                    "same separation into its two axes (how high vs. how far to the side) -- context for "
-                    "coaching the fix, not separately graded. Tunneling+ blends Ratio (higher is better) and "
-                    "the combined Release number (lower is better) against the rest of the team, equally "
-                    "weighted (100 = team average, 10 points = 1 SD) -- a placeholder weighting, not a "
-                    "validated one. Velo Diff/Vert Break Diff are shown for context only, not folded into the "
-                    f"grade. Built only from real back-to-back pitch sequences (at least {MIN_TUNNELING_PAIRS} "
-                    "needed per pitch pair) -- bullpen reps and real game plate appearances, not random "
-                    "pitches paired across different outings.",
+                    f"How well each pitch hides behind his {primary_fb}. Tunnel = how far apart the two pitches are at "
+                    "the moment a hitter has to decide to swing (smaller = harder to tell apart). Plate = how far "
+                    "apart they finish. Best pairs look the same early and split late. Release = how far apart the "
+                    "two leave his hand (smaller is better -- a different release tips the pitch). Tunneling+ "
+                    "grades the pair against our staff, 100 = average. Built only from real back-to-back pitches "
+                    f"(at least {MIN_TUNNELING_PAIRS} per pair).",
                     class_="text-muted small",
                 ))
                 children.append(ui.p(
@@ -1759,7 +1747,17 @@ def pitcher_profile_server(input, output, session, app_state):
     # pitch_insights_display.py): Plane & Preference, Seam Shift,
     # Get Ahead / Miss Bats, Usage Split.
     # -------------------------------------------------------------------
-    _INSIGHT_VIEWS = ("plane", "seam_shift", "get_ahead", "usage_split")
+    _INSIGHT_VIEWS = ("summary", "plane", "seam_shift", "get_ahead", "usage_split")
+    _DIG = (("arsenal_plan", "Arsenal Plan"), ("results", "Results by pitch"), ("command", "Command"),
+            ("sequencing", "Sequencing"), ("trends", "Trends"))
+
+    for _key, _lbl in _DIG:
+        def _mk(key):
+            @reactive.effect
+            @reactive.event(input[f"pp_dig_{key}"])
+            def _go():
+                ui.update_select("pp_view", selected=key)
+        _mk(_key)
 
     @render.ui
     def pp_insights_section():
@@ -1773,6 +1771,14 @@ def pitcher_profile_server(input, output, session, app_state):
         if view not in _INSIGHT_VIEWS:
             return None
         extra = None
+        if view == "summary":
+            extra = ui.div(
+                ui.p(ui.strong("Coach Summary"), "  ", ui.span("the short version -- open a view below for the detail",
+                                                             class_="text-muted small"), style="margin-bottom:4px;"),
+                ui.div(ui.span("Dig deeper: ", class_="small text-muted"),
+                       *[ui.input_action_button(f"pp_dig_{k}", lbl, class_="btn-sm btn-outline-light",
+                                                style="margin:0 6px 6px 0;") for k, lbl in _DIG]),
+            )
         if view == "usage_split":
             f = _current_filters()
             db = get_session()
@@ -1809,6 +1815,25 @@ def pitcher_profile_server(input, output, session, app_state):
             if player is None:
                 return None
             throws = player.throws
+            if view == "summary":
+                from analytics import coach_summary
+                mine = profile_queries.get_pitcher_profile_pitches(
+                    db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+                    game_scope=f["game_scope"], game_id=f["game_id"]) or []
+                team = trends.team_pitches_in_range(db, f["date_from"], f["date_to"], pitching=True)
+                loc = sequencing.loc_map(profile_queries.rapsodo_by_game_pitch_id(
+                    db, [p.game_pitch_id for p in list(mine) + list(team)]))
+                raps = profile_queries.get_pitcher_rapsodo_pitches(
+                    db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+                    game_scope=f["game_scope"], game_id=f["game_id"]) or []
+                fb_like = [r for r in raps if pitch_type_label(r) in arsenal_plan.FASTBALLS]
+                arm, _n = average_estimated_arm_angle(fb_like or raps, player)
+                hs = [float(r.release_height) for r in (fb_like or raps) if r.release_height is not None]
+                game_ids = sorted({p.game_id for p in mine})
+                label = (f"{f['date_from']:%b %d, %Y} – {f['date_to']:%b %d, %Y}" if f["date_from"] and f["date_to"] else "this range")
+                summ = coach_summary.build(db, pid, game_ids, label, list(mine), list(team), loc, raps, throws, arm,
+                                           sum(hs) / len(hs) if hs else None, overrides=_ap_overrides(db, pid))
+                return ui.HTML(pid_html.coach_summary_html(summ, f"{player.first_name} {player.last_name}", label))
             if view in ("plane", "seam_shift"):
                 raps = profile_queries.get_pitcher_rapsodo_pitches(
                     db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
@@ -2870,17 +2895,10 @@ def pitcher_profile_server(input, output, session, app_state):
             return ui.div(
                 ui.p(ui.strong("Count Leverage")),
                 ui.p(
-                    "Pitch mix by ball-strike count, laid out as a count tree -- 0-0 at the top, then every count "
-                    "reachable by that many total pitches into the at-bat below it, pitcher-favorable (more "
-                    "strikes) toward the left, hitter-favorable (more balls) toward the right, narrowing back "
-                    "down to 3-2 alone at the bottom. Pitch selection isn't supposed to stay fixed across an "
-                    "at-bat: the idea (Lance Brozdowski's framing, and the same split behind the Marlins' own "
-                    "dugout pitch-calling system) is best stuff middle-middle in non-two-strike counts, leaning "
-                    "on breaking stuff once there are two strikes to chase the whiff. Each pie's own count total "
-                    "is in its title; percentages are of THAT count, not his overall mix. Hover a slice for that "
-                    "pitch/count combo's own RV/100 (run value -- same currency Location+/Pitching+/Command+ use "
-                    "elsewhere on this page) to see whether what he leans on there is actually working, not just "
-                    "how often he throws it.",
+                    "What he throws in every count. 0-0 is at the top; counts where he's ahead lean left, counts "
+                    "where he's behind lean right, down to 3-2 at the bottom. Each pie is that count only (pitches "
+                    "in its title). Hover a slice to see if that pitch is working there -- a negative run value is "
+                    "good for him. Rule of thumb: best strike pitch early, put-away pitch with two strikes.",
                     class_="text-muted small",
                 ),
                 ui.navset_tab(
@@ -3737,6 +3755,23 @@ def pitcher_profile_server(input, output, session, app_state):
             title="Slider type & fit",
         )
 
+    def _release_window_card(pl):
+        """Where each pitch leaves his hand vs his fastball (pitch_insights.plane)."""
+        if pl is None:
+            return None
+        rows = []
+        for r in pl["release"]:
+            off = "his fastball" if r["offset"] is None else f"{r['offset']:.1f}\" away"
+            flag = (" -- hitters can pick it up early" if r["tell"] else "") + (" -- release wanders" if r["wander"] else "")
+            rows.append(ui.div(ui.strong(r["type"], style=f"color:{get_pitch_color(r['type'])};"),
+                               ui.span(f"  {off} · spread {r['sd']:.1f}\"" if r["sd"] is not None else f"  {off}",
+                                       class_="small"),
+                               ui.span(flag, class_="small", style="color:#F2A65A;") if flag else None))
+        return ui_helpers.card(
+            ui.p("Where each pitch leaves his hand compared with his fastball. Every pitch should come out of the "
+                 "same window; a pitch that leaves 3\"+ away, or a release that wanders 6\"+, tips hitters off.",
+                 class_="text-muted small"), *rows, title="Release window")
+
     @render.ui
     def pp_arsenal_plan_section():
         if not app_state.is_authenticated():
@@ -3759,9 +3794,9 @@ def pitcher_profile_server(input, output, session, app_state):
             head = [
                 ui.hr(),
                 ui.h5("Arsenal Plan", class_="gbo-section-title"),
-                ui.p("What to keep, what to tune, and what to add -- built off his own fastball shape and arm slot, "
-                     "using established pitch-design rules (not a trained model like Paradigm's REAPER). Treat targets "
-                     "as starting points; coaches can save their own. Uses this page's date range.",
+                ui.p("What to keep, what to tune, and what to add -- built off his own fastball shape and arm slot "
+                     "with standard pitch-design rules. Targets are starting points; coaches can save their own. "
+                     "Ride = how much the pitch holds up (inches), run = sideways movement (+ toward his arm side).",
                      class_="text-muted small"),
                 controls,
             ]
@@ -3771,14 +3806,43 @@ def pitcher_profile_server(input, output, session, app_state):
             fb = plan["fb"]
             slot_txt = {"high": "high slot", "low": "low slot", "mid": "three-quarter slot"}[plan["slot"]]
             arm_txt = f" (est. arm angle {plan['arm_angle']:.0f}°)" if plan.get("arm_angle") is not None else ""
-            kind_txt = {"ride": "a riding fastball profile -- builds around vertical separation",
-                        "run": "a running/sinking profile -- builds around horizontal separation",
-                        "mid": "an in-between profile"}[plan["kind"]]
-            summary = ui.p(
+            # Oct 2026 (one voice): the plane read (pitch_insights.plane) is
+            # folded in here instead of its own view, in the same words.
+            from analytics import pitch_insights as _pins
+            kind_txt = {"ride": "a vertical mover -- build around ride and depth (riding fastball, downer breaking ball, "
+                                "splitter/vertical changeup)",
+                        "run": "a horizontal mover -- build around run and sweep (sinker, sweeper, fading changeup)",
+                        "mid": "in between -- neither ride nor run dominates, so both directions are open"}[plan["kind"]]
+            pl = _pins.plane(raps, player.throws, plan.get("arm_angle"))
+            pl_word = {"vertical": "ride", "horizontal": "run", "diagonal": "mid"}.get(pl["kind"]) if pl else None
+            second = None
+            if pl is not None and pl_word != plan["kind"] and "mid" not in (pl_word, plan["kind"]):
+                second = ui.p(f"Second check disagrees: the line from his {pl['fb'].lower()} to his {pl['bb'].lower()} "
+                              f"reads {pl['kind']}. Mixed signals -- check high-speed video before changing his arm path.",
+                              class_="small", style="color:#F2A65A;")
+            summary = ui.div(ui.p(
                 ui.strong(f"{plan['primary']}: "),
-                f"{fb['velo']:.1f} mph, {fb['ivb']:.1f}\" ride, {fb['run']:.1f}\" arm-side run · {slot_txt}{arm_txt} · "
-                f"{kind_txt}.", class_="small",
-            )
+                f"{fb['velo']:.1f} mph, {fb['ivb']:.1f}\" ride, {fb['run']:.1f}\" arm-side run · {slot_txt}{arm_txt}. "
+                f"He looks like {kind_txt}.", class_="small",
+            ), second)
+            # Only mention the plane when the target also moves the pitch back
+            # toward his natural movement line -- then both reads agree.
+            off_plane = {o["type"]: o["dist"] for o in (pl["off"] if pl else []) if o["off"]}
+            if pl is not None:
+                F, B = pl["shapes"][pl["fb"]], pl["shapes"][pl["bb"]]
+                dh, dv = B["h"] - F["h"], B["v"] - F["v"]
+                L = (dh * dh + dv * dv) ** 0.5 or 1.0
+
+                def _line_dist(h, v):
+                    return abs(dv * (h - F["h"]) - dh * (v - F["v"])) / L
+                for r in plan["rows"]:
+                    t = r.get("target")
+                    if r["label"] in off_plane and r["status"] == "tune" and t:
+                        to = _line_dist(t["run"], t["ivb"])
+                        if to <= off_plane[r["label"]] - 3:
+                            r["text"] += (f" It now sits {off_plane[r['label']]:.0f}\" off the line from his fastball to "
+                                          "his breaking ball, which is why it can feel forced -- the target brings it "
+                                          "back toward his natural movement.")
 
             def fmt_shape(sh):
                 v = f"{sh['velo']:.1f} mph · " if sh.get("velo") is not None else ""
@@ -3810,6 +3874,7 @@ def pitcher_profile_server(input, output, session, app_state):
             children = head + [summary,
                 ui.layout_columns(keep_card, tune_card, add_card, col_widths=[4, 4, 4]),
                 _slider_fit_card(db, player, plan, raps),
+                _release_window_card(pl),
                 output_widget("pp_ap_movement"),
                 ui.p("Progress: how far each pitch's shape was from its target in each session (all readings that day).",
                      class_="text-muted small mt-2"),

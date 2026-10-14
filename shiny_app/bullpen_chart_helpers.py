@@ -44,11 +44,11 @@ PITCH_TYPE_COLORS = [
 ]
 
 
-def render_strike_zone_plot(title, data_by_type, view="pitcher"):
+def render_strike_zone_plot(title, data_by_type, view="catcher"):
     """view (Sept 2026, Ryker: "add a home plate to everything that
     has a strike zone... face the correct way based on the view")
     matches bullpen_tracking.py's existing "Grid perspective" toggle
-    (bp_zone_view, default "Pitcher's view") -- pass view="catcher"
+    (bp_zone_view, default "Catcher's view" since Oct 2026) -- pass view="catcher"
     when that toggle reads "Catcher's view" so the plate under this
     chart agrees with the zone-tap button grid the coach is looking
     at. player_bullpens.py has no such toggle (player-facing,

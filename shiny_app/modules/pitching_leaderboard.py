@@ -111,7 +111,18 @@ STAT_LABELS = {key: label for key, label, *_rest in STAT_META}
 STAT_HIGHER_BETTER = {key: hib for key, _label, hib, _dec in STAT_META}
 STAT_DECIMALS = {key: dec for key, _label, _hib, dec in STAT_META}
 
-DEFAULT_COLUMNS = ["ERA", "ERA+", "WHIP", "TBIP", "K/9", "BB/9", "K %", "FIP", "K-BB%+", "Command+", "Performance"]
+# Oct 2026 coach pass: defaults a pitching coach reads at a glance.
+DEFAULT_COLUMNS = ["ERA", "WHIP", "K %", "BB %", "Strike %", "FPS %", "ERA+", "FIP", "Performance"]
+PLUS_KEYS = {"ERA+", "FIP+", "WHIP+", "K%+", "BB%+", "K-BB%+"}
+PLUS_MIN_IP = 15
+
+
+def _ip_decimal(ip):
+    try:
+        whole, _, part = str(ip).partition(".")
+        return int(whole) + (int(part[:1]) / 3 if part else 0)
+    except ValueError:
+        return None
 DEFAULT_SORT = "ERA"
 
 
@@ -232,13 +243,17 @@ def pitching_leaderboard_server(input, output, session, app_state):
         table_rows = []
         for r in rows_sorted:
             row_dict = {"Pitcher": r["Pitcher"], "IP": r["IP"]}
+            small = (_ip_decimal(r["IP"]) or 0) < PLUS_MIN_IP
             for key in cols:
-                row_dict[STAT_LABELS[key]] = _fmt_stat(key, r.get(key))
+                txt = _fmt_stat(key, r.get(key))
+                row_dict[STAT_LABELS[key]] = f"({txt})" if small and key in PLUS_KEYS and txt != "—" else txt
             table_rows.append(row_dict)
 
         return ui.div(
             ui_helpers.render_dict_table(table_rows),
-            ui.p(f"Sorted by {STAT_LABELS[sort_key]}, best to worst.", class_="text-muted small mt-1"),
+            ui.p(f"Sorted by {STAT_LABELS[sort_key]}, best to worst."
+                 + (f" Plus stats (100 = D2 average) in ( ) are under {PLUS_MIN_IP} innings -- too small a sample to "
+                    "trust yet." if any(k in PLUS_KEYS for k in cols) else ""), class_="text-muted small mt-1"),
         )
 
     @reactive.effect

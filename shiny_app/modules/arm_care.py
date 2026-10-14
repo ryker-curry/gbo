@@ -41,12 +41,11 @@ def arm_care_ui():
         ui.output_ui("table"),
         ui.output_ui("editor"),
         ui.p("Rest chart (days off after an outing): 1-30 pitches 0 · 31-45 1 · 46-60 2 · 61-75 3 · 76+ 4. "
-             "Workload ratio = last 7 days vs his normal week over the last 4 (0.8-1.3 normal, 1.3-1.5 caution, "
-             "over 1.5 spike). Stress ratio (from \"Pitch Counts Don't Measure Stress\"): every pitch weighted by "
-             "effort -- (velo / his max fastball)^2, game pitches x1.2 -- then a 9-day weighted average over his 28-day "
-             "average (under 1.3 green, 1.3-1.5 caution, over 1.5 red). Can throw today = pitches before that ratio "
-             "crosses 1.3. Week vs last: build about 20% a week at most. Long toss, plyos and catch play aren't "
-             "logged, so real load is higher than shown. Guidance only -- the trainer and coaches make the call.",
+             "Arm load = his recent throwing compared with his normal over the last 4 weeks, with harder pitches "
+             "counting more than soft ones (a 92 mph fastball loads the arm more than an 80 mph changeup): Fresh, "
+             "Normal, Ramping fast, Spike. Can throw today = pitches before he'd go past Normal. Week vs last: "
+             "build about 20% a week at most. Long toss, plyos and catch play aren't logged, so his real load is "
+             "higher than shown. Guidance only -- the trainer and coaches make the call.",
              class_="text-muted small", style="margin-top:14px;"),
     )
 
@@ -102,8 +101,9 @@ def arm_care_server(input, output, session, app_state):
         as_of = input.as_of()
         head = ("<tr><th style='text-align:left'>Pitcher</th><th>Status</th><th style='text-align:left'>Why</th>"
                 "<th>Last outing</th><th>Pitches</th><th>Days rest</th><th>Needs</th><th>Ready</th>"
-                "<th>Last 7 days</th><th>Workload</th><th title='Velo-weighted stress units: 9-day weighted acute over 28-day chronic'>"
-                "Stress ratio</th><th title='Pitches before the stress ratio crosses 1.3'>Can throw today</th>"
+                "<th>Last 7 days</th><th title='Recent throwing vs his normal: Fresh (light lately), Normal, Ramping fast, "
+                "Spike. Hover a cell for the numbers.'>Arm load</th>"
+                "<th title='Pitches he can throw today before his arm load goes past Normal'>Can throw today</th>"
                 "<th title='Stress units, last 7 days vs the 7 before'>Week vs last</th>"
                 "<th style='text-align:left'>Plans</th></tr>")
         body = []
@@ -112,7 +112,6 @@ def arm_care_server(input, output, session, app_state):
             last = "—" if r["last"] is None else (r["last"].strftime("%a %b %d") + (" (game)" if r["last_was_game"] else " (pen)"))
             ready = "now" if r["ready_on"] is None or r["ready_on"] <= as_of else r["ready_on"].strftime("%a %b %d")
             ratio = r["ratio_label"] + (f" ({r['ratio']:.2f})" if r["ratio"] is not None else "")
-            rcolor = {"Spike": "#D94F3D", "Caution": "#B58A22", "Under-thrown": "#5B8DEF"}.get(r["ratio_label"], "inherit")
             plans = "<br>".join(
                 f"{escape(pl['type'] or 'Outing')} {pl['date'].strftime('%a %b %d')}"
                 + (f" <span style='color:#D94F3D'>⚠ {escape(pl['warn'])}</span>" if pl["warn"] else "")
@@ -124,26 +123,44 @@ def arm_care_server(input, output, session, app_state):
                 f"<td>{last}</td><td>{r['last_pitches'] or '—'}</td>"
                 f"<td>{'—' if r['days_rest'] is None else r['days_rest']}</td>"
                 f"<td>{'—' if r['required_rest'] is None else r['required_rest']}</td><td>{ready}</td>"
-                f"<td>{r['seven_day']}</td><td style='color:{rcolor}'>{escape(ratio)}</td>"
-                + _stress_cells(r.get("stress")) +
+                f"<td>{r['seven_day']}</td>"
+                + _load_cells(r, ratio) +
                 f"<td style='text-align:left' class='small'>{plans}</td></tr>")
         html = (f"<div class='table-responsive'><table class='table table-sm' style='text-align:center'>"
                 f"{head}{''.join(body)}</table></div>")
         return ui_helpers.card(ui.HTML(html), title="Pitching staff", right=f"as of {as_of.strftime('%a %b %d')}")
 
-    def _stress_cells(st):
-        if not st:
-            return "<td>—</td><td>—</td><td>—</td>"
-        if not st["full"] or st["ratio"] is None:
-            ratio = "<span class='text-muted small'>Building</span>"
+    _LOAD = {"Low": ("Fresh", "#5B8DEF", "Light lately -- fine after rest, but ramp him back up gradually."),
+             "Green": ("Normal", "#3FB27F", "In line with his normal workload."),
+             "Caution": ("Ramping fast", "#B58A22", "More than his normal lately -- trim volume."),
+             "Red": ("Spike", "#D94F3D", "Well above his normal -- rest is the priority.")}
+
+    def _load_cells(r, count_ratio):
+        """Oct 2026 coach pass: one plain arm-load call. Uses the effort-weighted
+        stress ratio once he has 4 weeks of history, else the pitch-count ratio;
+        both numbers in the hover."""
+        from analytics import stress_load
+        st = r.get("stress") or {}
+        ratio = st.get("ratio") if st.get("full") else r.get("ratio")
+        tip = f"Pitch-count ratio: {escape(count_ratio)}"
+        if st.get("ratio") is not None and st.get("full"):
+            tip += f" · Effort-weighted ratio: {st['ratio']:.2f}"
+        if ratio is None:
+            load = "<span class='text-muted small'>Building (needs 4 weeks)</span>"
         else:
-            c = {"Red": "#D94F3D", "Caution": "#B58A22", "Low": "#5B8DEF"}.get(st["zone"], "#3FB27F")
-            ratio = f"<span style='color:{c};font-weight:700'>{st['ratio']:.2f}</span> <span class='small'>{st['zone']}</span>"
+            word, c, why = _LOAD[stress_load.zone(ratio)]
+            load = f"<span style='color:{c};font-weight:700'>{word}</span>"
+            tip += f" · {why}"
         b = st.get("budget")
-        bud = "—" if not b else (f"~{b['pitches']}" if b["pitches"] is not None else "—")
+        bud = "—" if not b or b.get("pitches") is None else f"~{b['pitches']}"
+        if ratio is not None and stress_load.zone(ratio) == "Low" and bud != "—":
+            # Idle lately -> his 4-week base is low, so the safe number is small.
+            bud = (f"<span title='He has thrown little lately, so his 4-week base is low -- a big outing now would be a "
+                   f"spike. Build him back up over a week or two.'>{bud}<br><span class='small text-muted'>ramp back up"
+                   f"</span></span>")
         g = st.get("growth")
         gr = "—" if not g else (f"<span style='color:{'#D94F3D' if g['flag'] else 'inherit'}'>{g['pct']:+.0f}%</span>")
-        return f"<td>{ratio}</td><td>{bud}</td><td>{gr}</td>"
+        return f"<td title='{tip}'>{load}</td><td>{bud}</td><td>{gr}</td>"
 
     # ---------------- editor ----------------
     @render.ui
