@@ -399,12 +399,20 @@ def register_step_mode(input, output, session, d):
                           value=w.get("score_text") or ""),
             ui.div(*[ui.tags.button(r, type="button", class_="gbo-sb gbo-qr", **{"data-qr": r}) for r in QUICK_RESULTS],
                    class_="gbo-step-grid g4"),
+            # Oct 2026 (Ryker): batted ball type on the paper chart. Pre-picked
+            # from the notation when it can tell (6-3 ground ball, F7 fly...);
+            # tap to change, tap again to go back to the notation's guess.
+            ui.h6(ui.span("Batted ball type"), ui.span("filled in from the result when it can tell -- tap to change",
+                                                         class_="gbo-step-hint"), class_="gbo-step-q"),
+            ui.div(*[ui.tags.button(c, type="button", class_="gbo-sb gbo-bbt", **{"data-bbt": c}) for c in BBT],
+                   class_="gbo-step-grid g4"),
             ui.h6(ui.span("Contact quality"), ui.span("optional", class_="gbo-step-hint"), class_="gbo-step-q"),
             ui.div(*[ui.tags.button(c, type="button", class_="gbo-sb gbo-cq", **{"data-cq": c}) for c in IN_PLAY_CQ],
                    class_="gbo-step-grid g3"),
             ui.div(ui.tags.button("Next ›", type="button", class_="gbo-sb gbo-sb-primary gbo-score-next"), class_="gbo-step-grid g1"),
             _nav(),
-            ui.tags.script(f"gboScoreScreen('{wiz_id}', '{session.ns('step_score')}', {json.dumps(w.get('cq'))});"),
+            ui.tags.script(f"gboScoreScreen('{wiz_id}', '{session.ns('step_score')}', {json.dumps(w.get('cq'))}, "
+                           f"{json.dumps(w.get('bbt_pick'))});"),
             class_="gbo-step", id=session.ns("step_score"),
         )
 
@@ -541,7 +549,8 @@ def register_step_mode(input, output, session, d):
                                      type="warning", duration=6)
                 return
             spot = FIELDER_SPOT.get(r["fielder"])
-            _go("spray", ab=r["ab"], bbt=r["bbt"], cq=ev.get("cq") or None, score_text=ev.get("text"),
+            pick = ev.get("bbt") if ev.get("bbt") in BBT else None
+            _go("spray", ab=r["ab"], bbt=pick or r["bbt"], bbt_pick=pick, cq=ev.get("cq") or None, score_text=ev.get("text"),
                 x=spot[0] if spot else None, y=spot[1] if spot else None)
         elif a == "ab":
             _go("result", ab=ev.get("v"))
@@ -656,16 +665,33 @@ STEP_JS = r"""
       });
     }
   };
-  window.gboScoreScreen = function(id, rootId, cq0){
+  window.gboScoreScreen = function(id, rootId, cq0, bbt0){
     var root = document.getElementById(rootId);
     if (!root || root.dataset.bound) return;
     root.dataset.bound = '1';
-    var inp = root.querySelector('.gbo-score-in'), cq = cq0;
-    function paint(){ root.querySelectorAll('.gbo-cq').forEach(function(b){ b.classList.toggle('sel', b.dataset.cq === cq); }); }
-    function go(){ gboWiz(id, {a: 'score', text: inp.value, cq: cq}); }
+    var inp = root.querySelector('.gbo-score-in'), cq = cq0, pick = bbt0;
+    // Same reading as parse_scoring() on the server -- just to pre-light a button.
+    function guess(){
+      var t = (inp.value || '').toUpperCase().replace(/[\s.]/g, ''), m;
+      if (/^[123]B/.test(t)) return null;   // hits: the notation can't tell
+      if (/^(HR|SF|FF?\d)/.test(t)) return 'Fly Ball';
+      if (/^P\d/.test(t)) return 'Pop Up';
+      if (/^L\d/.test(t)) return 'Line Drive';
+      if ((m = t.match(/^E(\d)/))) return +m[1] <= 6 ? 'Ground Ball' : 'Fly Ball';
+      if (/^(G?\d(-\d|U)?|U\d|G?DP|FC|SH|SAC|\d-\d)/.test(t)) return 'Ground Ball';
+      return null;
+    }
+    function paint(){
+      root.querySelectorAll('.gbo-cq').forEach(function(b){ b.classList.toggle('sel', b.dataset.cq === cq); });
+      var show = pick || guess();
+      root.querySelectorAll('.gbo-bbt').forEach(function(b){ b.classList.toggle('sel', b.dataset.bbt === show); });
+    }
+    function go(){ gboWiz(id, {a: 'score', text: inp.value, cq: cq, bbt: pick || guess()}); }
+    inp.addEventListener('input', paint);
     root.addEventListener('click', function(e){
       var b = e.target.closest('button'); if (!b) return;
-      if (b.dataset.qr) { inp.value = b.dataset.qr; }
+      if (b.dataset.qr) { inp.value = b.dataset.qr; paint(); }
+      else if (b.dataset.bbt) { pick = (pick === b.dataset.bbt) ? null : b.dataset.bbt; paint(); }
       else if (b.dataset.cq) { cq = cq === b.dataset.cq ? null : b.dataset.cq; paint(); }
       else if (b.classList.contains('gbo-score-next')) { go(); }
     });
