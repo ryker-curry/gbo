@@ -131,3 +131,71 @@ def load(db, pid):
     import bucket_system as bs
     raw, _units = bs._batch_fetch_latest_values(db, NAMES, include_player_id=pid)
     return profile(pid, values(raw))
+
+
+def load_full(db, pid):
+    """(profile, raw) -- raw is needed to build an IDP goal."""
+    import bucket_system as bs
+    raw, _units = bs._batch_fetch_latest_values(db, NAMES, include_player_id=pid)
+    return profile(pid, values(raw)), raw
+
+
+def team(db):
+    """[(Player, profile)] for every active player with a profile, Elastic -> Muscular."""
+    import bucket_system as bs
+    from models import Player
+    raw, _units = bs._batch_fetch_latest_values(db, NAMES)
+    vals = values(raw)
+    out = []
+    for p in db.query(Player).filter(Player.active.is_(True)).all():
+        prof = profile(p.player_id, vals)
+        if prof:
+            out.append((p, prof))
+    out.sort(key=lambda t: -t[1]["index"])
+    return out
+
+
+TRAINING = {
+    "Elastic": {"focus": "Strength under the spring",
+                "do": ["Heavy lower-body strength (trap bar, squat, split squat) 2-3x / week, 3-5 reps",
+                       "Slow eccentrics and isometric holds to build force at the bottom",
+                       "Keep one short plyo day so he doesn't lose his bounce"],
+                "retest": "Net impulse, push / peak force per lb"},
+    "Muscular": {"focus": "Speed and reactivity",
+                 "do": ["Plyos with short ground contacts (pogos, hurdle hops, depth jumps)",
+                        "Speed-strength: light jump squats, med-ball throws for speed, velocity-based lifting",
+                        "Keep heavy strength in maintenance (1-2x / week)"],
+                 "retest": "Jump height, RSI-mod, hop RSI, time to takeoff"},
+    "Hybrid": {"focus": "Both, by block",
+               "do": ["Alternate 3-4 week blocks: heavy strength, then speed / reactive",
+                      "Train his biggest opportunity metric first",
+                      "Retest every block to see which side moves"],
+               "retest": "His lowest-percentile test"},
+}
+
+
+def goal_spec(pid, raw, prof):
+    """IDP goal for his biggest opportunity: raise (or lower) that test to the
+    team median, in the test's own units. None if it can't be built."""
+    if not prof or prof["worst"]["pct"] >= 50:
+        return None
+    test = prof["worst"]["test"]
+    rel = next(r for t, _s, _h, r in TESTS if t == test)
+    hib = next(h for t, _s, h, _r in TESTS if t == test)
+    pool = {k: float(v) for k, v in (raw.get(test) or {}).items() if v is not None}
+    bw = raw.get("Body Weight") or {}
+    if pid not in pool:
+        return None
+    if rel:
+        rels = [v / float(bw[k]) for k, v in pool.items() if bw.get(k)]
+        if not rels or not bw.get(pid):
+            return None
+        from statistics import median
+        target = median(rels) * float(bw[pid])
+    else:
+        from statistics import median
+        target = median(pool.values())
+    base = pool[pid]
+    if (hib and target <= base) or (not hib and target >= base):
+        return None
+    return {"test": test, "label": LABELS[test], "baseline": base, "target": target, "kind": prof["kind"]}

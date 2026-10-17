@@ -52,6 +52,19 @@ def _radar(metrics):
     return "".join(parts)
 
 
+def _training(kind):
+    from analytics.athlete_archetype import TRAINING
+    t = TRAINING.get(kind)
+    if not t:
+        return ""
+    items = "".join(f"<li>{_e(x)}</li>" for x in t["do"])
+    return (f'<div style="margin-top:10px;border-left:3px solid {KIND_C[kind]};padding-left:10px">'
+            f'<div style="font-size:.7rem;font-weight:700;letter-spacing:.06em">TRAINING FOCUS: {_e(t["focus"]).upper()}</div>'
+            f'<ul class="small" style="margin:4px 0 0 18px;padding:0">{items}</ul>'
+            f'<div class="small text-muted">Retest: {_e(t["retest"])}. General tendencies by type -- the strength '
+            f'staff makes the call.</div></div>')
+
+
 def archetype_card(prof):
     if prof is None:
         return ('<div class="gbo-seq-sec"><h6 class="gbo-seq-h">Athlete archetype</h6><p class="small text-muted">'
@@ -85,7 +98,7 @@ def archetype_card(prof):
             f'<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start"><div style="flex:0 1 300px">'
             f'{_radar(prof["metrics"])}</div><div style="flex:1 1 300px">{spectrum}'
             f'<div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:12px">{sides}</div>'
-            f'<ul class="small" style="margin:8px 0 0 18px;padding:0">{lines}</ul></div></div></div>')
+            f'<ul class="small" style="margin:8px 0 0 18px;padding:0">{lines}</ul>{_training(k)}</div></div></div>')
 
 
 STAGE_C = {"limiter": "#D64545", "ok": "#3FB27F", "untested": "#7A8594"}
