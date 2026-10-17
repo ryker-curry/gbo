@@ -358,3 +358,40 @@ def coach_summary_html(s, name, label):
               f'WHAT TO WORK ON</div>{lst(work, "Nothing stands out as a problem in the numbers.")}{arsenal}</div>'
             + "</div>")
     return CSS + _sec("Coach summary", "", body)
+
+
+# ---------------------------------------------------------------------------
+# Pitcher Type + attack plan (analytics/pitcher_type.py)
+# ---------------------------------------------------------------------------
+_PT_COLOR = {"Ride & Spin": "#3987E5", "Sink & Sweep": "#D95926", "Power Mix": "#BF1E2D",
+             "Strike Thrower": "#3FB27F", "Kitchen Sink": "#8E7CC3"}
+_ST = {"match": ("✔", "#3FB27F", "matches"), "partly": ("~", "#C9A227", "partly"), "gap": ("✖", "#D64545", "gap")}
+
+
+def pitcher_type_html(t, name=None):
+    if not t:
+        return CSS + _sec("Pitcher type", "", "<p class='small text-muted'>Needs charted game pitches.</p>")
+    c = _PT_COLOR.get(t["type"], "#999")
+    badge = (f'<span style="background:{c};color:#fff;padding:2px 10px;border-radius:7px;font-weight:800">'
+             f'{_e(t["type"].upper())}</span>' + (' <span class="gbo-pi-tag gbo-pi-ssw">POWER</span>' if t["power"] else ""))
+    sub = f"{_e(t['why_type'])}" + (f" · fastball {t['fb_velo']:.1f} mph" if t.get("fb_velo") else "") + \
+        f" · {t['strike_pct']:.0f}% strikes"
+    rows = []
+    for st_key, st_lbl in (("early", "Early (no strikes)"), ("ahead", "Ahead (0-1, 1-1)"), ("put", "Put-away (2 strikes)")):
+        for r in [x for x in t["rows"] if x["stage"] == st_key]:
+            s = _ST.get(r["status"])
+            mark = (f'<span style="color:{s[1]};font-weight:800" title="{s[2]}">{s[0]}</span>' if s
+                    else '<span class="text-muted">·</span>')
+            rows.append(f'<tr><th class="gbo-rc-pt">{_e(st_lbl)}<span>{_e(r["side_lbl"])}</span></th>'
+                        f'<td style="text-align:left;white-space:normal">{_e(r["plan"])}</td>'
+                        f'<td style="text-align:left;white-space:normal">{mark} {_e(r["actual"])}'
+                        f'<div class="small text-muted">{_e(r["detail"])}</div></td></tr>')
+    table = ('<div class="gbo-sg-wrap"><table class="gbo-rc"><thead><tr><th>Count</th><th>How he should attack</th>'
+             f'<th>What he did in games</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>')
+    body = (f'<div style="margin-bottom:6px">{badge}</div><p class="small text-muted">{sub}</p>'
+            + _lines(t["lines"]) + table
+            + '<p class="small text-muted" style="margin-top:6px">✔ his games match the plan · ~ partly · ✖ he\'s doing '
+              'something else there. Plans use standard pitch-design attack logic for his type, with his own pitches; '
+              'locations come from Rapsodo. A gap isn\'t automatically wrong -- it\'s the conversation to have.</p>')
+    return CSS + _sec("Pitcher type & attack plan", "What kind of pitcher he is and how that type should attack hitters -- "
+                      "then whether he actually does it.", body)

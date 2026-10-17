@@ -1833,7 +1833,14 @@ def pitcher_profile_server(input, output, session, app_state):
                 label = (f"{f['date_from']:%b %d, %Y} – {f['date_to']:%b %d, %Y}" if f["date_from"] and f["date_to"] else "this range")
                 summ = coach_summary.build(db, pid, game_ids, label, list(mine), list(team), loc, raps, throws, arm,
                                            sum(hs) / len(hs) if hs else None, overrides=_ap_overrides(db, pid))
-                return ui.HTML(pid_html.coach_summary_html(summ, f"{player.first_name} {player.last_name}", label))
+                from analytics import pitcher_type
+                try:
+                    pt = pitcher_type.for_pitcher(db, player, f["date_from"], f["date_to"])
+                except Exception:
+                    db.rollback()
+                    pt = None
+                return ui.HTML(pid_html.coach_summary_html(summ, f"{player.first_name} {player.last_name}", label)
+                               + (pid_html.pitcher_type_html(pt) if pt else ""))
             if view in ("plane", "seam_shift"):
                 raps = profile_queries.get_pitcher_rapsodo_pitches(
                     db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,

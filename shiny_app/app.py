@@ -79,6 +79,7 @@ from modules import (  # noqa: E402
     game_tracking, command_tracker, roster, player_profile,
     pitcher_meeting_report, weekly_report, advance_scouting, hitter_meeting_report, team_game_report,
     data_health, arm_care, how_to_read, research_project, charter_training, staff_compensation, pitch_cards,
+    player_types,
 )
 
 # Registry of page keys (see nav.NavPage.key) that have a real Shiny
@@ -119,6 +120,7 @@ MODULE_UI = {
     "hitter_profile": lambda: hitter_profile.hitter_profile_ui("hitter_profile"),
     "pitching_leaderboard": lambda: pitching_leaderboard.pitching_leaderboard_ui("pitching_leaderboard"),
     "staff_compensation": lambda: staff_compensation.staff_compensation_ui("staff_compensation"),
+    "player_types": lambda: player_types.player_types_ui("player_types"),
     "pitch_cards": lambda: pitch_cards.pitch_cards_ui("pitch_cards"),
     "hitting_leaderboard": lambda: hitting_leaderboard.hitting_leaderboard_ui("hitting_leaderboard"),
     "bullpen_dashboard": lambda: bullpen_dashboard.bullpen_dashboard_ui("bullpen_dashboard"),
@@ -380,6 +382,7 @@ def server(input, output, session):
     hitter_profile.hitter_profile_server("hitter_profile", app_state)
     pitching_leaderboard.pitching_leaderboard_server("pitching_leaderboard", app_state)
     staff_compensation.staff_compensation_server("staff_compensation", app_state)
+    player_types.player_types_server("player_types", app_state)
     pitch_cards.pitch_cards_server("pitch_cards", app_state)
     hitting_leaderboard.hitting_leaderboard_server("hitting_leaderboard", app_state)
     bullpen_dashboard.bullpen_dashboard_server("bullpen_dashboard", app_state)
@@ -468,7 +471,7 @@ _NAV_GROUPS = [
     ("Reports", ["team_game_report", "pitcher_game_report", "pitcher_meeting_report", "hitter_game_report",
                  "hitter_meeting_report", "weekly_report"]),
     # Sept 2026, Ryker: profiles / stats / leaderboards live under Analytics.
-    ("Analytics", ["analytics", "pitcher_profile", "staff_compensation", "hitter_profile", "pitching_leaderboard", "hitting_leaderboard"]),
+    ("Analytics", ["analytics", "pitcher_profile", "player_types", "staff_compensation", "hitter_profile", "pitching_leaderboard", "hitting_leaderboard"]),
     ("Scouting", ["advance_scouting", "pitch_cards", "opponent_teams"]),
     ("Admin", ["user_management", "staff_assignments", "video_import"]),
     ("Me", ["player_profile", "player_schedule", "player_development", "player_stats", "player_game_stats", "player_hitting", "player_video", "player_bullpens", "pitcher_profile", "pitcher_meeting_report", "weekly_report", "advance_scouting", "hitter_profile", "hitter_meeting_report", "pitching_leaderboard", "hitting_leaderboard"]),
@@ -514,6 +517,7 @@ _ICONS = {
     "hitter_profile": '<path d="M3 17l6-6 4 4 8-8M14 7h7v7"/><circle cx="12" cy="12" r="9"/>',
     "pitching_leaderboard": '<path d="M8 21h8M12 17v4M17 3H7v5a5 5 0 0010 0V3z"/><path d="M5 5H3v2a3 3 0 003 3M19 5h2v2a3 3 0 01-3 3"/>',
     "staff_compensation": '<path d="M4 6h16M4 12h10M4 18h6"/><circle cx="18" cy="16" r="3"/>',
+    "player_types": '<circle cx="8" cy="8" r="3"/><circle cx="16" cy="8" r="3"/><path d="M3 20c0-3 2.5-5 5-5s5 2 5 5M11 20c0-3 2.5-5 5-5s5 2 5 5"/>',
     "pitch_cards": '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
     "hitting_leaderboard": '<path d="M8 21h8M12 17v4M17 3H7v5a5 5 0 0010 0V3z"/><path d="M5 5H3v2a3 3 0 003 3M19 5h2v2a3 3 0 01-3 3"/>',
     "opponent_teams": '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',

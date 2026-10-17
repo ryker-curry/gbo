@@ -137,6 +137,8 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             NavPage("pitcher_profile", "Pitcher Deep Dive", "graph-up-arrow"),
             # Oct 2026, Ryker: compensation profiles across the staff.
             NavPage("staff_compensation", "Staff Compensation", "diagram-3"),
+            # Oct 2026, Ryker: athlete types (Muscular/Hybrid/Elastic) and pitcher types.
+            NavPage("player_types", "Player Types", "people"),
             NavPage("hitter_profile", "Hitter Profile", "graph-up-arrow"),
             # Oct 2026: automated weekly progress report (pitchers for now).
             NavPage("weekly_report", "Weekly Reports", "calendar-week"),
@@ -243,7 +245,7 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
 # ---------------------------------------------------------------------------
 _COACH_CORE = [
     ("Home", ["dashboard", "how_to_read"]),
-    ("Players", ["roster", "player_profile", "arm_care"]),
+    ("Players", ["roster", "player_profile", "player_types", "arm_care"]),
     ("Games", ["team_game_report", "pitch_cards", "advance_scouting"]),
     ("Leaderboards", ["pitching_leaderboard", "hitting_leaderboard", "analytics"]),
 ]
