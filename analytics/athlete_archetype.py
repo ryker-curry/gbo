@@ -199,3 +199,39 @@ def goal_spec(pid, raw, prof):
     if (hib and target <= base) or (not hib and target >= base):
         return None
     return {"test": test, "label": LABELS[test], "baseline": base, "target": target, "kind": prof["kind"]}
+
+
+def open_goal(db, pid, test):
+    """The player's existing not-Completed IDP goal on this test, or None --
+    so the one-click "Make goal" button can't create the same goal twice."""
+    from models import AssessmentTestType, IDPGoal, IDPStatus
+    return (db.query(IDPGoal)
+            .join(AssessmentTestType, AssessmentTestType.test_type_id == IDPGoal.target_test_type_id)
+            .outerjoin(IDPStatus, IDPStatus.status_id == IDPGoal.status_id)
+            .filter(IDPGoal.player_id == pid, AssessmentTestType.test_name == test,
+                    (IDPStatus.status_name.is_(None)) | (IDPStatus.status_name != "Completed"))
+            .first())
+
+
+def create_goal(db, pid, sp, user_id):
+    """Create the archetype IDP goal from goal_spec(). -> (created, message).
+    Refuses (no write) if an open goal on the same test already exists."""
+    from datetime import date, timedelta
+    from models import AssessmentTestType, IDPGoal, IDPStatus
+    if open_goal(db, pid, sp["test"]) is not None:
+        return False, f"He already has an open IDP goal on {sp['test']} -- no new goal made."
+    tt = db.query(AssessmentTestType).filter(AssessmentTestType.test_name == sp["test"]).first()
+    st = db.query(IDPStatus).order_by(IDPStatus.display_order, IDPStatus.status_id).first()
+    if tt is None or st is None:
+        return False, "Couldn't make the goal -- test type or IDP statuses missing."
+    verb = "Lower" if sp["target"] < sp["baseline"] else "Raise"
+    db.add(IDPGoal(
+        player_id=pid, category_id=tt.category_id, target_test_type_id=tt.test_type_id,
+        baseline_value=round(sp["baseline"], 3), target_value=round(sp["target"], 3),
+        target_date=date.today() + timedelta(weeks=8), status_id=st.status_id,
+        description=(f"Athlete archetype ({sp['kind']}): biggest opportunity is {sp['label'].lower()}. "
+                     f"{verb} {sp['test']} from {sp['baseline']:.2f} to the team middle ({sp['target']:.2f})."),
+        created_by_user_id=user_id,
+    ))
+    db.commit()
+    return True, f"Goal created: {sp['test']}."

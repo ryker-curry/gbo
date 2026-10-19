@@ -464,7 +464,10 @@ def player_profile_server(input, output, session, app_state):
             spec = aa.goal_spec(pid, raw, prof) if app_state.role_name() != "Player" else None
             _arch_ctx.set({"pid": pid, "spec": spec})
             btn = None
-            if spec:
+            if spec and aa.open_goal(db, pid, spec["test"]) is not None:
+                btn = ui.p(f"Open IDP goal on {spec['label'].lower()} already in place.",
+                           class_="text-muted small", style="margin:-6px 0 14px;")
+            elif spec:
                 verb = "Lower" if spec["target"] < spec["baseline"] else "Raise"
                 btn = ui.div(ui.input_action_button(
                     "arch_idp", f"Make IDP goal: {verb.lower()} {spec['label'].lower()} to the team middle",
@@ -484,27 +487,14 @@ def player_profile_server(input, output, session, app_state):
         sp = ctx.get("spec")
         if not sp or app_state.role_name() == "Player":
             return
-        from datetime import timedelta as _td
-        from models import IDPGoal, IDPStatus, AssessmentTestType
+        from analytics import athlete_archetype as aa
         db = get_session()
         try:
-            tt = db.query(AssessmentTestType).filter(AssessmentTestType.test_name == sp["test"]).first()
-            st = db.query(IDPStatus).order_by(IDPStatus.display_order, IDPStatus.status_id).first()
-            if tt is None or st is None:
-                ui.notification_show("Couldn't make the goal -- test type or IDP statuses missing.", type="error")
-                return
-            verb = "Lower" if sp["target"] < sp["baseline"] else "Raise"
-            db.add(IDPGoal(
-                player_id=ctx["pid"], category_id=tt.category_id, target_test_type_id=tt.test_type_id,
-                baseline_value=round(sp["baseline"], 3), target_value=round(sp["target"], 3),
-                target_date=date.today() + _td(weeks=8), status_id=st.status_id,
-                description=(f"Athlete archetype ({sp['kind']}): biggest opportunity is {sp['label'].lower()}. "
-                             f"{verb} {sp['test']} from {sp['baseline']:.2f} to the team middle ({sp['target']:.2f})."),
-                created_by_user_id=app_state.user_id(),
-            ))
-            db.commit()
-            ui.notification_show(f"IDP goal created: {sp['test']}. Edit it under Development plans.", type="message",
-                                 duration=6)
+            created, msg = aa.create_goal(db, ctx["pid"], sp, app_state.user_id())
+            if created:
+                msg += " Edit it under Development plans."
+                _arch_tick.set(_arch_tick.get() + 1)    # redraw: button -> "goal already in place"
+            ui.notification_show(msg, type="message" if created else "warning", duration=6)
         except Exception as e:
             db.rollback()
             ui.notification_show(f"Couldn't make the goal: {e}", type="error", duration=8)

@@ -109,7 +109,8 @@ import plotly.graph_objects as go
 from visualizations.chart_theme import apply_gbo_theme
 import glossary_content
 from pitch_type_config import get_pitch_color, FASTBALL_TYPES
-from analytics import fastball_shape, pitch_class
+from analytics import fastball_shape, pitch_class, command_lanes
+import command_lanes_display
 import velo_fade_display
 from analytics import velo_fade
 from services.pitch_type_switch import apply_switches, undo_switches
@@ -3058,6 +3059,42 @@ def pitcher_profile_server(input, output, session, app_state):
     # output needs its own registered function.
     # -------------------------------------------------------------------
 
+    @render.ui
+    def pp_command_lanes():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        req("pp_lanes_type" in input)
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        want = input.pp_lanes_type()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            player = db.query(Player).filter(Player.player_id == pid).first() if pid is not None else None
+            if player is None:
+                return None
+            throws = player.throws
+            f = _current_filters()
+            pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"], game_id=f["game_id"],
+            ) or []
+            sel = [p for p in pitches
+                   if want == "__all__" or (p.pitch_type is not None and p.pitch_type.type_name == want)]
+            hands = get_batter_hands(db, sel)
+        finally:
+            db.close()
+        if not sel:
+            return None
+        side = input.pp_lanes_side() if "pp_lanes_side" in input else "all"
+        if side in ("R", "L"):
+            sel = [p for p in sel if hands.get(p.game_pitch_id) == side]
+        return command_lanes_display.lanes_block(command_lanes.compute_lanes(sel, hands, throws))
+
     @reactive.calc
     def _view_pitches():
         """Command Target Zones' filtered view-pitch list, shared by
@@ -3287,6 +3324,18 @@ def pitcher_profile_server(input, output, session, app_state):
             ui.output_ui("pp_zone_exec"),
             ui.hr(),
             ui.output_ui("pp_release_consistency"),
+            # Oct 2026 (Ryker, after "Learning to miss better"): command by
+            # where the catcher set up -- analytics/command_lanes.py.
+            ui.p(ui.strong("Command by Target Lane")),
+            ui.p("Where the catcher set up (in / middle / away from the hitter, up / middle / down) and how close he got. "
+                 "Shows whether working the corners is costing him the zone.", class_="text-muted small"),
+            ui.div(
+                ui.input_select("pp_lanes_type", "Pitch type", choices={"__all__": "All pitches"} | {t: t for t in sorted({x.pitch_type.type_name for x in view_pitches if x.pitch_type is not None})}),
+                ui.input_radio_buttons("pp_lanes_side", "Hitters", choices={"all": "All", "R": "vs RHH", "L": "vs LHH"}, inline=True),
+                style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end;",
+            ),
+            ui.output_ui("pp_command_lanes"),
+            ui.hr(),
             ui.p(ui.strong("Command Target Zones")),
             ui.p(
                 "Same Precision/Command/Competitive target-radius bands and concentric-ring chart Command "

@@ -594,6 +594,11 @@ def _sidebar(app_state, sections):
     placed = set()
     groups = []
     nav_groups = _NAV_GROUPS
+    if not app_state.is_guest():
+        # Oct 2026: staff see the Research Project page (with the data
+        # checklist + analysis tabs) under Analytics; "About" is guest-only.
+        nav_groups = [(g, [k for k in keys if k != "research_project"] + (["research_project"] if g == "Analytics" else []))
+                      for g, keys in _NAV_GROUPS]
     # Oct 2026, Ryker: staff other than Administrator get a short sidebar
     # (nav.SIMPLE_SIDEBAR) -- everything else they can open is folded into
     # a collapsed "More tools" group at the bottom.
@@ -686,8 +691,12 @@ def _app_shell_ui(app_state):
     sidebar, first_title = _sidebar(app_state, sections)
 
     panels = []
+    seen_keys = set()      # a page listed in two sections (e.g. Research Project for a guest) gets one panel
     for section in sections:
         for page in section.pages:
+            if page.key in seen_keys:
+                continue
+            seen_keys.add(page.key)
             panels.append(ui.nav_panel(page.title, _page_body(page)))
 
     topbar = ui.div(
