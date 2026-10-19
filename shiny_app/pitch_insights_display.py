@@ -377,7 +377,8 @@ def pitcher_type_html(t, name=None):
     sub = f"{_e(t['why_type'])}" + (f" · fastball {t['fb_velo']:.1f} mph" if t.get("fb_velo") else "") + \
         f" · {t['strike_pct']:.0f}% strikes"
     rows = []
-    for st_key, st_lbl in (("early", "Early (no strikes)"), ("ahead", "Ahead (0-1, 1-1)"), ("put", "Put-away (2 strikes)")):
+    from analytics.pitcher_type import STAGES
+    for st_key, st_lbl in STAGES:
         for r in [x for x in t["rows"] if x["stage"] == st_key]:
             s = _ST.get(r["status"])
             mark = (f'<span style="color:{s[1]};font-weight:800" title="{s[2]}">{s[0]}</span>' if s

@@ -49,20 +49,36 @@ def lane_of(x, z, batter_hand):
     return v, h
 
 
+LEAN_SHARE = 0.4   # only call a lean when it's a real habit
+
+
+def _lean(axes, n):
+    """Most common miss per axis (arm / glove side, high / low), each counted
+    on its own -- "High Arm Side" and "Arm Side" both count toward Arm Side.
+    Returns "Arm Side", "High", "High Arm Side", ... or None."""
+    h = Counter(a[0] for a in axes if a and a[0])
+    v = Counter(a[1] for a in axes if a and a[1])
+    h_top = h.most_common(1)[0] if h else None
+    v_top = v.most_common(1)[0] if v else None
+    h_lbl = h_top[0] if h_top and h_top[1] / n >= LEAN_SHARE else None
+    v_lbl = v_top[0] if v_top and v_top[1] / n >= LEAN_SHARE else None
+    if h_lbl and v_lbl:
+        return f"{v_lbl} {h_lbl}"
+    return v_lbl or h_lbl
+
+
 def _summ(items):
-    """items: [(miss_in, hit_spot, direction)]"""
+    """items: [(miss_in, hit_spot, (horizontal_label, vertical_label))]"""
     n = len(items)
     if not n:
         return None
     misses = [m for m, _, _ in items if m is not None]
     hits = [h for _, h, _ in items if h is not None]
-    dirs = Counter(d for _, _, d in items if d and d != "On Target")
-    top = dirs.most_common(1)[0] if dirs else None
     return {
         "n": n,
         "avg_miss": round(sum(misses) / len(misses), 1) if misses else None,
         "hit_pct": round(100 * sum(hits) / len(hits)) if hits else None,
-        "lean": top[0] if top and top[1] / n >= 0.4 else None,   # only call a lean when it's a real habit
+        "lean": _lean([a for _, _, a in items], n),
     }
 
 
@@ -84,7 +100,7 @@ def compute_lanes(pitches, batter_hands, throws):
             skipped += 1
             continue
         dx, dz, dist = command_metrics.compute_miss(p.intended_plate_x, p.intended_plate_z, p.actual_plate_x, p.actual_plate_z)
-        item = (dist, strike_zone.pitch_hit_spot(p), command_metrics.classify_miss_direction(dx, dz, throws))
+        item = (dist, strike_zone.pitch_hit_spot(p), command_metrics.miss_direction_axes(dx, dz, throws))
         grid.setdefault(lane, []).append(item)
         by_h.setdefault(lane[1], []).append(item)
         by_v.setdefault(lane[0], []).append(item)

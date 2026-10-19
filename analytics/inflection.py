@@ -285,6 +285,9 @@ def run(ds, outcome, hand="all", line=None, split=True):
         xs, ys = [x for _p, x, _y in pr], [y for _p, _x, y in pr]
         fit = breakpoint_fit(xs, ys) if len(pr) >= MIN_N else None
         code, words = pattern(fit, outcome=outcome)
+        if fit is None and len(pr) >= MIN_N:
+            # enough pitchers, but too few distinct values to place a cutoff
+            code, words = "thin", "too little spread in this measure to look for a cutoff"
         rows.append({"metric": name, "unit": unit, "step": step, "height": name in HEIGHT_CHECK, "n": len(pr),
                      "fit": fit, "code": code, "read": words, "split": None})
     return add_splits(rows, ds, outcome, hand, line) if split else rows

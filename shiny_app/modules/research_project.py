@@ -150,14 +150,18 @@ def research_project_server(input, output, session, app_state):
         if _staff():
             # Oct 2026: staff (real login, never the guest demo) get the data
             # checklist and analysis tabs -- names only ever shown here.
-            return ui.navset_tab(
+            return ui.div(
+                ui.div(ui.input_action_button("rp_reload", "Reload data", class_="btn-sm btn-outline-light"),
+                       ui.span(" Pulls the latest assessments and Rapsodo readings.", class_="text-muted small"),
+                       style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-bottom:4px;"),
+                ui.navset_tab(
                 ui.nav_panel("Overview", ui_helpers.card(*intro, title="The study"),
                              ui_helpers.card(*progress_ui, title="Data collection progress")),
                 ui.nav_panel("Data checklist", ui.output_ui("rp_checklist")),
                 ui.nav_panel("Analysis", ui.output_ui("rp_controls"), ui.output_ui("rp_analysis")),
                 ui.nav_panel("Inflection points", ui.output_ui("rp_inf_controls"), ui.output_ui("rp_inf")),
                 id="rp_tab",
-            )
+            ))
         return ui.div(
             ui_helpers.card(*intro, title="The study"),
             ui_helpers.card(*progress_ui, title="Data collection progress"),
@@ -169,6 +173,10 @@ def research_project_server(input, output, session, app_state):
     @reactive.calc
     def _ds():
         req(_staff())
+        # Re-query on "Reload data", so new assessments / Rapsodo imports show
+        # up without logging out.
+        if "rp_reload" in input:
+            input.rp_reload()
         # Scout login: same data through the Scout engine (names hidden).
         import scout_mode
         db = scout_mode.maker()() if scout_mode.is_scout() else database.SessionLocal()
