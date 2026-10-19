@@ -44,7 +44,8 @@ FAMILY = {"4-Seam Fastball": "FB", "Fastball": "FB", "2-Seam Fastball": "SINK", 
 FALLBACK = {"SINK": ["FB"], "FB": ["SINK"], "CB": ["SL", "CUT"], "SL": ["CB", "CUT"], "CH": ["SINK", "CB", "SL"],
             "CUT": ["SL", "FB"], "WHIFF": ["SL", "CB", "CH"]}
 
-STAGES = (("early", "Early (no strikes)"), ("ahead", "Ahead (0-1, 1-1)"), ("put", "Put-away (2 strikes)"))
+STAGES = (("early", "Early (no strikes)"), ("ahead", "Ahead / even (0-1, 1-1)"), ("behind", "Behind (2-1, 3-1)"),
+          ("put", "Put-away (2 strikes)"))
 SIDES = (("same", "Same-handed hitters"), ("opp", "Opposite-handed hitters"))
 
 # type -> stage -> side -> [(family, where)]  ("where" in up/down/in/away/above/below/zone/edge)
@@ -52,26 +53,31 @@ PLANS = {
     "Ride & Spin": {
         "early": {"same": [("FB", "up")], "opp": [("FB", "up"), ("CB", "zone")]},
         "ahead": {"same": [("FB", "above"), ("SL", "away")], "opp": [("FB", "above"), ("CB", "below")]},
+        "behind": {"same": [("FB", "zone")], "opp": [("FB", "zone")]},
         "put": {"same": [("SL", "below"), ("CB", "below")], "opp": [("CH", "below"), ("CB", "below")]},
     },
     "Sink & Sweep": {
         "early": {"same": [("SINK", "in")], "opp": [("SINK", "away"), ("CH", "down")]},
         "ahead": {"same": [("SL", "away")], "opp": [("CH", "down"), ("SINK", "in")]},
+        "behind": {"same": [("SINK", "zone")], "opp": [("SINK", "zone"), ("CH", "zone")]},
         "put": {"same": [("SL", "away")], "opp": [("CH", "below")]},
     },
     "Power Mix": {
         "early": {"same": [("FB", "zone")], "opp": [("FB", "zone")]},
         "ahead": {"same": [("FB", "up")], "opp": [("FB", "up")]},
+        "behind": {"same": [("FB", "zone")], "opp": [("FB", "zone")]},
         "put": {"same": [("WHIFF", "below")], "opp": [("WHIFF", "below")]},
     },
     "Strike Thrower": {
         "early": {"same": [("FB", "edge")], "opp": [("FB", "edge")]},
         "ahead": {"same": [("SL", "away"), ("CB", "below")], "opp": [("CH", "down"), ("CB", "below")]},
+        "behind": {"same": [("FB", "edge")], "opp": [("FB", "edge"), ("CH", "zone")]},
         "put": {"same": [("WHIFF", "below")], "opp": [("WHIFF", "below")]},
     },
     "Kitchen Sink": {
         "early": {"same": [("ANY", "zone")], "opp": [("ANY", "zone")]},
         "ahead": {"same": [("SL", "away"), ("CB", "below")], "opp": [("CH", "down"), ("CB", "below")]},
+        "behind": {"same": [("ANY", "zone")], "opp": [("ANY", "zone")]},
         "put": {"same": [("WHIFF", "below")], "opp": [("WHIFF", "below")]},
     },
 }
@@ -153,12 +159,14 @@ def resolve(fam, have, whiff):
 
 
 def stage_of(p):
+    """early = no strikes; ahead = 0-1 / 1-1; behind = 2-1 / 3-1 (hitter's
+    counts -- was lumped into "early" before); put = 2 strikes."""
     s, b = p.strikes_before or 0, p.balls_before or 0
     if s >= 2:
         return "put"
     if s == 0:
         return "early"
-    return "ahead" if s >= b else "early"
+    return "ahead" if s >= b else "behind"
 
 
 def _side(p, hands, throws):
@@ -214,6 +222,9 @@ def build(pitches, raps, throws, arm, rel_h, hands, loc, staff_velos, label_of=N
                 plan_names = {n for n, _w in calls if n != "any pitch"}
                 share = 100.0 * sum(c[n] for n in plan_names) / len(ps) if plan_names else 100.0
                 status = "match" if share >= MATCH_SHARE else ("partly" if share >= PARTLY_SHARE else "gap")
+                if not calls:
+                    # none of his pitches fit this spot's plan -- nothing to match against
+                    status, detail = None, "no pitch in his mix fits the plan here"
                 # location check for the first plan call
                 if calls and calls[0][0] != "any pitch":
                     n, w = calls[0]
