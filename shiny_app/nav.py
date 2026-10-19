@@ -150,6 +150,9 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             NavPage("pitching_leaderboard", "Pitching Leaderboard", "trophy"),
             # Oct 2026, Ryker: same board for hitters.
             NavPage("hitting_leaderboard", "Hitting Leaderboard", "trophy"),
+            # Oct 2026: research project (S&C tests vs fastball velo/spin) --
+            # data checklist + analysis for staff.
+            NavPage("research_project", "Research Project", "flask"),
         ]))
 
     # Video Coordinator -- deliberately its own small section rather than

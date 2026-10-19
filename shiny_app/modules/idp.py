@@ -398,6 +398,7 @@ def idp_server(input, output, session, app_state):
         import archetype_display as ad
         db = get_session()
         lad = arch = spec = None
+        has_goal = False
         try:
             try:
                 data, raw, stab = ts.load(db)
@@ -407,6 +408,7 @@ def idp_server(input, output, session, app_state):
             try:
                 arch, araw = aa.load_full(db, pid)
                 spec = aa.goal_spec(pid, araw, arch) if _can_create_goals() else None
+                has_goal = spec is not None and aa.open_goal(db, pid, spec["test"]) is not None
             except Exception:
                 db.rollback()
         finally:
@@ -415,7 +417,10 @@ def idp_server(input, output, session, app_state):
         kids = []
         if arch:
             kids.append(ui.HTML(ad.archetype_card(arch)))
-            if spec:
+            if spec and has_goal:
+                kids.append(ui.p(f"Open IDP goal on {spec['label'].lower()} already in place.",
+                                 class_="text-muted small", style="margin:-6px 0 14px;"))
+            elif spec:
                 verb = "lower" if spec["target"] < spec["baseline"] else "raise"
                 kids.append(ui.div(ui.input_action_button(
                     "arch_idp", f"Make goal: {verb} {spec['label'].lower()} to the team middle",
@@ -433,27 +438,13 @@ def idp_server(input, output, session, app_state):
         sp = ctx.get("spec")
         if not sp or not _can_create_goals():
             return
-        from datetime import date as _d, timedelta as _td
-        from models import AssessmentTestType
+        from analytics import athlete_archetype as aa
         db = get_session()
         try:
-            tt = db.query(AssessmentTestType).filter(AssessmentTestType.test_name == sp["test"]).first()
-            st = db.query(IDPStatus).order_by(IDPStatus.display_order, IDPStatus.status_id).first()
-            if tt is None or st is None:
-                ui.notification_show("Couldn't make the goal -- test type or IDP statuses missing.", type="error")
-                return
-            verb = "Lower" if sp["target"] < sp["baseline"] else "Raise"
-            db.add(IDPGoal(
-                player_id=ctx["pid"], category_id=tt.category_id, target_test_type_id=tt.test_type_id,
-                baseline_value=round(sp["baseline"], 3), target_value=round(sp["target"], 3),
-                target_date=_d.today() + _td(weeks=8), status_id=st.status_id,
-                description=(f"Athlete archetype ({sp['kind']}): biggest opportunity is {sp['label'].lower()}. "
-                             f"{verb} {sp['test']} from {sp['baseline']:.2f} to the team middle ({sp['target']:.2f})."),
-                created_by_user_id=app_state.user_id(),
-            ))
-            db.commit()
-            ui.notification_show(f"Goal created: {sp['test']}.", type="message", duration=5)
-            _bump_refresh()
+            created, msg = aa.create_goal(db, ctx["pid"], sp, app_state.user_id())
+            ui.notification_show(msg, type="message" if created else "warning", duration=6)
+            if created:
+                _bump_refresh()
         except Exception as e:
             db.rollback()
             ui.notification_show(f"Couldn't make the goal: {e}", type="error", duration=8)

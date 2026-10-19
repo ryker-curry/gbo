@@ -43,9 +43,10 @@ from pitch_location_stats import compute_command_precision, compute_attack_zones
 # Command Precision/Attack Zones above are untouched, computed the way
 # they always have been -- this is a new, additional section, not a
 # replacement.
-from analytics import command_metrics, profile_queries, approach_angles, best_zone
+from analytics import command_metrics, profile_queries, approach_angles, best_zone, command_lanes
 import velo_fade_display
 from analytics import velo_fade
+import command_lanes_display
 from analytics.pitcher_game_report import compute_staff_game_totals, FPS_GOAL_PCT, SECONDARY_STRIKE_GOAL_PCT
 from analytics.pitch_grading import stuff_plus, arsenal_summary, location_plus, result_value, MIN_BASELINE_PITCHES
 # Sept 2026, Ryker: "add a results section to game report as well"
@@ -1126,6 +1127,28 @@ def pitcher_game_report_server(input, output, session, app_state):
             db.close()
 
     @render.ui
+    def command_lanes_table():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        req("report_section" in input)
+        if input.report_section() != "command_execution":
+            return None
+        req("gr_lanes_type" in input)
+        db = get_session()
+        try:
+            pitcher = db.query(Player).filter(Player.player_id == int(input.pitcher_select())).first()
+            pitches = get_pitching_pitches(db, int(input.pitcher_select()), game_id=int(input.game_select()))
+            sel = [p for p in pitches
+                   if input.gr_lanes_type() == "__all__" or (p.pitch_type is not None and p.pitch_type.type_name == input.gr_lanes_type())]
+            hands = get_batter_hands(db, sel)
+            side = input.gr_lanes_side() if "gr_lanes_side" in input else "all"
+            if side in ("R", "L"):
+                sel = [p for p in sel if hands.get(p.game_pitch_id) == side]
+            return command_lanes_display.lanes_block(command_lanes.compute_lanes(sel, hands, pitcher.throws if pitcher else None))
+        finally:
+            db.close()
+
+    @render.ui
     def command_execution_section():
         """Command Precision + Attack Zones -- unchanged computation,
         just moved out of report_body into their own gated section
@@ -1149,7 +1172,21 @@ def pitcher_game_report_server(input, output, session, app_state):
             if not pitches or pitcher is None:
                 return None
 
-            sections = [ui.p(ui.strong("Command Precision"))]
+            # Oct 2026 (Ryker, after "Learning to miss better"): command by
+            # where the catcher set up -- analytics/command_lanes.py.
+            sections = [
+                ui.p(ui.strong("Command by Target Lane")),
+                ui.p("Where the catcher set up (in / middle / away from the hitter, up / middle / down) and how close he got.",
+                     class_="text-muted small"),
+                ui.div(
+                ui.input_select("gr_lanes_type", "Pitch type", choices={"__all__": "All pitches"} | {t: t for t in sorted({x.pitch_type.type_name for x in pitches if x.pitch_type is not None})}),
+                ui.input_radio_buttons("gr_lanes_side", "Hitters", choices={"all": "All", "R": "vs RHH", "L": "vs LHH"}, inline=True),
+                style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end;",
+            ),
+                ui.output_ui("command_lanes_table"),
+                ui.hr(),
+                ui.p(ui.strong("Command Precision")),
+            ]
             sections.append(ui.p(
                 "Real distance between where he aimed and where it actually crossed the plate -- only counts "
                 "pitches reviewed in Video Review (both an intended and an actual location on file).",
