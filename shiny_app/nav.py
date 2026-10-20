@@ -127,6 +127,8 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             NavPage("hitter_game_report", "Hitter Game Breakdown", "trophy"),
             # Oct 2026: one-page printable report for hitters (game or season).
             NavPage("hitter_meeting_report", "Hitter Report", "printer"),
+            # Oct 2026, Ryker: fall exit meetings -- deep dive + offseason plan.
+            NavPage("exit_report", "Exit Reports", "clipboard-check"),
             # Filterable per-player deep dive (Aug 2026, Stat Lab plan) --
             # Stuff+/Location+/Pitching+ grading, physical charts, Command
             # Target Zones, all filterable by date range/pitch type/
@@ -204,11 +206,13 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             # roster-wide picker.
             my_dev_pages.append(NavPage("pitcher_game_report", "My Game Breakdown", "file-text"))
             my_dev_pages.append(NavPage("pitcher_meeting_report", "Pitcher Report", "printer"))  # Oct 2026, Ryker: renamed from Meeting Report, no "My"
+            my_dev_pages.append(NavPage("exit_report", "My Exit Report", "clipboard-check"))
             my_dev_pages.append(NavPage("weekly_report", "My Weekly Report", "calendar-week"))
         else:
             my_dev_pages.append(NavPage("hitter_profile", "My Hitter Profile", "graph-up-arrow"))
             my_dev_pages.append(NavPage("hitter_game_report", "My Game Breakdown", "file-text"))
             my_dev_pages.append(NavPage("hitter_meeting_report", "Hitter Report", "printer"))
+            my_dev_pages.append(NavPage("exit_report", "My Exit Report", "clipboard-check"))
             my_dev_pages.append(NavPage("weekly_report", "My Weekly Report", "calendar-week"))
             # Oct 2026: published advance scouting reports, read-only.
             my_dev_pages.append(NavPage("advance_scouting", "Scouting Reports", "binoculars"))
@@ -248,7 +252,7 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
 # ---------------------------------------------------------------------------
 _COACH_CORE = [
     ("Home", ["dashboard", "how_to_read"]),
-    ("Players", ["roster", "player_profile", "player_types", "arm_care"]),
+    ("Players", ["roster", "player_profile", "exit_report", "player_types", "arm_care"]),
     ("Games", ["team_game_report", "pitch_cards", "advance_scouting"]),
     ("Leaderboards", ["pitching_leaderboard", "hitting_leaderboard", "analytics"]),
 ]

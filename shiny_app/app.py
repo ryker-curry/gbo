@@ -79,7 +79,7 @@ from modules import (  # noqa: E402
     game_tracking, command_tracker, roster, player_profile,
     pitcher_meeting_report, weekly_report, advance_scouting, hitter_meeting_report, team_game_report,
     data_health, arm_care, how_to_read, research_project, charter_training, staff_compensation, pitch_cards,
-    player_types,
+    player_types, exit_report,
 )
 
 # Registry of page keys (see nav.NavPage.key) that have a real Shiny
@@ -109,6 +109,7 @@ MODULE_UI = {
     "pitcher_game_report": lambda: pitcher_game_report.pitcher_game_report_ui("pitcher_game_report"),
     "pitcher_meeting_report": lambda: pitcher_meeting_report.pitcher_meeting_report_ui("pitcher_meeting_report"),
     "hitter_meeting_report": lambda: hitter_meeting_report.hitter_meeting_report_ui("hitter_meeting_report"),
+    "exit_report": lambda: exit_report.exit_report_ui("exit_report"),
     "team_game_report": lambda: team_game_report.team_game_report_ui("team_game_report"),
     "data_health": lambda: data_health.data_health_ui("data_health"),
     "charter_training": lambda: charter_training.charter_training_ui("charter_training"),
@@ -369,6 +370,7 @@ def server(input, output, session):
     pitcher_game_report.pitcher_game_report_server("pitcher_game_report", app_state)
     pitcher_meeting_report.pitcher_meeting_report_server("pitcher_meeting_report", app_state)
     hitter_meeting_report.hitter_meeting_report_server("hitter_meeting_report", app_state)
+    exit_report.exit_report_server("exit_report", app_state)
     team_game_report.team_game_report_server("team_game_report", app_state)
     data_health.data_health_server("data_health", app_state)
     charter_training.charter_training_server("charter_training", app_state)
@@ -469,12 +471,12 @@ _NAV_GROUPS = [
     # Oct 2026 reorganization (Ryker approved): doing the work vs reading it.
     ("Game Operations", ["game_tracking", "data_health", "charter_training"]),
     ("Reports", ["team_game_report", "pitcher_game_report", "pitcher_meeting_report", "hitter_game_report",
-                 "hitter_meeting_report", "weekly_report"]),
+                 "hitter_meeting_report", "exit_report", "weekly_report"]),
     # Sept 2026, Ryker: profiles / stats / leaderboards live under Analytics.
     ("Analytics", ["analytics", "pitcher_profile", "player_types", "staff_compensation", "hitter_profile", "pitching_leaderboard", "hitting_leaderboard"]),
     ("Scouting", ["advance_scouting", "pitch_cards", "opponent_teams"]),
     ("Admin", ["user_management", "staff_assignments", "video_import"]),
-    ("Me", ["player_profile", "player_schedule", "player_development", "player_stats", "player_game_stats", "player_hitting", "player_video", "player_bullpens", "pitcher_profile", "pitcher_meeting_report", "weekly_report", "advance_scouting", "hitter_profile", "hitter_meeting_report", "pitching_leaderboard", "hitting_leaderboard"]),
+    ("Me", ["player_profile", "player_schedule", "player_development", "player_stats", "player_game_stats", "player_hitting", "player_video", "player_bullpens", "pitcher_profile", "pitcher_meeting_report", "weekly_report", "advance_scouting", "hitter_profile", "hitter_meeting_report", "exit_report", "pitching_leaderboard", "hitting_leaderboard"]),
 ]
 _NAV_LABELS = {
     "players": "Player setup", "roster": "Players", "idp": "Development plans", "rapsodo_import": "Import Rapsodo",
@@ -511,6 +513,7 @@ _ICONS = {
     "weekly_report": '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4M7 17l3-3 3 2 4-4"/>',
     "pitcher_meeting_report": '<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7"/><path d="M3 9h3M3 13h3"/>',
     "hitter_meeting_report": '<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7"/><path d="M3 9h3M3 13h3"/>',
+    "exit_report": '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3v3h6V3M8.5 13l2.5 2.5 4.5-5"/>',
     "team_game_report": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M8 15h2M14 15h2M8 4v16M16 4v16"/>',
     "analytics": '<path d="M3 17l6-6 4 4 8-8M14 7h7v7"/>',
     "pitcher_profile": '<path d="M3 17l6-6 4 4 8-8M14 7h7v7"/><circle cx="12" cy="12" r="9"/>',
