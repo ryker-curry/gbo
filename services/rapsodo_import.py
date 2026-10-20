@@ -46,6 +46,7 @@ logic, callable from a page, a script, or a test, per the spec's
 
 import hashlib
 import io
+import re
 from datetime import datetime
 
 import pandas as pd
@@ -242,11 +243,46 @@ def _parse_str(val):
     return s if s not in ("", "-") else None
 
 
+# Oct 2026 (Webb Fern's 9/30 export): Rapsodo writes the Date in the
+# exporting device's language. A Japanese-locale export reads
+# '水 9月 30 2026 4:04:04 午後' (= Wed Sep 30 2026 4:04:04 PM) and every row
+# was rejected as "unparseable Date". Chinese ('周三 9月 30 2026 4:04:04 下午')
+# and Korean ('수 9월 30 2026 4:04:04 오후') use the same layout. The weekday
+# word is ignored -- the date itself says which day it is.
+_CJK_DATE = re.compile(
+    r"^\S+\s+(\d{1,2})\s*[月월]\s*(\d{1,2})\s*[日일]?\s+(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})\s*(\S+)?$")
+_PM_WORDS = {"午後", "下午", "오후", "PM", "pm", "p.m."}
+_AM_WORDS = {"午前", "上午", "오전", "AM", "am", "a.m."}
+
+
 def _parse_pitch_date(val):
-    """Rapsodo's real "Date" format: 'Sat Aug 08 2026 6:03:29 PM'."""
+    """Rapsodo's real "Date" format: 'Sat Aug 08 2026 6:03:29 PM' -- plus the
+    same layout in Japanese / Chinese / Korean (see _CJK_DATE above)."""
+    if val is None:
+        return None
+    s = str(val).strip()
     try:
-        return datetime.strptime(str(val).strip(), "%a %b %d %Y %I:%M:%S %p")
+        return datetime.strptime(s, "%a %b %d %Y %I:%M:%S %p")
     except (ValueError, TypeError):
+        pass
+    m = _CJK_DATE.match(s)
+    if not m:
+        return None
+    mo, d, y, h, mi, sec, ap = m.groups()
+    h = int(h)
+    if ap in _PM_WORDS:
+        if not 1 <= h <= 12:
+            return None
+        h = h % 12 + 12
+    elif ap in _AM_WORDS:
+        if not 1 <= h <= 12:
+            return None
+        h = h % 12
+    elif ap is not None:
+        return None       # some other trailing word we don't know -- don't guess
+    try:
+        return datetime(int(y), int(mo), int(d), h, int(mi), int(sec))
+    except ValueError:
         return None
 
 
