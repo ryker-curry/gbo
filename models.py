@@ -1872,6 +1872,32 @@ class PlayerReportNote(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class ExitReport(Base):
+    """Fall exit meeting plan (Oct 2026, Ryker: a deep-dive report coaches
+    go through with each player, ending in what he works on before the
+    season). One row per (player, season). priorities = the coach-edited
+    top 3: [{"title", "why", "measure" ("g:<GAME_METRICS key>" /
+    "t:<test name>" / ""), "target", "retest" (ISO date), "drills",
+    "goal_id"}] -- goal_id is the IDP goal that priority created, so
+    re-saving updates it instead of making a duplicate. status "draft"
+    until a coach saves the plan; players only see it once "saved".
+    (python3 -m migrations.migrate_exit_reports)"""
+    __tablename__ = "exit_reports"
+    __table_args__ = (UniqueConstraint("player_id", "season_id", name="uq_exit_reports_player_season"),)
+
+    exit_report_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    season_id = Column(Integer, ForeignKey("seasons.season_id", ondelete="CASCADE"), nullable=False)
+    status = Column(String(12), default="draft", nullable=False)
+    priorities = Column(JSON, nullable=True)
+    coach_notes = Column(Text, nullable=True)
+    met_on = Column(Date, nullable=True)
+    saved_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    saved_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class ArsenalTarget(Base):
     """A coach's override of one pitch's target shape on the Arsenal Plan
     (Oct 2026, Ryker: REAPER-style recommender -- "a coach can override

@@ -32,7 +32,7 @@ def test_every_other_staff_role_is_short():
 def test_coach_sidebar_matches_plan():
     core = dict(nav.simple_sidebar_groups("Coach"))
     assert "game_tracking" not in {k for keys in core.values() for k in keys}  # Ryker: More tools
-    assert core["Players"] == ["roster", "player_profile", "player_types", "arm_care"]
+    assert core["Players"] == ["roster", "player_profile", "exit_report", "player_types", "arm_care"]  # Oct 2026: exit meetings
 
 
 def test_profile_link_pages_exist_for_coaches():
