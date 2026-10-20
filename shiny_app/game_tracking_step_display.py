@@ -112,6 +112,9 @@ def parse_scoring(text):
     m = re.fullmatch(r"(?:DP|GDP)([1-9])(?:-[1-9])?U?", t)
     if m:
         return {"ab": "Double Play", "bbt": "Ground Ball", "fielder": int(m.group(1))}
+    # A bare outfielder number (7 / 8 / 9) is a fly out on a scorecard, not a ground out.
+    if re.fullmatch(r"[789]", t):
+        return {"ab": "Flyout", "bbt": "Fly Ball", "fielder": int(t)}
     m = re.fullmatch(r"G?([1-9])(?:-[1-9]|U)?|U([1-9])", t)
     if m:
         return {"ab": "Groundout", "bbt": "Ground Ball", "fielder": int(m.group(1) or m.group(2))}

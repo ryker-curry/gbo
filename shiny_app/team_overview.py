@@ -100,6 +100,9 @@ def build(db, players, player_ids, ns):
     # --- today + recent activity ---
     events = db.query(TeamScheduleEvent).options(joinedload(TeamScheduleEvent.event_type)).filter(TeamScheduleEvent.scheduled_date == today).order_by(TeamScheduleEvent.title).all()
     appts = db.query(ATAppointment).options(joinedload(ATAppointment.player)).filter(ATAppointment.appointment_date == today, ATAppointment.player_id.in_(player_ids)).order_by(ATAppointment.appointment_time).all()
+    import scout_mode
+    if scout_mode.is_scout():
+        appts = []   # Guest login (real data, outside viewers): no medical appointments at all
     assigns = db.query(PlayerAssignment).options(joinedload(PlayerAssignment.player), joinedload(PlayerAssignment.session_type)).filter(PlayerAssignment.scheduled_date == today, PlayerAssignment.player_id.in_(player_ids)).all()
     today_items = []
     for e in events:

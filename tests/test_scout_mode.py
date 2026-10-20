@@ -70,3 +70,15 @@ def test_login_check(monkeypatch):
     assert not scout_mode.matches("guest@gbo.app", "password")
     monkeypatch.setenv("GBO_SCOUT_PASSWORD", "off")
     assert not scout_mode.matches("guest@gbo.app", "off")
+
+
+def test_free_text_blanked():
+    """Oct 2026: AT appointment reasons and IDP goal text showed on the Guest
+    dashboard. Blanked to "" so display code that slices them still works."""
+    from models import ATAppointment, IDPGoal
+    a = ATAppointment(reason="shoulder soreness")
+    g = IDPGoal(description="Webb: get the hip mobility up")
+    scout_mode.mask(a)
+    scout_mode.mask(g)
+    assert a.reason == "" and g.description == ""
+    assert g.description[:60] == ""

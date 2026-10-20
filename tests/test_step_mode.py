@@ -37,3 +37,10 @@ def test_paper_chart_shorthand():
     for res in ("6-3", "F7", "1B", "E5", "FC6", "SF8", "6-4-3", "L6", "P4"):
         assert p(res)["ab"] in gt.AB_OUTCOMES
     assert all(sd.parse_scoring(r) for r in sd.QUICK_RESULTS)
+
+
+def test_bare_outfielder_number_is_a_fly_out():
+    from game_tracking_step_display import parse_scoring
+    for n in (7, 8, 9):
+        assert parse_scoring(str(n)) == {"ab": "Flyout", "bbt": "Fly Ball", "fielder": n}
+    assert parse_scoring("6")["ab"] == "Groundout"
