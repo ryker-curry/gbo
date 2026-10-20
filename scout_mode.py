@@ -56,6 +56,15 @@ BLANK_COLUMNS = {
     "rapsodo_session_name",
 }
 
+# Oct 2026: more free text that can name people or hold medical detail --
+# AT appointment reasons and IDP goal descriptions were showing on the Guest
+# dashboard. Set to "" (not None) because display code slices / measures
+# these (g.description[:60]) and would crash on None.
+BLANK_TEXT_COLUMNS = {
+    "reason", "description", "player_feedback", "next_steps", "label", "detail",
+    "error_summary", "message", "traceback_text",
+}
+
 _engine = None
 _maker = None
 _lock = threading.Lock()
@@ -152,6 +161,9 @@ def mask(obj):
     for c in BLANK_COLUMNS & cols:
         if getattr(obj, c, None) is not None:
             set_committed_value(obj, c, None)
+    for c in BLANK_TEXT_COLUMNS & cols:
+        if getattr(obj, c, None):
+            set_committed_value(obj, c, "")
 
 
 def _on_load(target, context):
