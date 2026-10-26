@@ -1,6 +1,8 @@
 """Research project analysis (Oct 2026): stats helpers, pairing, CSV."""
 
 import datetime as dt
+
+import pytest
 from types import SimpleNamespace as NS
 
 from analytics import research_analysis as ra
@@ -43,7 +45,22 @@ def test_correlations_and_reads():
 
 def test_checklist_and_csv():
     rows = ra.checklist(_ds())
-    assert rows[0]["cats"]["Explosive Power"]["done"] == 1 and not rows[0]["complete"]
+    assert rows[0]["cats"]["Field testing & ROM"]["done"] == 1 and not rows[0]["complete"]
+    assert ra.CALC_GROUP not in rows[0]["cats"]
     csv_text = ra.to_csv(_ds())
     head = csv_text.splitlines()[0].split(",")
     assert head.count("Body Weight") == 1 and "fb_avg_velo" in head and len(csv_text.splitlines()) == 9
+
+
+def test_variables_grouped_by_tab_with_calculated():
+    groups = [g for g, _ in ra.BATTERY]
+    assert groups[0] == "Shoulder dynamometry" and groups[-1] == ra.CALC_GROUP
+    assert "Shoulder: Throw External Rotation" in ra.TESTS
+    assert any(t.startswith("Dynamic Strength Index") for t in ra.TESTS)
+    v = {"CMJ Concentric Peak Force": 2400.0, "Isometric Mid-Thigh Pull Peak Vertical Force": 3000.0,
+         "Hip Abduction Force (Drive Leg)": 200.0, "Hip Abduction Force (Plant Leg)": 150.0}
+    fns = {lab: fn for lab, _u, fn in ra.DERIVED_FNS}
+    dsi = [fn for lab, fn in fns.items() if lab.startswith("Dynamic Strength Index")][0]
+    assert dsi(v) == pytest.approx(0.8)
+    assert fns["Hip ABD max force asymmetry (drive vs plant)"](v) == pytest.approx(25.0)
+    assert ra.relative_ok("Hex Bar Deadlift Max") and not ra.relative_ok("30-Yard Sprint Time")

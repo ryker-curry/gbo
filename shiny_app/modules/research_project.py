@@ -202,10 +202,10 @@ def research_project_server(input, output, session, app_state):
         comp = ra.category_completion(rows)
         only = input.rp_missing_only() if "rp_missing_only" in input else False
         shown = [r for r in rows if not (only and r["complete"])]
-        cats = [c for c, _t in ra.BATTERY]
+        cats = [c for c, _t in ra.BATTERY if c != ra.CALC_GROUP]
         head = ui.tags.tr(ui.tags.th("Pitcher"), ui.tags.th("T", title="Throws"),
                           *[ui.tags.th(c, class_="n") for c in cats], ui.tags.th("FB velo", class_="n"),
-                          ui.tags.th("FB spin", class_="n"))
+                          ui.tags.th("FB spin", class_="n"), ui.tags.th("Notes"))
         body = []
         for r in shown:
             p = r["player"]
@@ -216,6 +216,9 @@ def research_project_server(input, output, session, app_state):
                 ui.tags.td(ui.span(str(fb["n_velo"]), class_="ok" if fb["avg_velo"] is not None else "no"), class_="c",
                            title=f"{ra.MIN_FB}+ fastball readings needed"),
                 ui.tags.td(ui.span(str(fb["n_spin"]), class_="ok" if fb["avg_spin"] is not None else "no"), class_="c"),
+                ui.tags.td(ui.span(f"{len(r['notes'])} note{'s' if len(r['notes']) != 1 else ''}", class_="part",
+                                   title="\n".join(r["notes"])) if r["notes"] else "",
+                           class_="small"),
             ))
         bars = ui.tags.table(
             ui.tags.tbody(*[ui.tags.tr(ui.tags.td(k), ui.tags.td(f"{v:.0f}%", class_="n"),
@@ -225,7 +228,9 @@ def research_project_server(input, output, session, app_state):
         return ui.div(
             ui.p(f"{n_done} of {len(rows)} active pitchers have every test plus fastball velo and spin this season. "
                  "✓ = all tests in that category (date of the latest), \"3 of 15\" = partial (hover to see what's "
-                 f"missing), ✗ = nothing yet. Fastball columns = Rapsodo readings this season ({ra.MIN_FB}+ needed).",
+                 f"missing), ✗ = nothing yet. Fastball columns = pitches behind the study's FB numbers (imported FB VELO&SPIN "
+                 f"tab), or Rapsodo readings this season when none were imported ({ra.MIN_FB}+ needed). Notes = values "
+                 "the import skipped and why (hover).",
                  class_="text-muted small", style="margin-top:10px;"),
             ui.layout_columns(ui_helpers.card(bars, title="Complete by category"),
                               ui.div(ui.input_checkbox("rp_missing_only", "Only pitchers still missing something", value=only),
@@ -277,11 +282,22 @@ def research_project_server(input, output, session, app_state):
 
         def fp(v):
             return "—" if v is None else ("<.001" if v < 0.001 else f"{v:.3f}".replace("0.", ".", 1))
-        order = sorted(rows, key=lambda r: (r["r"] is None, -(abs(r["r"]) if r["r"] is not None else 0)))
+        # Oct 2026 (Ryker): every variable, grouped by the workbook tab it came
+        # from; strongest relationships first within each group.
+        def _key(r):
+            return (r["r"] is None, -(abs(r["r"]) if r["r"] is not None else 0))
+        order = []
+        for g, _labs in ra.BATTERY:
+            order += sorted([r for r in rows if r["category"] == g], key=_key)
         head = ui.tags.tr(*[ui.tags.th(h, class_="n" if i > 1 else None) for i, h in enumerate(
-            ["Test", "Category", "n", "r", "95% CI", "p", "Spearman ρ", "Read"])])
+            ["Variable", "Group", "n", "r", "95% CI", "p", "Spearman ρ", "Read"])])
         trs = []
+        last_group = None
         for r in order:
+            if r["category"] != last_group:
+                last_group = r["category"]
+                trs.append(ui.tags.tr(ui.tags.td(ui.strong(last_group), colspan="8",
+                                                 style="padding-top:10px;color:var(--gbo-crimson);")))
             mark = " **" if r["bonf"] else (" *" if r["bh"] else "")
             trs.append(ui.tags.tr(
                 ui.tags.td(r["test"] + (" (per lb)" if r["relative"] else "") + mark), ui.tags.td(r["category"]),
@@ -303,7 +319,10 @@ def research_project_server(input, output, session, app_state):
                  f"With {m} tests, a few will look 'significant' by chance: * = holds up after a false-discovery-rate "
                  f"correction (Benjamini-Hochberg, 5%), ** = after Bonferroni (p under {0.05 / m if m else 0:.4f}). "
                  "Sprint times: lower is better, so a negative r means faster runners throw harder -- the Read column "
-                 "already accounts for that. Correlation isn't cause.", class_="text-muted small"),
+                 "already accounts for that. Correlation isn't cause. "
+                 "Throw / Glove and Drive / Plant follow each pitcher's throwing hand. 'Calculated by GBO': ER:IR and "
+                 "AD:AB ratios, asymmetries = (throw − glove) or (drive − plant) ÷ the higher side × 100, and Dynamic "
+                 "Strength Index = CMJ concentric peak force ÷ IMTP peak force.", class_="text-muted small"),
             ui.div(ui.tags.table(ui.tags.thead(head), ui.tags.tbody(*trs), class_="table table-sm"),
                    class_="table-responsive"),
             ui.hr(),
@@ -348,7 +367,7 @@ def research_project_server(input, output, session, app_state):
         req("rp_inf_outcome" in input)
         o = input.rp_inf_outcome()
         unit = ra.OUTCOMES[o][1]
-        step = 50 if o == "avg_spin" else (0.5 if o == "bauer" else 0.5)
+        step = 50 if o in ("avg_spin", "peak_spin") else 0.5
         return ui.input_numeric("rp_inf_line", f"Line ({unit})" if unit else "Line", value=inf.DEFAULT_LINE[o], step=step)
 
     @reactive.calc
