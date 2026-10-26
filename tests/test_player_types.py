@@ -42,11 +42,44 @@ def test_build_rows_and_gaps():
     assert r["whiff"] == "Slider"
 
 
+def _cmj(n=8):
+    """n players: player i has more spring (height, mRSI, velocity) and less
+    force as i goes up."""
+    r = range(n)
+    return {"CMJ Bodyweight": {i: 90.0 for i in r},
+            "Countermovement Jump Height": {i: 12 + i for i in r},
+            "CMJ Concentric Peak Velocity": {i: 2.5 + 0.05 * i for i in r},
+            "Countermovement Jump RSI-Modified": {i: 0.4 + 0.03 * i for i in r},
+            "CMJ Peak Power": {i: 4500 + 50 * i for i in r},
+            "CMJ Concentric Impulse": {i: 260 - 3 * i for i in r},
+            "CMJ Concentric Peak Force": {i: 2300 - 40 * i for i in r},
+            "CMJ Eccentric Peak Force": {i: 2200 - 40 * i for i in r},
+            "CMJ Eccentric Duration": {i: 560 - 10 * i for i in r},
+            "Countermovement Jump Concentric Duration": {i: 300 - 8 * i for i in r}}
+
+
+def test_archetype_gs_signature_and_spectrum():
+    raw = _cmj()
+    spring = aa.profile(7, aa.values(raw))
+    force = aa.profile(0, aa.values(raw))
+    assert spring["kind"] == "Elastic" and spring["index"] >= aa.ARCH_BAND
+    assert force["kind"] == "Muscular" and force["index"] <= -aa.ARCH_BAND
+    assert len(spring["signature"]) == 8 and sum(spring["counts"].values()) == 8
+    assert [m["label"] for m in spring["metrics"]][0] == "Jump Ht" and len(spring["metrics"]) == 9
+    assert spring["velocity"] > spring["force"]
+    assert spring["how"].startswith("On the plates he loads shallow")
+
+
+def test_gs_index_matches_their_sample():
+    # GS sample: 5 elastic, 2 muscular, 1 neutral -> +0.37 (Elastic)
+    assert round((5 - 2) / 8, 2) == 0.38 and (5 - 2) / 8 >= aa.ARCH_BAND
+
+
 def test_archetype_goal_spec():
-    raw = {"Body Weight": {i: 200 for i in range(8)},
-           "Countermovement Jump Height": {i: 20 + i for i in range(8)},
-           "Countermovement Jump Concentric Mean Force": {i: 2000 - 50 * i for i in range(8)}}
+    raw = _cmj()
     prof = aa.profile(7, aa.values(raw))
     sp = aa.goal_spec(7, raw, prof)
-    assert prof["kind"] == "Elastic" and sp["test"] == "Countermovement Jump Concentric Mean Force"
-    assert sp["target"] > sp["baseline"]
+    assert prof["worst"]["side"] == "force"
+    assert sp is not None and sp["target"] > sp["baseline"]
+    assert sp["test"] in ("CMJ Concentric Impulse", "CMJ Concentric Peak Force", "CMJ Eccentric Peak Force",
+                          "CMJ Concentric Peak Velocity")

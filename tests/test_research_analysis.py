@@ -62,5 +62,9 @@ def test_variables_grouped_by_tab_with_calculated():
     fns = {lab: fn for lab, _u, fn in ra.DERIVED_FNS}
     dsi = [fn for lab, fn in fns.items() if lab.startswith("Dynamic Strength Index")][0]
     assert dsi(v) == pytest.approx(0.8)
-    assert fns["Hip ABD max force asymmetry (drive vs plant)"](v) == pytest.approx(25.0)
+    assert fns["Hip ABD max force asymmetry (drive vs plant)"](v) == pytest.approx(25.0)      # (200-150)/200
+    v2 = {"Shoulder Strength: Throwing Arm ER Peak Force": 156.25, "Shoulder Strength: Non-Throwing Arm ER Peak Force": 164.0}
+    assert fns["Shoulder ER max force asymmetry (throw vs glove)"](v2) == pytest.approx(-4.96, abs=0.01)   # sheet: -4.96
+    sl = {"Single-Leg Jump Concentric Duration (Drive Leg)": 260.0, "Single-Leg Jump Concentric Duration (Plant Leg)": 332.0}
+    assert fns["Single-leg jump concentric duration asymmetry (drive vs plant)"](sl) == pytest.approx(-21.69, abs=0.01)
     assert ra.relative_ok("Hex Bar Deadlift Max") and not ra.relative_ok("30-Yard Sprint Time")

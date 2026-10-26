@@ -6,8 +6,10 @@ VARIABLES (Oct 2026 rebuild, Ryker: "all of this goes with research
 project"): every column of the testing workbook (study_workbook_spec.py),
 grouped by its tab, plus a "Calculated by GBO" group --
   - shoulder ER:IR and hip AD:AB ratios (max and average force),
-  - asymmetries, (throw - glove) or (drive - plant) / the higher side x 100,
-    the same formula for every bilateral test,
+  - asymmetries, the way the testing sheet calculates them (Ryker, Oct
+    2026): shoulder (throw - glove) / throw x 100, hip (drive - plant) /
+    drive x 100; single-leg jump and IMTP (drive - plant) / the higher side
+    x 100 (the sheet's SL Jump columns and the force plate's IMTP asymmetry),
   - Dynamic Strength Index = CMJ concentric peak force / IMTP peak force.
 Side-specific tests are read per pitcher from his throwing hand (throw /
 glove, drive / plant), so "Shoulder: Throw External Rotation" is the right
@@ -94,9 +96,18 @@ def _build_vars():
 
 
 def _asym(a, b):
+    """(a - b) / the higher side x 100 -- single-leg jump, IMTP."""
     if a is None or b is None or max(abs(a), abs(b)) == 0:
         return None
     return (a - b) / max(abs(a), abs(b)) * 100
+
+
+def _asym_ref(a, b):
+    """(a - b) / a x 100 -- shoulder (a = throwing arm) and hip (a = drive
+    leg), same as the testing sheet's ASYM columns."""
+    if a is None or b is None or a == 0:
+        return None
+    return (a - b) / a * 100
 
 
 def _ratio(a, b):
@@ -113,14 +124,14 @@ DERIVED_FNS = [
     ("Hip AD:AB ratio, max force (Plant)", "ratio", lambda v: _ratio(v.get("Hip Adduction Force (Plant Leg)"), v.get("Hip Abduction Force (Plant Leg)"))),
     ("Hip AD:AB ratio, avg force (Drive)", "ratio", lambda v: _ratio(v.get("Hip Adduction Avg Force (Drive Leg)"), v.get("Hip Abduction Avg Force (Drive Leg)"))),
     ("Hip AD:AB ratio, avg force (Plant)", "ratio", lambda v: _ratio(v.get("Hip Adduction Avg Force (Plant Leg)"), v.get("Hip Abduction Avg Force (Plant Leg)"))),
-    ("Shoulder ER max force asymmetry (throw vs glove)", "%", lambda v: _asym(v.get(_SH[0].format(m="ER")), v.get(_SH[1].format(m="ER")))),
-    ("Shoulder IR max force asymmetry (throw vs glove)", "%", lambda v: _asym(v.get(_SH[0].format(m="IR")), v.get(_SH[1].format(m="IR")))),
-    ("Shoulder ER avg force asymmetry (throw vs glove)", "%", lambda v: _asym(v.get("Shoulder ER Avg Force (Throwing Arm)"), v.get("Shoulder ER Avg Force (Non-Throwing Arm)"))),
-    ("Shoulder IR avg force asymmetry (throw vs glove)", "%", lambda v: _asym(v.get("Shoulder IR Avg Force (Throwing Arm)"), v.get("Shoulder IR Avg Force (Non-Throwing Arm)"))),
-    ("Hip ABD max force asymmetry (drive vs plant)", "%", lambda v: _asym(v.get("Hip Abduction Force (Drive Leg)"), v.get("Hip Abduction Force (Plant Leg)"))),
-    ("Hip ADD max force asymmetry (drive vs plant)", "%", lambda v: _asym(v.get("Hip Adduction Force (Drive Leg)"), v.get("Hip Adduction Force (Plant Leg)"))),
-    ("Hip ABD avg force asymmetry (drive vs plant)", "%", lambda v: _asym(v.get("Hip Abduction Avg Force (Drive Leg)"), v.get("Hip Abduction Avg Force (Plant Leg)"))),
-    ("Hip ADD avg force asymmetry (drive vs plant)", "%", lambda v: _asym(v.get("Hip Adduction Avg Force (Drive Leg)"), v.get("Hip Adduction Avg Force (Plant Leg)"))),
+    ("Shoulder ER max force asymmetry (throw vs glove)", "%", lambda v: _asym_ref(v.get(_SH[0].format(m="ER")), v.get(_SH[1].format(m="ER")))),
+    ("Shoulder IR max force asymmetry (throw vs glove)", "%", lambda v: _asym_ref(v.get(_SH[0].format(m="IR")), v.get(_SH[1].format(m="IR")))),
+    ("Shoulder ER avg force asymmetry (throw vs glove)", "%", lambda v: _asym_ref(v.get("Shoulder ER Avg Force (Throwing Arm)"), v.get("Shoulder ER Avg Force (Non-Throwing Arm)"))),
+    ("Shoulder IR avg force asymmetry (throw vs glove)", "%", lambda v: _asym_ref(v.get("Shoulder IR Avg Force (Throwing Arm)"), v.get("Shoulder IR Avg Force (Non-Throwing Arm)"))),
+    ("Hip ABD max force asymmetry (drive vs plant)", "%", lambda v: _asym_ref(v.get("Hip Abduction Force (Drive Leg)"), v.get("Hip Abduction Force (Plant Leg)"))),
+    ("Hip ADD max force asymmetry (drive vs plant)", "%", lambda v: _asym_ref(v.get("Hip Adduction Force (Drive Leg)"), v.get("Hip Adduction Force (Plant Leg)"))),
+    ("Hip ABD avg force asymmetry (drive vs plant)", "%", lambda v: _asym_ref(v.get("Hip Abduction Avg Force (Drive Leg)"), v.get("Hip Abduction Avg Force (Plant Leg)"))),
+    ("Hip ADD avg force asymmetry (drive vs plant)", "%", lambda v: _asym_ref(v.get("Hip Adduction Avg Force (Drive Leg)"), v.get("Hip Adduction Avg Force (Plant Leg)"))),
     ("IMTP net peak force asymmetry (drive vs plant)", "%", lambda v: _asym(v.get("IMTP Net Peak Vertical Force (Drive Leg)"), v.get("IMTP Net Peak Vertical Force (Plant Leg)"))),
 ] + [
     (f"Single-leg jump {name.lower()} asymmetry (drive vs plant)", "%",

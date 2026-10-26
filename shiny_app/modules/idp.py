@@ -399,6 +399,7 @@ def idp_server(input, output, session, app_state):
         db = get_session()
         lad = arch = spec = None
         has_goal = False
+        is_p = True
         try:
             try:
                 data, raw, stab = ts.load(db)
@@ -407,6 +408,8 @@ def idp_server(input, output, session, app_state):
                 db.rollback()
             try:
                 arch, araw = aa.load_full(db, pid)
+                _pl = db.query(Player).filter(Player.player_id == pid).first()
+                is_p = bool(_pl.is_pitcher) if _pl is not None else True
                 spec = aa.goal_spec(pid, araw, arch) if _can_create_goals() else None
                 has_goal = spec is not None and aa.open_goal(db, pid, spec["test"]) is not None
             except Exception:
@@ -416,7 +419,7 @@ def idp_server(input, output, session, app_state):
         _arch_spec.set({"pid": pid, "spec": spec})
         kids = []
         if arch:
-            kids.append(ui.HTML(ad.archetype_card(arch)))
+            kids.append(ui.HTML(ad.archetype_card(arch, is_pitcher=is_p)))
             if spec and has_goal:
                 kids.append(ui.p(f"Open IDP goal on {spec['label'].lower()} already in place.",
                                  class_="text-muted small", style="margin:-6px 0 14px;"))

@@ -90,13 +90,11 @@ def test_count_damage_groups():
 
 
 def test_archetype():
-    raw = {"Body Weight": {i: 200 for i in range(10)},
-           "Countermovement Jump Height": {i: 20 + i for i in range(10)},
-           "Countermovement Jump Concentric Mean Force": {i: 2000 - 50 * i for i in range(10)}}
-    v = aa.values(raw)
-    assert aa.profile(9, v)["kind"] == "Elastic"
+    from tests.test_player_types import _cmj
+    v = aa.values(_cmj())
+    assert aa.profile(7, v)["kind"] == "Elastic"
     assert aa.profile(0, v)["kind"] == "Muscular"
-    assert aa.profile(9, {"Countermovement Jump Height": v["Countermovement Jump Height"]}) is None
+    assert aa.profile(7, {"jump_ht": v["jump_ht"]}) is None
 
 
 def test_stress_series_and_budget():
