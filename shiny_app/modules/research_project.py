@@ -321,7 +321,8 @@ def research_project_server(input, output, session, app_state):
                  "Sprint times: lower is better, so a negative r means faster runners throw harder -- the Read column "
                  "already accounts for that. Correlation isn't cause. "
                  "Throw / Glove and Drive / Plant follow each pitcher's throwing hand. 'Calculated by GBO': ER:IR and "
-                 "AD:AB ratios, asymmetries = (throw − glove) or (drive − plant) ÷ the higher side × 100, and Dynamic "
+                 "AD:AB ratios, asymmetries the way the testing sheet does them (shoulder ÷ throwing arm, hip ÷ drive leg, "
+                 "single-leg jump and IMTP ÷ the higher side), and Dynamic "
                  "Strength Index = CMJ concentric peak force ÷ IMTP peak force.", class_="text-muted small"),
             ui.div(ui.tags.table(ui.tags.thead(head), ui.tags.tbody(*trs), class_="table table-sm"),
                    class_="table-responsive"),

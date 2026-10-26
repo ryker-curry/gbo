@@ -90,7 +90,7 @@ def player_types_server(input, output, session, app_state):
             trs.append(
                 f'<tr><td>{_e(p.first_name)} {_e(p.last_name)} <span class="text-muted small">{pos}</span></td>'
                 f'<td><span class="gbo-pt-badge" style="background:{KIND_C[pr["kind"]]}">{pr["kind"].upper()}</span></td>'
-                f'<td>{bar}<div class="small text-muted">force ← {pr["index"]:+.2f} → spring</div></td>'
+                f'<td>{bar}<div class="small text-muted">force ← {pr["index"]:+.2f} → spring · {pr["counts"]["muscular"]}M {pr["counts"]["elastic"]}E</div></td>'
                 f'<td>{pr["output"]}</td>'
                 f'<td>{_e(pr["best"]["label"])} <span class="text-muted small">({pr["best"]["pct"]})</span></td>'
                 f'<td>{_e(pr["worst"]["label"])} <span class="text-muted small">({pr["worst"]["pct"]})</span></td>'
@@ -98,8 +98,10 @@ def player_types_server(input, output, session, app_state):
         table = ('<div class="gbo-sg-wrap"><table class="gbo-pt-board"><thead><tr><th>Player</th><th>Type</th>'
                  '<th>Force vs spring</th><th>Overall output (team pct)</th><th>Superpower</th><th>Biggest opportunity</th>'
                  f'<th>Training focus</th></tr></thead><tbody>{"".join(trs)}</tbody></table></div>')
-        how = ("From each player's latest jump and force tests, ranked against the team (Georgia Southern's archetype "
-               "idea). Elastic = wins with speed and spring, Muscular = wins with force, Hybrid = no strong lean. Use "
+        how = ("From each player's latest countermovement jump, ranked against the team -- Georgia Southern's "
+               "force-plate archetype: 8 signature rows (timing and per-pound measures) each lean muscular, neutral or "
+               "elastic; spectrum index = (elastic - muscular) / rows, Elastic at +0.25 or more, Muscular at -0.25 or "
+               "less. Elastic = wins with speed and spring, Muscular = wins with force, Hybrid = no strong lean. Use "
                "it to group lifting: Elastic guys need strength under the spring, Muscular guys need speed and "
                "reactive work. Open a player's Player Profile → Assessments for his full card and a one-click IDP goal. "
                "A snapshot of the latest test -- regular jump testing turns it into a trend.")

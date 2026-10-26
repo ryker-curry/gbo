@@ -461,6 +461,8 @@ def player_profile_server(input, output, session, app_state):
             if pid is None:
                 return None
             prof, raw = aa.load_full(db, pid)
+            _pl = db.query(Player).filter(Player.player_id == pid).first()
+            is_p = bool(_pl.is_pitcher) if _pl is not None else True
             spec = aa.goal_spec(pid, raw, prof) if app_state.role_name() != "Player" else None
             _arch_ctx.set({"pid": pid, "spec": spec})
             btn = None
@@ -472,7 +474,7 @@ def player_profile_server(input, output, session, app_state):
                 btn = ui.div(ui.input_action_button(
                     "arch_idp", f"Make IDP goal: {verb.lower()} {spec['label'].lower()} to the team middle",
                     class_="btn-sm btn-outline-light"), style="margin:-6px 0 14px;")
-            return ui.div(ui.HTML(ad.archetype_card(prof)), btn)
+            return ui.div(ui.HTML(ad.archetype_card(prof, is_pitcher=is_p)), btn)
         finally:
             db.close()
 
