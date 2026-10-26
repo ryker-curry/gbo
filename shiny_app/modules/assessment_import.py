@@ -44,6 +44,8 @@ from services.assessment_import import (
     AssessmentImportError, AssessmentValidationError, UnknownCategoryError,
 )
 from assessment_import_spec import CATEGORY_SPECS
+from services import study_workbook_import as swi
+import study_workbook_spec as wspec
 
 import ui_helpers
 
@@ -101,6 +103,15 @@ def assessment_import_server(input, output, session, app_state):
         if app_state.role_name() not in ALLOWED_ROLES:
             return ui.p("You don't have access to this page.", class_="text-danger")
 
+        # Oct 2026 (Ryker): the testing workbook (every tab at once) is the
+        # default; the old one-category template stays as the second option.
+        mode = input.import_mode() if "import_mode" in input else "workbook"
+        mode_pick = ui.input_radio_buttons(
+            "import_mode", None, inline=True, selected=mode,
+            choices={"workbook": "Testing workbook (all tabs)", "category": "One category (template)"})
+        if mode == "workbook":
+            return ui.div(mode_pick, ui.output_ui("wb_section"))
+
         category_choices = {name: name for name in CATEGORY_SPECS.keys()}
         # Preserve whatever category was already picked across every
         # re-render (this re-renders on _bump_refresh(), i.e. after every
@@ -110,7 +121,7 @@ def assessment_import_server(input, output, session, app_state):
         current = input.import_category_select() if "import_category_select" in input else None
         selected = current if current in category_choices else None
 
-        sections = []
+        sections = [mode_pick]
         if not app_state.can_edit_assessments():
             sections.append(ui.p(
                 "Your role has read-only access -- you can preview what a sheet would do, but importing is disabled.",
@@ -322,3 +333,185 @@ def assessment_import_server(input, output, session, app_state):
                 class_="text-success",
             ),
         )
+
+
+    # ------------------------------------------------------------------
+    # Testing workbook (Oct 2026): every tab of STUDY_BBF26-style workbook
+    # in one upload -- services/study_workbook_import.py does the work.
+    # ------------------------------------------------------------------
+    _wb_key = reactive.Value(0)
+    _wb_result = reactive.Value(None)
+
+    def _wb_id():
+        return f"wb_file_{_wb_key()}"
+
+    @render.ui
+    def wb_section():
+        from datetime import date as _date
+        tabs = ", ".join(wspec.TABS)
+        return ui.div(
+            ui.p("Upload the whole testing workbook. GBO reads every tab it knows (" + tabs + "), converts units to "
+                 "GBO's (kg -> lb, m/cm -> in or ft, m/s -> mph), matches names to the roster, and shows exactly what "
+                 "it will save before anything is written. Asymmetry, ratio and best-of-both-legs columns are "
+                 "calculated by GBO, not imported. Values already recorded for that date are never overwritten.",
+                 class_="text-muted small"),
+            ui.div(ui.input_date("wb_date", "Test date", value=_date.today()),
+                   ui.input_file(_wb_id(), "Testing workbook (.xlsx)", accept=[".xlsx"]),
+                   style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;"),
+            ui.output_ui("wb_names"),
+            ui.output_ui("wb_preview"),
+            ui.output_ui("wb_result"),
+        )
+
+    @reactive.calc
+    def _wb_bytes():
+        fid = _wb_id()
+        req(fid in input)
+        files = input[fid]()
+        req(files)
+        with open(files[0]["datapath"], "rb") as f:
+            return f.read()
+
+    @reactive.calc
+    def _wb_base():
+        """Plan with automatic name matching only -- drives the name pickers."""
+        data = _wb_bytes()
+        db = get_session()
+        try:
+            return swi.build_plan(db, data, None)
+        except swi.WorkbookError as e:
+            return {"error": str(e)}
+        finally:
+            db.close()
+
+    def _overrides(base):
+        out = {}
+        for i, n in enumerate(base.get("names", [])):
+            if n["how"] == "exact":
+                continue
+            iid = f"wb_name_{i}"
+            if iid in input and input[iid]() is not None and input[iid]() != "":
+                out[n["key"]] = int(input[iid]())
+        return out
+
+    @reactive.calc
+    def _wb_plan():
+        base = _wb_base()
+        if base.get("error"):
+            return base
+        req("wb_date" in input and input.wb_date())
+        db = get_session()
+        try:
+            return swi.build_plan(db, _wb_bytes(), input.wb_date(), _overrides(base))
+        except swi.WorkbookError as e:
+            return {"error": str(e)}
+        finally:
+            db.close()
+
+    @render.ui
+    def wb_names():
+        base = _wb_base()
+        if base.get("error"):
+            return ui.p(base["error"], class_="text-danger")
+        names = base["names"]
+        exact = [n for n in names if n["how"] == "exact"]
+        other = [(i, n) for i, n in enumerate(names) if n["how"] != "exact"]
+        db = get_session()
+        try:
+            from models import Player
+            roster = db.query(Player).order_by(Player.last_name, Player.first_name).all()
+            choices = {"0": "Skip this name"} | {str(p.player_id): f"{p.last_name}, {p.first_name}" for p in roster}
+        finally:
+            db.close()
+        rows = []
+        for i, n in other:
+            label = f"{n['first']} {n['last']}".strip()
+            hint = ("close match -- check it" if n["how"] == "close" else "no match on the roster -- pick or skip")
+            rows.append(ui.div(
+                ui.div(ui.strong(label), ui.br(), ui.span(f"{hint} · in {', '.join(n['tabs'][:3])}"
+                                                          f"{'...' if len(n['tabs']) > 3 else ''}", class_="text-muted small"),
+                       style="min-width:240px;"),
+                ui.input_select(f"wb_name_{i}", None, choices=choices, selected=str(n["player_id"] or 0)),
+                style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:6px;"))
+        return ui_helpers.card(
+            ui.p(f"{len(exact)} of {len(names)} names matched the roster exactly." +
+                 (" Confirm the rest:" if other else ""), class_="small"),
+            *rows, title="Names")
+
+    @render.ui
+    def wb_preview():
+        plan = _wb_plan()
+        if plan.get("error"):
+            return None
+        tt = plan["totals"]
+        trs = []
+        for tab, i in plan["tabs"].items():
+            issues = []
+            if i["flags"]:
+                issues.append(f"{len(i['flags'])} flagged row(s) skipped")
+            if i["text"]:
+                issues.append(f"{len(i['text'])} text cell(s) skipped")
+            if i["unmatched"]:
+                issues.append(f"{i['unmatched']} name(s) skipped")
+            if i["unknown"]:
+                issues.append("unknown columns: " + ", ".join(i["unknown"]))
+            if i["missing"]:
+                issues.append("columns not found: " + ", ".join(i["missing"][:4]) + ("..." if len(i["missing"]) > 4 else ""))
+            trs.append({"Tab": tab, "Players": i["rows"], "Values": i["values"],
+                        "Calculated by GBO (not imported)": len(i["derived"]), "Notes": "; ".join(issues) or "—"})
+        notes = []
+        for pp in sorted(plan["players"].values(), key=lambda x: x["name"]):
+            for n in pp["notes"] + [f"skipped {s}" for s in pp["skipped"]]:
+                notes.append(f"{pp['name']}: {n}")
+        warn = []
+        if plan["missing_tabs"]:
+            warn.append(ui.p("Tabs not in this file: " + ", ".join(plan["missing_tabs"]), class_="text-warning small"))
+        if plan["unknown_tabs"]:
+            warn.append(ui.p("Tabs GBO doesn't know (ignored): " + ", ".join(plan["unknown_tabs"]), class_="text-warning small"))
+        can = app_state.can_edit_assessments() and tt["new_values"] + tt["fb_rows"] > 0
+        return ui.div(
+            ui.h5("What will be saved", class_="gbo-section-title"),
+            ui.p(f"{tt['new_values']} new value(s) for {tt['players']} player(s) on {plan['test_date']:%b %d, %Y}"
+                 + (f" · {tt['already_recorded']} already recorded for that date (skipped)" if tt["already_recorded"] else "")
+                 + f" · fastball outcomes for {tt['fb_rows']} pitcher(s) (Research Project)"
+                 + (f" · {tt['unmatched_names']} name(s) skipped" if tt["unmatched_names"] else ""),
+                 class_="text-success" if tt["new_values"] else "text-warning"),
+            *warn,
+            ui_helpers.render_dict_table(trs),
+            ui.tags.details(ui.tags.summary(f"Skipped values and notes ({len(notes)}) -- saved with each player's entry"),
+                            ui.tags.ul(*[ui.tags.li(x, class_="small") for x in notes])) if notes else None,
+            (ui.input_action_button("wb_import", f"Import {tt['new_values']} value(s)", class_="btn-primary mt-2")
+             if can else ui.p("Your role can't import -- ask a coach or admin." if not app_state.can_edit_assessments()
+                              else "Nothing new to import.", class_="text-muted small")),
+        )
+
+    @reactive.effect
+    @reactive.event(input.wb_import)
+    def _wb_do_import():
+        if not app_state.can_edit_assessments():
+            return
+        base = _wb_base()
+        if base.get("error"):
+            return
+        db = get_session()
+        try:
+            plan = swi.build_plan(db, _wb_bytes(), input.wb_date(), _overrides(base))   # fresh, not a stale preview
+            res = swi.commit_plan(db, plan, app_state.user_id())
+        except swi.WorkbookError as e:
+            ui.notification_show(str(e), type="error", duration=12)
+            return
+        finally:
+            db.close()
+        _wb_result.set(res)
+        _wb_key.set(_wb_key() + 1)
+        ui.notification_show(f"Imported {res['values']} value(s) -- {res['assessments_created']} new entries, "
+                             f"{res['fb_outcomes']} fastball outcome row(s).", type="message", duration=10)
+
+    @render.ui
+    def wb_result():
+        r = _wb_result()
+        if r is None:
+            return None
+        return ui.p(f"Last import: {r['values']} value(s), {r['assessments_created']} new entries, "
+                    f"{r['players_updated']} player profile(s) updated (height / throwing hand), "
+                    f"{r['fb_outcomes']} fastball outcome row(s), {r['notes']} note(s) kept.", class_="text-success")

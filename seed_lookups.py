@@ -65,6 +65,10 @@ ASSESSMENT_CATEGORIES = [
     ("Speed", True, 9),
     ("Baseball Performance", True, 10),
     ("Pitcher-Specific", False, 11),
+    # Oct 2026: the testing workbook's extra dynamometer / force-plate
+    # metrics (study_workbook_spec.new_test_types()).
+    ("Dynamometry", True, 12),
+    ("Force Plate Detail", True, 13),
 ]
 
 # (test_name, unit) -- from Ryker's fully-populated Anthropometrics sheet
@@ -318,6 +322,10 @@ def seed_assessment_categories_and_tests(session):
     seed_tests("Rotational Power", ROTATIONAL_POWER_TESTS)
     seed_tests("Speed", SPEED_TESTS)
     seed_tests("Pitcher-Specific", PITCHER_SPECIFIC_TESTS)
+    # Oct 2026: testing-workbook metrics GBO didn't have yet.
+    from study_workbook_spec import new_test_types
+    for cat_name in ("Dynamometry", "Force Plate Detail"):
+        seed_tests(cat_name, [(n, u) for c, n, u in new_test_types() if c == cat_name])
     print(
         "NOTE: Baseball Performance has no data in the spreadsheet -- "
         "confirm whether to drop it or keep as a placeholder."

@@ -53,7 +53,7 @@ METRICS = [
     ("Skeletal Muscle Mass per inch of height", "lb/in", 0.1, "smm_in"),
 ]
 HEIGHT_CHECK = {"Body Weight per inch of height", "Skeletal Muscle Mass per inch of height"}
-DEFAULT_LINE = {"avg_velo": 85.0, "peak_velo": 87.0, "avg_spin": 2200.0, "bauer": 25.0}
+DEFAULT_LINE = {"avg_velo": 85.0, "peak_velo": 87.0, "avg_spin": 2200.0, "peak_spin": 2400.0, "bauer": 25.0}
 
 
 def metric_value(rec, source, name):
@@ -188,7 +188,8 @@ def breakpoint_fit(xs, ys, seed=SEED):
             "x_max": float(x.max())}
 
 
-OUTCOME_WORD = {"avg_velo": "velo", "peak_velo": "peak velo", "avg_spin": "spin", "bauer": "Bauer units"}
+OUTCOME_WORD = {"avg_velo": "velo", "peak_velo": "peak velo", "avg_spin": "spin", "peak_spin": "peak spin",
+                "bauer": "Bauer units"}
 
 
 def _dir(slope, flat):

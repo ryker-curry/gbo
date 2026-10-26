@@ -1898,6 +1898,30 @@ class ExitReport(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class ResearchFBOutcome(Base):
+    """Study fastball outcomes for one pitcher and season, as computed for
+    the research study and imported from the testing workbook's
+    FB VELO&SPIN tab (Oct 2026, Ryker: the study uses these numbers --
+    games only, spin confidence 0.8+ -- rather than GBO recomputing them).
+    analytics/research_analysis.py prefers these over its own Rapsodo
+    numbers when a row exists. One row per (player, season_label).
+    (python3 -m migrations.migrate_study_workbook)"""
+    __tablename__ = "research_fb_outcomes"
+    __table_args__ = (UniqueConstraint("player_id", "season_label", name="uq_research_fb_player_season"),)
+
+    outcome_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    season_label = Column(String(20), nullable=False)
+    test_date = Column(Date, nullable=True)
+    avg_velo = Column(Numeric(6, 2), nullable=True)
+    peak_velo = Column(Numeric(6, 2), nullable=True)
+    avg_spin = Column(Numeric(7, 1), nullable=True)
+    peak_spin = Column(Numeric(7, 1), nullable=True)
+    n_pitches = Column(Integer, nullable=True)
+    note = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class ArsenalTarget(Base):
     """A coach's override of one pitch's target shape on the Arsenal Plan
     (Oct 2026, Ryker: REAPER-style recommender -- "a coach can override
