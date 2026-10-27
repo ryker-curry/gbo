@@ -361,6 +361,9 @@ def player_profile_server(input, output, session, app_state):
             ui.nav_panel("Pitching", ui.div(pitching_tab, class_="gbo-tab-body")),
             ui.nav_panel("Development", ui.div(dev_tab, class_="gbo-tab-body")),
             ui.nav_panel("Video", ui.div(video_tab, class_="gbo-tab-body")),
+            # Oct 2026, Ryker: WHOOP pilot -- sleep / HRV / recovery vs
+            # performance. Everyone sees it, players included.
+            ui.nav_panel("Recovery", ui.div(ui.output_ui("recovery_tab"), class_="gbo-tab-body")),
             # Oct 2026, Ryker: how each pitcher compensates -- staff only.
             *([ui.nav_panel("Compensation", ui.div(ui.output_ui("comp_tab"), class_="gbo-tab-body"))]
               if p.is_pitcher and app_state.role_name() != "Player" else []),
@@ -434,6 +437,112 @@ def player_profile_server(input, output, session, app_state):
             db.close()
 
     _comp_ctx = reactive.Value({})
+
+    # --- Recovery tab (Oct 2026 WHOOP pilot) ---------------------------
+    # Data: models.WhoopDaily (written by the whoop-sync Edge Function).
+    # Math: analytics/whoop_metrics.py. Display: shiny_app/whoop_display.py.
+    _whoop_tick = reactive.Value(0)
+    _whoop_msg = reactive.Value(None)
+
+    def _profile_pid(db):
+        """The player this page is showing -- same resolution body() uses."""
+        if app_state.role_name() == "Player":
+            from models import User
+            u = db.query(User).filter(User.user_id == app_state.user_id()).first()
+            return u.player_id if u and u.player_id else None
+        pid = _selected()
+        if pid is None:
+            players = _visible_players(db)
+            pid = players[0].player_id if players else None
+        return pid
+
+    @render.ui
+    def recovery_tab():
+        if not app_state.is_authenticated():
+            return None
+        req("profile_tabs" in input and input.profile_tabs() == "Recovery")
+        _whoop_tick()
+        from datetime import timedelta as _td
+        from models import WhoopConnection
+        from analytics import whoop_metrics as wm
+        from services import whoop_service
+        import whoop_display as wd
+        days = int(input.whoop_range()) if "whoop_range" in input and input.whoop_range() else 30
+        db = get_session()
+        try:
+            pid = _profile_pid(db)
+            if pid is None:
+                return ui_helpers.card(ui_helpers.empty_state("No player selected."))
+            p = db.query(Player).filter(Player.player_id == pid).first()
+            conn = db.query(WhoopConnection).filter(WhoopConnection.player_id == pid, WhoopConnection.active.is_(True)).first()
+            open_link = whoop_service.latest_open_link(db, pid)
+            today = date.today()
+            # Load enough history for the 60-day baseline behind the shown window.
+            all_rows = wm.load_daily(db, pid, date_from=today - _td(days=days + wm.BASELINE_DAYS + wm.HRV_WINDOW))
+            shown = [r for r in all_rows if r["day"] >= today - _td(days=days - 1)]
+            ready = wm.readiness(all_rows, today) if all_rows else None
+            games = []
+            if all_rows:
+                start = today - _td(days=days - 1)
+                games = (wm.pitcher_outings(db, pid, all_rows, date_from=start) if p and p.is_pitcher
+                         else wm.hitter_games(db, pid, all_rows, date_from=start))
+        finally:
+            db.close()
+        msg = _whoop_msg()
+        # Guest demo: show the page, but no connect/sync buttons (nothing real to connect).
+        guest = bool(app_state.is_guest())
+        top = wd.connection_card(conn, open_link, not guest, "whoop_make_link", "whoop_sync", allow_sync=not guest)
+        notice = ui.p(msg[1], class_="small " + ("text-success" if msg[0] else "text-danger")) if msg else None
+        if not all_rows:
+            return ui.div(top, notice, ui_helpers.card(ui_helpers.empty_state(
+                "No WHOOP data yet." if conn else "Connect his WHOOP to start seeing sleep, HRV and recovery here.")))
+        sel = str(days)
+        return ui.div(
+            top, notice,
+            ui.div(ui.div(wd.readiness_chip(ready), style="font-size:1.05rem"),
+                   ui.input_radio_buttons("whoop_range", None, {"14": "14 days", "30": "30 days", "60": "60 days", "90": "90 days"},
+                                          selected=sel, inline=True),
+                   style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:6px 0 10px;"),
+            wd.kpi_row(ready),
+            wd.trend_cards(shown, ready),
+            wd.performance_section(games, bool(p and p.is_pitcher)),
+            ui.p(wd.EXPLAIN, class_="text-muted small", style="margin-top:12px;"),
+        )
+
+    @reactive.effect
+    @reactive.event(input.whoop_make_link)
+    def _whoop_make_link():
+        if app_state.is_guest():
+            return
+        from services import whoop_service
+        db = get_session()
+        try:
+            pid = _profile_pid(db)
+            if pid is None:
+                return
+            whoop_service.make_connect_link(db, pid, app_state.user_id())
+        finally:
+            db.close()
+        _whoop_msg.set((True, "New link made below -- it works once and expires in 7 days."))
+        _whoop_tick.set(_whoop_tick() + 1)
+
+    @reactive.effect
+    @reactive.event(input.whoop_sync)
+    def _whoop_sync():
+        if app_state.is_guest():
+            return
+        from services import whoop_service
+        db = get_session()
+        try:
+            pid = _profile_pid(db)
+            if pid is None:
+                return
+            ui.notification_show("Syncing WHOOP...", duration=3)
+            ok, text_msg = whoop_service.sync_now(db, pid)
+        finally:
+            db.close()
+        _whoop_msg.set((ok, text_msg))
+        _whoop_tick.set(_whoop_tick() + 1)
 
     def _ladder_html(db, pid):
         """Mobility -> stability -> strength (analytics/training_stage.py)."""

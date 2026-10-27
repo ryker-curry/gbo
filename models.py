@@ -2118,3 +2118,126 @@ class AppError(Base):
     role_name = Column(String(60), nullable=True)
     traceback_text = Column(Text, nullable=True)
     alert_sent = Column(Boolean, default=False, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# WHOOP pilot (Oct 2026, Ryker: pull players' WHOOP data into GBO for sports
+# science -- sleep, HRV, recovery -- and compare it to performance. Pilot is
+# one player first; everyone, players included, can see the data).
+#
+# The WHOOP sign-in and the nightly sync run in Supabase Edge Functions
+# (supabase/functions/whoop-oauth-callback, whoop-sync) -- they are the only
+# code that writes these tables. The OAuth tokens live in whoop_tokens, which
+# has NO ORM model on purpose: the Shiny app never needs them.
+# (python3 -m migrations.migrate_whoop)
+# ---------------------------------------------------------------------------
+from sqlalchemy import BigInteger  # noqa: E402
+
+
+class WhoopConnectLink(Base):
+    """A one-time "Connect WHOOP" link a staff member (or the player) made
+    for one player. The player opens it, signs into WHOOP, taps Allow; the
+    callback finds the player by this state value. Expires after 7 days."""
+    __tablename__ = "whoop_connect_links"
+
+    link_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    state = Column(String(64), nullable=False, unique=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class WhoopConnection(Base):
+    """One player's WHOOP account link. status: connected / error /
+    disconnected. last_error is the plain-English reason a sync failed
+    (e.g. he revoked access in the WHOOP app)."""
+    __tablename__ = "whoop_connections"
+
+    connection_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False, unique=True)
+    whoop_user_id = Column(BigInteger, nullable=True)
+    whoop_name = Column(String(150), nullable=True)
+    scopes = Column(Text, nullable=True)
+    status = Column(String(20), default="connected", nullable=False)
+    last_error = Column(Text, nullable=True)
+    connected_at = Column(DateTime, nullable=True)
+    last_synced_at = Column(DateTime, nullable=True)
+    active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    player = relationship("Player")
+
+
+class WhoopDaily(Base):
+    """One WHOOP physiological cycle (about one day) for one player: the
+    recovery he woke up with, the sleep that produced it, and the strain of
+    the day that followed. day_date = the day he woke up (cycle start in his
+    local time + 12 h -- a cycle starts when he falls asleep). score_state is
+    WHOOP's SCORED / PENDING_SCORE / UNSCORABLE; only SCORED values are used
+    in baselines."""
+    __tablename__ = "whoop_daily"
+    __table_args__ = (UniqueConstraint("player_id", "cycle_id", name="uq_whoop_daily_player_cycle"),)
+
+    whoop_daily_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    cycle_id = Column(BigInteger, nullable=False)
+    day_date = Column(Date, nullable=False)
+    cycle_start = Column(DateTime, nullable=True)
+    cycle_end = Column(DateTime, nullable=True)
+    timezone_offset = Column(String(10), nullable=True)
+    cycle_score_state = Column(String(20), nullable=True)
+    day_strain = Column(Numeric(5, 2), nullable=True)
+    kilojoule = Column(Numeric(10, 2), nullable=True)
+    avg_hr = Column(Integer, nullable=True)
+    max_hr = Column(Integer, nullable=True)
+    recovery_score_state = Column(String(20), nullable=True)
+    recovery_score = Column(Numeric(5, 1), nullable=True)
+    hrv_rmssd_ms = Column(Numeric(7, 2), nullable=True)
+    resting_hr = Column(Numeric(5, 1), nullable=True)
+    spo2_pct = Column(Numeric(5, 2), nullable=True)
+    skin_temp_c = Column(Numeric(5, 2), nullable=True)
+    user_calibrating = Column(Boolean, nullable=True)
+    sleep_id = Column(String(64), nullable=True)
+    sleep_start = Column(DateTime, nullable=True)
+    sleep_end = Column(DateTime, nullable=True)
+    sleep_score_state = Column(String(20), nullable=True)
+    sleep_performance_pct = Column(Numeric(5, 1), nullable=True)
+    sleep_consistency_pct = Column(Numeric(5, 1), nullable=True)
+    sleep_efficiency_pct = Column(Numeric(5, 1), nullable=True)
+    respiratory_rate = Column(Numeric(5, 2), nullable=True)
+    total_sleep_min = Column(Numeric(6, 1), nullable=True)
+    in_bed_min = Column(Numeric(6, 1), nullable=True)
+    light_sleep_min = Column(Numeric(6, 1), nullable=True)
+    deep_sleep_min = Column(Numeric(6, 1), nullable=True)
+    rem_sleep_min = Column(Numeric(6, 1), nullable=True)
+    awake_min = Column(Numeric(6, 1), nullable=True)
+    sleep_need_min = Column(Numeric(6, 1), nullable=True)
+    disturbances = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class WhoopWorkout(Base):
+    """One WHOOP-detected or logged workout. Note: WHOOP strain is heart-rate
+    load -- it does NOT capture arm load from throwing (pitch-count ACWR in
+    analytics/workload_metrics.py / arm_care.py stays the throwing load)."""
+    __tablename__ = "whoop_workouts"
+
+    whoop_workout_id = Column(String(64), primary_key=True)   # WHOOP's v2 UUID
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    day_date = Column(Date, nullable=True)
+    start_time = Column(DateTime, nullable=True)
+    end_time = Column(DateTime, nullable=True)
+    timezone_offset = Column(String(10), nullable=True)
+    sport_name = Column(String(80), nullable=True)
+    score_state = Column(String(20), nullable=True)
+    strain = Column(Numeric(5, 2), nullable=True)
+    avg_hr = Column(Integer, nullable=True)
+    max_hr = Column(Integer, nullable=True)
+    kilojoule = Column(Numeric(10, 2), nullable=True)
+    zone_durations = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

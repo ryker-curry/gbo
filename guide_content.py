@@ -232,6 +232,29 @@ GUIDE = [
         "good": ["One or two goals at a time, each On track or Met."],
     },
     {
+        "key": "whoop", "title": "WHOOP: Recovery Board and the Recovery tab", "who": "all",
+        "pages": ["Recovery Board"],
+        "shows": "Sleep, HRV, resting heart rate, recovery and strain from players' WHOOP bands, each compared to that "
+                 "player's own normal, plus how his games went on good and bad recovery days.",
+        "use": [
+            "Connect: Player Profile > Recovery > Make Connect WHOOP link, text it to him, he signs into WHOOP and taps "
+            "Allow. His last 90 days come in right away; after that it syncs every morning and afternoon.",
+            "HRV and resting HR are judged against HIS OWN last 60 days, never teammates. 'Now' is his 7-day average; "
+            "the shaded band is his normal range.",
+            "Ready = HRV and resting HR normal or better. Monitor = one is outside his normal. Back off = clearly outside.",
+            "It takes about 2-3 weeks of wearing it before the baseline means anything (the page says 'Building baseline').",
+            "Strain is heart-rate load -- it does NOT include arm load from throwing. Use Arm Care & Availability for that.",
+            "Recovery vs performance puts each game next to the recovery and sleep he had that morning. Trust it only "
+            "after 8+ games.",
+        ],
+        "good": [
+            "Recovery mostly green and HRV inside or above his band.",
+            "Sleep close to what WHOOP says he needs, at a consistent bedtime.",
+            "A dip after a start or a hard lift that comes back within 1-2 days.",
+            "Guidance only -- the trainer and coaches make the call.",
+        ],
+    },
+    {
         "key": "arm_care", "title": "Arm Care & Availability", "who": "staff", "pages": ["Arm Care & Availability"],
         "shows": "Who can throw today, from pitch counts and the rest chart, plus coach holds and planned outings.",
         "use": [
