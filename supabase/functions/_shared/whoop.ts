@@ -13,7 +13,9 @@ import { createClient, SupabaseClient } from "npm:@supabase/supabase-js@2.45.4";
 export const WHOOP_AUTH_URL = "https://api.prod.whoop.com/oauth/oauth2/auth";
 export const WHOOP_TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token";
 export const WHOOP_API = "https://api.prod.whoop.com/developer";
-export const SCOPES = "offline read:recovery read:cycles read:sleep read:workout read:body_measurement read:profile";
+// read:profile left out: not enabled on the GBO WHOOP Pilot app (WHOOP rejects the whole
+// request with invalid_scope). The profile call in whoop-oauth-callback is optional.
+export const SCOPES = "offline read:recovery read:cycles read:sleep read:workout read:body_measurement";
 export const BACKFILL_DAYS = 90;   // history pulled on first connect
 export const OVERLAP_DAYS = 4;     // WHOOP can re-score recent days; re-pull them each sync
 
