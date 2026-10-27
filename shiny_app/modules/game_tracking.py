@@ -358,6 +358,22 @@ from shinywidgets import output_widget, render_plotly
 from sqlalchemy.orm import joinedload, selectinload
 
 from database import get_session
+import os as _os
+from sqlalchemy import event as _sa_event
+from sqlalchemy.orm import Session as _SASession
+
+# Oct 2026 (Supabase egress fix, GAME-TRACKING-EGRESS-PLAN.md): the page's
+# display blocks share ONE tracking-context load per Shiny flush instead of
+# each re-downloading the whole game. GBO_SHARED_TRACKING=0 (Posit Connect env
+# var) switches back to the old load-per-block behavior without a code change.
+SHARED_TRACKING = _os.environ.get("GBO_SHARED_TRACKING", "1") != "0"
+_commit_counter = [0]
+
+
+@_sa_event.listens_for(_SASession, "after_commit")
+def _count_commit(_session):
+    """Any save anywhere in this process invalidates shared contexts."""
+    _commit_counter[0] += 1
 from format_helpers import opponent_display_name as _opponent_display_name
 import strike_zone
 import field_location
@@ -2099,6 +2115,44 @@ def game_tracking_server(input, output, session, app_state):
         # this file keeps pointing at exactly what it always has.
         return game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots
 
+    # --- shared, read-only context for display blocks (egress fix) -------
+    # One load per Shiny flush (+ reload after any commit in this process),
+    # held on its own session so lazy relationships still work, and closed
+    # when the flush ends so it never sits on a pooled connection. Only
+    # @render blocks use this -- every save/edit/delete handler keeps its own
+    # fresh _load_tracking_context so writes always see current data.
+    _ctx_memo = {"key": None, "db": None, "ctx": None}
+
+    def _drop_ctx_memo():
+        db_old = _ctx_memo["db"]
+        _ctx_memo.update(key=None, db=None, ctx=None)
+        if db_old is not None:
+            try:
+                db_old.close()
+            except Exception:
+                pass
+
+    def _render_tracking_context(_caller_db, game_id):
+        if not SHARED_TRACKING or game_id is None:
+            return _load_tracking_context(_caller_db, game_id)
+        key = (game_id, _commit_counter[0])
+        if _ctx_memo["key"] != key:
+            _drop_ctx_memo()
+            db_new = get_session()
+            try:
+                ctx = _load_tracking_context(db_new, game_id)
+            except Exception:
+                db_new.close()
+                raise
+            _ctx_memo.update(key=key, db=db_new, ctx=ctx)
+        return _ctx_memo["ctx"]
+
+    try:
+        session.root_scope().on_flushed(_drop_ctx_memo, once=False)
+        session.root_scope().on_ended(_drop_ctx_memo)
+    except Exception:
+        pass  # hooks unavailable; the memo is still reset on every commit
+
     # -------------------------------------------------------------------
     # Seasons + game picker
     # -------------------------------------------------------------------
@@ -3474,7 +3528,7 @@ def game_tracking_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None:
                 return None
             game, pitches = ctx[0], ctx[1]
@@ -3540,7 +3594,7 @@ def game_tracking_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None:
                 return None
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
@@ -3583,7 +3637,7 @@ def game_tracking_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None:
                 return None
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
@@ -3644,7 +3698,7 @@ def game_tracking_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None:
                 return None
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
@@ -3795,7 +3849,7 @@ def game_tracking_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None:
                 return None
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
@@ -3892,7 +3946,7 @@ def game_tracking_server(input, output, session, app_state):
         req("runner_event_type_select" in input)
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None:
                 return None
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
@@ -4053,7 +4107,7 @@ def game_tracking_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None:
                 return None
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
@@ -4216,7 +4270,7 @@ def game_tracking_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None:
                 return None
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
@@ -4333,7 +4387,7 @@ def game_tracking_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None:
                 return None
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
@@ -4389,7 +4443,7 @@ def game_tracking_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None:
                 return None
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
@@ -4504,7 +4558,7 @@ def game_tracking_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None:
                 return None
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
@@ -4579,7 +4633,7 @@ def game_tracking_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None:
                 return None
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
@@ -4831,7 +4885,7 @@ def game_tracking_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None:
                 return None
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
@@ -4959,7 +5013,7 @@ def game_tracking_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None or ctx[0].status != "In Progress":
                 return None
             # See pitch_type_and_outcome_picker's show_intended for why this
@@ -4982,7 +5036,7 @@ def game_tracking_server(input, output, session, app_state):
             return None
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None or ctx[0].status != "In Progress":
                 return None
             if not ((not ctx[5]["is_our_batting"]) or ctx[0].is_intrasquad):
@@ -5088,7 +5142,7 @@ def game_tracking_server(input, output, session, app_state):
         req("pitch_outcome_select" in input)
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None:
                 return None
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
@@ -5143,7 +5197,7 @@ def game_tracking_server(input, output, session, app_state):
         req("pitch_outcome_select" in input)
         db = get_session()
         try:
-            ctx = _load_tracking_context(db, game_id)
+            ctx = _render_tracking_context(db, game_id)
             if ctx is None:
                 return None
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
