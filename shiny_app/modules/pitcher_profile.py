@@ -79,7 +79,7 @@ from datetime import date, timedelta
 
 from shiny import module, ui, render, req, reactive
 from shinywidgets import output_widget, render_plotly
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, undefer
 from database import get_session
 from models import Player, User, PitchType, PlayerPitchArsenal, StaffPlayerAssignment, Game, GamePitch, RapsodoPitch
 from game_stats import compute_pitching_line, compute_pitch_type_breakdown, get_batter_hands, compute_pitch_mix_by_count, pitching_line_for
@@ -3268,7 +3268,8 @@ def pitcher_profile_server(input, output, session, app_state):
         team, not just this page's own player."""
         rows = (
             db.query(RapsodoPitch)
-            .options(joinedload(RapsodoPitch.pitch_type), joinedload(RapsodoPitch.game_pitch))
+            .options(joinedload(RapsodoPitch.pitch_type), joinedload(RapsodoPitch.game_pitch),
+                     undefer(RapsodoPitch.trajectory_json))   # deferred by default (egress fix)
             .filter(RapsodoPitch.bullpen_id.is_(None), RapsodoPitch.trajectory_json.isnot(None))
             .all()
         )
