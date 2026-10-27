@@ -19,6 +19,7 @@ from sqlalchemy.orm import joinedload
 
 from models import Game, GamePitch, Player
 import game_stats
+from gbo_cache import cached
 from analytics import hitter_insights, league_baselines
 
 
@@ -44,7 +45,19 @@ def _babip(line):
     return round((h - hr) / den, 3) if ab and den > 0 else None
 
 
+@cached("hitting_leaderboard", {"game_pitches", "games", "players", "pitch_types", "opponent_players"})
+def _rows_cached(db, date_from, date_to, game_scope):
+    return _rows_uncached(db, date_from, date_to, game_scope)
+
+
 def rows(db, date_from=None, date_to=None, game_scope="all"):
+    """Cached (gbo_cache, Oct 2026 Supabase egress fix): the query below pulls
+    every pitch of every game in the window. Returns fresh dicts so callers
+    can't change the cached rows."""
+    return [dict(r) for r in _rows_cached(db, date_from, date_to, game_scope)]
+
+
+def _rows_uncached(db, date_from=None, date_to=None, game_scope="all"):
     by_player = defaultdict(list)
     for p in _query(db, date_from, date_to, game_scope).order_by(GamePitch.game_id, GamePitch.pitch_sequence).all():
         pid = p.our_player_id if p.is_our_team_batting else p.opponent_our_player_id

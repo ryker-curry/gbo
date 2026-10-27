@@ -1312,9 +1312,8 @@ def pitcher_game_report_server(input, output, session, app_state):
         widened from just the pooled (mean, stdev, n) so
         session_command_plus() below can grade each pitch against its
         own pitch type (see that function's module comment for why)."""
-        all_pitches = db.query(GamePitch).filter(GamePitch.intended_plate_x.isnot(None)).all()
-        view_pitches = command_metrics.game_pitches_command_view(all_pitches, None)
-        return command_metrics.team_command_plus_baselines(view_pitches)
+        from analytics import profile_queries as _pq
+        return _pq.team_command_baselines(db)   # cached (egress fix)
 
     def _cmd_fmt(value, suffix=""):
         return f"{value}{suffix}" if value is not None else "—"

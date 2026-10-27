@@ -49,7 +49,7 @@ states for the live add-form.
 """
 
 from shiny import ui, render, reactive, req
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from database import get_session
 from models import Game, GamePitch, GameRunnerEvent, GameLineupSlot, LineupSubstitution
@@ -369,7 +369,7 @@ def register_game_tracking_runner_events(
             try:
                 game = (
                     db.query(Game)
-                    .options(joinedload(Game.runner_events), joinedload(Game.forced_half_inning_ends))
+                    .options(selectinload(Game.runner_events), selectinload(Game.forced_half_inning_ends))  # no cartesian join (egress fix)
                     .filter(Game.game_id == game_id)
                     .first()
                 )
