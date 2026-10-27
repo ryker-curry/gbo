@@ -52,7 +52,7 @@ GUIDE = [
         "key": "pitcher_profile", "title": "Pitcher Deep Dive", "who": "pitchers",
         "pages": ["Pitcher Deep Dive", "My Pitcher Deep Dive"],
         "shows": "Everything about a pitcher in one place, filtered by dates, pitch type and game type. The View "
-                 "menu is grouped: Summary (Overview, Trends), Stuff & Shape (Metrics, Arsenal, Tunneling+, Arsenal "
+                 "menu is grouped: Summary (Overview, Trends), Stuff & Shape (Metrics, Arsenal, Arsenal "
                  "Plan), Command (Command & Execution, Zone) and Usage & Results (Results, Count Leverage, Sequencing).",
         "use": [
             "Overview: your line (IP, K, BB, WHIP, TBIP, FIP), plus stats vs D2, and your Stuff+/Location+/Pitching+ "
@@ -371,15 +371,6 @@ GUIDE += [
                 "Faded squares and rows have too few pitches to trust yet."],
         "good": ["His most-used follow-ups green, no red flags on predictability, and a two-strike finish that "
                  "gets strikeouts more than hits."],
-    },
-    {
-        "key": "tunnel_check", "title": "Tunnel check", "who": "pitchers",
-        "pages": ["Pitcher Deep Dive", "My Pitcher Deep Dive"],
-        "shows": "Pitcher Deep Dive > Tunneling+. Pairs more than about 20\" apart in movement or 10 mph apart in velo "
-                 "can't look like his fastball out of the hand.",
-        "use": ["Those pitches still work -- as a change of speed or shape. Judge them on whiffs and results, not "
-                "tunnel numbers."],
-        "good": ["Secondaries that tunnel, plus one that's a big change of speed or shape."],
     },
     {
         "key": "outperform", "title": "Release & results vs. stuff", "who": "pitchers",

@@ -56,7 +56,6 @@ from pitch_type_config import normalize_pitch_type
 from rapsodo_conventions import spin_clock_to_degrees, strike_zone_inches_to_plate_feet
 from strike_zone import derive_old_zone
 from game_stats import get_pitching_pitches
-from pitch_trajectory import compute_trajectory
 
 
 class RapsodoImportError(Exception):
@@ -525,18 +524,8 @@ def import_rapsodo_file(
                 plate_x_ft=plate_x_ft,
                 plate_z_ft=plate_z_ft,
             )
-            try:
-                # Backend data only -- see module docstring and
-                # pitch_trajectory.py. A trajectory is an input for
-                # later analytics, not a required field -- never let a
-                # physics-engine edge case (e.g. an out-of-range
-                # release_extension in a bad row) abort an otherwise-
-                # successful import. Missing inputs already return None
-                # cleanly (see pitch_trajectory.py); this try/except is
-                # only a backstop against a genuine bug.
-                new_pitch.trajectory_json = compute_trajectory(new_pitch)
-            except Exception:
-                new_pitch.trajectory_json = None
+            # trajectory_json no longer computed (Oct 2026: Tunneling+, its only
+            # reader, was removed). Column kept so older rows aren't touched.
             db_session.add(new_pitch)
         db_session.commit()
     except Exception:
