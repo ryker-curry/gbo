@@ -79,7 +79,7 @@ from modules import (  # noqa: E402
     game_tracking, command_tracker, roster, player_profile,
     pitcher_meeting_report, weekly_report, advance_scouting, hitter_meeting_report, team_game_report,
     data_health, arm_care, how_to_read, research_project, charter_training, staff_compensation, pitch_cards,
-    player_types, exit_report,
+    player_types, exit_report, recovery_board,
 )
 
 # Registry of page keys (see nav.NavPage.key) that have a real Shiny
@@ -114,6 +114,7 @@ MODULE_UI = {
     "data_health": lambda: data_health.data_health_ui("data_health"),
     "charter_training": lambda: charter_training.charter_training_ui("charter_training"),
     "arm_care": lambda: arm_care.arm_care_ui("arm_care"),
+    "recovery_board": lambda: recovery_board.recovery_board_ui("recovery_board"),
     "weekly_report": lambda: weekly_report.weekly_report_ui("weekly_report"),
     "advance_scouting": lambda: advance_scouting.advance_scouting_ui("advance_scouting"),
     "hitter_game_report": lambda: hitter_game_report.hitter_game_report_ui("hitter_game_report"),
@@ -375,6 +376,7 @@ def server(input, output, session):
     data_health.data_health_server("data_health", app_state)
     charter_training.charter_training_server("charter_training", app_state)
     arm_care.arm_care_server("arm_care", app_state)
+    recovery_board.recovery_board_server("recovery_board", app_state)
     weekly_report.weekly_report_server("weekly_report", app_state)
     how_to_read.how_to_read_server("how_to_read", app_state)
     research_project.research_project_server("research_project", app_state)
@@ -466,7 +468,7 @@ _NAV_GROUPS = [
     # at_appointments/bullpen_scripts intentionally omitted from every group
     # below (Aug 31 2026 -- Ryker's call, kept in the codebase/MODULE_UI,
     # just out of the visible sidebar) -- see nav.py's matching comments.
-    ("Pitching", ["arm_care", "bullpen_dashboard", "bullpen_tracking", "rapsodo_import"]),
+    ("Pitching", ["arm_care", "recovery_board", "bullpen_dashboard", "bullpen_tracking", "rapsodo_import"]),
     # ("Hitting", ["hitter_tracking"]) -- removed from the sidebar Oct 2026 (Ryker)
     # Oct 2026 reorganization (Ryker approved): doing the work vs reading it.
     ("Game Operations", ["game_tracking", "data_health", "charter_training"]),
@@ -476,7 +478,7 @@ _NAV_GROUPS = [
     ("Analytics", ["analytics", "pitcher_profile", "player_types", "staff_compensation", "hitter_profile", "pitching_leaderboard", "hitting_leaderboard"]),
     ("Scouting", ["advance_scouting", "pitch_cards", "opponent_teams"]),
     ("Admin", ["user_management", "staff_assignments", "video_import"]),
-    ("Me", ["player_profile", "player_schedule", "player_development", "player_stats", "player_game_stats", "player_hitting", "player_video", "player_bullpens", "pitcher_profile", "pitcher_meeting_report", "weekly_report", "advance_scouting", "hitter_profile", "hitter_meeting_report", "exit_report", "pitching_leaderboard", "hitting_leaderboard"]),
+    ("Me", ["player_profile", "player_schedule", "player_development", "player_stats", "player_game_stats", "player_hitting", "player_video", "player_bullpens", "recovery_board", "pitcher_profile", "pitcher_meeting_report", "weekly_report", "advance_scouting", "hitter_profile", "hitter_meeting_report", "exit_report", "pitching_leaderboard", "hitting_leaderboard"]),
 ]
 _NAV_LABELS = {
     "players": "Player setup", "roster": "Players", "idp": "Development plans", "rapsodo_import": "Import Rapsodo",
@@ -500,6 +502,7 @@ _ICONS = {
     "at_appointments": '<path d="M12 4v16M4 12h16"/><rect x="3" y="3" width="18" height="18" rx="3"/>',
     "data_health": '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
     "charter_training": '<path d="M2 9l10-5 10 5-10 5z"/><path d="M6 11v5c3 2 9 2 12 0v-5"/>',
+    "recovery_board": '<path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z"/>',
     "arm_care": '<path d="M12 21s-7-4.5-9-9.5C1.5 7 4.5 4 8 4c2 0 3.2 1 4 2.2C12.8 5 14 4 16 4c3.5 0 6.5 3 5 7.5-2 5-9 9.5-9 9.5z"/>',
     "bullpen_dashboard": '<path d="M4 20V9M10 20V4M16 20v-8M22 20H2"/>',
     "bullpen_tracking": '<circle cx="12" cy="12" r="8"/><path d="M8 8c2 2 2 6 0 8M16 8c-2 2-2 6 0 8"/>',

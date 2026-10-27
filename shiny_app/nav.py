@@ -78,6 +78,8 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
         if show_bullpen_pages or role_name in ("Sports Scientist", "Data Analyst", "Athletic Trainer", "Strength Coach"):
             # Oct 2026: who can throw today (staff only).
             pd_pages.append(NavPage("arm_care", "Arm Care & Availability", "heart"))
+        # Oct 2026, Ryker: WHOOP pilot -- every staff role (and players, below).
+        pd_pages.append(NavPage("recovery_board", "Recovery Board", "moon"))
         if show_bullpen_pages or role_name in ("Sports Scientist", "Data Analyst"):
             pd_pages.extend([
                 NavPage("bullpen_tracking", "Bullpen Tracking", "trophy"),
@@ -189,6 +191,8 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             # migrated, so this stays a single shared page, not a
             # separate player-facing copy.
             NavPage("training_routines", "Training Routines", "activity"),
+            # Oct 2026, Ryker: WHOOP pilot -- players see the board too.
+            NavPage("recovery_board", "Recovery Board", "moon"),
         ]
         # My Bullpens is pitcher-specific; hitters get the hitter pages
         # below instead -- based on the player's own is_pitcher flag.
@@ -252,7 +256,7 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
 # ---------------------------------------------------------------------------
 _COACH_CORE = [
     ("Home", ["dashboard", "how_to_read"]),
-    ("Players", ["roster", "player_profile", "exit_report", "player_types", "arm_care"]),
+    ("Players", ["roster", "player_profile", "exit_report", "player_types", "arm_care"]),  # Recovery Board sits under More tools for coaches (13-page cap)
     ("Games", ["team_game_report", "pitch_cards", "advance_scouting"]),
     ("Leaderboards", ["pitching_leaderboard", "hitting_leaderboard", "analytics"]),
 ]
@@ -261,17 +265,17 @@ SIMPLE_SIDEBAR = {
     "Coach": _COACH_CORE,
     "Strength Coach": [
         ("Home", ["dashboard", "how_to_read"]),
-        ("Players", ["roster", "player_profile", "arm_care"]),
+        ("Players", ["roster", "player_profile", "arm_care", "recovery_board"]),
         ("Training", ["assessments", "training_routines", "player_assignments", "team_schedule"]),
     ],
     "Athletic Trainer": [
         ("Home", ["dashboard", "how_to_read"]),
-        ("Players", ["roster", "player_profile", "arm_care"]),
+        ("Players", ["roster", "player_profile", "arm_care", "recovery_board"]),
         ("Care", ["assessments", "team_schedule"]),
     ],
     "Sports Scientist": [
         ("Home", ["dashboard", "how_to_read"]),
-        ("Players", ["roster", "player_profile"]),
+        ("Players", ["roster", "player_profile", "recovery_board"]),
         ("Analysis", ["assessments", "staff_compensation", "research_project", "analytics"]),
     ],
     "Data Analyst": [
