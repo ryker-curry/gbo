@@ -213,7 +213,7 @@ def register_game_tracking_manage(input, output, session, _refresh_tick, _active
             game = db.query(Game).filter(Game.game_id == game_id).first()
             if game is None:
                 return None
-            pitch_count = len(game.pitches)
+            pitch_count = db.query(GamePitch).filter(GamePitch.game_id == game.game_id).count()  # egress fix: count, don't load
             return ui.accordion(
                 ui.accordion_panel(
                     "Delete this game",

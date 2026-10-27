@@ -355,7 +355,7 @@ from datetime import date, datetime, timedelta
 
 from shiny import module, ui, render, reactive, req
 from shinywidgets import output_widget, render_plotly
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from database import get_session
 from format_helpers import opponent_display_name as _opponent_display_name
@@ -2053,8 +2053,11 @@ def game_tracking_server(input, output, session, app_state):
         game = (
             db.query(Game)
             .options(
-                joinedload(Game.pitching_changes), joinedload(Game.runner_events),
-                joinedload(Game.forced_half_inning_ends),
+                # selectinload, not joinedload (Oct 2026 egress fix): three
+                # joined collections multiplied into changes x events x ends
+                # rows, each repeating the whole game row.
+                selectinload(Game.pitching_changes), selectinload(Game.runner_events),
+                selectinload(Game.forced_half_inning_ends),
             )
             .filter(Game.game_id == game_id)
             .first()

@@ -2957,10 +2957,7 @@ def pitcher_profile_server(input, output, session, app_state):
         session_command_plus() can grade each pitch against its own
         pitch type (see that function's module comment in
         analytics/command_metrics.py for why)."""
-        from models import GamePitch
-        all_pitches = db.query(GamePitch).filter(GamePitch.intended_plate_x.isnot(None)).all()
-        view_pitches = command_metrics.game_pitches_command_view(all_pitches, None)
-        return command_metrics.team_command_plus_baselines(view_pitches)
+        return profile_queries.team_command_baselines(db)   # cached (egress fix)
 
     def _team_havaa_baseline(db):
         """Team-wide Height-Adjusted VAA baseline (Sept 2026, Ryker:

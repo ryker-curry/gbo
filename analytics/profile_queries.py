@@ -185,6 +185,17 @@ def get_pitcher_rapsodo_pitches(db, player_id, date_from=None, date_to=None, pit
     return query.order_by(RapsodoPitch.pitch_date).all()
 
 
+
+@cached("command_baselines", {"game_pitches", "pitch_types"})
+def team_command_baselines(db):
+    """command_metrics.team_command_plus_baselines() over every game pitch
+    with an intended location -- the same team-wide pull four pages used to
+    run on every render (Oct 2026 Supabase egress fix: now cached)."""
+    from analytics import command_metrics
+    all_pitches = db.query(GamePitch).filter(GamePitch.intended_plate_x.isnot(None)).all()
+    return command_metrics.team_command_plus_baselines(command_metrics.game_pitches_command_view(all_pitches, None))
+
+
 def rapsodo_by_game_pitch_id(db, game_pitch_ids):
     """{game_pitch_id: RapsodoPitch} for every game_pitch_id in the
     given list that has a linked Rapsodo reading -- the join the
@@ -679,10 +690,7 @@ def pitching_staff_leaderboard_rows(db, date_from=None, date_to=None, game_scope
     # one pitcher on that page).
     stuff_baselines = team_stuff_plus_baselines(db)
     location_baseline = team_location_plus_baseline(db)
-    all_command_pitches = db.query(GamePitch).filter(GamePitch.intended_plate_x.isnot(None)).all()
-    command_baselines = command_metrics.team_command_plus_baselines(
-        command_metrics.game_pitches_command_view(all_command_pitches, None)
-    )
+    command_baselines = team_command_baselines(db)
 
     lines_by_player = team_pitching_lines_by_player(db, date_from, date_to, game_scope)
     results_baseline = None

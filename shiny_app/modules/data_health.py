@@ -434,8 +434,7 @@ def data_health_server(input, output, session, app_state):
                     .filter(RapsodoPitch.pitch_date >= lo, RapsodoPitch.pitch_date <= hi).all())
             models = profile_queries.team_stuff_plus_baselines(db)
             throws = {pl.player_id: pl.throws for pl in db.query(Player).all()}
-            all_cmd = db.query(GamePitch).filter(GamePitch.intended_plate_x.isnot(None)).all()
-            cmd_base = command_metrics.team_command_plus_baselines(command_metrics.game_pitches_command_view(all_cmd, None))
+            cmd_base = profile_queries.team_command_baselines(db)   # cached (egress fix)
         finally:
             db.close()
 
