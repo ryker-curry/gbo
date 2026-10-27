@@ -20,7 +20,7 @@ game_scope convention (matches Game.is_intrasquad): "all" (no filter,
 the default), "intrasquad", or "external".
 """
 
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, undefer
 from sqlalchemy import or_
 
 from models import GamePitch, Game, RapsodoPitch, RapsodoImport, BullpenSession, PitchType, Player
@@ -159,7 +159,7 @@ def get_pitcher_rapsodo_pitches(db, player_id, date_from=None, date_to=None, pit
     get_pitcher_profile_pitches/_apply_filters."""
     query = (
         db.query(RapsodoPitch)
-        .options(joinedload(RapsodoPitch.pitch_type))
+        .options(joinedload(RapsodoPitch.pitch_type), undefer(RapsodoPitch.trajectory_json))  # Tunneling+ reads it
         .filter(RapsodoPitch.player_id == player_id)
     )
     if game_linked_only:

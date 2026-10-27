@@ -914,7 +914,11 @@ class RapsodoPitch(Base):
     plate_x_ft = Column(Numeric(6, 3), nullable=True)  # converted from strike_zone_side (GBO plate-center-at-0 convention, matches strike_zone.py)
     plate_z_ft = Column(Numeric(6, 3), nullable=True)  # converted from strike_zone_height (0 = ground)
     perceived_velocity = Column(Numeric(6, 2), nullable=True)  # extension-adjusted formula -- deferred indefinitely per Ryker's Phase 4 call (no agreed-on reference baseline), still NULL
-    trajectory_json = Column(JSON, nullable=True)  # gravity+drag flight-path model (pitch_trajectory.py), computed at import time. Originally shipped as a Phase 4 rendered chart, then removed per Ryker's call after reviewing it live -- "didn't read as useful" -- leaving this column briefly dormant (rows dated before the Sept 2026 restore may be NULL or hold values from that brief earlier window). RESTORED Sept 2026 as backend-only data for pitch-tunneling analytics (analytics/pitch_grading.py) -- see pitch_trajectory.py's docstring for the full history. No chart reads this; it's an analytics input only.
+    # deferred() Oct 2026 (Supabase egress fix): ~1.5 KB of JSON per pitch that only
+    # Tunneling+ reads, but every RapsodoPitch query was shipping it. The two
+    # tunneling queries undefer it (profile_queries.get_pitcher_rapsodo_pitches,
+    # pitcher_profile._team_tunneling_baseline).
+    trajectory_json = deferred(Column(JSON, nullable=True))  # gravity+drag flight-path model (pitch_trajectory.py), computed at import time. Originally shipped as a Phase 4 rendered chart, then removed per Ryker's call after reviewing it live -- "didn't read as useful" -- leaving this column briefly dormant (rows dated before the Sept 2026 restore may be NULL or hold values from that brief earlier window). RESTORED Sept 2026 as backend-only data for pitch-tunneling analytics (analytics/pitch_grading.py) -- see pitch_trajectory.py's docstring for the full history. No chart reads this; it's an analytics input only.
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 

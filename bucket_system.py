@@ -122,6 +122,7 @@ from datetime import date
 from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
 from models import Player, Assessment, AssessmentResult, AssessmentTestType
+from gbo_cache import cached
 
 # ---------------------------------------------------------------------
 # Seasons (Aug 2026, Ryker's call -- see the module docstring's "Season
@@ -780,6 +781,32 @@ def _all_bucket_test_names():
 
 
 def _batch_fetch_latest_values(session, test_names, season_start=None, season_end=None, active_only=True, include_player_id=None):
+    """Cached front door for _batch_fetch_latest_values_uncached (Oct 2026,
+    Supabase egress fix): this team-wide pull ran on every bucket-score
+    render -- ~1,100 rows each time, tens of thousands of times -- and was
+    the biggest single source of database egress. Now it goes through
+    gbo_cache (10-minute entries, cleared on any assessment/player save in
+    this process). include_player_id only matters for a player who has
+    gone inactive, so it's dropped for active players to let every active
+    player share one cache entry. Returns copies so callers can't mutate
+    the cached dicts."""
+    import copy
+    if active_only and include_player_id is not None:
+        active = session.query(Player.active).filter(Player.player_id == include_player_id).scalar()
+        if active:
+            include_player_id = None
+    values, units = _batch_fetch_latest_values_cached(
+        session, tuple(sorted(set(test_names))), season_start, season_end, bool(active_only), include_player_id)
+    return copy.deepcopy(values), dict(units)
+
+
+@cached("bucket_latest_values", {"assessment_results", "assessments", "players", "assessment_test_types"})
+def _batch_fetch_latest_values_cached(session, test_names, season_start, season_end, active_only, include_player_id):
+    return _batch_fetch_latest_values_uncached(session, list(test_names), season_start=season_start, season_end=season_end,
+                                               active_only=active_only, include_player_id=include_player_id)
+
+
+def _batch_fetch_latest_values_uncached(session, test_names, season_start=None, season_end=None, active_only=True, include_player_id=None):
     """Batched replacement for calling get_latest_values_by_player()
     once per metric -- the naive per-metric loop compute_bucket_system()
     used to run cost roughly 60 metrics x up to 2 queries each, more
