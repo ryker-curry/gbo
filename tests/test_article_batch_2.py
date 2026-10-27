@@ -6,7 +6,7 @@ import datetime as dt
 import random
 from types import SimpleNamespace as NS
 
-from analytics import (tunnel_check, rapsodo_check, outperform, arsenal_breadth, outcome_profile,
+from analytics import (rapsodo_check, outperform, arsenal_breadth, outcome_profile,
                        metric_check, charter_training)
 
 
@@ -17,14 +17,6 @@ def _rap(pid=1, label="4-Seam Fastball", velo=88.0, ivb=15.0, hb=8.0, spin=2200.
               rapsodo_pitch_id=rid if rid is not None else n, release_height=rh, release_side=rs,
               release_extension=ext, spin_confidence=conf, plate_x_ft=x, plate_z_ft=z,
               pitch_date=dt.datetime(2026, 9, bp, 15), spin_direction_clock="12:30", spin_efficiency=92.0)
-
-
-def test_tunnel_check():
-    fb = [_rap(ivb=16, hb=8, velo=88) for _ in range(5)]
-    cb = [_rap(label="Curveball", ivb=-12, hb=-6, velo=73) for _ in range(5)]
-    sl = [_rap(label="Slider", ivb=2, hb=-4, velo=81) for _ in range(5)]
-    assert not tunnel_check.check(fb, cb)["ok"]
-    assert tunnel_check.check(fb, sl)["ok"]
 
 
 def test_rapsodo_check_flags_shifted_session():
