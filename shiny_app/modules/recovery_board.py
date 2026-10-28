@@ -70,8 +70,8 @@ def recovery_board_server(input, output, session, app_state):
         rows = _board()
         if not rows:
             return None
-        head = ["Player", "Readiness", "Recovery", "HRV (7-day vs normal)", "Resting HR (7-day vs normal)",
-                "Sleep last night", "Sleep 7-day avg", "Sync"]
+        head = ["Player", "Readiness", "Recovery", "HRV 7d / normal", "RHR 7d / normal",
+                "Sleep", "Sleep %", "Sleep 7-day avg", "Strain", "Health", "Last data", "Sync"]
         body = []
         for r in rows:
             p, rd, c = r["player"], r["ready"], r["connection"]
@@ -90,14 +90,21 @@ def recovery_board_server(input, output, session, app_state):
                     else ui.tags.a(label, onclick=js, role="button", style="cursor:pointer;font-weight:600"))
             sleep = (f"{t['sleep_hours']:.1f} h" if t.get("sleep_hours") is not None else "—") + \
                     (f" / {t['sleep_need_hours']:.1f}" if t.get("sleep_need_hours") else "")
+            flagged = [h["label"] for h in rd.get("health") or [] if h["status"] in ("watch", "flag")]
+            health = ui_helpers.status_chip("watch", ", ".join(flagged)) if flagged else ui.span("normal", class_="text-muted small")
+            sd = rd.get("stale_days")
+            last = "—" if sd is None else ("today" if sd == 0 else ("yesterday" if sd == 1 else f"{sd} days ago"))
+            last_style = "color:var(--gbo-status-watch);font-weight:700;" if (sd or 0) >= 2 else ""
             body.append(ui.tags.tr(
                 ui.tags.td(name), ui.tags.td(wd.readiness_chip(rd)),
                 ui.tags.td(rec, style=rec_style), ui.tags.td(vs(rd["hrv"])), ui.tags.td(vs(rd["rhr"])),
-                ui.tags.td(sleep), ui.tags.td(wd.fmt(rd["sleep_avg_7d"], "{:.1f} h")),
+                ui.tags.td(sleep), ui.tags.td(wd.fmt(t.get("sleep_performance"), "{:.0f}%")),
+                ui.tags.td(wd.fmt(rd["sleep_avg_7d"], "{:.1f} h")), ui.tags.td(wd.fmt(t.get("strain"), "{:.1f}")),
+                ui.tags.td(health), ui.tags.td(last, style=last_style),
                 ui.tags.td(wd.synced_text(c), class_="text-muted small"),
             ))
         return ui_helpers.card(ui.div(ui.tags.table(ui.tags.thead(ui.tags.tr(*[ui.tags.th(h) for h in head])),
-                                                    ui.tags.tbody(*body), class_="table table-sm"),
+                                                    ui.tags.tbody(*body), class_="table table-sm", style="font-size:.85rem;"),
                                       class_="table-responsive"), title="Today")
 
     @reactive.effect

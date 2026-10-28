@@ -482,6 +482,7 @@ def player_profile_server(input, output, session, app_state):
             shown = [r for r in all_rows if r["day"] >= today - _td(days=days - 1)]
             ready = wm.readiness(all_rows, today) if all_rows else None
             games = []
+            workouts = wm.load_workouts(db, pid, date_from=today - _td(days=days - 1)) if all_rows else []
             if all_rows:
                 start = today - _td(days=days - 1)
                 games = (wm.pitcher_outings(db, pid, all_rows, date_from=start) if p and p.is_pitcher
@@ -503,8 +504,13 @@ def player_profile_server(input, output, session, app_state):
                    ui.input_radio_buttons("whoop_range", None, {"14": "14 days", "30": "30 days", "60": "60 days", "90": "90 days"},
                                           selected=sel, inline=True),
                    style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:6px 0 10px;"),
+            wd.freshness_note(ready),
             wd.kpi_row(ready),
+            wd.sleep_breakdown(ready["today"]),
+            wd.health_card(ready),
             wd.trend_cards(shown, ready),
+            wd.daily_table(shown),
+            wd.workouts_table(workouts),
             wd.performance_section(games, bool(p and p.is_pitcher)),
             ui.p(wd.EXPLAIN, class_="text-muted small", style="margin-top:12px;"),
         )

@@ -45,6 +45,21 @@ def _f(v):
         return None
 
 
+def _offset_minutes(off):
+    import re
+    m = re.match(r"^([+-])(\d{2}):?(\d{2})$", off or "")
+    if not m:
+        return -5 * 60
+    return (-1 if m.group(1) == "-" else 1) * (int(m.group(2)) * 60 + int(m.group(3)))
+
+
+def _local(ts, off):
+    """UTC timestamp -> his local wall-clock time, using WHOOP's offset."""
+    if ts is None:
+        return None
+    return ts + timedelta(minutes=_offset_minutes(off))
+
+
 def recovery_zone(score):
     """WHOOP's own colors: green 67-100, yellow 34-66, red 0-33."""
     s = _f(score)
@@ -77,6 +92,13 @@ def row_dict(r):
         "resp_rate": _f(r.respiratory_rate) if scored_sleep else None,
         "deep_hours": (_f(r.deep_sleep_min) / 60.0) if r.deep_sleep_min is not None else None,
         "rem_hours": (_f(r.rem_sleep_min) / 60.0) if r.rem_sleep_min is not None else None,
+        "light_hours": (_f(r.light_sleep_min) / 60.0) if r.light_sleep_min is not None else None,
+        "awake_hours": (_f(r.awake_min) / 60.0) if r.awake_min is not None else None,
+        "in_bed_hours": (_f(r.in_bed_min) / 60.0) if r.in_bed_min is not None else None,
+        "disturbances": r.disturbances if scored_sleep else None,
+        "bedtime": _local(r.sleep_start, r.timezone_offset),
+        "wake_time": _local(r.sleep_end, r.timezone_offset),
+        "avg_hr": r.avg_hr, "max_hr": r.max_hr,
     }
 
 
@@ -161,9 +183,14 @@ _RANK = {FLAG: 3, WATCH: 2, GOOD: 1, NEUTRAL: 0}
 def readiness(rows, as_of=None):
     """Everything the Recovery tab / board header needs for one player."""
     as_of = as_of or (rows[-1]["day"] if rows else date.today())
-    today = next((r for r in reversed(rows) if r["day"] <= as_of), None)
-    if today is not None and today["day"] < as_of - timedelta(days=2):
-        today = None  # stale: no WHOOP day in the last 3 days
+    # Latest WHOOP day on or before as_of (Oct 2026, Ryker: show it with its
+    # date rather than blanking the tiles when his band hasn't synced).
+    # Prefer the latest SCORED morning (the newest cycle is often still
+    # pending until he wakes up / syncs); fall back to the newest day at all.
+    past = [r for r in rows if r["day"] <= as_of]
+    today = next((r for r in reversed(past) if r.get("recovery") is not None or r.get("sleep_hours") is not None),
+                 past[-1] if past else None)
+    stale_days = (as_of - past[-1]["day"]).days if past else None
     hrv = metric_status(rows, as_of, "hrv", higher_is_better=True, log=True)
     rhr = metric_status(rows, as_of, "rhr", higher_is_better=False)
     sleep_week = _window(rows, "sleep_hours", as_of - timedelta(days=6), as_of)
@@ -184,6 +211,7 @@ def readiness(rows, as_of=None):
         "sleep_avg_7d": _mean(sleep_week), "sleep_need_avg_7d": _mean(need_week),
         "sleep_debt_7d": (sum(need_week) - sum(sleep_week)) if sleep_week and len(sleep_week) == len(need_week) else None,
         "status": overall, "label": label, "days": len(rows),
+        "stale_days": stale_days, "health": health_signals(rows, as_of),
     }
 
 
@@ -300,7 +328,7 @@ def relationship(games, x_key, y_key, min_n=MIN_GAMES_FOR_TREND):
 # --------------------------------------------------------------- team board
 def team_board(db, as_of=None):
     """One dict per active WHOOP connection: player, connection, readiness."""
-    from models import WhoopConnection, Player
+    from models import WhoopConnection
     from sqlalchemy.orm import joinedload
     as_of = as_of or date.today()
     conns = (db.query(WhoopConnection).options(joinedload(WhoopConnection.player))
@@ -313,4 +341,103 @@ def team_board(db, as_of=None):
         rows = load_daily(db, c.player_id, date_from=as_of - timedelta(days=HRV_WINDOW + BASELINE_DAYS + 2), date_to=as_of)
         out.append({"player": p, "connection": c, "ready": readiness(rows, as_of), "rows": rows})
     out.sort(key=lambda x: (-_RANK[x["ready"]["status"]], x["player"].last_name or "", x["player"].first_name or ""))
+    return out
+
+
+# --------------------------------------------------------------- health signals
+# Oct 2026 (Ryker): SpO2, skin temperature and breathing rate vs his own
+# normal. A jump in skin temp or breathing rate (or a drop in SpO2) overnight
+# is often the first sign of getting sick -- WHOOP's own "Health Monitor"
+# idea. Compared to his previous 30 days (needs 7+); z = SDs from normal.
+HEALTH_BASE_DAYS = 30
+HEALTH_MIN = 7
+HEALTH_METRICS = [
+    # key, label, unit, fmt, bad direction (+1 = up is bad)
+    ("skin_temp", "Skin temp", "\u00b0C", "{:.1f}", +1),
+    ("resp_rate", "Breathing rate", "/min", "{:.1f}", +1),
+    ("spo2", "Blood oxygen", "%", "{:.1f}", -1),
+    ("rhr", "Resting HR", "bpm", "{:.0f}", +1),
+]
+
+
+def health_signals(rows, as_of=None):
+    """[{key, label, unit, fmt, value, base, diff, z, status, day}] for the
+    latest day with each value."""
+    if not rows:
+        return []
+    as_of = as_of or rows[-1]["day"]
+    out = []
+    for key, label, unit, fmt, bad in HEALTH_METRICS:
+        latest = next((r for r in reversed(rows) if r["day"] <= as_of and r.get(key) is not None), None)
+        item = {"key": key, "label": label, "unit": unit, "fmt": fmt, "value": None, "base": None,
+                "diff": None, "z": None, "status": NEUTRAL, "day": None, "n_base": 0}
+        if latest is None:
+            out.append(item)
+            continue
+        d = latest["day"]
+        base = _window(rows, key, d - timedelta(days=HEALTH_BASE_DAYS), d - timedelta(days=1))
+        item.update(value=latest[key], day=d, n_base=len(base))
+        if len(base) >= HEALTH_MIN:
+            m, sd = _mean(base), _sd(base)
+            item["base"], item["diff"] = m, latest[key] - m
+            if sd:
+                z = (latest[key] - m) / sd
+                item["z"] = z
+                worse = z * bad
+                item["status"] = FLAG if worse >= 2 else (WATCH if worse >= 1 else GOOD)
+            else:   # no variation in his history yet
+                item["status"] = WATCH if item["diff"] * bad > 0 else GOOD
+        out.append(item)
+    return out
+
+
+def day_flags(rows):
+    """{day: {key: status}} -- each day's HRV / resting HR / skin temp /
+    breathing rate vs the 30-60 days before it, for coloring the
+    day-by-day table. Days without enough history get no color."""
+    out = {}
+    for r in rows:
+        d = r["day"]
+        flags = {}
+        for key, bad, log, days in (("hrv", -1, True, BASELINE_DAYS), ("rhr", +1, False, BASELINE_DAYS),
+                                    ("skin_temp", +1, False, HEALTH_BASE_DAYS), ("resp_rate", +1, False, HEALTH_BASE_DAYS),
+                                    ("spo2", -1, False, HEALTH_BASE_DAYS)):
+            v = r.get(key)
+            if v is None or (log and v <= 0):
+                continue
+            base = _window(rows, key, d - timedelta(days=days), d - timedelta(days=1), math.log if log else None)
+            if len(base) < HEALTH_MIN:
+                continue
+            sd = _sd(base)
+            if not sd:
+                continue
+            z = ((math.log(v) if log else v) - _mean(base)) / sd
+            worse = z * bad
+            flags[key] = FLAG if worse >= 1.5 else (WATCH if worse >= 0.75 else (GOOD if worse <= -0.75 else None))
+        out[d] = flags
+    return out
+
+
+# --------------------------------------------------------------- workouts
+HR_ZONES = [("zone_zero_milli", "Z0"), ("zone_one_milli", "Z1"), ("zone_two_milli", "Z2"),
+            ("zone_three_milli", "Z3"), ("zone_four_milli", "Z4"), ("zone_five_milli", "Z5")]
+
+
+def load_workouts(db, player_id, date_from=None):
+    """[dict] newest first: day, sport, start (local), minutes, strain,
+    avg/max HR, zone minutes {Z0..Z5}."""
+    from models import WhoopWorkout
+    q = db.query(WhoopWorkout).filter(WhoopWorkout.player_id == player_id)
+    if date_from is not None:
+        q = q.filter(WhoopWorkout.day_date >= date_from)
+    out = []
+    for w in q.order_by(WhoopWorkout.start_time.desc()).all():
+        if (w.score_state or "SCORED") != "SCORED":
+            continue
+        zd = w.zone_durations or {}
+        zones = {lbl: round((zd.get(k) or 0) / 60000.0, 1) for k, lbl in HR_ZONES}
+        mins = (w.end_time - w.start_time).total_seconds() / 60 if w.start_time and w.end_time else None
+        out.append({"day": w.day_date, "sport": (w.sport_name or "activity").replace("-", " ").title(),
+                    "start": _local(w.start_time, w.timezone_offset), "minutes": mins,
+                    "strain": _f(w.strain), "avg_hr": w.avg_hr, "max_hr": w.max_hr, "zones": zones})
     return out

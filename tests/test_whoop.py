@@ -150,3 +150,38 @@ def test_nav_has_recovery_board():
     for pitcher in (True, False):
         keys = {pg.key for s in nav.build_nav_sections("Player", None, pitcher) for pg in s.pages}
         assert "recovery_board" in keys
+
+
+def test_health_signals_flag_fever_pattern():
+    rows = _rows()
+    for r in rows:
+        r["skin_temp"], r["resp_rate"], r["spo2"] = 33.5 + (0.1 if r["day"].day % 2 else -0.1), 15.0 + (0.2 if r["day"].day % 3 else -0.2), 97.0
+    rows[-1]["skin_temp"], rows[-1]["resp_rate"] = 35.0, 17.5
+    hs = {h["key"]: h for h in wm.health_signals(rows)}
+    assert hs["skin_temp"]["status"] == wm.FLAG and hs["resp_rate"]["status"] == wm.FLAG
+    assert hs["spo2"]["status"] == wm.GOOD
+    flags = wm.day_flags(rows)
+    assert flags[rows[-1]["day"]]["skin_temp"] == wm.FLAG
+
+
+def test_readiness_uses_latest_scored_day_and_reports_staleness():
+    rows = _rows(end=date(2026, 10, 16))
+    rows.append(dict(rows[-1], day=date(2026, 10, 17), recovery=None, hrv=None, rhr=None, sleep_hours=None))
+    rd = wm.readiness(rows, date(2026, 10, 27))
+    assert rd["today"]["day"] == date(2026, 10, 16) and rd["stale_days"] == 10
+
+
+def test_new_display_pieces_build():
+    import whoop_display as wd
+    from datetime import datetime as _dt
+    rows = _rows()
+    rows[-1].update(light_hours=3.5, awake_hours=0.3, in_bed_hours=7.9, disturbances=8,
+                    bedtime=_dt(2026, 10, 26, 23, 40), wake_time=_dt(2026, 10, 27, 7, 35))
+    rd = wm.readiness(rows, date(2026, 10, 27))
+    assert wd.sleep_breakdown(rd["today"]) is not None
+    assert wd.health_card(rd) is not None
+    assert wd.daily_table(rows[-14:]) is not None
+    assert wd.freshness_note(dict(rd, stale_days=5)) is not None and wd.freshness_note(rd) is None
+    w = [{"day": date(2026, 10, 27), "sport": "Baseball", "start": _dt(2026, 10, 27, 15, 0), "minutes": 100.0,
+          "strain": 9.7, "avg_hr": 110, "max_hr": 170, "zones": {"Z0": 31.0, "Z1": 53.4, "Z2": 12.4, "Z3": 3.0, "Z4": 0.1, "Z5": 0.0}}]
+    assert wd.workouts_table(w) is not None and wd.workouts_table([]) is not None
