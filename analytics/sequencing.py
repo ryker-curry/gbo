@@ -367,7 +367,7 @@ def tag(p, loc):
     return f"{t} {h}" if h and h != "mid" else t
 
 
-K_RESULTS = ("K", "K (Looking)")
+K_RESULTS = ("K", "K (Looking)", "K - Reached on Dropped 3rd")
 WALK_RESULTS = ("BB", "IBB", "HBP")
 
 

@@ -57,8 +57,9 @@ DOMINANT_OUTCOMES = {"Called Strike", "Swing and Miss", "Foul"}  # Ryker's own D
 # separate AB_OUTCOMES value (game_tracking.py) purely so a strikeout
 # looking shows as its own result on the sheet; it's still a K/out for
 # every stat here.
-K_OUTCOMES = {"K", "K (Looking)"}
-OUT_AB_OUTCOMES = {"Groundout", "Flyout", "Lineout", "Double Play", "Sac Bunt", "Sac Fly"} | K_OUTCOMES
+DROPPED_K_OUTCOME = "K - Reached on Dropped 3rd"  # a K, but not an out (Oct 2026)
+K_OUTCOMES = {"K", "K (Looking)", DROPPED_K_OUTCOME}
+OUT_AB_OUTCOMES = ({"Groundout", "Flyout", "Lineout", "Double Play", "Sac Bunt", "Sac Fly"} | K_OUTCOMES) - {DROPPED_K_OUTCOME}
 HIT_AB_OUTCOMES = {"1B", "2B", "3B", "HR"}
 XBH_AB_OUTCOMES = {"2B", "3B", "HR"}
 NON_AB_OUTCOMES = {"BB", "IBB", "HBP", "Sac Bunt", "Sac Fly"}  # excluded from the standard AB count, per the official scoring rule

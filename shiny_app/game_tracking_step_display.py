@@ -60,7 +60,7 @@ IN_PLAY_CQ = ["Barreled/Squared Up", "Solid", "Weak", "Jammed", "Off the End", "
 BBT = ["Ground Ball", "Line Drive", "Fly Ball", "Pop Up"]
 IN_PLAY_AB = ["Groundout", "Flyout", "Lineout", "1B", "2B", "3B", "HR", "E", "FC",
               "Double Play", "Sac Fly", "Sac Bunt", "No Result"]
-NON_IN_PLAY_AB = ["K", "K (Looking)", "BB", "HBP", "No Result"]
+NON_IN_PLAY_AB = ["K", "K (Looking)", "K - Reached on Dropped 3rd", "BB", "HBP", "No Result"]
 ZONE_LABELS = {1: "chalk", 2: "in", 3: "mid", 4: "away", 5: "chalk"}
 
 # Paper chart mode (entering a game after the fact from the Coach Chart +
@@ -79,13 +79,13 @@ QUICK_RESULTS = ["6-3", "4-3", "5-3", "F8", "F7", "F9", "L6", "P4", "1B", "2B", 
 def parse_scoring(text):
     """Scorebook shorthand -> {"ab", "bbt", "fielder"} (bbt/fielder may be None),
     or raises ValueError with a message to show. Covers what the Coach Chart
-    uses: K, KL, BB, IBB, HBP, 1B/2B/3B/HR (+ optional fielder: 1B7),
+    uses: K, KL, KD3 (dropped 3rd strike, reached), BB, IBB, HBP, 1B/2B/3B/HR (+ optional fielder: 1B7),
     E5, FC6, SF8, SH/SAC (+fielder), 6-3, 3U, 6-4-3 / DP6-4-3, F7, P4, L6, FF2, G6."""
     import re
     t = re.sub(r"[\s.]", "", (text or "").upper()).replace("ꓘ", "KL")
     if not t:
         raise ValueError("Type the result, e.g. 6-3, F7, 1B.")
-    simple = {"K": "K", "KS": "K", "KL": "K (Looking)", "KC": "K (Looking)", "BB": "BB", "W": "BB",
+    simple = {"K": "K", "KS": "K", "KL": "K (Looking)", "KC": "K (Looking)", "KD3": "K - Reached on Dropped 3rd", "K23": "K - Reached on Dropped 3rd", "BB": "BB", "W": "BB",
               "IBB": "IBB", "IW": "IBB", "HBP": "HBP", "HP": "HBP", "NR": "No Result"}
     if t in simple:
         return {"ab": simple[t], "bbt": None, "fielder": None}
@@ -547,7 +547,7 @@ def register_step_mode(input, output, session, d):
             except ValueError as e:
                 ui.notification_show(str(e), type="warning", duration=6)
                 return
-            if r["ab"] in ("K", "K (Looking)", "BB", "IBB", "HBP"):
+            if r["ab"] in ("K", "K (Looking)", "K - Reached on Dropped 3rd", "BB", "IBB", "HBP"):
                 ui.notification_show(f"{r['ab']} isn't a ball in play -- go Back and pick what the pitch was.",
                                      type="warning", duration=6)
                 return
