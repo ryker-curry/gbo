@@ -165,7 +165,7 @@ def damage_grid(mine, loc):
         if p.ends_plate_appearance and p.ab_outcome in HITS:
             c["hits"] += 1
             c["hr"] += p.ab_outcome == "HR"
-        if p.ends_plate_appearance and p.ab_outcome in ("K", "K (Looking)"):
+        if p.ends_plate_appearance and p.ab_outcome in ("K", "K (Looking)", "K - Reached on Dropped 3rd"):
             c["k"] += 1
     out = {}
     for key, c in cells.items():

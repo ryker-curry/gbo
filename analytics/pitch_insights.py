@@ -451,7 +451,7 @@ def outs_on(p):
         return 0
     if p.outs_before is not None and p.outs_after is not None:
         return max(0, min(3, p.outs_after) - p.outs_before)
-    return 1 if p.ab_outcome in K_OUTCOMES + ("Groundout", "Flyout", "Lineout", "Popout") else 0
+    return 1 if p.ab_outcome != "K - Reached on Dropped 3rd" and p.ab_outcome in K_OUTCOMES + ("Groundout", "Flyout", "Lineout", "Popout") else 0
 
 
 def outs_per_xbh(pitches):

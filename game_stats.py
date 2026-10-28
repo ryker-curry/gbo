@@ -527,7 +527,9 @@ NON_AB_OUTCOMES = {"BB", "IBB", "HBP", "Sac Bunt", "Sac Fly"}  # IBB: Oct 2026, 
 # separate AB_OUTCOMES value (game_tracking.py) purely so a strikeout
 # looking shows as its own result on the sheet; it's still a K for
 # every aggregate (K count, AB count, leadoff-out, putaway pitch, etc.).
-K_OUTCOMES = ("K", "K (Looking)")
+# "K - Reached on Dropped 3rd" (Oct 2026): still a K and an AB, but no out.
+DROPPED_K_OUTCOME = "K - Reached on Dropped 3rd"
+K_OUTCOMES = ("K", "K (Looking)", DROPPED_K_OUTCOME)
 
 # Quality At-Bat (QAB) -- Ryker, Sept 2026: pointed at Brian Cain's
 # published QAB definition (briancain.com/blog/quality-at-bats-
@@ -1154,7 +1156,7 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0, extra_unea
             ahead_pas += 1
 
     leadoff_pas = leadoff_pas_fn(completed_pas)
-    leadoff_outs = sum(1 for pa in leadoff_pas if pa[-1].ab_outcome in K_OUTCOMES + ("Groundout", "Flyout", "Lineout", "Double Play", "Sac Bunt", "Sac Fly"))
+    leadoff_outs = sum(1 for pa in leadoff_pas if pa[-1].ab_outcome != DROPPED_K_OUTCOME and pa[-1].ab_outcome in K_OUTCOMES + ("Groundout", "Flyout", "Lineout", "Double Play", "Sac Bunt", "Sac Fly"))
     leadoff_bb = sum(1 for pa in leadoff_pas if pa[-1].ab_outcome == "BB")
     two_out_bb = sum(1 for pa in completed_pas if pa[-1].ab_outcome == "BB" and pa[-1].outs_before == 2)
     zero_two_hits = sum(1 for pa in completed_pas if pa[-1].ab_outcome in HIT_OUTCOMES and pa[-1].balls_before == 0 and pa[-1].strikes_before == 2)

@@ -420,7 +420,7 @@ def count_after(outcome, balls, strikes):
         strikes += 1
     return balls, strikes
 AB_OUTCOMES = [
-    "K", "K (Looking)", "BB", "IBB", "HBP", "1B", "2B", "3B", "HR", "E", "FC",
+    "K", "K (Looking)", "K - Reached on Dropped 3rd", "BB", "IBB", "HBP", "1B", "2B", "3B", "HR", "E", "FC",
     "Sac Bunt", "Sac Fly", "Groundout", "Flyout", "Lineout", "Double Play",
     "No Result",
 ]
@@ -441,7 +441,11 @@ AB_OUTCOMES = [
 # ab_outcome (game_stats.py, analytics/pitcher_game_report.py) -- "K
 # (Looking)" exists only so a strikeout looking shows as its own
 # result here, per Ryker's request (Sept 2026).
-K_OUTCOMES = ("K", "K (Looking)")
+# Oct 2026, Ryker: batter strikes out but reaches 1st on a dropped third
+# strike -- still a K (and an AB) for both pitcher and hitter, but NO out
+# is recorded; suggest_after_state puts the batter on 1st instead.
+DROPPED_K_OUTCOME = "K - Reached on Dropped 3rd"
+K_OUTCOMES = ("K", "K (Looking)", DROPPED_K_OUTCOME)
 # Sept 2026, Ryker: renamed/expanded from Barrel/Solid/Weak/Miss so
 # "weak contact" splits into how it was actually mishit. "Miss" stays
 # a separate 6th value (swung and made literally no contact -- not a
@@ -989,7 +993,10 @@ def suggest_after_state(ab_outcome, bases_before, outs_before):
             b[1] = "1"
         b[0] = "1"
 
-    if ab_outcome in K_OUTCOMES + ("Groundout", "Flyout", "Lineout"):
+    if ab_outcome == DROPPED_K_OUTCOME:
+        # No out; batter takes 1st, forced runners move up (overridable).
+        force_advance()
+    elif ab_outcome in K_OUTCOMES + ("Groundout", "Flyout", "Lineout"):
         outs += 1
     elif ab_outcome == "Double Play":
         outs += 2
