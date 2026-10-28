@@ -354,3 +354,105 @@ def connection_card(conn, open_link, can_manage, ns_make, ns_sync, allow_sync=Tr
         )
     return ui_helpers.card(msg, ui.div(*btns, style="display:flex;gap:8px;flex-wrap:wrap;") if btns else None, link_block,
                            title="WHOOP", right=ui_helpers.how_to_link("whoop"))
+
+
+# ---------------------------------------------------------------------------
+# WHOOP vs performance explorer (Oct 2026) -- analytics/whoop_performance.py
+# ---------------------------------------------------------------------------
+_ZONE_TXT = {"green": "Green (67+)", "yellow": "Yellow (34-66)", "red": "Red (0-33)"}
+
+
+def explorer_controls(outcome_id, predictor_id, outcomes, sel_outcome=None, sel_predictor=None):
+    from analytics import whoop_performance as wp
+    preds = {k: v[0] for k, v in wp.PREDICTORS.items()}
+    so = sel_outcome if sel_outcome in outcomes else next(iter(outcomes), None)
+    sp = sel_predictor if sel_predictor in preds else "recovery"
+    return ui.div(
+        ui.input_select(outcome_id, "Performance", outcomes, selected=so, width="320px"),
+        ui.input_select(predictor_id, "Compared with (WHOOP)", preds, selected=sp, width="300px"),
+        style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;",
+    )
+
+
+def _zone_bars(zones, fmt_v, diff=False, raw=None):
+    """Bars = difference vs his own average (so tiny raw gaps aren't
+    exaggerated); text shows the raw average too when `raw` is given."""
+    vals = [m for m, n in zones.values() if m is not None]
+    if not vals:
+        return ui.p("No sessions on scored WHOOP mornings yet.", class_="small text-muted")
+    lo, hi = min(vals + ([0] if diff else [])), max(vals + ([0] if diff else []))
+    span = (hi - lo) or 1
+    rows = []
+    for z in ("green", "yellow", "red"):
+        m, n = zones.get(z, (None, 0))
+        color = _CELL_COLOR[wm.ZONE_STATUS[z]]
+        if m is None:
+            bar, txt = None, "no sessions"
+        else:
+            w = 15 + 85 * (m - lo) / span if not diff else 10 + 90 * abs(m) / (max(abs(lo), abs(hi)) or 1)
+            bar = ui.div(style=f"width:{w:.0f}%;height:14px;border-radius:4px;background:{color};")
+            raw_txt = f"{fmt_v.format(raw[z][0])} · " if raw and raw.get(z, (None,))[0] is not None else ""
+            txt = raw_txt + (f"{m:+.2f} vs his avg" if diff else fmt_v.format(m)) + f" · {n} session{'s' if n != 1 else ''}"
+        rows.append(ui.div(ui.div(_ZONE_TXT[z], style="width:120px;flex:none;", class_="small"),
+                           ui.div(bar, style="flex:1;min-width:80px;"),
+                           ui.div(txt, class_="small", style="width:250px;flex:none;text-align:right;font-variant-numeric:tabular-nums;"),
+                           style="display:flex;gap:10px;align-items:center;margin:6px 0;"))
+    rows.append(ui.p("Bar length = how far from his own average (longer = bigger difference).", class_="small text-muted", style="margin:2px 0 0;"))
+    return ui.div(*rows)
+
+
+def _value_fmt(outcome_key):
+    return "{:.1f} mph" if outcome_key.startswith("fb_") else "{:.2f}"
+
+
+def player_explorer(paired, n_sessions, outcome_key, outcome_label, predictor):
+    from analytics import whoop_performance as wp
+    pred_label, pred_fmt = wp.PREDICTORS[predictor]
+    fmt_v = _value_fmt(outcome_key)
+    if n_sessions == 0:
+        return ui_helpers.empty_state(f"No {outcome_label} sessions on record for him yet.")
+    if not paired:
+        return ui_helpers.empty_state(f"He has {n_sessions} {outcome_label} session{'s' if n_sessions != 1 else ''}, but none on a day "
+                                      "he has WHOOP data. They'll pair up once both are being collected.")
+    read = wp.player_read(paired, predictor)
+    svg = wc.scatter_svg(paired, predictor, "value", pred_label, outcome_label, read, fmt_v.replace(" mph", ""))
+    recent = sorted(paired, key=lambda p: p["day"], reverse=True)[:12]
+    head = ui.tags.tr(*[ui.tags.th(h) for h in ["Day", outcome_label, "vs his avg", "Recovery", "HRV vs normal", "Slept", "Strain day before"]])
+    body = [ui.tags.tr(
+        ui.tags.td(_day_label(p["day"])), ui.tags.td(fmt_v.format(p["value"])), ui.tags.td(f"{p['diff']:+.2f}"),
+        ui.tags.td(fmt(p.get("recovery")) + ("%" if p.get("recovery") is not None else ""),
+                   style=(f"color:{_CELL_COLOR[wm.ZONE_STATUS[p['zone']]]};font-weight:700;" if p.get("zone") else "")),
+        ui.tags.td(fmt(p.get("hrv_z"), "{:+.1f}")), ui.tags.td(_hm(p.get("sleep_hours"))), ui.tags.td(fmt(p.get("prev_strain"), "{:.1f}")),
+    ) for p in recent]
+    return ui.div(
+        ui.p(ui.strong(f"{outcome_label} by recovery zone that morning"), class_="small", style="margin:8px 0 2px;"),
+        _zone_bars(wp.zone_summary(paired, "diff"), fmt_v, diff=True, raw=wp.zone_summary(paired)),
+        ui.div(ui.HTML(svg) if svg else ui.p(f"No sessions with {pred_label.lower()} yet.", class_="small text-muted"), style="margin-top:12px;"),
+        ui.p(ui.strong(f"{pred_label} vs {outcome_label}: "), read["read"], class_="small"),
+        ui.p(f"{len(paired)} of his {n_sessions} sessions fall on a WHOOP day. One session rarely means much -- look for the pattern "
+             f"over {wp.MIN_SESSIONS}+.", class_="small text-muted"),
+        ui.div(ui.tags.table(ui.tags.thead(head), ui.tags.tbody(*body), class_="table table-sm", style="font-size:.85rem;"),
+               class_="table-responsive"),
+    )
+
+
+def team_explorer(res, outcome_key, outcome_label, predictor):
+    from analytics import whoop_performance as wp
+    pred_label = wp.PREDICTORS[predictor][0]
+    if not res["players"]:
+        return ui_helpers.empty_state("No players with WHOOP connected yet.")
+    fmt_v = "{:+.2f}"
+    head = ui.tags.tr(ui.tags.th("Player"), ui.tags.th("Paired sessions"), ui.tags.th("His own r"))
+    body = [ui.tags.tr(ui.tags.td(p["name"]), ui.tags.td(str(p["n"])),
+                       ui.tags.td("—" if p["r"] is None else f"{p['r']:+.2f}" + ("" if p["n"] >= wp.MIN_SESSIONS else " (early)")))
+            for p in sorted(res["players"], key=lambda p: -p["n"])]
+    return ui.div(
+        ui.p(ui.strong(f"{outcome_label}, vs each player's own average, by recovery zone"), class_="small", style="margin:8px 0 2px;"),
+        _zone_bars(res["zones"], fmt_v, diff=True),
+        ui.p(ui.strong(f"{pred_label} vs {outcome_label}: "), res["read"], class_="small", style="margin-top:10px;"),
+        ui.div(ui.tags.table(ui.tags.thead(head), ui.tags.tbody(*body), class_="table table-sm", style="font-size:.85rem;"),
+               class_="table-responsive"),
+        ui.p("Each player is compared with himself first (his sessions vs his own average, his WHOOP vs his own normal), then pooled "
+             "-- a repeated-measures correlation -- so differences BETWEEN players (a 92 vs an 84 mph arm) don't fake a relationship. "
+             "Guidance for spotting patterns, not proof of cause.", class_="small text-muted"),
+    )

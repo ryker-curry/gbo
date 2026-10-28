@@ -26,6 +26,7 @@ def recovery_board_ui():
         ui.output_ui("controls"),
         ui.output_ui("summary"),
         ui.output_ui("table"),
+        ui.output_ui("team_perf"),
         ui.p(wd.EXPLAIN, class_="text-muted small", style="margin-top:14px;"),
     )
 
@@ -106,6 +107,37 @@ def recovery_board_server(input, output, session, app_state):
         return ui_helpers.card(ui.div(ui.tags.table(ui.tags.thead(ui.tags.tr(*[ui.tags.th(h) for h in head])),
                                                     ui.tags.tbody(*body), class_="table table-sm", style="font-size:.85rem;"),
                                       class_="table-responsive"), title="Today")
+
+    @render.ui
+    def team_perf():
+        """Team WHOOP vs performance (pooled within-player)."""
+        if not _board():
+            return None
+        from analytics import whoop_performance as wp
+        db = get_session()
+        try:
+            outcomes = wp.outcome_choices(db)
+        finally:
+            db.close()
+        with reactive.isolate():
+            so = input.tp_outcome() if "tp_outcome" in input else None
+            sp = input.tp_predictor() if "tp_predictor" in input else None
+        return ui_helpers.card(wd.explorer_controls("tp_outcome", "tp_predictor", outcomes, so, sp),
+                               ui.output_ui("team_perf_result"),
+                               title="WHOOP vs performance, team", right="every connected player, each vs himself")
+
+    @render.ui
+    def team_perf_result():
+        req("tp_outcome" in input and input.tp_outcome() and "tp_predictor" in input and input.tp_predictor())
+        from analytics import whoop_performance as wp
+        db = get_session()
+        try:
+            key = input.tp_outcome()
+            label = wp.outcome_choices(db).get(key, key)
+            res = wp.team_read(db, key, input.tp_predictor())
+        finally:
+            db.close()
+        return wd.team_explorer(res, key, label, input.tp_predictor())
 
     @reactive.effect
     @reactive.event(input.open)

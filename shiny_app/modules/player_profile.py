@@ -483,6 +483,11 @@ def player_profile_server(input, output, session, app_state):
             ready = wm.readiness(all_rows, today) if all_rows else None
             games = []
             workouts = wm.load_workouts(db, pid, date_from=today - _td(days=days - 1)) if all_rows else []
+            from analytics import whoop_performance as wp
+            outcomes = wp.outcome_choices(db, pid) if all_rows else {}
+            with reactive.isolate():   # changing the dropdowns re-renders only whoop_explorer
+                sel_explorer = (input.whoop_outcome() if "whoop_outcome" in input else None,
+                                input.whoop_predictor() if "whoop_predictor" in input else None)
             if all_rows:
                 start = today - _td(days=days - 1)
                 games = (wm.pitcher_outings(db, pid, all_rows, date_from=start) if p and p.is_pitcher
@@ -511,9 +516,35 @@ def player_profile_server(input, output, session, app_state):
             wd.trend_cards(shown, ready),
             wd.daily_table(shown),
             wd.workouts_table(workouts),
+            ui_helpers.card(
+                wd.explorer_controls("whoop_outcome", "whoop_predictor", outcomes, *sel_explorer),
+                ui.output_ui("whoop_explorer"),
+                title="WHOOP vs performance", right="velo, bullpens, force plate and every test"),
             wd.performance_section(games, bool(p and p.is_pitcher)),
             ui.p(wd.EXPLAIN, class_="text-muted small", style="margin-top:12px;"),
         )
+
+    @render.ui
+    def whoop_explorer():
+        """WHOOP vs one performance measure for this player (all history)."""
+        if not app_state.is_authenticated():
+            return None
+        req("profile_tabs" in input and input.profile_tabs() == "Recovery")
+        req("whoop_outcome" in input and input.whoop_outcome() and "whoop_predictor" in input and input.whoop_predictor())
+        from analytics import whoop_metrics as wm, whoop_performance as wp
+        import whoop_display as wd
+        db = get_session()
+        try:
+            pid = _profile_pid(db)
+            if pid is None:
+                return None
+            key = input.whoop_outcome()
+            labels = wp.outcome_choices(db, pid)
+            rows = wm.load_daily(db, pid)
+            paired, n_sess = wp.paired_sessions(db, pid, key, rows)
+        finally:
+            db.close()
+        return wd.player_explorer(paired, n_sess, key, labels.get(key, key), input.whoop_predictor())
 
     @reactive.effect
     @reactive.event(input.whoop_make_link)
