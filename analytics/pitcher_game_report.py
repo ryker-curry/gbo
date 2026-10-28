@@ -228,6 +228,7 @@ def _compute_header_stats(all_pitches, completed_pas, extras=None):
     ip_display = f"{ip_whole}.{ip_partial}"
     ip_decimal = ip_whole + ip_partial / 3.0  # for rate stats (ERA, WHIP, K/9) -- the real fractional innings, not the X.Y display convention
 
+    errors_behind = sum(1 for pa in completed_pas if pa[-1].ab_outcome == "E")
     ab = sum(1 for pa in completed_pas if pa[-1].ab_outcome not in NON_AB_OUTCOMES)
     bf = len(completed_pas)
     hits = sum(1 for pa in completed_pas if pa[-1].ab_outcome in HIT_AB_OUTCOMES)
@@ -272,8 +273,15 @@ def _compute_header_stats(all_pitches, completed_pas, extras=None):
         "pitches": total_pitches, "strikes": strikes, "strike_pct": round(strikes / total_pitches * 100, 1) if total_pitches else None,
         "balls": balls, "ball_pct": round(balls / total_pitches * 100, 1) if total_pitches else None,
         "pitches_per_inning": round(total_pitches / ip_decimal, 1) if ip_decimal else None,
+        # Oct 2026, Ryker: pitches per out -- works for the partial / capped
+        # innings of fall intrasquads, where per inning doesn't. Outs include
+        # pickoffs and caught stealings; errors behind him are shown on the
+        # side (pitches_per_out_e treats each error as the out it should have been).
+        "outs": total_outs, "errors_behind": errors_behind,
+        "pitches_per_out": round(total_pitches / total_outs, 2) if total_outs else None,
+        "pitches_per_out_e": round(total_pitches / (total_outs + errors_behind), 2) if (total_outs + errors_behind) else None,
         "ip_display": ip_display, "ip_decimal": ip_decimal,
-        "ab": ab, "bf": bf, "pitches_per_bf": round(total_pitches / bf, 1) if bf else None,
+        "ab": ab, "bf": bf, "pitches_per_bf": round(total_pitches / bf, 2) if bf else None,
         "runs": runs, "earned_runs": earned, "earned_runs_approx": earned,
         "hits": hits, "xbh": xbh, "bb": bb, "hbp": hbp, "whip": whip, "bases": bases, "tbip": tbip, "ks": ks, "k_bb": k_bb, "k_pct": k_pct,
         "leadoff_pas": len(leadoff_pas), "leadoff_outs": leadoff_outs,

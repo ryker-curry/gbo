@@ -88,6 +88,12 @@ METRICS = [
     dict(key="execution_pct", label="Hit-the-spot %", hib=True, scale=6.0, unit="%", n="execution_reviewed",
          means="Pitches that landed in the zone the catcher called (needs video review).",
          tip="Pick a small target and finish to it."),
+    dict(key="pitches_per_out", label="Pitches per out", hib=False, scale=0.6, unit="", n="outs",
+         means="Efficiency that works for partial innings. About 5 (15 an inning) is efficient; 6+ costs innings.",
+         tip="Get outs early in counts -- in play or 2 strikes by pitch 3."),
+    dict(key="pitches_per_bf", label="Pitches per batter", hib=False, scale=0.3, unit="", n="bf",
+         means="Pitches per hitter faced. Around 3.8 is typical; higher means deep counts.",
+         tip="Win 0-0 and 1-1 so hitters are swinging early."),
     dict(key="pitches_per_inning", label="Pitches per inning", hib=False, scale=2.0, unit="", n="outs",
          means="Efficiency. Around 15 or fewer lets you go deeper in games.",
          tip="Be efficient -- early contact saves pitches."),
@@ -155,6 +161,8 @@ def stat_bundle(pitches, pitch_types, db=None):
         "k_pct": h["k_pct"], "bb_pct": _pct(h["bb"], bf),
         "execution_pct": h["execution_pct"], "execution_reviewed": h["execution_reviewed"],
         "pitches_per_inning": h["pitches_per_inning"],
+        "pitches_per_out": h["pitches_per_out"], "pitches_per_out_e": h["pitches_per_out_e"],
+        "errors_behind": h["errors_behind"], "pitches_per_bf": h["pitches_per_bf"],
     }
 
 
