@@ -185,3 +185,56 @@ def test_new_display_pieces_build():
     w = [{"day": date(2026, 10, 27), "sport": "Baseball", "start": _dt(2026, 10, 27, 15, 0), "minutes": 100.0,
           "strain": 9.7, "avg_hr": 110, "max_hr": 170, "zones": {"Z0": 31.0, "Z1": 53.4, "Z2": 12.4, "Z3": 3.0, "Z4": 0.1, "Z5": 0.0}}]
     assert wd.workouts_table(w) is not None and wd.workouts_table([]) is not None
+
+
+def test_whoop_performance_pairs_and_reads(db, seeded):
+    from analytics import whoop_performance as wp
+    from models import Player, WhoopConnection, WhoopDaily, RapsodoPitch
+    import whoop_display as wd
+    raps = db.query(RapsodoPitch).filter(RapsodoPitch.velocity.isnot(None), RapsodoPitch.pitch_date.isnot(None)).all()
+    assert raps
+    pid = raps[0].player_id
+    days = sorted({r.pitch_date.date() for r in raps if r.player_id == pid})
+    db.add(WhoopConnection(player_id=pid, status="connected", connected_at=datetime.utcnow()))
+    first = days[0] - timedelta(days=40)
+    n = (days[-1] - first).days + 1
+    for i in range(n):
+        d = first + timedelta(days=i)
+        db.add(WhoopDaily(player_id=pid, cycle_id=50000 + i, day_date=d, recovery_score_state="SCORED",
+                          recovery_score=20 + (i * 7) % 75, hrv_rmssd_ms=60 + (i % 9), resting_hr=50,
+                          sleep_score_state="SCORED", total_sleep_min=400 + (i % 5) * 20, sleep_need_min=480, day_strain=10))
+    db.commit()
+    try:
+        choices = wp.outcome_choices(db, pid)
+        assert list(choices)[:3] == ["fb_game", "fb_pen", "fb_pen_max"]
+        rows = wm.load_daily(db, pid)
+        tot = 0
+        for key in ("fb_game", "fb_pen", "fb_pen_max"):
+            paired, n_sess = wp.paired_sessions(db, pid, key, rows)
+            tot += len(paired)
+            if paired:
+                assert abs(sum(p["diff"] for p in paired)) < 1e-6
+                assert wd.player_explorer(paired, n_sess, key, choices[key], "recovery") is not None
+                z = wp.zone_summary(paired)
+                assert sum(n for _, n in z.values()) <= len(paired)
+        assert tot > 0
+        team = wp.team_read(db, "fb_pen", "sleep_hours")
+        assert team["players"] and wd.team_explorer(team, "fb_pen", "FB", "sleep_hours") is not None
+        for k in [k for k in choices if k.startswith("test:")][:2]:
+            wp.paired_sessions(db, pid, k, rows)
+    finally:
+        db.query(WhoopDaily).filter(WhoopDaily.player_id == pid).delete()
+        db.query(WhoopConnection).filter(WhoopConnection.player_id == pid).delete()
+        db.commit()
+
+
+def test_rmcorr_removes_between_player_differences():
+    from analytics import whoop_performance as wp
+    # two players: within each, more sleep -> slightly higher velo; between them, the
+    # low-sleep guy throws much harder. Raw pooled r would be negative; rmcorr positive.
+    a = [(6 + i * .2, 92 + i * .1) for i in range(10)]
+    b = [(8 + i * .2, 84 + i * .1) for i in range(10)]
+    raw = wp._pearson(a + b)[0]
+    cen = [(x - 6.9, y - 92.45) for x, y in a] + [(x - 8.9, y - 84.45) for x, y in b]
+    rm = wp._pearson(cen)[0]
+    assert raw < 0 < rm
