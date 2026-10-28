@@ -472,7 +472,39 @@ RUNNER_EVENT_TYPES = ["Stolen Base", "Caught Stealing", "Picked Off", "Wild Pitc
                       "Fielding Error", "Advanced on Throw", "Obstruction", "Interference", "Out on Bases"]
 RUNNER_EVENT_OUT_TYPES = ("Caught Stealing", "Picked Off", "Interference", "Out on Bases")
 RUNNER_ADVANCE_TYPES = [t for t in RUNNER_EVENT_TYPES if t not in RUNNER_EVENT_OUT_TYPES]
-BATTER_REACH_BASE = {"1B": 1, "BB": 1, "IBB": 1, "HBP": 1, "E": 1, "FC": 1, "2B": 2, "3B": 3}
+BATTER_REACH_BASE = {"1B": 1, "BB": 1, "IBB": 1, "HBP": 1, "E": 1, "FC": 1, "2B": 2, "3B": 3,
+                     "K - Reached on Dropped 3rd": 1}
+
+
+def _place_runners(start_bases, targets, batter_base):
+    """Which runners already on base end up on which of `targets` (the
+    occupied bases after the play, batter's own base excluded). Oct 2026,
+    Ryker: on a fielder's choice with runners on 1st and 2nd where the lead
+    runner was thrown out at 3rd, the old lead-first fill kept the lead
+    runner on 2nd -- the wrong man. Runners can't go backward or pass each
+    other, and when the batter reaches, every runner forced by him has to
+    move up at least one base; any runner not placed was put out. Of the
+    placements that obey those rules, take the one where runners move the
+    fewest total bases. start_bases is lead-first; returns a list of
+    (start_base, target) pairs, or None if no legal placement exists (the
+    caller then falls back to the plain lead-first fill)."""
+    from itertools import combinations
+    targets = sorted(targets, reverse=True)
+    forced = set()
+    if batter_base:
+        b = 1
+        while b in start_bases:
+            forced.add(b)
+            b += 1
+    best = None
+    for kept in combinations(start_bases, len(targets)):
+        pairs = list(zip(kept, targets))
+        if any(t < s or (s in forced and t <= s) for s, t in pairs):
+            continue
+        cost = sum(t - s for s, t in pairs)
+        if best is None or cost < best[0]:
+            best = (cost, pairs)
+    return best[1] if best else None
 
 
 def runners_on_base(pitches, runner_events):
@@ -521,15 +553,21 @@ def runners_on_base(pitches, runner_events):
             if (p.outs_after or 0) >= 3:
                 runners = {}
             else:
-                lead_first = [runners[b] for b in sorted(runners, reverse=True)]
-                remaining = lead_first[(p.runs_scored_on_play or 0):]
+                lead_bases = sorted(runners, reverse=True)[(p.runs_scored_on_play or 0):]
                 new_on = bases_set(p.bases_after)
                 placed = {}
                 bb = BATTER_REACH_BASE.get(p.ab_outcome)
                 if bb in new_on:
                     placed[bb] = batter_of(p)
-                for b in sorted(new_on - set(placed), reverse=True):
-                    placed[b] = remaining.pop(0) if remaining else None
+                targets = new_on - set(placed)
+                plan = _place_runners(lead_bases, targets, bb if bb in new_on else None)
+                if plan is not None:
+                    for s, t in plan:
+                        placed[t] = runners[s]
+                else:
+                    remaining = [runners[b] for b in lead_bases]
+                    for b in sorted(targets, reverse=True):
+                        placed[b] = remaining.pop(0) if remaining else None
                 runners = placed
         apply_events(runners, p.pitch_sequence)
     return runners

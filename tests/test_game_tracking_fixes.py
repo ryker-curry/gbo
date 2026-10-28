@@ -85,6 +85,24 @@ def test_runners_on_base_follows_plays():
     assert gt.runners_on_base(ps, [_ev(3, 3, None, out=True, n=1)]) == {1: ("our", 13)}
 
 
+def test_runners_on_base_fc_lead_runner_out():
+    # Oct 2026: Freeland (32) on 2nd, Swanson (29) on 1st, Hepner (24) bunts,
+    # lead runner thrown out at 3rd -> Swanson on 2nd, Hepner on 1st.
+    ps = [_pa(1, 32, "2B", "000", "010"), _pa(2, 29, "BB", "010", "110"),
+          _pa(3, 24, "FC", "110", "110", outs_after=1)]
+    assert gt.runners_on_base(ps, []) == {2: ("our", 29), 1: ("our", 24)}
+    # runner on 1st only, forced out at 2nd -> only the batter is on
+    ps = [_pa(1, 32, "1B", "000", "100"), _pa(2, 24, "FC", "100", "100", outs_after=1)]
+    assert gt.runners_on_base(ps, []) == {1: ("our", 24)}
+    # bases loaded, force at home -> everyone else moves up one
+    ps = [_pa(1, 1, "1B", "000", "100"), _pa(2, 2, "1B", "100", "110"), _pa(3, 3, "1B", "110", "111"),
+          _pa(4, 4, "FC", "111", "111", outs_after=1)]
+    assert gt.runners_on_base(ps, []) == {3: ("our", 2), 2: ("our", 3), 1: ("our", 4)}
+    # dropped third strike: batter takes 1st, runner from 2nd to 3rd
+    ps = [_pa(1, 39, "2B", "000", "010"), _pa(2, 17, "K - Reached on Dropped 3rd", "010", "101")]
+    assert gt.runners_on_base(ps, []) == {3: ("our", 39), 1: ("our", 17)}
+
+
 def test_runners_on_base_scores_lead_runner_and_resets_each_half():
     ps = [_pa(1, 11, "2B", "000", "010"), _pa(2, 12, "1B", "010", "100", runs=1)]
     assert gt.runners_on_base(ps, []) == {1: ("our", 12)}
