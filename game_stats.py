@@ -1097,6 +1097,7 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0, extra_unea
     thrown = [p for p in pitches if getattr(p, "is_pitch", True) is not False]
     hits_allowed = sum(1 for p in pa_pitches if p.ab_outcome in HIT_OUTCOMES)
     hr_allowed = sum(1 for p in pa_pitches if p.ab_outcome == "HR")
+    errors_behind = sum(1 for p in pa_pitches if p.ab_outcome == "E")
     xbh_allowed = sum(1 for p in pa_pitches if p.ab_outcome in ("2B", "3B", "HR"))
     gb_n = sum(1 for p in pa_pitches if p.batted_ball_type == "Ground Ball")
     fb_n = sum(1 for p in pa_pitches if p.batted_ball_type == "Fly Ball")
@@ -1184,6 +1185,15 @@ def compute_pitching_line(pitches, extra_earned_runs=0, extra_outs=0, extra_unea
         "First Pitch Strikes": first_pitch_strikes, "First Pitch Strike %": _rate(first_pitch_strikes, len(first_thrown)),
         "Balls": balls_thrown, "Ball %": _rate(balls_thrown, len(thrown)),
         "Pitches/Inning": round(len(thrown) / ip_decimal, 1) if ip_decimal else None,
+        # Oct 2026, Ryker: pitches per out / per batter faced -- per out
+        # works for the partial, capped innings of fall intrasquads. Outs
+        # include pickoffs / caught stealings (extra_outs); "E as outs"
+        # counts each reach-on-error as the out it should have been.
+        "Outs": round(ip_decimal * 3), "Errors Behind": errors_behind,
+        "Pitches/Out": round(len(thrown) / round(ip_decimal * 3), 2) if round(ip_decimal * 3) else None,
+        "Pitches/Out (E as outs)": (round(len(thrown) / (round(ip_decimal * 3) + errors_behind), 2)
+                                    if (round(ip_decimal * 3) + errors_behind) else None),
+        "Pitches/BF": round(len(thrown) / batters_faced, 2) if batters_faced else None,
         "AB": ab, "Hits": hits_allowed, "HBP": hbp, "XBH": xbh_allowed,
         "WHIP": round((bb + ibb + hits_allowed) / ip_decimal, 2) if ip_decimal else None,   # official WHIP counts IBB
         # Oct 2026, Ryker: TBIP (SABR Tooth Tigers, "One simple pitching

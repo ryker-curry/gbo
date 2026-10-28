@@ -66,6 +66,8 @@ DRILLS = {
     "secondary_strike_pct": ["Off-speed for a strike in 1-0 and 2-1 counts in every pen",
                              "Shape check on the secondary -- one pitch he can land on demand"],
     "pitches_per_inning": ["Attack early: 3-pitch rule in live ABs (in play or 2 strikes by pitch 3)"],
+    "pitches_per_out": ["Attack early: 3-pitch rule in live ABs (in play or 2 strikes by pitch 3)"],
+    "pitches_per_bf": ["Live ABs that start 1-1 -- win the next pitch, put the hitter away by pitch 4"],
     "h_chase": ["Pitch-recognition reps (spin / no-spin, ball / strike calls) 3x a week",
                 "Live ABs with a 'two-strike zone' plan -- take anything off the plate"],
     "h_swing_dec": ["BP rounds swinging only at a called zone; take the rest",

@@ -76,6 +76,8 @@ STAT_META = [
     ("K-BB%+", "K-BB%+", True, 0),
     ("WHIP", "WHIP", False, 2),
     ("TBIP", "TBIP", False, 2),   # Oct 2026: bases allowed per inning, lower is better
+    ("Pitches/Out", "Pitches/Out", False, 2),   # Oct 2026, Ryker: efficiency that works for partial innings
+    ("Pitches/BF", "Pitches/BF", False, 2),
     ("FIP", "FIP", False, 2),
     ("SIERA", "SIERA", False, 2),   # Oct 2026: skill-interactive ERA (D2-scaled)
     ("K/9", "K/9", True, 2),

@@ -94,7 +94,11 @@ def _count_situational_children(line):
             {"label": "Ahead", "value": str(line["Ahead (PA)"])},
             {"label": "E+A %", "value": _fmt_pct(line["E+A %"])},
         ]),
-        ui.p(f"Pitches/Inning: {_fmt(line['Pitches/Inning'], 1)} · Balls: {line['Balls']} ({_fmt_pct(line['Ball %'])})", class_="text-muted small"),
+        ui.p(f"Pitches/Out: {_fmt(line['Pitches/Out'])} · Pitches/BF: {_fmt(line['Pitches/BF'])} · "
+             f"Pitches/Inning: {_fmt(line['Pitches/Inning'], 1)} · Balls: {line['Balls']} ({_fmt_pct(line['Ball %'])})"
+             + (f" · {line['Errors Behind']} error{'s' if line['Errors Behind'] != 1 else ''} behind him "
+                f"({_fmt(line['Pitches/Out (E as outs)'])} pitches/out counting them as outs)" if line.get("Errors Behind") else ""),
+             class_="text-muted small"),
 
         ui.p(ui.strong("Situational")),
         ui_helpers.render_kpi_cards([
@@ -817,8 +821,12 @@ def pitcher_game_report_server(input, output, session, app_state):
         pitcher's. Two goal-tracked stats (First Pitch Strike %,
         Secondary Strike %) get a green/red tile against Ryker's own
         targets; the other three (AB<=4-pitches %, Leadoff Out %,
-        Shutdown Inning %) show plainly with no goal yet, per his call."""
+        Shutdown Inning %) show plainly with no goal yet, per his call.
+        Hidden for Player logins (Oct 2026, Ryker: players don't need staff
+        totals on My Game Breakdown) -- staff roles only."""
         if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        if app_state.role_name() == "Player":
             return None
         req("game_select" in input)
         selected_game_id = int(input.game_select())
@@ -1001,6 +1009,8 @@ def pitcher_game_report_server(input, output, session, app_state):
             sections.append(ui_helpers.render_kpi_cards([
                 {"label": "WHIP", "value": _fmt(line["WHIP"])},
                 {"label": "TBIP", "value": _fmt(line["TBIP"])},
+                {"label": "Pitches/Out", "value": _fmt(line["Pitches/Out"])},
+                {"label": "Pitches/BF", "value": _fmt(line["Pitches/BF"])},
                 {"label": "K/BB", "value": _fmt(line["K/BB"])},
                 {"label": "K %", "value": _fmt_pct(line["K %"])},
                 {"label": "ERA", "value": _fmt(line["ERA"])},
