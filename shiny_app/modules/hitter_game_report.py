@@ -37,6 +37,8 @@ from analytics import profile_queries
 from visualizations.hitter_pitch_chart import at_bat_pitch_locations_chart, swing_decision_chart
 from visualizations.spray_chart import all_bip_spray_chart
 from analytics import decision_value
+from analytics import hitter_game_card
+from visualizations import hitter_game_card as hitter_game_card_html
 # Reusing Hitter Tracking's own zone-score math/heatmap builder and its
 # CONTACT_QUALITY_SCORE/ZONE_LABELS constants -- rather than a second,
 # parallel implementation -- so a batter's "how well do I make contact
@@ -104,6 +106,9 @@ def hitter_game_report_ui():
         ui.output_ui("game_picker"),
         ui.output_ui("batter_picker"),
         ui.input_select("hgr_view", "View", choices=VIEWS),
+        # Oct 2026, Ryker: post-game hitter card (tiles vs team, every pitch
+        # and his decision, where he swung, Heart / Edges / Chase).
+        ui.output_ui("game_card"),
         ui.output_ui("report_body"),
         # Oct 2026, Ryker: game visuals -- swing decisions map (Approach),
         # all-balls-in-play spray chart (Batted Balls).
@@ -231,6 +236,27 @@ def hitter_game_report_server(input, output, session, app_state):
             batters = db.query(Player).filter(Player.player_id.in_(batter_ids)).order_by(Player.last_name, Player.first_name).all()
             choices = {str(p.player_id): f"{p.first_name} {p.last_name}" for p in batters}
             return ui.input_select("batter_select", "Batter", choices=choices, selected=_dl.take("pid", choices))
+        finally:
+            db.close()
+
+    @render.ui
+    def game_card():
+        if not app_state.is_authenticated() or app_state.role_name() not in ALLOWED_ROLES:
+            return None
+        if _view() != "overview":
+            return None
+        req("game_select" in input)
+        req("batter_select" in input)
+        db = get_session()
+        try:
+            gid, pid = int(input.game_select()), int(input.batter_select())
+            card = hitter_game_card.load(db, pid, gid)
+            if card is None or not card["me"]["pitches"]:
+                return None
+            batter = db.query(Player).filter(Player.player_id == pid).first()
+            hand = batter.bats if batter is not None and batter.bats in ("R", "L") else None
+            return ui.div(ui.p(ui.strong("Game card")), ui.HTML(hitter_game_card_html.card_html(card, hand)),
+                          ui.hr(), class_="mb-2")
         finally:
             db.close()
 

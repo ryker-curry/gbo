@@ -6,7 +6,7 @@ Run once, after pulling this update:
 
   1. Creates research_fb_outcomes (models.ResearchFBOutcome) -- the study's
      fastball outcomes imported from the FB VELO&SPIN tab.
-  2. Seeds the two new assessment categories ("Dynamometry", "Force Plate
+  2. Seeds the two new assessment categories ("ForceFrame", "Force Plate
      Detail") and their test types (study_workbook_spec.new_test_types()).
 Nothing existing changes. Safe to run more than once.
 """

@@ -5,7 +5,7 @@ test, one row per pitcher).
 
 Decisions agreed with Ryker (AskUserQuestion, Oct 2026):
   - Import EVERY column. Columns with an existing GBO test type map onto it;
-    the rest get new test types (seed_lookups.py: "Dynamometry" and "Force
+    the rest get new test types (seed_lookups.py: "ForceFrame" and "Force
     Plate Detail" categories).
   - Convert to GBO units on the way in (kg -> lb, m / cm -> in or ft,
     m/s -> mph, N -> lb for shoulder dynamometer force).
@@ -309,7 +309,7 @@ def resolve_test(template, throws):
     return template.format(T=t, G=g, D=t, P=g, R=r, L=l)
 
 
-NEW_TEST_CATEGORY = {"SH": "Dynamometry", "HIP": "Dynamometry"}   # every other tab -> "Force Plate Detail"
+NEW_TEST_CATEGORY = {"SH": "ForceFrame", "HIP": "ForceFrame"}   # every other tab -> "Force Plate Detail"
 
 
 def new_test_types():

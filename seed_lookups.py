@@ -67,7 +67,7 @@ ASSESSMENT_CATEGORIES = [
     ("Pitcher-Specific", False, 11),
     # Oct 2026: the testing workbook's extra dynamometer / force-plate
     # metrics (study_workbook_spec.new_test_types()).
-    ("Dynamometry", True, 12),
+    ("ForceFrame", True, 12),
     ("Force Plate Detail", True, 13),
 ]
 
@@ -324,7 +324,7 @@ def seed_assessment_categories_and_tests(session):
     seed_tests("Pitcher-Specific", PITCHER_SPECIFIC_TESTS)
     # Oct 2026: testing-workbook metrics GBO didn't have yet.
     from study_workbook_spec import new_test_types
-    for cat_name in ("Dynamometry", "Force Plate Detail"):
+    for cat_name in ("ForceFrame", "Force Plate Detail"):
         seed_tests(cat_name, [(n, u) for c, n, u in new_test_types() if c == cat_name])
     print(
         "NOTE: Baseball Performance has no data in the spreadsheet -- "
