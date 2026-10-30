@@ -71,6 +71,8 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from analytics import today as today_data
 import today_box
+from analytics import hub
+from visualizations import hub_view
 from models import (
     Player, StaffPlayerAssignment, Assessment, AssessmentResult,
     AssessmentTestType, AssessmentCategory, IDPGoal, IDPStatus,
@@ -196,6 +198,24 @@ def dashboard_server(input, output, session, app_state):
                                       pitching="Arm Care & Availability" in allowed), allowed))
             except Exception as exc:  # never let it take the dashboard down
                 sections.append(ui_helpers.empty_state(f"Today box unavailable: {exc}"))
+
+            # Oct 2026, Ryker (after IUFB's "The Hub"): what's in, the team
+            # pulse, and the watch list -- players far outside their OWN
+            # history (analytics/hub.py, visualizations/hub_view.py).
+            try:
+                hub_data = hub.build(db, players)
+                sections.append(ui.HTML(hub_view.hub_html(hub_data)))
+                sections.append(ui.tags.script(f"""
+                (function(){{
+                  var root = document.getElementById('{session.ns('body')}'); if (!root || root.__gboHub) return; root.__gboHub = true;
+                  root.addEventListener('click', function(e){{
+                    var a = e.target.closest ? e.target.closest('.gbo-hub-player') : null;
+                    if (a) {{ e.preventDefault(); Shiny.setInputValue('{session.ns('open_player')}', parseInt(a.getAttribute('data-player-id')), {{priority:'event'}}); }}
+                  }});
+                }})();"""))
+            except Exception as exc:  # never let it take the dashboard down
+                db.rollback()
+                sections.append(ui_helpers.empty_state(f"Hub unavailable: {exc}"))
 
             # v2: team overview block (flags, attention list, today,
             # bucket status, coverage) ahead of the role-specific section --
