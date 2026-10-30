@@ -973,7 +973,19 @@ def get_current_three_squad_pitcher_id(game):
     return _three_squad_pitcher_id(candidates[-1])
 
 
-def suggest_next_opponent_order(game):
+OPP_LINEUP_MAX_SLOTS = 12  # Oct 2026: fall outside-competition games can bat 10+ (extra hitters)
+
+
+def suggest_next_opponent_order(game, opponent_lineup_slots=None, batter_id=None):
+    """Suggested batting-order # for the next external-opponent batter.
+    Oct 2026 (Ryker: outside-competition fall games bat 10+): if the
+    picked batter is in the saved opponent lineup, use his slot; otherwise
+    wrap at the saved lineup's length, or at the highest order seen this
+    game (min 9) when no lineup was saved -- never a hard-coded 9."""
+    if batter_id is not None and opponent_lineup_slots:
+        slot = next((s for s in opponent_lineup_slots if s.opponent_player_id == batter_id), None)
+        if slot is not None:
+            return slot.batting_order
     opp_pa_endings = sorted(
         [p for p in game.pitches if not p.is_our_team_batting and p.ends_plate_appearance and p.ab_outcome != "No Result" and p.opponent_batting_order],
         key=lambda p: p.pitch_sequence,
@@ -981,7 +993,12 @@ def suggest_next_opponent_order(game):
     if not opp_pa_endings:
         return 1
     last_order = opp_pa_endings[-1].opponent_batting_order
-    return (last_order % 9) + 1
+    if opponent_lineup_slots:
+        orders = sorted(s.batting_order for s in opponent_lineup_slots)
+        later = [o for o in orders if o > last_order]
+        return later[0] if later else orders[0]
+    wrap = max([9] + [p.opponent_batting_order for p in opp_pa_endings])
+    return (last_order % wrap) + 1
 
 
 def suggest_next_opponent_lineup_player(game, opponent_lineup_slots):
@@ -3286,12 +3303,17 @@ def game_tracking_server(input, output, session, app_state):
             opp_label = game.opponent_team.team_name if game.opponent_team else (game.opponent_name or "the opponent")
             roster = game.opponent_team.roster if game.opponent_team else []
             roster_choices = {"": "-- Existing roster --"}
-            roster_choices.update({str(p.opponent_player_id): p.player_name + (f" (#{p.jersey_number})" if p.jersey_number else "") for p in roster})
+            roster_choices.update({str(p.opponent_player_id): p.player_name + (f" (#{p.jersey_number})" if p.jersey_number else "")
+                                   + (f" ({p.bats})" if p.bats else "") for p in roster})
+            bats_choices = {"": "Bats", "R": "R", "L": "L", "S": "S (switch)"}
 
             rows = [
                 ui.h5(f"Set {opp_label}'s lineup (optional)", class_="gbo-section-title"),
                 ui.p(
-                    "9 batting order slots + starting pitcher. Pick a name from their roster if you've got one "
+                    "Up to 12 batting order slots (fill 9, or 10-12 for fall games with extra hitters -- the order "
+                    "cycles through however many you fill) + starting pitcher. Pick each hitter's hand (R/L/S); it's "
+                    "saved to that player for next time (leave it blank to keep what's on file). "
+                    "Pick a name from their roster if you've got one "
                     "built out, or just type a new name -- typing a name adds them to a reusable roster for this "
                     "opponent, so next time you play them you can pick from a list instead of retyping. Skip this "
                     "and Game Tracking still works -- you'll just pick the batter manually each at-bat instead of "
@@ -3299,13 +3321,16 @@ def game_tracking_server(input, output, session, app_state):
                     class_="text-muted small",
                 ),
             ]
-            for i in range(1, 10):
+            for i in range(1, OPP_LINEUP_MAX_SLOTS + 1):
+                if i == 10:
+                    rows.append(ui.p("Extra hitters (optional)", class_="text-muted small mt-2 mb-1"))
                 rows.append(ui.layout_columns(
                     ui.p(f"{i}.", class_="mb-0 fw-bold"),
                     ui.input_select(f"opp_lineup_existing_{i}", None, choices=roster_choices),
                     ui.input_text(f"opp_lineup_new_{i}", None, placeholder="...or type a new name"),
                     ui.input_text(f"opp_lineup_jersey_{i}", None, placeholder="#"),
-                    col_widths=[1, 4, 5, 2],
+                    ui.input_select(f"opp_lineup_bats_{i}", None, choices=bats_choices),
+                    col_widths=[1, 4, 3, 2, 2],
                 ))
             rows.append(ui.p("Their starting pitcher", class_="fw-bold mt-2 mb-1"))
             rows.append(ui.layout_columns(
@@ -3353,12 +3378,23 @@ def game_tracking_server(input, output, session, app_state):
                 return new_player.opponent_player_id
 
             added = 0
-            for i in range(1, 10):
+            used_ids = set()
+            for i in range(1, OPP_LINEUP_MAX_SLOTS + 1):
                 existing_raw = input[f"opp_lineup_existing_{i}"]() if f"opp_lineup_existing_{i}" in input else ""
                 new_name_raw = input[f"opp_lineup_new_{i}"]() if f"opp_lineup_new_{i}" in input else ""
                 new_jersey_raw = input[f"opp_lineup_jersey_{i}"]() if f"opp_lineup_jersey_{i}" in input else ""
+                bats_raw = input[f"opp_lineup_bats_{i}"]() if f"opp_lineup_bats_{i}" in input else ""
                 resolved = _resolve(existing_raw, new_name_raw, new_jersey_raw)
                 if resolved is not None:
+                    if resolved in used_ids:
+                        db.rollback()
+                        ui.notification_show(f"The same player is in more than one batting order slot (slot {i}). Fix it and save again.", type="error", duration=8)
+                        return
+                    used_ids.add(resolved)
+                    if bats_raw in ("R", "L", "S"):
+                        op = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == resolved).first()
+                        if op is not None:
+                            op.bats = bats_raw
                     db.add(OpponentLineupSlot(game_id=game_id, batting_order=i, opponent_player_id=resolved))
                     added += 1
 
@@ -3392,7 +3428,8 @@ def game_tracking_server(input, output, session, app_state):
             )
             if not slots:
                 return None
-            rows = [{"#": s.batting_order, "Player": s.opponent_player.player_name if s.opponent_player else "—"} for s in slots]
+            rows = [{"#": s.batting_order, "Player": s.opponent_player.player_name if s.opponent_player else "—",
+                     "Bats": (s.opponent_player.bats if s.opponent_player and s.opponent_player.bats else "—")} for s in slots]
             children = [ui.h5(f"{game.opponent_team.team_name if game.opponent_team else 'Opponent'}'s lineup", class_="gbo-section-title"), ui_helpers.render_dict_table(rows)]
             if game.opponent_starting_pitcher:
                 children.append(ui.p(f"Their starting pitcher: {game.opponent_starting_pitcher.player_name}", class_="text-muted small"))
@@ -4550,13 +4587,32 @@ def game_tracking_server(input, output, session, app_state):
                     # get the manual radio since we usually don't have
                     # a reliable OpponentPlayer.bats for them.
                     if not game.is_intrasquad:
+                        # Oct 2026 (Ryker): hand defaults from the batter's
+                        # saved bats (set in opponent lineup setup); a switch
+                        # hitter defaults to the side opposite our current
+                        # pitcher. Always overridable here.
                         default_hand = "R"
-                        if "opp_roster_player_select" in input and input.opp_roster_player_select():
-                            rp = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == int(input.opp_roster_player_select())).first()
+                        hand_note = None
+                        batter_id = None
+                        if "opp_roster_player_select" in input:
+                            batter_id = int(input.opp_roster_player_select()) if input.opp_roster_player_select() else None
+                        elif opponent_lineup_slots:
+                            batter_id = suggest_next_opponent_lineup_player(game, opponent_lineup_slots)
+                        if batter_id is not None:
+                            rp = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == batter_id).first()
                             if rp and rp.bats in ("R", "L"):
                                 default_hand = rp.bats
+                            elif rp and rp.bats == "S":
+                                cur_pid = get_current_pitcher_id(game)
+                                cur_p = db.query(Player).filter(Player.player_id == cur_pid).first() if cur_pid else None
+                                default_hand = "R" if (cur_p and cur_p.throws == "L") else "L"
+                                hand_note = "Switch hitter -- defaulted to the side opposite our pitcher."
                         children.append(ui.input_radio_buttons("opp_batter_hand_radio", "Opposing batter's hand", choices=["R", "L"], selected=default_hand, inline=True))
-                        children.append(ui.input_numeric("opp_batting_order_input", "Opponent's batting order #", value=suggest_next_opponent_order(game), min=1, max=12, step=1))
+                        if hand_note:
+                            children.append(ui.p(hand_note, class_="text-muted small"))
+                        children.append(ui.input_numeric("opp_batting_order_input", "Opponent's batting order #",
+                                                         value=suggest_next_opponent_order(game, opponent_lineup_slots, batter_id),
+                                                         min=1, max=OPP_LINEUP_MAX_SLOTS, step=1))
 
             if not state["is_our_batting"]:
                 current_pitcher_id = get_current_pitcher_id(game)
