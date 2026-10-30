@@ -3337,7 +3337,8 @@ def game_tracking_server(input, output, session, app_state):
                 ui.input_select("opp_pitcher_existing", None, choices=roster_choices),
                 ui.input_text("opp_pitcher_new_name", None, placeholder="...or type a new name"),
                 ui.input_text("opp_pitcher_new_jersey", None, placeholder="#"),
-                col_widths=[4, 6, 2],
+                ui.input_select("opp_pitcher_throws", None, choices={"": "Throws", "R": "R", "L": "L"}),
+                col_widths=[4, 4, 2, 2],
             ))
             rows.append(ui.input_action_button("opp_lineup_save_btn", "Save opponent lineup", class_="btn-primary mt-2"))
             return ui.div(*rows)
@@ -3402,6 +3403,15 @@ def game_tracking_server(input, output, session, app_state):
             pitcher_new_name = input.opp_pitcher_new_name() if "opp_pitcher_new_name" in input else ""
             pitcher_new_jersey = input.opp_pitcher_new_jersey() if "opp_pitcher_new_jersey" in input else ""
             game.opponent_starting_pitcher_id = _resolve(pitcher_existing, pitcher_new_name, pitcher_new_jersey)
+            # Oct 2026 (Ryker): pick their starter's hand here too; saved to
+            # the player (blank keeps what's on file).
+            pitcher_throws = input.opp_pitcher_throws() if "opp_pitcher_throws" in input else ""
+            if game.opponent_starting_pitcher_id and pitcher_throws in ("R", "L"):
+                sp = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == game.opponent_starting_pitcher_id).first()
+                if sp is not None:
+                    sp.throws = pitcher_throws
+                    if not sp.position:
+                        sp.position = "P"
 
             db.commit()
             ui.notification_show(f"Saved {opp_team.team_name}'s lineup ({added} batters).", type="message", duration=8)
@@ -3432,7 +3442,8 @@ def game_tracking_server(input, output, session, app_state):
                      "Bats": (s.opponent_player.bats if s.opponent_player and s.opponent_player.bats else "—")} for s in slots]
             children = [ui.h5(f"{game.opponent_team.team_name if game.opponent_team else 'Opponent'}'s lineup", class_="gbo-section-title"), ui_helpers.render_dict_table(rows)]
             if game.opponent_starting_pitcher:
-                children.append(ui.p(f"Their starting pitcher: {game.opponent_starting_pitcher.player_name}", class_="text-muted small"))
+                sp = game.opponent_starting_pitcher
+                children.append(ui.p(f"Their starting pitcher: {sp.player_name}" + (f" ({sp.throws}HP)" if sp.throws else " (hand not set)"), class_="text-muted small"))
             return ui.div(*children)
         finally:
             db.close()
@@ -5504,6 +5515,22 @@ def game_tracking_server(input, output, session, app_state):
         raw = input.opp_their_pitcher_select() if "opp_their_pitcher_select" in input else ""
         return int(raw) if raw else None
 
+    @reactive.effect
+    @reactive.event(input.opp_their_pitcher_select, ignore_init=True)
+    def _sync_their_pitcher_hand():
+        """Oct 2026: when a different opposing pitcher is picked, move the
+        hand radio to his hand on file (still changeable before saving)."""
+        raw = input.opp_their_pitcher_select()
+        if not raw:
+            return
+        db = get_session()
+        try:
+            op = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == int(raw)).first()
+            if op is not None and op.throws in ("R", "L"):
+                ui.update_radio_buttons("opp_pitcher_hand_radio", selected=op.throws)
+        finally:
+            db.close()
+
     def _do_record_pitch(non_pitch=None, step=None):
         """non_pitch: one of NON_PITCH_OUTCOMES (clock violation / intentional
         walk) -- saved like a pitch for the count, but is_pitch=False and with
@@ -5582,10 +5609,16 @@ def game_tracking_server(input, output, session, app_state):
                         opp_hand_choice = input.opp_pitcher_hand_radio() if "opp_pitcher_hand_radio" in input else "R"
                         # Oct 2026 (Advance Scouting): their pitcher, if picked/typed.
                         opp_player_choice = _resolve_their_pitcher(db, game, opp_hand_choice)
-                        if opp_player_choice is not None:
+                        # Oct 2026 (Ryker: opposing pitcher hand has to be
+                        # selectable) -- the radio is what gets recorded,
+                        # never overridden by what's on file; picking a hand
+                        # also saves it to that pitcher (fills a blank or
+                        # corrects a wrong one). The radio already defaults
+                        # to his hand on file (_sync_their_pitcher_hand).
+                        if opp_player_choice is not None and opp_hand_choice in ("R", "L"):
                             picked = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == opp_player_choice).first()
-                            if picked is not None and picked.throws in ("R", "L"):
-                                opp_hand_choice = picked.throws
+                            if picked is not None and picked.throws != opp_hand_choice:
+                                picked.throws = opp_hand_choice
                 else:
                     our_player_choice = get_current_pitcher_id(game)
                     if our_player_choice is None:
