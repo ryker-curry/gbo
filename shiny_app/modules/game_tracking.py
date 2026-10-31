@@ -5021,17 +5021,24 @@ def game_tracking_server(input, output, session, app_state):
     # -------------------------------------------------------------------
     OPP_NEW_LINEUP_ROWS_EXTRA = 2
 
-    def _resolve_opp_batter(db, game, raw_select, raw_name):
+    OPP_BATS_CHOICES = {"R": "R", "L": "L", "S": "Switch"}
+
+    def _resolve_opp_batter(db, game, raw_select, raw_name, bats=None):
         """Opponent player id from a roster pick or a typed new name (added
-        to their roster, matched case-insensitively first). None = blank."""
+        to their roster, matched case-insensitively first). None = blank.
+        bats ('R'/'L'/'S', Oct 31 2026): saved on a new player, and filled in
+        on an existing one whose hand isn't on file yet."""
         name = (raw_name or "").strip()
+        bats = bats if bats in ("R", "L", "S") else None
         if name:
             existing = (db.query(OpponentPlayer)
                         .filter(OpponentPlayer.team_id == game.opponent_team_id,
                                 func.lower(OpponentPlayer.player_name) == name.lower()).first())
             if existing is not None:
+                if bats and not existing.bats:
+                    existing.bats = bats
                 return existing.opponent_player_id
-            op = OpponentPlayer(team_id=game.opponent_team_id, player_name=name)
+            op = OpponentPlayer(team_id=game.opponent_team_id, player_name=name, bats=bats)
             db.add(op)
             db.flush()
             return op.opponent_player_id
@@ -5070,6 +5077,7 @@ def game_tracking_server(input, output, session, app_state):
                     ui.input_select("opp_sub_slot_select", "Spot", choices=slot_choices),
                     ui.input_select("opp_sub_player_select", "Incoming player", choices=incoming),
                     ui.input_text("opp_sub_new_name", None, placeholder="...or new player's name (adds him to their roster)"),
+                    ui.input_radio_buttons("opp_sub_new_bats", "New player bats", choices=OPP_BATS_CHOICES, selected="R", inline=True),
                     ui.input_action_button("opp_confirm_sub_btn", "Confirm substitution", class_="btn-sm btn-primary"),
                 ))
 
@@ -5085,6 +5093,7 @@ def game_tracking_server(input, output, session, app_state):
                     ui.input_select(f"opp_nl_select_{order}", f"#{order}", choices=all_choices,
                                     selected=str(cur) if cur else ""),
                     ui.input_text(f"opp_nl_name_{order}", None, placeholder="...or new name"),
+                    ui.input_radio_buttons(f"opp_nl_bats_{order}", "New player bats", choices=OPP_BATS_CHOICES, selected="R", inline=True),
                     class_="mb-2",
                 ))
             panels.append(ui.accordion_panel(
@@ -5117,7 +5126,8 @@ def game_tracking_server(input, output, session, app_state):
             game, pitches, _a, _b, opponent_lineup_slots, state, _c = ctx
             slot = next((s for s in opponent_lineup_slots if str(s.opponent_lineup_slot_id) == str(slot_raw)), None)
             new_id = _resolve_opp_batter(db, game, input.opp_sub_player_select() if "opp_sub_player_select" in input else "",
-                                         input.opp_sub_new_name() if "opp_sub_new_name" in input else "")
+                                         input.opp_sub_new_name() if "opp_sub_new_name" in input else "",
+                                         input.opp_sub_new_bats() if "opp_sub_new_bats" in input else None)
             if slot is None or new_id is None:
                 ui.notification_show("Pick the spot and the incoming player (or type his name).", type="error", duration=8)
                 return
@@ -5162,7 +5172,8 @@ def game_tracking_server(input, output, session, app_state):
             for order in range(1, n_rows + 1):
                 sel = input[f"opp_nl_select_{order}"]() if f"opp_nl_select_{order}" in input else ""
                 name = input[f"opp_nl_name_{order}"]() if f"opp_nl_name_{order}" in input else ""
-                pid = _resolve_opp_batter(db, game, sel, name)
+                bats = input[f"opp_nl_bats_{order}"]() if f"opp_nl_bats_{order}" in input else None
+                pid = _resolve_opp_batter(db, game, sel, name, bats if (name or "").strip() else None)
                 if pid is not None:
                     picks[order] = pid
             dupes = [pid for pid in set(picks.values()) if list(picks.values()).count(pid) > 1]
