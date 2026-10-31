@@ -4204,7 +4204,9 @@ def game_tracking_server(input, output, session, app_state):
             if ctx is None:
                 return None
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
-            if game.status != "In Progress" or not game.is_intrasquad:
+            # Oct 31 2026: available for every game, not just intrasquads
+            # (Ryker: end an inning vs Crowder for their pitcher's pitch count).
+            if game.status != "In Progress":
                 return None
 
             runs_pending = state["bases"].count("1")
@@ -4260,16 +4262,17 @@ def game_tracking_server(input, output, session, app_state):
                 # rollover already firing from outs_after >= 3 before this
                 # panel's own forced-end rollover runs on top of it).
                 children.append(ui.input_action_button("confirm_forced_end_btn", "Confirm -- new team is up", class_="btn-warning btn-sm mt-1"))
-                children.append(ui.p(
-                    "Use \"new team is up\" for a genuine half-inning end. Use \"same team "
-                    f"continues\" instead when {who or 'this pitcher'} is being kept in -- a pitch "
-                    "count, or just staying in for extra work against the same lineup -- so the SAME "
-                    "squad keeps batting/pitching. Make this call before (or right as) the 3rd out "
-                    "lands, not after it's already posted -- that keeps who's-pitching/who's-batting "
-                    "straight for every pitch after this one.",
-                    class_="text-muted small mt-1",
-                ))
-                children.append(ui.input_action_button("confirm_forced_end_same_side_btn", "Confirm -- same team continues", class_="btn-warning btn-sm mt-1"))
+                if game.is_intrasquad:  # "same team continues" only makes sense in intrasquads
+                    children.append(ui.p(
+                        "Use \"new team is up\" for a genuine half-inning end. Use \"same team "
+                        f"continues\" instead when {who or 'this pitcher'} is being kept in -- a pitch "
+                        "count, or just staying in for extra work against the same lineup -- so the SAME "
+                        "squad keeps batting/pitching. Make this call before (or right as) the 3rd out "
+                        "lands, not after it's already posted -- that keeps who's-pitching/who's-batting "
+                        "straight for every pitch after this one.",
+                        class_="text-muted small mt-1",
+                    ))
+                    children.append(ui.input_action_button("confirm_forced_end_same_side_btn", "Confirm -- same team continues", class_="btn-warning btn-sm mt-1"))
                 children.append(ui.input_action_link("cancel_forced_end_btn", "Cancel", class_="text-muted small d-block mt-1"))
 
             return ui.div(*children)
@@ -4296,7 +4299,9 @@ def game_tracking_server(input, output, session, app_state):
             if ctx is None:
                 return
             game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
-            if game.status != "In Progress" or not game.is_intrasquad:
+            if game.status != "In Progress":
+                return
+            if same_side_continues and not game.is_intrasquad:
                 return
 
             runs_scored = state["bases"].count("1")
