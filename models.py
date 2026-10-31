@@ -1445,7 +1445,7 @@ class GamePitch(Base):
     actual_plate_z = Column(Numeric(5, 3), nullable=True)
     intended_plate_x = Column(Numeric(5, 3), nullable=True)
     intended_plate_z = Column(Numeric(5, 3), nullable=True)
-    pitch_outcome = Column(String(20), nullable=True)  # "Ball" / "Called Strike" / "Swing and Miss" / "Foul" / "In Play" / "HBP"
+    pitch_outcome = Column(String(30), nullable=True)  # "Ball" / "Called Strike" / "Swing and Miss" / "Foul" / "In Play" / "HBP"
     contact_quality = Column(String(20), nullable=True)  # "Barreled/Squared Up" / "Solid" / "Weak" / "Jammed" / "Off the End" / "Clipped" / "Miss" / "Bunt" -- same categories as Hitter Tracking, plus "Bunt" which is Game-Tracking-only (scored as weak contact in rate/score stats)
     # Only meaningful when pitch_outcome == "In Play". Swing/take itself
     # isn't a separate field -- it's already fully derivable from
