@@ -1187,6 +1187,7 @@ class Game(Base):
     squad_b_starting_pitcher = relationship("Player", foreign_keys=[squad_b_starting_pitcher_id])
     squad_c_starting_pitcher = relationship("Player", foreign_keys=[squad_c_starting_pitcher_id])
     opponent_lineup_slots = relationship("OpponentLineupSlot", back_populates="game", cascade="all, delete-orphan", order_by="OpponentLineupSlot.batting_order")
+    opponent_lineup_restarts = relationship("OpponentLineupRestart", back_populates="game", cascade="all, delete-orphan", order_by="OpponentLineupRestart.pitch_sequence_at_entry")
     opponent_starting_pitcher = relationship("OpponentPlayer", foreign_keys=[opponent_starting_pitcher_id])
     pitches = relationship("GamePitch", back_populates="game", cascade="all, delete-orphan", order_by="GamePitch.pitch_sequence")
     pitching_changes = relationship("PitchingChange", back_populates="game", cascade="all, delete-orphan", order_by="PitchingChange.pitch_sequence_at_entry")
@@ -1263,6 +1264,49 @@ class OpponentLineupSlot(Base):
 
     game = relationship("Game", back_populates="opponent_lineup_slots")
     opponent_player = relationship("OpponentPlayer")
+    # Oct 31 2026: mid-game substitutions into this spot (see OpponentLineupSubstitution).
+    substitutions = relationship("OpponentLineupSubstitution", back_populates="slot", cascade="all, delete-orphan",
+                                 order_by="OpponentLineupSubstitution.pitch_sequence_at_entry")
+
+
+class OpponentLineupSubstitution(Base):
+    """Oct 31 2026 (Ryker, Crowder 18-inning day): the OPPONENT's version of
+    LineupSubstitution -- a player entering one of their batting-order spots
+    (OpponentLineupSlot) mid-game. Current occupant of a spot = the most
+    recent row here for that spot (by pitch_sequence_at_entry, then
+    created_at), else the spot's original OpponentLineupSlot.opponent_player_id.
+    See game_tracking.get_current_opp_slot_occupant_id()."""
+    __tablename__ = "opponent_lineup_substitutions"
+
+    opponent_sub_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id", ondelete="CASCADE"), nullable=False, index=True)
+    opponent_lineup_slot_id = Column(Integer, ForeignKey("opponent_lineup_slots.opponent_lineup_slot_id", ondelete="CASCADE"), nullable=False)
+    opponent_player_id = Column(Integer, ForeignKey("opponent_players.opponent_player_id"), nullable=False)
+    inning = Column(Integer, nullable=False)
+    outs_at_entry = Column(Integer, nullable=False)
+    pitch_sequence_at_entry = Column(Integer, nullable=False)  # same convention as LineupSubstitution
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    slot = relationship("OpponentLineupSlot", back_populates="substitutions")
+    opponent_player = relationship("OpponentPlayer")
+
+
+class OpponentLineupRestart(Base):
+    """Oct 31 2026: the opponent went back to the TOP of their order (a new
+    lineup mid-game) -- the next opponent batter after this anchor is their
+    #1 spot, no matter who batted last. Anchored like every other in-game
+    event (pitch_sequence_at_entry = last pitch recorded when it happened)."""
+    __tablename__ = "opponent_lineup_restarts"
+
+    restart_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id", ondelete="CASCADE"), nullable=False, index=True)
+    pitch_sequence_at_entry = Column(Integer, nullable=False)
+    inning = Column(Integer, nullable=False)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    game = relationship("Game", back_populates="opponent_lineup_restarts")
 
 
 class RunExpectancy(Base):

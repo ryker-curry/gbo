@@ -382,7 +382,7 @@ from models import (
     Player, Position, PitchType, Game, GameLineupSlot, GamePitch, RunExpectancy,
     OpponentTeam, OpponentPlayer, Season, PitchingChange, PlayerPitchArsenal, OpponentLineupSlot,
     LineupSubstitution, GameRunnerEvent, GameForcedHalfInningEnd,
-    RapsodoPitch, GameVideoClip,
+    RapsodoPitch, GameVideoClip, OpponentLineupSubstitution, OpponentLineupRestart,
 )
 from game_stats import (
     get_pitching_pitches, get_batting_pitches, compute_pitching_line, compute_batting_line,
@@ -976,48 +976,76 @@ def get_current_three_squad_pitcher_id(game):
 OPP_LINEUP_MAX_SLOTS = 12  # Oct 2026: fall outside-competition games can bat 10+ (extra hitters)
 
 
+def get_current_opp_slot_occupant_id(slot):
+    """Oct 31 2026: opponent-side get_current_slot_occupant_id -- the most
+    recent OpponentLineupSubstitution into this spot, else the original."""
+    subs = sorted(getattr(slot, "substitutions", None) or [], key=lambda s: (s.pitch_sequence_at_entry, s.created_at))
+    if subs:
+        return subs[-1].opponent_player_id
+    return slot.opponent_player_id
+
+
+def _opp_last_pa_ending(game):
+    endings = [p for p in game.pitches if not p.is_our_team_batting and p.ends_plate_appearance
+               and p.ab_outcome != "No Result" and (p.opponent_batting_order or p.opponent_player_id)]
+    return max(endings, key=lambda p: p.pitch_sequence) if endings else None
+
+
+def _opp_restart_since(game, last_ending):
+    """True if the opponent went back to the top of their order (an
+    OpponentLineupRestart) after their last completed plate appearance."""
+    restarts = getattr(game, "opponent_lineup_restarts", None) or []
+    if not restarts:
+        return False
+    if last_ending is None:
+        return True
+    return any(r.pitch_sequence_at_entry >= last_ending.pitch_sequence for r in restarts)
+
+
 def suggest_next_opponent_order(game, opponent_lineup_slots=None, batter_id=None):
     """Suggested batting-order # for the next external-opponent batter.
     Oct 2026 (Ryker: outside-competition fall games bat 10+): if the
     picked batter is in the saved opponent lineup, use his slot; otherwise
     wrap at the saved lineup's length, or at the highest order seen this
-    game (min 9) when no lineup was saved -- never a hard-coded 9."""
+    game (min 9) when no lineup was saved -- never a hard-coded 9.
+    Oct 31 2026: follows opponent substitutions (current occupant of each
+    spot) and lineup restarts (back to #1)."""
     if batter_id is not None and opponent_lineup_slots:
-        slot = next((s for s in opponent_lineup_slots if s.opponent_player_id == batter_id), None)
+        slot = next((s for s in opponent_lineup_slots if get_current_opp_slot_occupant_id(s) == batter_id), None)
         if slot is not None:
             return slot.batting_order
-    opp_pa_endings = sorted(
-        [p for p in game.pitches if not p.is_our_team_batting and p.ends_plate_appearance and p.ab_outcome != "No Result" and p.opponent_batting_order],
-        key=lambda p: p.pitch_sequence,
-    )
-    if not opp_pa_endings:
+    last = _opp_last_pa_ending(game)
+    if last is None:
         return 1
-    last_order = opp_pa_endings[-1].opponent_batting_order
+    if _opp_restart_since(game, last):
+        return min((s.batting_order for s in opponent_lineup_slots), default=1) if opponent_lineup_slots else 1
+    last_order = last.opponent_batting_order
+    if not last_order and opponent_lineup_slots:
+        slot = next((s for s in opponent_lineup_slots if last.opponent_player_id in
+                     (s.opponent_player_id, get_current_opp_slot_occupant_id(s))), None)
+        last_order = slot.batting_order if slot else None
+    if not last_order:
+        return 1
     if opponent_lineup_slots:
         orders = sorted(s.batting_order for s in opponent_lineup_slots)
         later = [o for o in orders if o > last_order]
         return later[0] if later else orders[0]
-    wrap = max([9] + [p.opponent_batting_order for p in opp_pa_endings])
+    opp_orders = [p.opponent_batting_order for p in game.pitches if not p.is_our_team_batting and p.opponent_batting_order]
+    wrap = max([9] + opp_orders)
     return (last_order % wrap) + 1
 
 
 def suggest_next_opponent_lineup_player(game, opponent_lineup_slots):
+    """Who's up next for the opponent, from their saved lineup. Oct 31
+    2026: uses each spot's CURRENT occupant (substitutions) and the
+    batting order # recorded on the last plate appearance, and restarts
+    at #1 after an OpponentLineupRestart."""
     if not opponent_lineup_slots:
         return None
-    opp_pa_endings = sorted(
-        [p for p in game.pitches if not p.is_our_team_batting and p.ends_plate_appearance and p.ab_outcome != "No Result" and p.opponent_player_id],
-        key=lambda p: p.pitch_sequence,
-    )
-    if not opp_pa_endings:
-        return opponent_lineup_slots[0].opponent_player_id
-    last_batter_id = opp_pa_endings[-1].opponent_player_id
-    last_slot = next((s for s in opponent_lineup_slots if s.opponent_player_id == last_batter_id), None)
-    if last_slot is None:
-        return opponent_lineup_slots[0].opponent_player_id
-    slot_orders = sorted(s.batting_order for s in opponent_lineup_slots)
-    current_idx = slot_orders.index(last_slot.batting_order)
-    next_order = slot_orders[(current_idx + 1) % len(slot_orders)]
-    return next((s.opponent_player_id for s in opponent_lineup_slots if s.batting_order == next_order), opponent_lineup_slots[0].opponent_player_id)
+    slots = sorted(opponent_lineup_slots, key=lambda s: s.batting_order)
+    next_order = suggest_next_opponent_order(game, slots)
+    slot = next((s for s in slots if s.batting_order == next_order), slots[0])
+    return get_current_opp_slot_occupant_id(slot)
 
 
 def bases_display(bases_str):
@@ -1699,6 +1727,8 @@ def _insert_missed_pitch_at(db, game_id, anchor_seq, field_values):
     _shift_anchors(GameForcedHalfInningEnd, GameForcedHalfInningEnd.pitch_sequence_after, "a forced half-inning end")
     _shift_anchors(PitchingChange, PitchingChange.pitch_sequence_at_entry, "a pitching change")
     _shift_anchors(LineupSubstitution, LineupSubstitution.pitch_sequence_at_entry, "a lineup substitution")
+    _shift_anchors(OpponentLineupSubstitution, OpponentLineupSubstitution.pitch_sequence_at_entry, "an opponent substitution")
+    _shift_anchors(OpponentLineupRestart, OpponentLineupRestart.pitch_sequence_at_entry, "an opponent lineup restart")
     db.flush()
 
     new_pitch = GamePitch(game_id=game_id, pitch_sequence=anchor_seq + 1, **field_values)
@@ -2135,7 +2165,7 @@ def game_tracking_server(input, output, session, app_state):
                 # joined collections multiplied into changes x events x ends
                 # rows, each repeating the whole game row.
                 selectinload(Game.pitching_changes), selectinload(Game.runner_events),
-                selectinload(Game.forced_half_inning_ends),
+                selectinload(Game.forced_half_inning_ends), selectinload(Game.opponent_lineup_restarts),
             )
             .filter(Game.game_id == game_id)
             .first()
@@ -2166,7 +2196,8 @@ def game_tracking_server(input, output, session, app_state):
             .order_by(GameLineupSlot.batting_order).all()
         )
         opponent_lineup_slots = (
-            db.query(OpponentLineupSlot).options(joinedload(OpponentLineupSlot.opponent_player))
+            db.query(OpponentLineupSlot).options(joinedload(OpponentLineupSlot.opponent_player),
+                                                 selectinload(OpponentLineupSlot.substitutions))
             .filter(OpponentLineupSlot.game_id == game_id)
             .order_by(OpponentLineupSlot.batting_order).all()
         )
@@ -3433,13 +3464,23 @@ def game_tracking_server(input, output, session, app_state):
             if game is None or game.is_intrasquad:
                 return None
             slots = (
-                db.query(OpponentLineupSlot).options(joinedload(OpponentLineupSlot.opponent_player))
+                db.query(OpponentLineupSlot).options(joinedload(OpponentLineupSlot.opponent_player),
+                                                     selectinload(OpponentLineupSlot.substitutions))
                 .filter(OpponentLineupSlot.game_id == game_id).order_by(OpponentLineupSlot.batting_order).all()
             )
             if not slots:
                 return None
-            rows = [{"#": s.batting_order, "Player": s.opponent_player.player_name if s.opponent_player else "—",
-                     "Bats": (s.opponent_player.bats if s.opponent_player and s.opponent_player.bats else "—")} for s in slots]
+            # Oct 31 2026: show who's in each spot NOW (after any substitutions).
+            occ_ids = {s.opponent_lineup_slot_id: get_current_opp_slot_occupant_id(s) for s in slots}
+            occ = {op.opponent_player_id: op for op in db.query(OpponentPlayer).filter(
+                OpponentPlayer.opponent_player_id.in_([v for v in occ_ids.values() if v])).all()}
+            rows = []
+            for s in slots:
+                op = occ.get(occ_ids[s.opponent_lineup_slot_id])
+                subbed = occ_ids[s.opponent_lineup_slot_id] != s.opponent_player_id
+                rows.append({"#": s.batting_order,
+                             "Player": (op.player_name if op else "—") + (" (sub)" if subbed else ""),
+                             "Bats": (op.bats if op and op.bats else "—")})
             children = [ui.h5(f"{game.opponent_team.team_name if game.opponent_team else 'Opponent'}'s lineup", class_="gbo-section-title"), ui_helpers.render_dict_table(rows)]
             if game.opponent_starting_pitcher:
                 sp = game.opponent_starting_pitcher
@@ -3500,6 +3541,7 @@ def game_tracking_server(input, output, session, app_state):
                 ui.output_ui("squad_a_lineup_moves"),
                 ui.output_ui("squad_b_lineup_moves"),
                 ui.output_ui("squad_c_lineup_moves"),
+                ui.output_ui("opponent_lineup_moves"),
                 ui.hr(),
                 ui.output_ui("live_pitch_sequence_display"),
                 ui.hr(),
@@ -3565,7 +3607,8 @@ def game_tracking_server(input, output, session, app_state):
                     ui.output_ui("base_diamond"), ui.output_ui("runner_events_panel")),
             _drawer("Lineup changes / scouting",
                     ui.output_ui("opponent_scouting_card"), ui.output_ui("squad_a_lineup_moves"),
-                    ui.output_ui("squad_b_lineup_moves"), ui.output_ui("squad_c_lineup_moves")),
+                    ui.output_ui("squad_b_lineup_moves"), ui.output_ui("squad_c_lineup_moves"),
+                    ui.output_ui("opponent_lineup_moves")),
             _drawer("This at-bat's pitches", ui.output_ui("live_pitch_sequence_display")),
             ui.div(
                 ui.input_action_button("undo_last_pitch_btn", "Undo last", class_="btn-outline-danger btn-sm"),
@@ -4963,6 +5006,206 @@ def game_tracking_server(input, output, session, app_state):
     _register_lineup_moves("A", "squad_a_lineup")
     _register_lineup_moves("B", "squad_b_lineup")
     _register_lineup_moves("C", "squad_c_lineup")
+
+    # -------------------------------------------------------------------
+    # Opponent lineup changes (Oct 31 2026, Ryker -- Crowder 18-inning day:
+    # "need to be able to make substitutions for opposing team, not just
+    # us"). Live Tracking only, external games with a saved opponent
+    # lineup. Two actions:
+    #   1. Substitute one spot (roster pick or a typed new name, which is
+    #      added to their roster).
+    #   2. New lineup from here: re-enter their whole order (blank row =
+    #      no change) and, by default, go back to the top -- the next
+    #      batter is their #1 (OpponentLineupRestart).
+    # Earlier at-bats keep whoever actually batted (stored per pitch).
+    # -------------------------------------------------------------------
+    OPP_NEW_LINEUP_ROWS_EXTRA = 2
+
+    def _resolve_opp_batter(db, game, raw_select, raw_name):
+        """Opponent player id from a roster pick or a typed new name (added
+        to their roster, matched case-insensitively first). None = blank."""
+        name = (raw_name or "").strip()
+        if name:
+            existing = (db.query(OpponentPlayer)
+                        .filter(OpponentPlayer.team_id == game.opponent_team_id,
+                                func.lower(OpponentPlayer.player_name) == name.lower()).first())
+            if existing is not None:
+                return existing.opponent_player_id
+            op = OpponentPlayer(team_id=game.opponent_team_id, player_name=name)
+            db.add(op)
+            db.flush()
+            return op.opponent_player_id
+        return int(raw_select) if raw_select else None
+
+    @render.ui
+    def opponent_lineup_moves():
+        _pa_tick()
+        if not _access_ok() or not _can_edit():
+            return None
+        game_id = _active_game_id()
+        if game_id is None:
+            return None
+        db = get_session()
+        try:
+            game = db.query(Game).options(joinedload(Game.opponent_team)).filter(Game.game_id == game_id).first()
+            if game is None or game.status != "In Progress" or game.is_intrasquad or not game.opponent_team_id:
+                return None
+            slots = (db.query(OpponentLineupSlot).options(selectinload(OpponentLineupSlot.substitutions))
+                     .filter(OpponentLineupSlot.game_id == game_id).order_by(OpponentLineupSlot.batting_order).all())
+            team = game.opponent_team.team_name if game.opponent_team else "Opponent"
+            roster = (db.query(OpponentPlayer).filter(OpponentPlayer.team_id == game.opponent_team_id)
+                      .order_by(OpponentPlayer.player_name).all())
+            names = {op.opponent_player_id: op.player_name + (f" #{op.jersey_number}" if op.jersey_number else "") for op in roster}
+            occupants = {s.opponent_lineup_slot_id: get_current_opp_slot_occupant_id(s) for s in slots}
+
+            panels = []
+            if slots:
+                slot_choices = {str(s.opponent_lineup_slot_id): f"#{s.batting_order} — {names.get(occupants[s.opponent_lineup_slot_id], '—')}"
+                                for s in slots}
+                in_lineup = set(occupants.values())
+                incoming = {"": "-- Select --"}
+                incoming.update({str(pid): n for pid, n in names.items() if pid not in in_lineup})
+                panels.append(ui.accordion_panel(
+                    f"Substitute for {team}",
+                    ui.input_select("opp_sub_slot_select", "Spot", choices=slot_choices),
+                    ui.input_select("opp_sub_player_select", "Incoming player", choices=incoming),
+                    ui.input_text("opp_sub_new_name", None, placeholder="...or new player's name (adds him to their roster)"),
+                    ui.input_action_button("opp_confirm_sub_btn", "Confirm substitution", class_="btn-sm btn-primary"),
+                ))
+
+            n_rows = max([9] + [s.batting_order for s in slots]) + OPP_NEW_LINEUP_ROWS_EXTRA
+            by_order = {s.batting_order: s for s in slots}
+            all_choices = {"": "-- No change / empty --"}
+            all_choices.update({str(pid): n for pid, n in names.items()})
+            rows = []
+            for order in range(1, n_rows + 1):
+                s = by_order.get(order)
+                cur = occupants.get(s.opponent_lineup_slot_id) if s else None
+                rows.append(ui.div(
+                    ui.input_select(f"opp_nl_select_{order}", f"#{order}", choices=all_choices,
+                                    selected=str(cur) if cur else ""),
+                    ui.input_text(f"opp_nl_name_{order}", None, placeholder="...or new name"),
+                    class_="mb-2",
+                ))
+            panels.append(ui.accordion_panel(
+                f"New {team} lineup from here",
+                ui.p("Each spot starts on who's in it now -- change only the spots that changed. "
+                     "Leave a spot on \"No change / empty\" to keep it as is (or leave an extra spot unused).",
+                     class_="text-muted small"),
+                *rows,
+                ui.input_checkbox("opp_nl_restart_chk", "They went back to the top -- next batter is their #1", value=True),
+                ui.input_action_button("opp_confirm_new_lineup_btn", "Save new lineup", class_="btn-sm btn-primary"),
+            ))
+            return ui.div(ui.h5(f"{team} lineup changes", class_="gbo-section-title"),
+                          ui.accordion(*panels, open=False, id=None))
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.opp_confirm_sub_btn)
+    def _opp_confirm_sub():
+        game_id = _active_game_id()
+        if game_id is None:
+            return
+        req("opp_sub_slot_select" in input)
+        slot_raw = input.opp_sub_slot_select()
+        db = get_session()
+        try:
+            ctx = _load_tracking_context(db, game_id)
+            if ctx is None:
+                return
+            game, pitches, _a, _b, opponent_lineup_slots, state, _c = ctx
+            slot = next((s for s in opponent_lineup_slots if str(s.opponent_lineup_slot_id) == str(slot_raw)), None)
+            new_id = _resolve_opp_batter(db, game, input.opp_sub_player_select() if "opp_sub_player_select" in input else "",
+                                         input.opp_sub_new_name() if "opp_sub_new_name" in input else "")
+            if slot is None or new_id is None:
+                ui.notification_show("Pick the spot and the incoming player (or type his name).", type="error", duration=8)
+                return
+            if new_id == get_current_opp_slot_occupant_id(slot):
+                ui.notification_show("He's already in that spot -- nothing changed.", type="warning", duration=6)
+                return
+            db.add(OpponentLineupSubstitution(
+                game_id=game_id, opponent_lineup_slot_id=slot.opponent_lineup_slot_id, opponent_player_id=new_id,
+                inning=state["inning"], outs_at_entry=state["outs"], pitch_sequence_at_entry=len(pitches),
+                created_by_user_id=app_state.user_id(),
+            ))
+            db.commit()
+            op = db.query(OpponentPlayer).filter(OpponentPlayer.opponent_player_id == new_id).first()
+            ui.notification_show(f"{op.player_name if op else 'New player'} is now in their #{slot.batting_order} spot.", type="message", duration=8)
+            _bump_pa()
+            _bump_refresh()
+        except Exception:
+            db.rollback()
+            import traceback
+            traceback.print_exc()
+            ui.notification_show("Couldn't save that substitution -- nothing was saved.", type="error", duration=10)
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.opp_confirm_new_lineup_btn)
+    def _opp_confirm_new_lineup():
+        game_id = _active_game_id()
+        if game_id is None:
+            return
+        db = get_session()
+        try:
+            ctx = _load_tracking_context(db, game_id)
+            if ctx is None:
+                return
+            game, pitches, _a, _b, opponent_lineup_slots, state, _c = ctx
+            if game.is_intrasquad or not game.opponent_team_id:
+                return
+            by_order = {s.batting_order: s for s in opponent_lineup_slots}
+            n_rows = max([9] + list(by_order)) + OPP_NEW_LINEUP_ROWS_EXTRA
+            picks = {}
+            for order in range(1, n_rows + 1):
+                sel = input[f"opp_nl_select_{order}"]() if f"opp_nl_select_{order}" in input else ""
+                name = input[f"opp_nl_name_{order}"]() if f"opp_nl_name_{order}" in input else ""
+                pid = _resolve_opp_batter(db, game, sel, name)
+                if pid is not None:
+                    picks[order] = pid
+            dupes = [pid for pid in set(picks.values()) if list(picks.values()).count(pid) > 1]
+            if dupes:
+                db.rollback()
+                ui.notification_show("The same player is in two spots -- fix that and save again.", type="error", duration=10)
+                return
+            anchor = len(pitches)
+            changed = 0
+            for order, pid in sorted(picks.items()):
+                slot = by_order.get(order)
+                if slot is None:
+                    db.add(OpponentLineupSlot(game_id=game_id, batting_order=order, opponent_player_id=pid))
+                    changed += 1
+                elif get_current_opp_slot_occupant_id(slot) != pid:
+                    db.add(OpponentLineupSubstitution(
+                        game_id=game_id, opponent_lineup_slot_id=slot.opponent_lineup_slot_id, opponent_player_id=pid,
+                        inning=state["inning"], outs_at_entry=state["outs"], pitch_sequence_at_entry=anchor,
+                        created_by_user_id=app_state.user_id(),
+                    ))
+                    changed += 1
+            restart = "opp_nl_restart_chk" in input and input.opp_nl_restart_chk()
+            if restart:
+                db.add(OpponentLineupRestart(game_id=game_id, pitch_sequence_at_entry=anchor, inning=state["inning"],
+                                             created_by_user_id=app_state.user_id()))
+            if not changed and not restart:
+                db.rollback()
+                ui.notification_show("Nothing changed.", type="warning", duration=6)
+                return
+            db.commit()
+            msg = f"Their lineup is updated ({changed} spot{'s' if changed != 1 else ''} changed)."
+            if restart:
+                msg += " Next batter is their #1."
+            ui.notification_show(msg, type="message", duration=8)
+            _bump_pa()
+            _bump_refresh()
+        except Exception:
+            db.rollback()
+            import traceback
+            traceback.print_exc()
+            ui.notification_show("Couldn't save their new lineup -- nothing was saved.", type="error", duration=10)
+        finally:
+            db.close()
 
     def _resolve_actual_pitcher_id(game, state):
         """Whoever is ACTUALLY pitching this plate appearance, across
