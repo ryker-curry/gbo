@@ -41,6 +41,7 @@ from plate_discipline import (
 )
 from pitch_location_stats import compute_command_precision, compute_attack_zones
 from bucket_display import build_percentage_rings
+import stat_line_display
 
 import ui_helpers
 from analytics import league_baselines
@@ -116,6 +117,10 @@ def analytics_server(input, output, session, app_state):
             season_suffix = f" — {season.season_name}" if season is not None else " — All seasons"
 
             sections = [ui.h5(f"{player.first_name} {player.last_name}", class_="gbo-section-title")]
+
+            # Oct 2026: Baseball-Reference-style standard stat line, every
+            # season + Career, above the existing cards (shared with My Stats).
+            sections.extend(stat_line_display.stat_line_section(db, player, season_choice))
 
             batting_pitches = get_batting_pitches(db, selected_player_id, season_choice)
             pitching_pitches = get_pitching_pitches(db, selected_player_id, season_choice)

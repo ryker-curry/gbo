@@ -252,6 +252,14 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .table tbody tr td:first-child { color: var(--gbo-text); font-weight: 600; }
 .table td { font-variant-numeric: tabular-nums; }
 .table-responsive { overflow-x: auto; }
+/* Baseball-Reference-style stat line (Season Stats, Oct 2026): compact, right-aligned numbers */
+.gbo-statline { margin-bottom: .75rem; }
+.gbo-statline table.table > :not(caption) > * > * { padding: .35rem .5rem; text-align: right; white-space: nowrap; }
+.gbo-statline table.table > :not(caption) > * > *:first-child { text-align: left; position: sticky; left: 0; background: var(--gbo-bg-page); z-index: 1; }
+.gbo-statline table.table thead th { font-size: .68rem; letter-spacing: .03em; cursor: help; }
+.gbo-statline tr.gbo-statline-selected > * { background: linear-gradient(var(--gbo-crimson-soft), var(--gbo-crimson-soft)), var(--gbo-bg-page) !important; color: var(--gbo-text); }
+.gbo-statline tfoot tr > * { font-weight: 700; color: var(--gbo-text); border-top: 2px solid var(--gbo-border-strong); border-bottom: 0; }
+.gbo-statline .gbo-statline-na { color: var(--gbo-text-muted); }
 .shiny-data-grid, .shiny-data-grid table { background: transparent; color: var(--gbo-text-2); }
 .shiny-data-grid thead th { background: var(--gbo-bg-card); color: var(--gbo-text-muted); font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--gbo-border); }
 .shiny-data-grid tbody tr:hover { background: var(--gbo-bg-raised); }

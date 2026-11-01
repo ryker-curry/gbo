@@ -27,6 +27,7 @@ from plate_discipline import compute_hitter_discipline, compute_pitcher_command,
 from pitch_location_stats import compute_command_precision, compute_attack_zones
 
 import ui_helpers
+import stat_line_display
 from analytics import league_baselines
 import format_helpers
 from format_helpers import (
@@ -104,6 +105,8 @@ def player_game_stats_server(input, output, session, app_state):
             pitching_pitches = get_pitching_pitches(db, my_player.player_id, season_choice)
 
             sections = []
+            # Oct 2026: Baseball-Reference-style stat line (same as coach Season Stats).
+            sections.extend(stat_line_display.stat_line_section(db, my_player, season_choice))
 
             if not my_player.is_pitcher:
                 sections.append(ui.h5("Hitting", class_="gbo-section-title"))
