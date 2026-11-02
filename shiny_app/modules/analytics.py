@@ -31,7 +31,7 @@ from shiny import module, ui, render, reactive, req
 from database import get_session
 from models import Player, Season
 from game_stats import (
-    get_batting_pitches, get_pitching_pitches, compute_batting_line, compute_pitching_line,
+    get_batting_pitches, get_pitching_pitches, compute_batting_line, batting_line_for, compute_pitching_line,
     compute_pitch_type_breakdown, compute_batted_ball_profile, get_forced_half_inning_end_runs,
     get_runner_event_outs, get_batter_hands, pitching_line_for,
 )
@@ -130,19 +130,21 @@ def analytics_server(input, output, session, app_state):
                 if not batting_pitches:
                     sections.append(ui_helpers.empty_state("No hitting data recorded yet for this player in Game Tracking."))
                 else:
-                    batting_line = compute_batting_line(batting_pitches)
+                    batting_line = batting_line_for(db, selected_player_id, batting_pitches)
                     sections.append(ui.p(ui.strong("Line" + season_suffix)))
                     sections.append(ui_helpers.render_kpi_cards([
                         {"label": "PA", "value": str(batting_line["PA"])},
                         {"label": "AB", "value": str(batting_line["AB"])},
+                        {"label": "R", "value": str(batting_line["R"])},
                         {"label": "H", "value": str(batting_line["H"])},
+                        {"label": "RBI", "value": str(batting_line["RBI"])},
                         {"label": "BB", "value": str(batting_line["BB"])},
                         {"label": "K", "value": str(batting_line["K"])},
                         {"label": "AVG", "value": _fmt_num(batting_line["AVG"], 3)},
                     ]))
                     sections.append(ui.p(
                         f"1B: {batting_line['1B']} · 2B: {batting_line['2B']} · 3B: {batting_line['3B']} · HR: {batting_line['HR']} · "
-                        f"HBP: {batting_line['HBP']} · Total RV: {batting_line['Total RV']} · Avg RV/PA: {batting_line['Avg RV/PA']}",
+                        f"HBP: {batting_line['HBP']} · SB: {batting_line['SB']} · CS: {batting_line['CS']} · Total RV: {batting_line['Total RV']} · Avg RV/PA: {batting_line['Avg RV/PA']}",
                         class_="text-muted small",
                     ))
 
@@ -265,6 +267,8 @@ def analytics_server(input, output, session, app_state):
                         {"label": "H", "value": str(pitching_line["H Allowed"])},
                         {"label": "R", "value": str(pitching_line["Runs Allowed"])},
                     ]))
+                    sections.append(ui.p(f"SB allowed: {pitching_line['SB Allowed']} · CS: {pitching_line['CS Allowed']}",
+                                         class_="text-muted small"))
                     sections.append(ui_helpers.render_kpi_cards([
                         {"label": "WHIP", "value": _fmt_num(pitching_line["WHIP"])},
                         {"label": "TBIP", "value": _fmt_num(pitching_line["TBIP"])},

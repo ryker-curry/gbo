@@ -1729,6 +1729,23 @@ class GameForcedHalfInningEnd(Base):
     created_by = relationship("User")
 
 
+class GamePlayRunScorer(Base):
+    """Who scored on a PA-ending play, as confirmed (or fixed) by the coach
+    in Game Tracking (Nov 2026, Ryker: track runs scored). One row per run,
+    slot 1..runs_scored_on_play. Optional -- with no rows, run_scorers.py
+    infers the scorers from the base/runner data, and rows whose count no
+    longer matches the play's runs_scored_on_play are ignored the same way.
+    Both ids NULL = a run whose scorer is unknown."""
+    __tablename__ = "game_play_run_scorers"
+
+    run_scorer_id = Column(Integer, primary_key=True)
+    game_pitch_id = Column(Integer, ForeignKey("game_pitches.game_pitch_id", ondelete="CASCADE"), nullable=False, index=True)
+    slot = Column(Integer, nullable=False)
+    our_player_id = Column(Integer, ForeignKey("players.player_id", ondelete="SET NULL"), nullable=True)
+    opponent_player_id = Column(Integer, ForeignKey("opponent_players.opponent_player_id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class GameVideoClip(Base):
     """One uploaded video clip for a game -- "upload now, match to the
     actual pitch later" (same pattern already proven on Video Review's

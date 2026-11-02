@@ -754,6 +754,8 @@ def pitcher_profile_server(input, output, session, app_state):
                     {"label": "Strike %", "value": _fmt_pct(line["Strike %"])},
                     {"label": "Hit-the-spot %", "value": _fmt_pct(line["Zone Execution %"])},
                 ]))
+                if "SB Allowed" in line:   # whole-outing stat; not shown when filtered to one pitch type
+                    sections.append(ui.p(f"SB allowed: {line['SB Allowed']} · CS: {line['CS Allowed']}", class_="text-muted small"))
                 # Oct 2026 coach pass: the rarely-used rate stats sit behind a
                 # click, each with a one-line meaning.
                 sections.append(ui.tags.details(

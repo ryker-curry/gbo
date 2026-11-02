@@ -57,7 +57,7 @@ from shinywidgets import output_widget, render_plotly
 
 from database import get_session
 from models import Player, User, PitchType, StaffPlayerAssignment
-from game_stats import get_pitcher_hands, compute_batting_line, compute_batted_ball_profile, ops_plus
+from game_stats import get_pitcher_hands, compute_batting_line, batting_line_for, compute_batted_ball_profile, ops_plus
 from plate_discipline import compute_hitter_discipline, compute_zone_tier_discipline
 from analytics import performance_score, profile_queries
 from analytics import hitter_hot_zones, hitter_insights, league_baselines, trends
@@ -402,7 +402,7 @@ def hitter_profile_server(input, output, session, app_state):
                 ))
             f = _current_filters()
 
-            line = compute_batting_line(pitches)
+            line = batting_line_for(db, pid, pitches)
             # Oct 2026: OPS+ (and the other "+" stats below) vs the 2026 D2 average.
             player_ops_plus = ops_plus(line["OBP"], line["SLG"])
             plus = league_baselines.hitting_plus(line)
@@ -416,13 +416,16 @@ def hitter_profile_server(input, output, session, app_state):
             sections.append(ui_helpers.render_kpi_cards([
                 {"label": "PA", "value": str(line["PA"])},
                 {"label": "AB", "value": str(line["AB"])},
+                {"label": "R", "value": str(line["R"])},
                 {"label": "H", "value": str(line["H"])},
+                {"label": "RBI", "value": str(line["RBI"])},
                 {"label": "BB", "value": str(line["BB"])},
                 {"label": "K", "value": str(line["K"])},
                 {"label": "AVG", "value": _fmt(line["AVG"])},
             ]))
             sections.append(ui.p(
                 f"1B: {line['1B']} · 2B: {line['2B']} · 3B: {line['3B']} · HR: {line['HR']} · HBP: {line['HBP']} · "
+                f"SB: {line['SB']} · CS: {line['CS']} · "
                 f"Total RV: {line['Total RV']} · Avg RV/PA: {line['Avg RV/PA']}",
                 class_="text-muted small",
             ))

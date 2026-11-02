@@ -29,7 +29,7 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from models import Player, Game, GamePitch, User, OpponentPlayer
 from game_stats import (
-    get_batting_pitches, compute_batting_line, compute_batted_ball_profile,
+    get_batting_pitches, compute_batting_line, batting_line_for, compute_batted_ball_profile,
     _group_into_plate_appearances, ops_plus, get_batter_hands,
 )
 from plate_discipline import compute_hitter_discipline, compute_zone_tier_discipline
@@ -280,7 +280,7 @@ def hitter_game_report_server(input, output, session, app_state):
             if not pitches:
                 return ui_helpers.empty_state("No pitches for this batter in this game.")
 
-            line = compute_batting_line(pitches)
+            line = batting_line_for(db, selected_batter_id, pitches)
             # Oct 2026: OPS+ (and the other "+" stats below) vs the 2026 D2 average.
             player_ops_plus = ops_plus(line["OBP"], line["SLG"])
             plus = league_baselines.hitting_plus(line)
@@ -295,13 +295,16 @@ def hitter_game_report_server(input, output, session, app_state):
             sections.append(ui_helpers.render_kpi_cards([
                 {"label": "PA", "value": str(line["PA"])},
                 {"label": "AB", "value": str(line["AB"])},
+                {"label": "R", "value": str(line["R"])},
                 {"label": "H", "value": str(line["H"])},
+                {"label": "RBI", "value": str(line["RBI"])},
                 {"label": "BB", "value": str(line["BB"])},
                 {"label": "K", "value": str(line["K"])},
                 {"label": "AVG", "value": _fmt(line["AVG"])},
             ]))
             sections.append(ui.p(
                 f"1B: {line['1B']} · 2B: {line['2B']} · 3B: {line['3B']} · HR: {line['HR']} · HBP: {line['HBP']} · "
+                f"SB: {line['SB']} · CS: {line['CS']} · "
                 f"Total RV: {line['Total RV']} · Avg RV/PA: {line['Avg RV/PA']}",
                 class_="text-muted small",
             ))
