@@ -14,8 +14,8 @@ _NOTE_PITCHING = (
     "BB includes intentional walks, like Baseball-Reference. ERA+ is vs the D2 average (100 = average)."
 )
 _NOTE_BATTING = (
-    "* = practice/fall season, not official. Dashes are stats GBO doesn't track yet (R, RBI, SB, CS). "
-    "BB includes intentional walks, like Baseball-Reference. OPS+ is vs the D2 average (100 = average)."
+    "* = practice/fall season, not official. R is worked out from who was on base (a coach can confirm "
+    "who scored in Game Tracking). BB includes intentional walks, like Baseball-Reference. OPS+ is vs the D2 average (100 = average)."
 )
 
 

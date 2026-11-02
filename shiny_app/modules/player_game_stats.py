@@ -19,7 +19,7 @@ from shiny import module, ui, render, reactive, req
 from database import get_session
 from models import Player, User, Season
 from game_stats import (
-    get_batting_pitches, get_pitching_pitches, compute_batting_line, compute_pitching_line,
+    get_batting_pitches, get_pitching_pitches, compute_batting_line, batting_line_for, compute_pitching_line,
     compute_pitch_type_breakdown, compute_batted_ball_profile, get_forced_half_inning_end_runs,
     get_runner_event_outs, pitching_line_for,
 )
@@ -113,19 +113,21 @@ def player_game_stats_server(input, output, session, app_state):
                 if not batting_pitches:
                     sections.append(ui_helpers.empty_state("No hitting data recorded yet for you in Game Tracking."))
                 else:
-                    bl = compute_batting_line(batting_pitches)
+                    bl = batting_line_for(db, my_player.player_id, batting_pitches)
                     sections.append(ui.p(ui.strong("Line" + (f" — {season_label}" if season_label else " — All seasons"))))
                     sections.append(ui_helpers.render_kpi_cards([
                         {"label": "PA", "value": str(bl["PA"])},
                         {"label": "AB", "value": str(bl["AB"])},
+                        {"label": "R", "value": str(bl["R"])},
                         {"label": "H", "value": str(bl["H"])},
+                        {"label": "RBI", "value": str(bl["RBI"])},
                         {"label": "BB", "value": str(bl["BB"])},
                         {"label": "K", "value": str(bl["K"])},
                         {"label": "AVG", "value": f"{bl['AVG']:.3f}" if bl["AVG"] is not None else "—"},
                     ]))
                     sections.append(ui.p(
                         f"1B: {bl['1B']} · 2B: {bl['2B']} · 3B: {bl['3B']} · HR: {bl['HR']} · "
-                        f"HBP: {bl['HBP']} · Total RV: {bl['Total RV']} · Avg RV/PA: {bl['Avg RV/PA']}",
+                        f"HBP: {bl['HBP']} · SB: {bl['SB']} · CS: {bl['CS']} · Total RV: {bl['Total RV']} · Avg RV/PA: {bl['Avg RV/PA']}",
                         class_="text-muted small",
                     ))
 
@@ -232,6 +234,8 @@ def player_game_stats_server(input, output, session, app_state):
                         {"label": "H", "value": str(pl["H Allowed"])},
                         {"label": "R", "value": str(pl["Runs Allowed"])},
                     ]))
+                    sections.append(ui.p(f"SB allowed: {pl['SB Allowed']} · CS: {pl['CS Allowed']}",
+                                         class_="text-muted small"))
                     sections.append(ui_helpers.render_kpi_cards([
                         {"label": "WHIP", "value": _fmt_num(pl["WHIP"])},
                         {"label": "TBIP", "value": _fmt_num(pl["TBIP"])},

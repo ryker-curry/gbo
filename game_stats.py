@@ -27,6 +27,7 @@ from plate_discipline import SWING_OUTCOMES, WHIFF_OUTCOMES
 from strike_zone import is_in_zone, classify_attack_zone, pitch_hit_spot
 from field_location import classify_spray_direction
 from gbo_cache import cached
+from run_scorers import rbi_on_play, running_line_for, sb_cs_allowed_for
 
 
 def get_batting_pitches(session, player_id, season_id=None, game_id=None):
@@ -484,9 +485,22 @@ def extras_for_pitch_set(session, pitches):
 
 def pitching_line_for(session, player_id, pitches):
     """compute_pitching_line() with every run/out adjustment applied -- the one
-    call every page should use for a pitcher's real line."""
+    call every page should use for a pitcher's real line. Nov 2026: also
+    "SB Allowed" / "CS Allowed" (runner events right after his pitches)."""
     xer, xouts, xue = get_pitching_extras_for_pitches(session, player_id, pitches)
-    return compute_pitching_line(pitches, extra_earned_runs=xer, extra_outs=xouts, extra_unearned_runs=xue)
+    line = compute_pitching_line(pitches, extra_earned_runs=xer, extra_outs=xouts, extra_unearned_runs=xue)
+    line["SB Allowed"], line["CS Allowed"] = sb_cs_allowed_for(session, pitches)
+    return line
+
+
+def batting_line_for(session, player_id, pitches):
+    """compute_batting_line() plus R / SB / CS (Nov 2026), which need the
+    runner events and the who-scored walk (run_scorers.py), not just this
+    hitter's pitches. RBI is already in compute_batting_line."""
+    line = compute_batting_line(pitches)
+    extra = running_line_for(session, player_id, pitches)
+    line["R"], line["SB"], line["CS"] = extra["R"], extra["SB"], extra["CS"]
+    return line
 
 
 def get_pitches_thrown_to_opponent_batter(session, opponent_player_id, season_id=None, game_id=None):
@@ -794,6 +808,9 @@ def compute_batting_line(pitches):
     return {
         "PA": pa, "AB": ab, "H": base["H"], "1B": singles, "2B": doubles, "3B": triples, "HR": hr,
         "BB": bb, "IBB": base["IBB"], "HBP": hbp, "K": k, "SF": sf,
+        # Nov 2026: official-rule RBI (no RBI on an error / double play) --
+        # see run_scorers.rbi_on_play.
+        "RBI": sum(rbi_on_play(p) for p in pitches),
         "AVG": base["AVG"],
         "Total RV": round(sum(rv_values), 3) if rv_values else None,
         # Oct 2026 audit: was divided by PITCHES despite the label.

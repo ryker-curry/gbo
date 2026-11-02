@@ -1006,6 +1006,7 @@ def pitcher_game_report_server(input, output, session, app_state):
                 {"label": "H", "value": str(line["H Allowed"])},
                 {"label": "R", "value": str(line["Runs Allowed"])},
             ]))
+            sections.append(ui.p(f"SB allowed: {line['SB Allowed']} · CS: {line['CS Allowed']}", class_="text-muted small"))
             sections.append(ui_helpers.render_kpi_cards([
                 {"label": "WHIP", "value": _fmt(line["WHIP"])},
                 {"label": "TBIP", "value": _fmt(line["TBIP"])},

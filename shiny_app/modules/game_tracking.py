@@ -381,7 +381,7 @@ from sqlalchemy import func
 from models import (
     Player, Position, PitchType, Game, GameLineupSlot, GamePitch, RunExpectancy,
     OpponentTeam, OpponentPlayer, Season, PitchingChange, PlayerPitchArsenal, OpponentLineupSlot,
-    LineupSubstitution, GameRunnerEvent, GameForcedHalfInningEnd,
+    LineupSubstitution, GameRunnerEvent, GameForcedHalfInningEnd, GamePlayRunScorer,
     RapsodoPitch, GameVideoClip, OpponentLineupSubstitution, OpponentLineupRestart,
 )
 from game_stats import (
@@ -472,105 +472,24 @@ RUNNER_EVENT_TYPES = ["Stolen Base", "Caught Stealing", "Picked Off", "Wild Pitc
                       "Fielding Error", "Advanced on Throw", "Obstruction", "Interference", "Out on Bases"]
 RUNNER_EVENT_OUT_TYPES = ("Caught Stealing", "Picked Off", "Interference", "Out on Bases")
 RUNNER_ADVANCE_TYPES = [t for t in RUNNER_EVENT_TYPES if t not in RUNNER_EVENT_OUT_TYPES]
-BATTER_REACH_BASE = {"1B": 1, "BB": 1, "IBB": 1, "HBP": 1, "E": 1, "FC": 1, "2B": 2, "3B": 3,
-                     "K - Reached on Dropped 3rd": 1}
+# Nov 2026: the base-runner walk moved to run_scorers.py (root) so the
+# stats can use it too -- the diamond and the R stat can't disagree.
+from run_scorers import (  # noqa: E402
+    BATTER_REACH_BASE, place_runners as _place_runners, walk_game, predicted_scorers, batter_of as _batter_of,
+    load_confirmed,
+)
+
+RUN_SCORER_MAX = 4  # same cap as the "Runs scored on play" box
 
 
-def _place_runners(start_bases, targets, batter_base):
-    """Which runners already on base end up on which of `targets` (the
-    occupied bases after the play, batter's own base excluded). Oct 2026,
-    Ryker: on a fielder's choice with runners on 1st and 2nd where the lead
-    runner was thrown out at 3rd, the old lead-first fill kept the lead
-    runner on 2nd -- the wrong man. Runners can't go backward or pass each
-    other, and when the batter reaches, every runner forced by him has to
-    move up at least one base; any runner not placed was put out. Of the
-    placements that obey those rules, take the one where runners move the
-    fewest total bases. start_bases is lead-first; returns a list of
-    (start_base, target) pairs, or None if no legal placement exists (the
-    caller then falls back to the plain lead-first fill)."""
-    from itertools import combinations
-    targets = sorted(targets, reverse=True)
-    forced = set()
-    if batter_base:
-        b = 1
-        while b in start_bases:
-            forced.add(b)
-            b += 1
-    best = None
-    for kept in combinations(start_bases, len(targets)):
-        pairs = list(zip(kept, targets))
-        if any(t < s or (s in forced and t <= s) for s, t in pairs):
-            continue
-        cost = sum(t - s for s, t in pairs)
-        if best is None or cost < best[0]:
-            best = (cost, pairs)
-    return best[1] if best else None
-
-
-def runners_on_base(pitches, runner_events):
+def runners_on_base(pitches, runner_events, confirmed=None):
     """{base: identity} for the runners on base right now, identity being
     ("our", player_id) / ("opp", opponent_player_id) / None when GBO can't
-    tell. Oct 2026, for the drag-and-drop bases. Walks the current half-
-    inning: the batter goes to the base his result puts him on, runners
-    already on fill the other occupied bases lead-first (anyone left over
-    was put out -- e.g. the forced runner on a fielder's choice), runs take
-    the lead runners off first, and runner events move whoever they name."""
-    ev_after = {}
-    for e in runner_events or []:
-        ev_after.setdefault(e.pitch_sequence_after, []).append(e)
-    for k in ev_after:
-        ev_after[k].sort(key=lambda e: (e.created_at or 0, getattr(e, "runner_event_id", 0) or 0))
-
-    def batter_of(p):
-        if p.is_our_team_batting:
-            return ("our", p.our_player_id) if p.our_player_id else None
-        if p.opponent_our_player_id:
-            return ("our", p.opponent_our_player_id)
-        return ("opp", p.opponent_player_id) if p.opponent_player_id else None
-
-    def bases_set(b):
-        return {i + 1 for i, c in enumerate((b or "000")[:3]) if c == "1"}
-
-    def apply_events(runners, anchor):
-        for e in ev_after.get(anchor, []):
-            who = runners.pop(e.from_base, None)
-            if e.our_player_id:
-                who = ("our", e.our_player_id)
-            elif e.opponent_player_id:
-                who = ("opp", e.opponent_player_id)
-            if not e.is_out and e.to_base in (1, 2, 3):
-                runners[e.to_base] = who
-
-    runners, half = {}, None
-    apply_events(runners, 0)
-    for p in sorted(pitches, key=lambda x: x.pitch_sequence):
-        key = (p.inning, bool(p.is_our_team_batting), p.batting_squad)
-        if key != half:
-            runners, half = {}, key
-        on_before = bases_set(p.bases_before)
-        runners = {b: runners.get(b) for b in on_before}
-        if p.ends_plate_appearance and p.ab_outcome not in (None, "No Result"):
-            if (p.outs_after or 0) >= 3:
-                runners = {}
-            else:
-                lead_bases = sorted(runners, reverse=True)[(p.runs_scored_on_play or 0):]
-                new_on = bases_set(p.bases_after)
-                placed = {}
-                bb = BATTER_REACH_BASE.get(p.ab_outcome)
-                if bb in new_on:
-                    placed[bb] = batter_of(p)
-                targets = new_on - set(placed)
-                plan = _place_runners(lead_bases, targets, bb if bb in new_on else None)
-                if plan is not None:
-                    for s, t in plan:
-                        placed[t] = runners[s]
-                else:
-                    remaining = [runners[b] for b in lead_bases]
-                    for b in sorted(targets, reverse=True):
-                        placed[b] = remaining.pop(0) if remaining else None
-                runners = placed
-        apply_events(runners, p.pitch_sequence)
-    return runners
+    tell. Oct 2026, for the drag-and-drop bases. See run_scorers.walk_game
+    for the rules (batter to his base, fewest-bases placement, lead runners
+    score first, runner events move whoever they name). confirmed: the
+    coach-confirmed scorers ({game_pitch_id: [identity, ...]})."""
+    return walk_game(pitches, runner_events, confirmed=confirmed)["runners"]
 
 # Display-only label for each squad letter (Sep 2026, Ryker: show "Team
 # 1/2/3" instead of "Squad A/B/C"). Purely cosmetic -- the underlying
@@ -3842,7 +3761,8 @@ def game_tracking_server(input, output, session, app_state):
                 return None
             roster = _diamond_roster(db, game, pitches, squad_a_slots, squad_b_slots, squad_c_slots, state)
             names = dict(roster)
-            known = runners_on_base(pitches, game.runner_events)
+            known = runners_on_base(pitches, game.runner_events,
+                                    confirmed=load_confirmed(db, [p.game_pitch_id for p in pitches if p.runs_scored_on_play]))
             bases = {}
             for b in (1, 2, 3):
                 if state["bases"][b - 1] != "1":
@@ -5612,9 +5532,105 @@ def game_tracking_server(input, output, session, app_state):
                 # models.GamePitch.unearned_runs_on_play for the full
                 # reasoning on why this is manual, not auto-derived.
                 ui.input_numeric("unearned_runs_input", "Of those, unearned (error-caused)", value=0, min=0, max=4, step=1),
+                ui.output_ui("run_scorer_fields"),
             )
         finally:
             db.close()
+
+    @render.ui
+    def run_scorer_fields():
+        """Nov 2026, Ryker: who scored on this play, for the R stat. One
+        picker per run, filled in with GBO's guess (lead runners first, then
+        the batter -- see run_scorers.py); the coach only touches it when
+        the guess is wrong."""
+        if not _access_ok() or not _can_edit():
+            return None
+        if "final_runs_input" not in input:
+            return None
+        runs = input.final_runs_input()
+        if not runs or runs < 1:
+            return None
+        runs = min(int(runs), RUN_SCORER_MAX)
+        game_id = _active_game_id()
+        if game_id is None:
+            return None
+        db = get_session()
+        try:
+            ctx = _render_tracking_context(db, game_id)
+            if ctx is None:
+                return None
+            game, pitches, squad_a_slots, squad_b_slots, opponent_lineup_slots, state, squad_c_slots = ctx
+            roster = _diamond_roster(db, game, pitches, squad_a_slots, squad_b_slots, squad_c_slots, state)
+            names = dict(roster)
+            confirmed = load_confirmed(db, [p.game_pitch_id for p in pitches if p.runs_scored_on_play])
+            known = runners_on_base(pitches, game.runner_events, confirmed=confirmed)
+            on_base = {b: known.get(b) for b in (1, 2, 3) if state["bases"][b - 1] == "1"}
+
+            def key_of(who):
+                return f"{who[0]}:{who[1]}" if who else ""
+
+            def label_of(who):
+                k = key_of(who)
+                if k in names:
+                    return names[k]
+                if who and who[0] == "our":
+                    pl = db.query(Player).filter(Player.player_id == who[1]).first()
+                    return f"{pl.first_name} {pl.last_name}" if pl else None
+                return None
+
+            base_word = {1: "1st", 2: "2nd", 3: "3rd"}
+            choices, used = {}, set()
+            for b in sorted(on_base, reverse=True):
+                who = on_base[b]
+                k = key_of(who) or f"base:{b}"
+                choices[k] = f"{label_of(who) or 'Runner'} (on {base_word[b]})"
+                used.add(k)
+            choices["batter"] = "The batter"
+            for k, lab in roster:
+                if k not in used:
+                    choices[k] = lab
+            choices["none"] = "Not sure"
+
+            # GBO's guess: lead runners first, then the batter (run_scorers.predicted_scorers)
+            lead = sorted(on_base, reverse=True)
+            guess = [key_of(on_base[b]) or f"base:{b}" for b in lead[:runs]]
+            if runs > len(lead):
+                guess.append("batter")
+            pickers = [
+                ui.input_select(f"run_scorer_{i + 1}", f"Run {i + 1} scored by", choices=choices,
+                                selected=guess[i] if i < len(guess) and guess[i] in choices else "none")
+                for i in range(runs)
+            ]
+            return ui.div(
+                ui.layout_columns(*pickers),
+                ui.p("Who scored -- filled in from who was on base. Fix it only if it's wrong.", class_="text-muted small"),
+            )
+        finally:
+            db.close()
+
+    def _read_run_scorers(runs, new_pitch, on_base):
+        """[identity, ...] from the run-scorer pickers, or None if they
+        aren't on screen. Returns "dup" if one player is picked twice."""
+        if not runs or "run_scorer_1" not in input:
+            return None
+        out = []
+        for i in range(min(runs, RUN_SCORER_MAX)):
+            fid = f"run_scorer_{i + 1}"
+            raw = input[fid]() if fid in input else "none"
+            if raw == "batter":
+                who = _batter_of(new_pitch)
+            elif raw and raw.startswith("base:"):
+                who = on_base.get(int(raw[5:]))
+            elif raw and ":" in raw:
+                side, pid = raw.split(":", 1)
+                who = (side, int(pid))
+            else:
+                who = None
+            out.append(who)
+        named = [w for w in out if w is not None]
+        if len(named) != len(set(named)):
+            return "dup"
+        return out
 
     @render.ui
     def record_pitch_controls():
@@ -6079,7 +6095,7 @@ def game_tracking_server(input, output, session, app_state):
                 final_runs if ends_pa else 0, new_balls=new_balls, new_strikes=new_strikes,
             )
 
-            db.add(GamePitch(
+            new_pitch = GamePitch(
                 game_id=game_id,
                 pitch_sequence=next_seq,
                 inning=state["inning"],
@@ -6122,7 +6138,28 @@ def game_tracking_server(input, output, session, app_state):
                 run_value=run_value,
                 notes=notes or None,
                 is_pitch=non_pitch is None,
-            ))
+            )
+            # Nov 2026: who scored (run_scorer_fields). Only from the regular
+            # form; step mode / automatic results fall back to inference.
+            scorer_picks = None
+            if ends_pa and final_runs and step is None and not non_pitch:
+                conf_prev = load_confirmed(db, [p.game_pitch_id for p in pitches if p.runs_scored_on_play])
+                known_now = runners_on_base(pitches, game.runner_events, confirmed=conf_prev)
+                on_base_now = {b: known_now.get(b) for b in (1, 2, 3) if state["bases"][b - 1] == "1"}
+                scorer_picks = _read_run_scorers(final_runs, new_pitch, on_base_now)
+                if scorer_picks == "dup":
+                    ui.notification_show("The same player is picked to score twice -- pitch not recorded.",
+                                         type="error", duration=8)
+                    return
+            db.add(new_pitch)
+            if scorer_picks and len(scorer_picks) == final_runs:
+                db.flush()
+                for i, who in enumerate(scorer_picks):
+                    db.add(GamePlayRunScorer(
+                        game_pitch_id=new_pitch.game_pitch_id, slot=i + 1,
+                        our_player_id=who[1] if who and who[0] == "our" else None,
+                        opponent_player_id=who[1] if who and who[0] == "opp" else None,
+                    ))
             if ends_pa and final_runs:
                 if batting_squad == "A":
                     game.our_score += final_runs
