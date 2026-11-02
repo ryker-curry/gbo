@@ -254,6 +254,7 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .table-responsive { overflow-x: auto; }
 /* Baseball-Reference-style stat line (Season Stats, Oct 2026): compact, right-aligned numbers */
 .gbo-statline { margin-bottom: .75rem; }
+.gbo-cc-partial { font-size: .65rem; text-transform: uppercase; letter-spacing: .04em; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--gbo-border, currentColor); opacity: .75; }
 .gbo-statline table.table > :not(caption) > * > * { padding: .35rem .5rem; text-align: right; white-space: nowrap; }
 .gbo-statline table.table > :not(caption) > * > *:first-child { text-align: left; position: sticky; left: 0; background: var(--gbo-bg-page); z-index: 1; }
 .gbo-statline table.table thead th { font-size: .68rem; letter-spacing: .03em; cursor: help; }
