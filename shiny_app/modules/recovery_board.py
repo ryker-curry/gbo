@@ -2,8 +2,9 @@
 GBO -- Recovery Board (Oct 2026 WHOOP pilot). One row per player with a
 connected WHOOP: today's readiness, recovery, HRV and resting HR vs his own
 normal, last night's sleep, and when it last synced. Click a name to open
-his Player Profile on the Recovery tab. Everyone can see it, players
-included (Ryker's call for the pilot). Math: analytics/whoop_metrics.py.
+his Player Profile on the Recovery tab. Staff only (Nov 2026, Ryker --
+was open to players during the pilot): a player with a WHOOP sees just his
+own data on My Profile's Recovery tab. Math: analytics/whoop_metrics.py.
 """
 
 from datetime import date
@@ -34,15 +35,21 @@ def recovery_board_ui():
 @module.server
 def recovery_board_server(input, output, session, app_state):
 
+    def _staff():
+        return app_state.is_authenticated() and app_state.role_name() != "Player"
+
     @render.ui
     def controls():
         if not app_state.is_authenticated():
             return None
+        if not _staff():
+            return ui_helpers.card(ui_helpers.empty_state(
+                "The Recovery Board is for staff. If you have a WHOOP connected, your own recovery is on My Profile's Recovery tab."))
         return ui.input_date("as_of", "As of", value=date.today(), width="200px")
 
     @reactive.calc
     def _board():
-        req(app_state.is_authenticated() and "as_of" in input and input.as_of())
+        req(_staff() and "as_of" in input and input.as_of())
         db = get_session()
         try:
             return wm.team_board(db, input.as_of())
@@ -86,9 +93,7 @@ def recovery_board_server(input, output, session, app_state):
                 return f"{spec.format(ms['now'])} vs {spec.format(ms['base_mean'])}"
             js = f"Shiny.setInputValue('{session.ns('open')}', {p.player_id}, {{priority: 'event'}})"
             label = f"{p.last_name}, {p.first_name}"
-            # Players see the whole board but can only open their own profile.
-            name = (ui.tags.span(label, style="font-weight:600") if app_state.role_name() == "Player"
-                    else ui.tags.a(label, onclick=js, role="button", style="cursor:pointer;font-weight:600"))
+            name = ui.tags.a(label, onclick=js, role="button", style="cursor:pointer;font-weight:600")
             sleep = (f"{t['sleep_hours']:.1f} h" if t.get("sleep_hours") is not None else "—") + \
                     (f" / {t['sleep_need_hours']:.1f}" if t.get("sleep_need_hours") else "")
             flagged = [h["label"] for h in rd.get("health") or [] if h["status"] in ("watch", "flag")]
@@ -128,7 +133,7 @@ def recovery_board_server(input, output, session, app_state):
 
     @render.ui
     def team_perf_result():
-        req("tp_outcome" in input and input.tp_outcome() and "tp_predictor" in input and input.tp_predictor())
+        req(_staff() and "tp_outcome" in input and input.tp_outcome() and "tp_predictor" in input and input.tp_predictor())
         from analytics import whoop_performance as wp
         db = get_session()
         try:
@@ -142,6 +147,8 @@ def recovery_board_server(input, output, session, app_state):
     @reactive.effect
     @reactive.event(input.open)
     def _open():
+        if not _staff():
+            return
         app_state.deep_link_player_id.set((int(input.open()), "Recovery"))
         target = "My Profile" if app_state.role_name() == "Player" else "Player Profile"
         ui.update_navs("main_nav", selected=target, session=session.root_scope())

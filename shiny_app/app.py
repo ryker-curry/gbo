@@ -478,7 +478,7 @@ _NAV_GROUPS = [
     ("Analytics", ["analytics", "pitcher_profile", "player_types", "staff_compensation", "hitter_profile", "pitching_leaderboard", "hitting_leaderboard"]),
     ("Scouting", ["advance_scouting", "pitch_cards", "opponent_teams"]),
     ("Admin", ["user_management", "staff_assignments", "video_import"]),
-    ("Me", ["player_profile", "player_schedule", "player_development", "player_stats", "player_game_stats", "player_hitting", "player_video", "player_bullpens", "recovery_board", "pitcher_profile", "pitcher_meeting_report", "weekly_report", "advance_scouting", "hitter_profile", "hitter_meeting_report", "exit_report", "pitching_leaderboard", "hitting_leaderboard"]),
+    ("Me", ["player_profile", "player_schedule", "player_development", "player_stats", "player_game_stats", "player_hitting", "player_video", "player_bullpens", "pitcher_profile", "pitcher_meeting_report", "weekly_report", "advance_scouting", "hitter_profile", "hitter_meeting_report", "exit_report", "pitching_leaderboard", "hitting_leaderboard"]),
 ]
 _NAV_LABELS = {
     "players": "Player setup", "roster": "Players", "idp": "Development plans", "rapsodo_import": "Import Rapsodo",

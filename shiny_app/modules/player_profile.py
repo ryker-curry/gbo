@@ -365,8 +365,10 @@ def player_profile_server(input, output, session, app_state):
             # Nov 2026, Ryker: official college seasons (PSU + previous schools).
             ui.nav_panel("College Career", ui.div(ui.output_ui("college_career_tab"), class_="gbo-tab-body")),
             # Oct 2026, Ryker: WHOOP pilot -- sleep / HRV / recovery vs
-            # performance. Everyone sees it, players included.
-            ui.nav_panel("Recovery", ui.div(ui.output_ui("recovery_tab"), class_="gbo-tab-body")),
+            # performance. Nov 2026: staff see it for every player; a
+            # player sees it on his own profile only if he has a WHOOP.
+            *([ui.nav_panel("Recovery", ui.div(ui.output_ui("recovery_tab"), class_="gbo-tab-body"))]
+              if _recovery_visible(p.player_id) else []),
             # Oct 2026, Ryker: how each pitcher compensates -- staff only.
             *([ui.nav_panel("Compensation", ui.div(ui.output_ui("comp_tab"), class_="gbo-tab-body"))]
               if p.is_pitcher and app_state.role_name() != "Player" else []),
@@ -442,6 +444,19 @@ def player_profile_server(input, output, session, app_state):
     _comp_ctx = reactive.Value({})
 
     # --- Recovery tab (Oct 2026 WHOOP pilot) ---------------------------
+    def _recovery_visible(pid):
+        """Staff: always. Player (his own profile only): only with an
+        active WHOOP connection (Nov 2026, Ryker)."""
+        if app_state.role_name() != "Player":
+            return True
+        from models import WhoopConnection
+        db = get_session()
+        try:
+            return db.query(WhoopConnection).filter(WhoopConnection.player_id == pid,
+                                                    WhoopConnection.active.is_(True)).first() is not None
+        finally:
+            db.close()
+
     # Data: models.WhoopDaily (written by the whoop-sync Edge Function).
     # Math: analytics/whoop_metrics.py. Display: shiny_app/whoop_display.py.
     _whoop_tick = reactive.Value(0)
@@ -467,6 +482,9 @@ def player_profile_server(input, output, session, app_state):
             return None
         req("profile_tabs" in input and input.profile_tabs() == "Recovery")
         _whoop_tick()
+        with get_session() as _db:
+            if not _recovery_visible(_profile_pid(_db)):
+                return None
         from datetime import timedelta as _td
         from models import WhoopConnection
         from analytics import whoop_metrics as wm
@@ -535,6 +553,9 @@ def player_profile_server(input, output, session, app_state):
         if not app_state.is_authenticated():
             return None
         req("profile_tabs" in input and input.profile_tabs() == "Recovery")
+        with get_session() as _db:
+            if not _recovery_visible(_profile_pid(_db)):
+                return None
         req("whoop_outcome" in input and input.whoop_outcome() and "whoop_predictor" in input and input.whoop_predictor())
         from analytics import whoop_metrics as wm, whoop_performance as wp
         import whoop_display as wd
@@ -560,7 +581,7 @@ def player_profile_server(input, output, session, app_state):
         db = get_session()
         try:
             pid = _profile_pid(db)
-            if pid is None:
+            if pid is None or not _recovery_visible(pid):
                 return
             whoop_service.make_connect_link(db, pid, app_state.user_id())
         finally:
@@ -577,7 +598,7 @@ def player_profile_server(input, output, session, app_state):
         db = get_session()
         try:
             pid = _profile_pid(db)
-            if pid is None:
+            if pid is None or not _recovery_visible(pid):
                 return
             ui.notification_show("Syncing WHOOP...", duration=3)
             ok, text_msg = whoop_service.sync_now(db, pid)

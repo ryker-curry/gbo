@@ -191,8 +191,8 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             # migrated, so this stays a single shared page, not a
             # separate player-facing copy.
             NavPage("training_routines", "Training Routines", "activity"),
-            # Oct 2026, Ryker: WHOOP pilot -- players see the board too.
-            NavPage("recovery_board", "Recovery Board", "moon"),
+            # Nov 2026, Ryker: Recovery Board is staff-only now. A player
+            # with a WHOOP sees his own data on My Profile's Recovery tab.
         ]
         # My Bullpens is pitcher-specific; hitters get the hitter pages
         # below instead -- based on the player's own is_pitcher flag.
