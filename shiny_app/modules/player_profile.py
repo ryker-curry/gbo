@@ -52,6 +52,7 @@ from assessment_history import assessment_history_query, assessment_history_rows
 from pitch_type_config import FASTBALL_TYPES
 import bucket_display
 import profile_links
+import college_career_display
 import ui_helpers
 
 
@@ -361,6 +362,8 @@ def player_profile_server(input, output, session, app_state):
             ui.nav_panel("Pitching", ui.div(pitching_tab, class_="gbo-tab-body")),
             ui.nav_panel("Development", ui.div(dev_tab, class_="gbo-tab-body")),
             ui.nav_panel("Video", ui.div(video_tab, class_="gbo-tab-body")),
+            # Nov 2026, Ryker: official college seasons (PSU + previous schools).
+            ui.nav_panel("College Career", ui.div(ui.output_ui("college_career_tab"), class_="gbo-tab-body")),
             # Oct 2026, Ryker: WHOOP pilot -- sleep / HRV / recovery vs
             # performance. Everyone sees it, players included.
             ui.nav_panel("Recovery", ui.div(ui.output_ui("recovery_tab"), class_="gbo-tab-body")),
@@ -455,6 +458,8 @@ def player_profile_server(input, output, session, app_state):
             players = _visible_players(db)
             pid = players[0].player_id if players else None
         return pid
+
+    college_career_display.register(input, output, session, app_state, _profile_pid)
 
     @render.ui
     def recovery_tab():

@@ -1729,6 +1729,40 @@ class GameForcedHalfInningEnd(Base):
     created_by = relationship("User")
 
 
+class CollegeSeasonStat(Base):
+    """One college season from before (or outside) GBO's own charting --
+    Nov 2026, Ryker: pull each player's previous seasons (Pitt State
+    spring seasons, JUCO, other 4-years) from the schools' websites and
+    show them as a College Career section on Player Profile. Fall ball
+    stays GBO-charted only.
+
+    side = "batting" or "pitching". For pitching rows h/r/bb/so/hr/hbp are
+    ALLOWED. Every stat is nullable: many seasons were only published in
+    part (a bio line, a news story), and a blank means "not published",
+    never zero. college_career.py decides which rows are complete enough
+    to count toward the career totals. ip_outs = innings x 3."""
+    __tablename__ = "college_season_stats"
+    __table_args__ = (UniqueConstraint("player_id", "side", "season_year", "school", name="uq_college_season_stat"),)
+
+    college_season_stat_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False, index=True)
+    side = Column(String(10), nullable=False)
+    season_year = Column(Integer, nullable=False)
+    school = Column(String(120), nullable=False)
+    level = Column(String(20), nullable=True)  # NCAA D1/D2, NJCAA D1/D2/D3, NAIA, CCCAA, Other
+    g = Column(Integer); gs = Column(Integer)
+    ab = Column(Integer); r = Column(Integer); h = Column(Integer); doubles = Column(Integer); triples = Column(Integer)
+    hr = Column(Integer); rbi = Column(Integer); bb = Column(Integer); hbp = Column(Integer); so = Column(Integer)
+    gdp = Column(Integer); sf = Column(Integer); sh = Column(Integer); sb = Column(Integer); cs = Column(Integer); ibb = Column(Integer)
+    w = Column(Integer); l = Column(Integer); cg = Column(Integer); sho = Column(Integer); sv = Column(Integer)
+    ip_outs = Column(Integer); er = Column(Integer); wp = Column(Integer); bk = Column(Integer); bf = Column(Integer)
+    source_url = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class GamePlayRunScorer(Base):
     """Who scored on a PA-ending play, as confirmed (or fixed) by the coach
     in Game Tracking (Nov 2026, Ryker: track runs scored). One row per run,
