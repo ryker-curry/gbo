@@ -149,7 +149,7 @@ def test_nav_has_recovery_board():
         assert "recovery_board" in keys, role
     for pitcher in (True, False):
         keys = {pg.key for s in nav.build_nav_sections("Player", None, pitcher) for pg in s.pages}
-        assert "recovery_board" in keys
+        assert "recovery_board" not in keys   # Nov 2026: staff only
 
 
 def test_health_signals_flag_fever_pattern():
