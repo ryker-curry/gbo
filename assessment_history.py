@@ -16,6 +16,7 @@ profile_queries.py for Pitcher/Hitter Profile).
 
 from sqlalchemy.orm import joinedload
 
+from assessment_period import period_label
 from models import Assessment, AssessmentResult, BullpenPitch
 
 
@@ -52,7 +53,7 @@ def assessment_history_rows(assessments):
     that filtered/queried differently can still reuse it."""
     rows = []
     for a in assessments:
-        row = {"Date": a.assessment_date.strftime("%Y-%m-%d (%a)")}
+        row = {"Date": period_label(a.assessment_date)}
         if a.pitch_type:
             row["Pitch Type"] = a.pitch_type.type_name
         row["Notes"] = a.notes or ""

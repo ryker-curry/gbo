@@ -88,6 +88,7 @@ from models import GameForcedHalfInningEnd
 from models import GamePitch, GameRunnerEvent
 from bucket_system import compute_bucket_system
 
+from assessment_period import period_label
 import ui_helpers
 import team_overview
 import bucket_display
@@ -479,7 +480,7 @@ def _athletic_trainer_section(db, players, player_ids):
     sections.append(ui_helpers.render_dict_table(
         [
             {
-                "Date": r.assessment.assessment_date.strftime("%Y-%m-%d (%a)"),
+                "Date": period_label(r.assessment.assessment_date),
                 "Player": f"{r.assessment.player.first_name} {r.assessment.player.last_name}" if r.assessment.player else "—",
                 "Metric": r.test_type.test_name.replace("Pain & Readiness: ", ""),
                 "Score": round(float(r.value), 2),
@@ -627,7 +628,7 @@ def _strength_coach_section(db, players, player_ids, week_ago):
     sections.append(ui_helpers.render_dict_table(
         [
             {
-                "Date": a.assessment_date.strftime("%Y-%m-%d (%a)"),
+                "Date": period_label(a.assessment_date),
                 "Player": f"{a.player.first_name} {a.player.last_name}" if a.player else "—",
                 "Category": a.category.category_name if a.category else "—",
             }
@@ -735,7 +736,7 @@ def _sports_scientist_section(db, players, player_ids, week_ago):
     sections.append(ui_helpers.render_dict_table(
         [
             {
-                "Date": a.assessment_date.strftime("%Y-%m-%d (%a)"),
+                "Date": period_label(a.assessment_date),
                 "Player": f"{a.player.first_name} {a.player.last_name}" if a.player else "—",
                 "Category": a.category.category_name if a.category else "—",
             }
@@ -1272,7 +1273,7 @@ def _general_section(db, players, player_ids, week_ago):
         ui_helpers.render_dict_table(
             [
                 {
-                    "Date": a.assessment_date.strftime("%Y-%m-%d (%a)"),
+                    "Date": period_label(a.assessment_date),
                     "Player": f"{a.player.first_name} {a.player.last_name}" if a.player else "—",
                     "Category": a.category.category_name if a.category else "—",
                 }

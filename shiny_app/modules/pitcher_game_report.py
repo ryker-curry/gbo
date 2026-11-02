@@ -62,6 +62,7 @@ import command_config
 from visualizations import command_charts
 from visualizations.bullpen_charts import movement_chart, color_for_pitch_label
 from visualizations.pitcher_graphic import pitcher_release_svg
+import release_graphics
 from visualizations.attack_zones_chart import attack_zones_figure as _attack_zones_figure
 from visualizations.zone_damage_chart import zone_damage_heatmap_by_hand
 from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, MUTED_GRAY, TEXT_CREAM, GOLD, CRIMSON
@@ -2022,7 +2023,12 @@ def pitcher_game_report_server(input, output, session, app_state):
             player = pitches[0].player
             player_height_in = float(player.height_in) if player is not None and player.height_in is not None else None
             throws = player.throws if player is not None else None
-            children = [ui.HTML(pitcher_release_svg(releases, throws=throws or "R", height_in=player_height_in or 73))]
+            # Nov 2026: both views -- behind the pitcher + catcher's-view card.
+            card = (release_graphics.profile_from_rapsodo(player, pitches, min_readings=3)
+                    if player is not None else None)
+            children = [ui.HTML(release_graphics.both_views_html(
+                pitcher_release_svg(releases, throws=throws or "R", height_in=player_height_in or 73), card,
+                empty_note="Needs 3+ fastball readings in this game."))]
             if player is not None and player.height_in is None:
                 children.append(ui.p(
                     "Using an average height -- add this pitcher's real height on the Players page for a more accurate figure.",

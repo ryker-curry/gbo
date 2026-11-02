@@ -27,6 +27,7 @@ from models import (Assessment, AssessmentCategory, BullpenSession, IDPGoal, IDP
                     TeamScheduleEvent, ATAppointment, PlayerAssignment)
 from bucket_system import compute_bucket_system
 from modules.roster import _flag_for
+from assessment_period import period_label
 import ui_helpers
 
 
@@ -87,7 +88,7 @@ def build(db, players, player_ids, ns):
             trs.append(ui.tags.tr(
                 ui.tags.td(ui.tags.a(f"{p.first_name} {p.last_name}", href="#", class_="gbo-player-link", **{"data-player-id": str(p.player_id)})),
                 ui.tags.td(pos), ui.tags.td(ui_helpers.status_chip(f)), ui.tags.td(why, style="white-space:normal; min-width:200px; max-width:320px;"),
-                ui.tags.td(last.strftime("%b %d") if last else "—", class_="text-end", style="font-family:var(--gbo-mono);"),
+                ui.tags.td(period_label(last), class_="text-end", style="font-family:var(--gbo-mono);"),
                 ui.tags.td(f"{bd.get('total_score'):.0f}" if bd.get("total_score") is not None else "—", class_="text-end", style="font-family:var(--gbo-mono); color:var(--gbo-text);"),
             ))
         attention_table = ui.div(ui.tags.table(ui.tags.thead(ui.tags.tr(ui.tags.th("Player"), ui.tags.th("Pos"), ui.tags.th("Flag"), ui.tags.th("Why"), ui.tags.th("Last test", class_="text-end"), ui.tags.th("Overall", class_="text-end"))), ui.tags.tbody(*trs), class_="table"), class_="table-responsive")
@@ -125,7 +126,7 @@ def build(db, players, player_ids, ns):
     activity = []
     for (d, cat), names in list(grouped.items())[:5]:
         names = sorted(names)
-        activity.append(ui.div(ui.div(d.strftime("%b %d"), class_="gbo-li-dt"), ui.div(ui.tags.b(cat), " — " + ", ".join(names[:4]) + (f" +{len(names)-4}" if len(names) > 4 else "")), class_="gbo-li", style="justify-content:flex-start;"))
+        activity.append(ui.div(ui.div(period_label(d), class_="gbo-li-dt"), ui.div(ui.tags.b(cat), " — " + ", ".join(names[:4]) + (f" +{len(names)-4}" if len(names) > 4 else "")), class_="gbo-li", style="justify-content:flex-start;"))
     pens = db.query(BullpenSession).options(joinedload(BullpenSession.player), joinedload(BullpenSession.rapsodo_pitches)).filter(BullpenSession.player_id.in_(player_ids)).order_by(BullpenSession.session_date.desc()).limit(3).all()
     for b in pens:
         activity.append(ui.div(ui.div(b.session_date.strftime("%b %d"), class_="gbo-li-dt"), ui.div(ui.tags.b(f"{b.player.first_name} {b.player.last_name}" if b.player else "Bullpen"), f" bullpen — {len(b.rapsodo_pitches or [])} pitches"), class_="gbo-li", style="justify-content:flex-start;"))

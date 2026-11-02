@@ -51,6 +51,7 @@ from datetime import date, datetime
 
 import pandas as pd
 
+from assessment_period import parse_period_label
 from models import Assessment, AssessmentCategory, AssessmentResult, AssessmentTestType, Player
 from assessment_import_spec import CATEGORY_SPECS, BASE_COLUMNS
 
@@ -124,6 +125,11 @@ def _parse_assessment_date(val):
     s = str(val).strip()
     if not s:
         return None
+    # Oct 31 2026: "Fall 2026" / "Spring 2027" accepted in place of a
+    # real date -- stored as that period's representative date.
+    period_dt = parse_period_label(s)
+    if period_dt is not None:
+        return period_dt
     for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%B %d, %Y", "%b %d, %Y", "%m-%d-%Y"):
         try:
             return datetime.strptime(s, fmt).date()

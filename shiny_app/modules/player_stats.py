@@ -41,6 +41,7 @@ from bucket_system import compute_bucket_system
 from analytics import assessment_progress as ap
 from visualizations import progress_chart as pchart
 
+from assessment_period import period_label
 import ui_helpers
 import bucket_display
 
@@ -390,7 +391,7 @@ def _history_table_ui(assessments):
     rows_data = []
     columns = []
     for a in assessments:
-        row = {"Date": a.assessment_date.strftime("%Y-%m-%d (%a)")}
+        row = {"Date": period_label(a.assessment_date)}
         if a.pitch_type:
             row["Pitch Type"] = a.pitch_type.type_name
         for r in a.results:

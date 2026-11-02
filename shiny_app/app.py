@@ -79,7 +79,7 @@ from modules import (  # noqa: E402
     game_tracking, command_tracker, roster, player_profile,
     pitcher_meeting_report, weekly_report, advance_scouting, hitter_meeting_report, team_game_report,
     data_health, arm_care, how_to_read, research_project, charter_training, staff_compensation, pitch_cards,
-    player_types, exit_report, recovery_board,
+    player_types, exit_report, recovery_board, smartpark_import, arsenal_comparison,
 )
 
 # Registry of page keys (see nav.NavPage.key) that have a real Shiny
@@ -100,6 +100,7 @@ MODULE_UI = {
     "player_assignments": lambda: player_assignments.player_assignments_ui("player_assignments"),
     "at_appointments": lambda: at_appointments.at_appointments_ui("at_appointments"),
     "rapsodo_import": lambda: rapsodo_import.rapsodo_import_ui("rapsodo_import"),
+    "smartpark_import": lambda: smartpark_import.smartpark_import_ui("smartpark_import"),
     "player_development": lambda: player_development.player_development_ui("player_development"),
     "player_game_stats": lambda: player_game_stats.player_game_stats_ui("player_game_stats"),
     "player_hitting": lambda: player_hitting.player_hitting_ui("player_hitting"),
@@ -121,6 +122,7 @@ MODULE_UI = {
     "pitcher_profile": lambda: pitcher_profile.pitcher_profile_ui("pitcher_profile"),
     "hitter_profile": lambda: hitter_profile.hitter_profile_ui("hitter_profile"),
     "pitching_leaderboard": lambda: pitching_leaderboard.pitching_leaderboard_ui("pitching_leaderboard"),
+    "arsenal_comparison": lambda: arsenal_comparison.arsenal_comparison_ui("arsenal_comparison"),
     "staff_compensation": lambda: staff_compensation.staff_compensation_ui("staff_compensation"),
     "player_types": lambda: player_types.player_types_ui("player_types"),
     "pitch_cards": lambda: pitch_cards.pitch_cards_ui("pitch_cards"),
@@ -362,6 +364,7 @@ def server(input, output, session):
     player_assignments.player_assignments_server("player_assignments", app_state)
     at_appointments.at_appointments_server("at_appointments", app_state)
     rapsodo_import.rapsodo_import_server("rapsodo_import", app_state)
+    smartpark_import.smartpark_import_server("smartpark_import", app_state)
     player_development.player_development_server("player_development", app_state)
     player_game_stats.player_game_stats_server("player_game_stats", app_state)
     player_hitting.player_hitting_server("player_hitting", app_state)
@@ -385,6 +388,7 @@ def server(input, output, session):
     pitcher_profile.pitcher_profile_server("pitcher_profile", app_state)
     hitter_profile.hitter_profile_server("hitter_profile", app_state)
     pitching_leaderboard.pitching_leaderboard_server("pitching_leaderboard", app_state)
+    arsenal_comparison.arsenal_comparison_server("arsenal_comparison", app_state)
     staff_compensation.staff_compensation_server("staff_compensation", app_state)
     player_types.player_types_server("player_types", app_state)
     pitch_cards.pitch_cards_server("pitch_cards", app_state)
@@ -471,18 +475,18 @@ _NAV_GROUPS = [
     ("Pitching", ["arm_care", "recovery_board", "bullpen_dashboard", "bullpen_tracking", "rapsodo_import"]),
     # ("Hitting", ["hitter_tracking"]) -- removed from the sidebar Oct 2026 (Ryker)
     # Oct 2026 reorganization (Ryker approved): doing the work vs reading it.
-    ("Game Operations", ["game_tracking", "data_health", "charter_training"]),
+    ("Game Operations", ["game_tracking", "smartpark_import", "data_health", "charter_training"]),
     ("Reports", ["team_game_report", "pitcher_game_report", "pitcher_meeting_report", "hitter_game_report",
                  "hitter_meeting_report", "exit_report", "weekly_report"]),
     # Sept 2026, Ryker: profiles / stats / leaderboards live under Analytics.
-    ("Analytics", ["analytics", "pitcher_profile", "player_types", "staff_compensation", "hitter_profile", "pitching_leaderboard", "hitting_leaderboard"]),
+    ("Analytics", ["analytics", "pitcher_profile", "arsenal_comparison", "player_types", "staff_compensation", "hitter_profile", "pitching_leaderboard", "hitting_leaderboard"]),
     ("Scouting", ["advance_scouting", "pitch_cards", "opponent_teams"]),
     ("Admin", ["user_management", "staff_assignments", "video_import"]),
     ("Me", ["player_profile", "player_schedule", "player_development", "player_stats", "player_game_stats", "player_hitting", "player_video", "player_bullpens", "pitcher_profile", "pitcher_meeting_report", "weekly_report", "advance_scouting", "hitter_profile", "hitter_meeting_report", "exit_report", "pitching_leaderboard", "hitting_leaderboard"]),
 ]
 _NAV_LABELS = {
     "players": "Player setup", "roster": "Players", "idp": "Development plans", "rapsodo_import": "Import Rapsodo",
-    "assessment_import": "Import Assessments",
+    "assessment_import": "Import Assessments", "smartpark_import": "Import SmartPark",
     "analytics": "Season stats", "at_appointments": "AT appointments", "player_assignments": "Assignments",
     "team_schedule": "Team schedule", "user_management": "Users", "staff_assignments": "Staff assignments",
 }
@@ -508,6 +512,7 @@ _ICONS = {
     "bullpen_tracking": '<circle cx="12" cy="12" r="8"/><path d="M8 8c2 2 2 6 0 8M16 8c-2 2-2 6 0 8"/>',
     "bullpen_scripts": '<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h6M9 17h6"/>',
     "rapsodo_import": '<path d="M12 3v12M7 10l5 5 5-5M4 21h16"/>',
+    "smartpark_import": '<path d="M12 3v12M7 10l5 5 5-5M4 21h16"/>',
     "hitter_tracking": '<path d="M4 20L18 6l2 2L6 22zM15 3l6 6"/>',
     "game_tracking": '<path d="M12 3l8 8-8 10-8-10z"/><path d="M12 3v18M4 11h16"/>',
     "pitcher_game_report": '<path d="M5 4h14v16H5zM8 9h8M8 13h8M8 17h5"/>',
@@ -522,6 +527,7 @@ _ICONS = {
     "pitcher_profile": '<path d="M3 17l6-6 4 4 8-8M14 7h7v7"/><circle cx="12" cy="12" r="9"/>',
     "hitter_profile": '<path d="M3 17l6-6 4 4 8-8M14 7h7v7"/><circle cx="12" cy="12" r="9"/>',
     "pitching_leaderboard": '<path d="M8 21h8M12 17v4M17 3H7v5a5 5 0 0010 0V3z"/><path d="M5 5H3v2a3 3 0 003 3M19 5h2v2a3 3 0 01-3 3"/>',
+    "arsenal_comparison": '<circle cx="7" cy="12" r="4"/><circle cx="17" cy="12" r="4"/><path d="M11 12h2"/>',
     "staff_compensation": '<path d="M4 6h16M4 12h10M4 18h6"/><circle cx="18" cy="16" r="3"/>',
     "player_types": '<circle cx="8" cy="8" r="3"/><circle cx="16" cy="8" r="3"/><path d="M3 20c0-3 2.5-5 5-5s5 2 5 5M11 20c0-3 2.5-5 5-5s5 2 5 5"/>',
     "pitch_cards": '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
