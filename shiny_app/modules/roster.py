@@ -26,6 +26,7 @@ from sqlalchemy.orm import joinedload
 from database import get_session
 from models import Player, StaffPlayerAssignment, Assessment
 from bucket_system import compute_bucket_system, list_seasons, current_season_label, season_date_range, build_roster_batch_cache
+from assessment_period import period_label
 import ui_helpers
 
 
@@ -262,7 +263,7 @@ def roster_server(input, output, session, app_state):
             sname = p.status.status_name if p.status else "Active"
             st_chip = ui_helpers.status_chip("neutral", sname) if sname == "Active" else ui_helpers.status_chip("watch" if sname in ("Injured", "Medical Hold") else "neutral", sname)
             cls = (p.player_class.class_name if p.player_class else "").replace("Redshirt ", "RS ").replace("Freshman", "FR").replace("Sophomore", "SO").replace("Junior", "JR").replace("Senior", "SR").replace("Graduate", "GR")
-            last_cell = ui.tags.td(r["last"].strftime("%b %d") if r["last"] else "—", class_="text-end gbo-num", style="font-family:var(--gbo-mono);" + ("" if r["last"] and (date.today() - r["last"]).days <= 45 else "color:var(--gbo-status-watch);"))
+            last_cell = ui.tags.td(period_label(r["last"]), class_="text-end gbo-num", style="font-family:var(--gbo-mono);" + ("" if r["last"] and (date.today() - r["last"]).days <= 45 else "color:var(--gbo-status-watch);"))
             body.append(ui.tags.tr(
                 ui.tags.td(str(p.jersey_number or "—"), class_="gbo-num", style="font-family:var(--gbo-mono); color:var(--gbo-text-muted);"),
                 ui.tags.td(ui.tags.a(f"{p.first_name} {p.last_name}", href="#", class_="gbo-player-link", **{"data-player-id": str(p.player_id)}), title=r["why"]),

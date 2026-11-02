@@ -53,6 +53,7 @@ from pitch_type_config import FASTBALL_TYPES
 import bucket_display
 import profile_links
 import college_career_display
+from assessment_period import period_label
 import ui_helpers
 
 
@@ -318,7 +319,7 @@ def player_profile_server(input, output, session, app_state):
         card = ui_helpers.show_card(p, bd, summ, flag, fastball_summary=game_fastball_summ)
         tiles = ui.div(
             ui_helpers.kpi_tile("Status", ui_helpers.status_chip(flag), delta=f"{sum(1 for s,_,_ in pris if s=='flag')} priority · {sum(1 for s,_,_ in pris if s=='watch')} attention" if pris else "No flags"),
-            ui_helpers.kpi_tile("Last assessed", last_date.strftime("%b %d") if last_date else "—", delta=f"{last_cat} · {(date.today()-last_date).days} days ago" if last_date else "No assessments yet"),
+            ui_helpers.kpi_tile("Last assessed", period_label(last_date), delta=f"{last_cat}" if last_date else "No assessments yet"),
             ui_helpers.kpi_tile("Movement flag", (mf.get("color") or "—").title(), delta=mf.get("reason") or ("Score " + str(mf.get("score")) if mf.get("score") is not None else "Not assessed"), status="flag" if mf.get("color") == "red" else "watch" if mf.get("color") in ("yellow", "orange") else None),
             class_="gbo-kpi-row", style="margin-bottom:16px;",
         )

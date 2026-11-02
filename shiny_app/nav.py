@@ -104,6 +104,9 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
     if role_name in ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator"):
         sections.append(NavSection("Game Operations", [
             NavPage("game_tracking", "Game Tracking", "clipboard-data"),
+            # Oct 2026, Ryker: SmartPark (WIN Reality / Yakkertech) game files
+            # build a game's whole chart -- replaces manual charting once installed.
+            NavPage("smartpark_import", "Import SmartPark Game", "upload"),
             # Oct 2026: charting completeness checks per game.
             NavPage("data_health", "Data Health", "activity"),
             # Oct 2026: arsenal cheat sheets + pitch-ID quiz for charters.
@@ -139,6 +142,9 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             # Pitcher/Hitter Profile' entries below -- one module,
             # self-scoped by role, same pattern as player_profile.py.
             NavPage("pitcher_profile", "Pitcher Deep Dive", "graph-up-arrow"),
+            # Nov 2026, Ryker: compare two PSU pitchers (release card +
+            # similarity by category) and find a pitcher's closest teammates.
+            NavPage("arsenal_comparison", "Arsenal Comparison", "people"),
             # Oct 2026, Ryker: compensation profiles across the staff.
             NavPage("staff_compensation", "Staff Compensation", "diagram-3"),
             # Oct 2026, Ryker: athlete types (Muscular/Hybrid/Elastic) and pitcher types.

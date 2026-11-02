@@ -23,7 +23,7 @@ from datetime import datetime, date
 
 from sqlalchemy import (
     Column, Integer, String, Text, Boolean, Date, DateTime,
-    ForeignKey, Numeric, UniqueConstraint, JSON
+    ForeignKey, Numeric, UniqueConstraint, JSON, Float
 )
 from sqlalchemy.orm import relationship, deferred
 
@@ -2339,3 +2339,134 @@ class WhoopWorkout(Base):
     zone_durations = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# SmartPark (WIN Reality / Yakkertech) -- Oct 2026, built ahead of install
+# ---------------------------------------------------------------------------
+# Ryker's call (Oct 27 2026): SmartPark REPLACES manual game charting. One
+# uploaded game file builds the game's whole pitch-by-pitch GamePitch record
+# (count, outs, result, location, pitch type, batted ball) and keeps every
+# tracking reading in smartpark_pitches, linked 1:1 to the GamePitch it made.
+# The export format wasn't known yet when this was built -- all column names
+# live in services/smartpark_columns.py so the first real file only means
+# editing that one mapping file. migrations/migrate_smartpark.py.
+
+class SmartParkImport(Base):
+    """One uploaded SmartPark game file -- audit log + duplicate guard."""
+    __tablename__ = "smartpark_imports"
+    __table_args__ = (UniqueConstraint("file_hash", name="uq_smartpark_import_hash"),)
+
+    import_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id", ondelete="CASCADE"), nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    file_hash = Column(String(64), nullable=False)  # sha256 of the raw bytes
+    source_game_uid = Column(String(100), nullable=True)  # the file's own GameID, if it has one
+    uploaded_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    row_count = Column(Integer, nullable=False)
+    pitch_count = Column(Integer, default=0, nullable=False)  # GamePitch rows built
+    status = Column(String(20), nullable=False)  # "success" / "partial"
+    warnings = Column(Text, nullable=True)  # plain-English notes for the coach, one per line
+
+    game = relationship("Game")
+    uploaded_by = relationship("User")
+    pitches = relationship("SmartParkPitch", back_populates="import_record", cascade="all, delete-orphan")
+
+
+class SmartParkPitch(Base):
+    """One SmartPark row (one pitch), raw readings kept as imported. Field
+    names follow the TrackMan-style names Yakkertech exports have used;
+    anything the mapping doesn't know lands in raw_extra, never dropped."""
+    __tablename__ = "smartpark_pitches"
+
+    smartpark_pitch_id = Column(Integer, primary_key=True)
+    import_id = Column(Integer, ForeignKey("smartpark_imports.import_id", ondelete="CASCADE"), nullable=False, index=True)
+    game_id = Column(Integer, ForeignKey("games.game_id", ondelete="CASCADE"), nullable=False, index=True)
+    game_pitch_id = Column(Integer, ForeignKey("game_pitches.game_pitch_id", ondelete="SET NULL"), nullable=True, index=True)
+    pitcher_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True, index=True)  # set when the pitcher is ours
+    batter_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True, index=True)  # set when the batter is ours
+    pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=True)
+
+    # --- identity / game state, as in the file ---
+    pitch_no = Column(Integer, nullable=True)
+    source_pitch_uid = Column(String(100), nullable=True)
+    pitch_time = Column(DateTime, nullable=True)
+    inning = Column(Integer, nullable=True)  # real inning (1..9), not GBO's half-inning counter
+    top_bottom = Column(String(10), nullable=True)
+    pa_of_inning = Column(Integer, nullable=True)
+    pitch_of_pa = Column(Integer, nullable=True)
+    outs = Column(Integer, nullable=True)
+    balls = Column(Integer, nullable=True)
+    strikes = Column(Integer, nullable=True)
+    pitcher_name = Column(String(150), nullable=True)
+    pitcher_source_id = Column(String(50), nullable=True)
+    pitcher_throws = Column(String(10), nullable=True)
+    pitcher_team = Column(String(100), nullable=True)
+    batter_name = Column(String(150), nullable=True)
+    batter_source_id = Column(String(50), nullable=True)
+    batter_side = Column(String(10), nullable=True)
+    batter_team = Column(String(100), nullable=True)
+    tagged_pitch_type = Column(String(50), nullable=True)
+    auto_pitch_type = Column(String(50), nullable=True)
+    pitch_call = Column(String(40), nullable=True)
+    kor_bb = Column(String(20), nullable=True)
+    tagged_hit_type = Column(String(30), nullable=True)
+    play_result = Column(String(30), nullable=True)
+    outs_on_play = Column(Integer, nullable=True)
+    runs_scored = Column(Integer, nullable=True)
+
+    # --- pitch tracking ---
+    rel_speed = Column(Float, nullable=True)  # mph
+    spin_rate = Column(Float, nullable=True)  # rpm
+    spin_axis = Column(Float, nullable=True)  # degrees
+    spin_efficiency = Column(Float, nullable=True)  # %
+    tilt = Column(String(10), nullable=True)  # clock, e.g. "1:15"
+    rel_height = Column(Float, nullable=True)  # ft
+    rel_side = Column(Float, nullable=True)  # ft
+    extension = Column(Float, nullable=True)  # ft
+    vert_rel_angle = Column(Float, nullable=True)
+    horz_rel_angle = Column(Float, nullable=True)
+    induced_vert_break = Column(Float, nullable=True)  # in
+    horz_break = Column(Float, nullable=True)  # in
+    vert_break = Column(Float, nullable=True)  # in, gravity included
+    plate_loc_height = Column(Float, nullable=True)  # ft, as in the file
+    plate_loc_side = Column(Float, nullable=True)  # ft, as in the file
+    zone_speed = Column(Float, nullable=True)
+    vert_appr_angle = Column(Float, nullable=True)
+    horz_appr_angle = Column(Float, nullable=True)
+
+    # --- batted ball / swing ---
+    exit_speed = Column(Float, nullable=True)  # mph
+    launch_angle = Column(Float, nullable=True)  # deg
+    direction = Column(Float, nullable=True)  # spray angle, deg, + = right field
+    distance = Column(Float, nullable=True)  # ft
+    hit_spin_rate = Column(Float, nullable=True)
+    hang_time = Column(Float, nullable=True)
+    bat_speed = Column(Float, nullable=True)  # mph
+
+    # --- GBO-derived ---
+    plate_x_ft = Column(Float, nullable=True)  # GBO convention (strike_zone.py)
+    plate_z_ft = Column(Float, nullable=True)
+
+    raw_extra = Column(JSON, nullable=True)  # every column the mapping didn't recognise
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    import_record = relationship("SmartParkImport", back_populates="pitches")
+    game_pitch = relationship("GamePitch")
+    pitch_type = relationship("PitchType")
+
+
+class SmartParkPlayerLink(Base):
+    """Remembers which roster player a SmartPark name/ID is, so a coach
+    only fixes a name mismatch once (e.g. the file says "Curry, Ry")."""
+    __tablename__ = "smartpark_player_links"
+    __table_args__ = (UniqueConstraint("source_key", name="uq_smartpark_player_link_key"),)
+
+    link_id = Column(Integer, primary_key=True)
+    source_key = Column(String(200), nullable=False)  # "id:<SmartPark player id>" or "name:<normalized name>"
+    source_name = Column(String(150), nullable=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    player = relationship("Player")

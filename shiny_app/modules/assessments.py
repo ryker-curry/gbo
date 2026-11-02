@@ -53,6 +53,7 @@ from models import (
 from bucket_system import BUCKET_RELEVANT_CATEGORIES, get_bucket_test_names_for_category
 from assessment_history import assessment_history_query
 
+from assessment_period import period_label
 import ui_helpers
 
 
@@ -244,7 +245,7 @@ def assessments_server(input, output, session, app_state):
             else:
                 choices = {}
                 for a in editable_assessments:
-                    label = a.assessment_date.strftime("%Y-%m-%d (%a)")
+                    label = period_label(a.assessment_date)
                     if a.pitch_type:
                         label += f" — {a.pitch_type.type_name}"
                     if a.notes:

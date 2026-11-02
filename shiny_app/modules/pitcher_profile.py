@@ -143,6 +143,7 @@ from analytics.bullpen_metrics import (
 )
 from visualizations.bullpen_charts import movement_chart, release_point_chart, color_for_pitch_label
 from visualizations.pitcher_graphic import pitcher_release_svg
+import release_graphics
 from visualizations.attack_zones_chart import attack_zones_figure
 from pitch_location_stats import compute_attack_zones
 from visualizations.spin_axis_chart import average_spin_axis_chart, individual_spin_axis_chart
@@ -264,6 +265,7 @@ def pitcher_profile_ui():
         ui.output_ui("pp_view_picker"),
         ui.output_ui("pp_overview_section"),
         ui.output_ui("pp_outperform"),
+        ui.output_ui("pp_release_comps"),
         ui.output_ui("pp_metrics_section"),
         ui.output_ui("pp_results_section"),
         ui.output_ui("pp_zone_hand_filter"),
@@ -693,6 +695,71 @@ def pitcher_profile_server(input, output, session, app_state):
                  class_="text-muted small", style="margin:6px 0 0;"),
             title="Release & results vs. stuff",
         )
+
+    @render.ui
+    def pp_release_comps():
+        """Closest PSU teammates (Nov 2026, Ryker: Past The Eye Test-style
+        pitcher similarity, PSU vs PSU only). analytics/release_comps.py,
+        game pitches only, this page's date range. Players see their own
+        comps; staff also get a jump to Arsenal Comparison."""
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "overview":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            from analytics import release_comps
+            try:
+                summ = release_comps.staff_pool(db, f["date_from"], f["date_to"], f["game_scope"])
+            except Exception:
+                return None
+        finally:
+            db.close()
+        comps = release_comps.closest_teammates(summ, pid, n=3)
+        if not comps:
+            return None
+        items = []
+        for p, overall, cats in comps:
+            best = sorted(cats.items(), key=lambda kv: -kv[1])[:2]
+            why = ", ".join(f"{k.lower()} {v:.0f}%" for k, v in best)
+            items.append(ui.tags.li(ui.strong(f"{p.first_name} {p.last_name}"), f" -- {overall:.0f}% similar",
+                                    ui.span(f" (closest on {why})", class_="text-muted") if why else ""))
+        children = [ui.tags.ul(*items, style="margin:4px 0 8px; padding-left:18px;", class_="small")]
+        if role != "Player":
+            children.append(ui.div(
+                ui.input_select("pp_comp_pick", None,
+                                choices={str(p.player_id): f"{p.first_name} {p.last_name}" for p, *_ in comps},
+                                width="220px"),
+                ui.input_action_button("pp_comp_open", "Compare side by side", class_="btn-sm"),
+                style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;",
+            ))
+        children.append(ui.p("Our pitchers only, game pitches in this date range. Compares release, arsenal, whiffs, "
+                             "command and contact; 100% = identical, categories with no data yet are skipped.",
+                             class_="text-muted small", style="margin:6px 0 0;"))
+        return ui_helpers.card(*children, title="Closest teammates")
+
+    @reactive.effect
+    @reactive.event(input.pp_comp_open)
+    def _pp_open_comparison():
+        import deep_link
+        if app_state.role_name() == "Player" or "pp_comp_pick" not in input or not input.pp_comp_pick():
+            return
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+        finally:
+            db.close()
+        if pid is None:
+            return
+        deep_link.go(app_state, session, "Arsenal Comparison", pid=pid, pid_b=int(input.pp_comp_pick()))
 
     @render.ui
     def pp_overview_section():
@@ -1225,8 +1292,15 @@ def pitcher_profile_server(input, output, session, app_state):
             player_height_in = float(player.height_in) if player.height_in is not None else None
             graphic_children = [ui.p(ui.strong("Release Point & Arm Angle"), class_="mt-3")]
             if releases:
+                # Nov 2026, Ryker: "i want to have both views" -- the
+                # behind-the-pitcher graphic above (every pitch type) plus
+                # the Past The Eye Test-style catcher's-view card (his
+                # fastball), side by side. Same game-linked pitches.
                 graphic_children.append(ui.div(
-                    ui.HTML(pitcher_release_svg(releases, throws=player.throws or "R", height_in=player_height_in or 73)),
+                    ui.HTML(release_graphics.both_views_html(
+                        pitcher_release_svg(releases, throws=player.throws or "R", height_in=player_height_in or 73),
+                        release_graphics.profile_from_rapsodo(player, rapsodo_pitches),
+                    )),
                 ))
                 if player_height_in is None:
                     graphic_children.append(ui.p(

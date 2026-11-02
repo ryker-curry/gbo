@@ -121,6 +121,7 @@ import force_plate_standards
 from modules.roster import _flag_for
 import bucket_display
 
+from assessment_period import period_label
 import ui_helpers
 import deep_link
 from analytics import game_goals
@@ -629,7 +630,7 @@ def idp_server(input, output, session, app_state):
                             body.append(ui.p("Current: no assessments recorded for this metric yet.", class_="text-muted small"))
 
                 if goal.source_assessment:
-                    body.append(ui.p(f"Linked to assessment dated {goal.source_assessment.assessment_date.strftime('%Y-%m-%d (%a)')}", class_="text-muted small"))
+                    body.append(ui.p(f"Linked to assessment dated {period_label(goal.source_assessment.assessment_date)}", class_="text-muted small"))
                 if goal.source_bullpen:
                     bp_type = goal.source_bullpen.bullpen_type.type_name if goal.source_bullpen.bullpen_type else "—"
                     body.append(ui.p(f"Linked to bullpen session dated {goal.source_bullpen.session_date.strftime('%Y-%m-%d (%a)')} ({bp_type})", class_="text-muted small"))
@@ -885,7 +886,7 @@ def idp_server(input, output, session, app_state):
                     .all()
                 )
                 choices = {"": "-- Not linked to a specific assessment --"}
-                choices.update({str(a.assessment_id): f"{a.assessment_date.strftime('%Y-%m-%d (%a)')} (#{a.assessment_id})" for a in player_assessments})
+                choices.update({str(a.assessment_id): f"{period_label(a.assessment_date)} (#{a.assessment_id})" for a in player_assessments})
                 return ui.input_select("new_goal_assessment", "Link to assessment (optional)", choices=choices)
         finally:
             db.close()

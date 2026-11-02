@@ -47,6 +47,7 @@ from assessment_import_spec import CATEGORY_SPECS
 from services import study_workbook_import as swi
 import study_workbook_spec as wspec
 
+from assessment_period import period_label
 import ui_helpers
 
 ALLOWED_ROLES = ("Administrator", "Head Coach", "Coach", "Strength Coach", "Athletic Trainer", "Sports Scientist", "Data Analyst")
@@ -240,7 +241,7 @@ def assessment_import_server(input, output, session, app_state):
             row_dicts.append({
                 "Row": r["file_row_num"],
                 "Player": f"{r['first_name'] or '—'} {r['last_name'] or ''}".strip(),
-                "Date": r["assessment_date"].strftime("%Y-%m-%d") if r["assessment_date"] else "—",
+                "Date": period_label(r["assessment_date"]),
                 "Status": status_label,
                 "Detail": detail,
             })

@@ -105,6 +105,7 @@ from pitch_type_config import FASTBALL_TYPES
 from visualizations.bullpen_charts import movement_chart, release_point_chart, location_chart, color_for_pitch_label
 from visualizations.spin_axis_chart import individual_spin_axis_chart, average_spin_axis_chart
 from visualizations.pitcher_graphic import pitcher_release_svg
+import release_graphics
 from video_helpers import render_video_clip
 
 import ui_helpers
@@ -777,7 +778,15 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
             # Its own legend (colored dot + label + usage %) is built
             # into the SVG, so no separate legend_items block is needed
             # here anymore.
-            silhouette_children = [ui.HTML(pitcher_release_svg(releases, throws=throws or "R", height_in=player_height_in or 73))]
+            # Nov 2026: both views -- behind the pitcher + catcher's-view card
+            # (this session's fastball).
+            card = (release_graphics.profile_from_rapsodo(
+                        player, filtered_pitches, min_readings=3,
+                        subtitle="Fastball avg -- this bullpen")
+                    if player is not None else None)
+            silhouette_children = [ui.HTML(release_graphics.both_views_html(
+                pitcher_release_svg(releases, throws=throws or "R", height_in=player_height_in or 73), card,
+                empty_note="Needs 3+ fastball readings in this bullpen.", caption_color=TEXT_CREAM))]
             if player is not None and player.height_in is None:
                 silhouette_children.append(ui.p(
                     "Using an average height -- add this pitcher's real height on the Players page for a more accurate figure.",
@@ -792,7 +801,7 @@ def register_bullpen_dashboard(input, output, session, key_prefix, get_target):
             return ui.layout_columns(
                 chart_helpers.fig_to_img(release_point_chart(filtered_pitches, mode="individual"), width=450, height=420),
                 silhouette_panel,
-                col_widths=[6, 6],
+                col_widths=[4, 8],
             )
 
         key = (release_chart_id, _target_key(target))
