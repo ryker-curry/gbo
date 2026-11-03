@@ -20,9 +20,12 @@ Choices agreed with Ryker (AskUserQuestion, Nov 2026):
   - ForceFrame Shoulder IR/ER (supine 90/90): Pull = ER, Squeeze = IR.
     Hip AD/AB (supine, ankle): Pull = abduction, Squeeze = adduction. Other
     positions (e.g. Hip AD/AB - 45) are skipped. 0 means "side not tested".
-  - L/R -> throwing / glove arm and drive / plant leg from Player.throws
-    (drive leg = throwing side, same as the workbook). A player without a
-    throwing hand gets his two-leg tests only.
+  - L/R -> throwing / glove arm from Player.throws. Legs: for pitchers the
+    drive leg is the throwing side (same as the workbook); for hitters
+    (is_pitcher False) "Drive Leg" is the BACK leg, from Player.bats -- a
+    left-handed hitter's back leg is his left whatever arm he throws with.
+    Switch hitters have no single back leg, so they fall back to their
+    throwing side. A player without a hand on file gets his two-leg tests only.
   - Shoulder ER:IR ratios are filled from the imported peak forces.
   - IBSQT (isometric belt squat) gets its own test types in Force Plate
     Detail, created on --apply if missing.
@@ -101,7 +104,15 @@ def _sides(throws):
     return ("R", "L") if throws == "R" else ("L", "R")
 
 
-def forcedecks_values(r, throws):
+def leg_side(player):
+    """'R' / 'L' side of the drive leg: a hitter's back leg (from bats), a
+    pitcher's throwing side. Switch hitters / no bats -> throwing side."""
+    if not player.is_pitcher and player.bats in ("R", "L"):
+        return player.bats
+    return player.throws
+
+
+def forcedecks_values(r, legs):
     """{test name: value} for one ForceDecks row, plus a reason if the row
     is a bad trial."""
     t = r.get("test type", "").strip().upper()
@@ -112,7 +123,7 @@ def forcedecks_values(r, throws):
             if c.kind != "value":
                 continue
             v = _num(r.get(spec.norm(c.header)))
-            name = spec.resolve_test(c.test, throws) if c.test else None
+            name = spec.resolve_test(c.test, legs) if c.test else None
             if v is None or name is None:
                 continue
             out[name] = spec.CONV[c.conv](v) if c.conv else v
@@ -132,8 +143,8 @@ def forcedecks_values(r, throws):
         v = _num(r.get(spec.norm("BW [KG]")))
         if v is not None:
             out["Single-Leg Jump Bodyweight"] = v
-        if throws in ("R", "L"):
-            d, p = _sides(throws)
+        if legs in ("R", "L"):
+            d, p = _sides(legs)
             for h, (name, unit, conv) in _SL_NAMES.items():
                 for side, word in ((d, "Drive Leg"), (p, "Plant Leg")):
                     v = _num(r.get(spec.norm(f"{h} ({side})")))
@@ -149,16 +160,17 @@ def forcedecks_values(r, throws):
     return out, None
 
 
-def forceframe_values(rows, throws):
-    """One player's ForceFrame rows for one date -> {test name: value}."""
-    if throws not in ("R", "L"):
-        return {}
-    d, p = _sides(throws)
+def forceframe_values(rows, throws, legs):
+    """One player's ForceFrame rows for one date -> {test name: value}.
+    Arms follow the throwing hand, legs the drive-leg side (leg_side)."""
     best = defaultdict(lambda: None)
     for r in rows:
         test, direction, pos = r.get("test", ""), r.get("direction", ""), r.get("position", "")
         if test == "Shoulder IR/ER" and "Supine (90 Degrees AB)" in pos:
             motion = "ER" if direction == "Pull" else "IR" if direction == "Squeeze" else None
+            if throws not in ("R", "L"):
+                continue
+            d, p = _sides(throws)
             words = {d: "Throwing Arm", p: "Non-Throwing Arm"}
             names = lambda side: {  # noqa: E731
                 "max": f"Shoulder Strength: {words[side]} {motion} Peak Force",
@@ -167,6 +179,9 @@ def forceframe_values(rows, throws):
             conv = spec.CONV["n_lb"]
         elif test == "Hip AD/AB" and "Supine (Ankle)" in pos:
             motion = "Abduction" if direction == "Pull" else "Adduction" if direction == "Squeeze" else None
+            if legs not in ("R", "L"):
+                continue
+            d, p = _sides(legs)
             words = {d: "Drive Leg", p: "Plant Leg"}
             names = lambda side: {  # noqa: E731
                 "max": f"Hip {motion} Force ({words[side]})",
@@ -216,11 +231,11 @@ def build(db, folder):
             if is_ff:
                 ff[(p.player_id, day)].append(r)
                 continue
-            vals, why = forcedecks_values(r, p.throws)
+            vals, why = forcedecks_values(r, leg_side(p))
             if why:
                 dropped.append(f"{p.first_name} {p.last_name} {day} {r.get('test type')}: {why}")
                 continue
-            if r.get("test type", "").upper() == "SLJ" and p.throws not in ("R", "L"):
+            if r.get("test type", "").upper() in ("SLJ", "IMTP") and leg_side(p) not in ("R", "L"):
                 no_hand.add(f"{p.first_name} {p.last_name}")
             t = _time(r.get("time"))
             for name, v in vals.items():
@@ -230,9 +245,9 @@ def build(db, folder):
                     stamp[k] = t
     by_id = {p.player_id: p for p in players.values()}
     for (pid, day), rows in ff.items():
-        if by_id[pid].throws not in ("R", "L"):
+        if by_id[pid].throws not in ("R", "L") or leg_side(by_id[pid]) not in ("R", "L"):
             no_hand.add(f"{by_id[pid].first_name} {by_id[pid].last_name}")
-        plan[(pid, day)].update(forceframe_values(rows, by_id[pid].throws))
+        plan[(pid, day)].update(forceframe_values(rows, by_id[pid].throws, leg_side(by_id[pid])))
     return plan, by_id, dropped, unmatched, no_hand, files
 
 
@@ -258,7 +273,9 @@ def run(db, folder, apply=False, user_id=None):
     if user_id is None:
         u = (db.query(User).join(Role, Role.role_id == User.role_id)
              .filter(Role.role_name == "Administrator", User.active.is_(True)).order_by(User.user_id).first())
-        user_id = u.user_id if u else None
+        if u is None:
+            sys.exit("No active Administrator user to record as 'entered by'.")
+        user_id = u.user_id
     missing_tests = set()
     n_new_a = n_vals = n_have = 0
     for (pid, day), vals in sorted(plan.items(), key=lambda kv: (by_id[kv[0][0]].last_name, kv[0][1])):
