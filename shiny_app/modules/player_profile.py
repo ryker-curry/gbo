@@ -53,6 +53,7 @@ from pitch_type_config import FASTBALL_TYPES
 import bucket_display
 import profile_links
 import college_career_display
+import career_development_display
 from assessment_period import period_label
 import ui_helpers
 
@@ -365,6 +366,10 @@ def player_profile_server(input, output, session, app_state):
             ui.nav_panel("Video", ui.div(video_tab, class_="gbo-tab-body")),
             # Nov 2026, Ryker: official college seasons (PSU + previous schools).
             ui.nav_panel("College Career", ui.div(ui.output_ui("college_career_tab"), class_="gbo-tab-body")),
+            # Nov 2026, Ryker: season-to-season development (Rapsodo history +
+            # game numbers) -- shiny_app/career_development_display.py.
+            *([ui.nav_panel("Career Development", ui.div(ui.output_ui("career_dev_tab"), class_="gbo-tab-body"))]
+              if p.is_pitcher else []),
             # Oct 2026, Ryker: WHOOP pilot -- sleep / HRV / recovery vs
             # performance. Nov 2026: staff see it for every player; a
             # player sees it on his own profile only if he has a WHOOP.
@@ -476,6 +481,7 @@ def player_profile_server(input, output, session, app_state):
         return pid
 
     college_career_display.register(input, output, session, app_state, _profile_pid)
+    career_development_display.register(input, output, session, app_state, _profile_pid)
 
     @render.ui
     def recovery_tab():
