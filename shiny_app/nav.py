@@ -51,6 +51,9 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             NavPage("players", "Player setup", "person"),
             NavPage("assessments", "Assessments", "clipboard-check"),
             NavPage("assessment_import", "Import Assessments", "upload"),
+            # Nov 2026, Ryker: physical test changes vs fastball changes
+            # (change-vs-change scatter + decline watch) -- S&C staff too.
+            NavPage("athlete_performance", "Athlete vs Performance", "graph-up"),
             NavPage("video_import", "Video Import", "camera-video"),
             NavPage("idp", "IDP", "bullseye"),
             NavPage("team_schedule", "Team Schedule", "calendar3"),
@@ -272,7 +275,7 @@ SIMPLE_SIDEBAR = {
     "Strength Coach": [
         ("Home", ["dashboard", "how_to_read"]),
         ("Players", ["roster", "player_profile", "arm_care", "recovery_board"]),
-        ("Training", ["assessments", "training_routines", "player_assignments", "team_schedule"]),
+        ("Training", ["assessments", "athlete_performance", "training_routines", "player_assignments", "team_schedule"]),
     ],
     "Athletic Trainer": [
         ("Home", ["dashboard", "how_to_read"]),
@@ -282,7 +285,7 @@ SIMPLE_SIDEBAR = {
     "Sports Scientist": [
         ("Home", ["dashboard", "how_to_read"]),
         ("Players", ["roster", "player_profile", "recovery_board"]),
-        ("Analysis", ["assessments", "staff_compensation", "research_project", "analytics"]),
+        ("Analysis", ["assessments", "athlete_performance", "staff_compensation", "research_project", "analytics"]),
     ],
     "Data Analyst": [
         ("Home", ["dashboard", "how_to_read"]),
