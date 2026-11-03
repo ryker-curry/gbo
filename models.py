@@ -1763,6 +1763,91 @@ class CollegeSeasonStat(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class RapsodoHistory(Base):
+    """A Rapsodo pitch from before GBO's own imports (Nov 2026, Ryker:
+    Career Development tab on Player Profile). Sources: "rapsodo_account"
+    (Ryker's own Rapsodo Cloud history, Oct 2022 on) and "drive_fall_2025"
+    (the fall 2025 intrasquad export in the team Drive, Raw Rapsodo.xlsx).
+
+    Deliberately NOT in rapsodo_pitches: about 50 analytics read that table,
+    several over every pitch a player has (ratings, pitch class, fastball
+    shape, release comps), and old seasons would quietly move those numbers.
+    Only career_development.py reads this table. Loaded by
+    scripts/import_career_history.py, which skips any pitch already in
+    rapsodo_pitches (same Rapsodo unique id).
+
+    Same conventions as RapsodoPitch: release_side / hb are in Rapsodo's
+    pitcher-body frame (+ = the pitcher's right), IVB = vb_spin, HB =
+    hb_trajectory (analytics/bullpen_metrics.py). release_extension in feet
+    (the Drive export was in meters and is converted on import)."""
+    __tablename__ = "rapsodo_history"
+    __table_args__ = (UniqueConstraint("player_id", "source", "source_uid", name="uq_rapsodo_history_source"),)
+
+    rapsodo_history_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False, index=True)
+    source = Column(String(40), nullable=False)
+    source_uid = Column(String(100), nullable=False)  # Rapsodo "Unique ID" (player@epoch)
+    pitch_date = Column(DateTime, nullable=False)  # local (Central) time
+    session_key = Column(String(100), nullable=True)
+    session_type = Column(String(40), nullable=True)  # Rapsodo session type (Live, High Intent, Rehab...)
+    raw_pitch_type = Column(String(50), nullable=True)
+    pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=True)
+    velocity = Column(Numeric(6, 2)); total_spin = Column(Numeric(7, 2)); true_spin = Column(Numeric(7, 2))
+    spin_efficiency = Column(Numeric(6, 2)); spin_confidence = Column(Numeric(5, 3)); gyro_degree = Column(Numeric(6, 2))
+    spin_axis_degrees = Column(Numeric(5, 1)); vb_spin = Column(Numeric(6, 2)); hb_trajectory = Column(Numeric(6, 2))
+    release_height = Column(Numeric(6, 3)); release_side = Column(Numeric(6, 3)); release_extension = Column(Numeric(6, 3))
+    is_strike = Column(Boolean, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    player = relationship("Player")
+    pitch_type = relationship("PitchType")
+
+
+class SeasonPitchSplit(Base):
+    """Game numbers for one pitch type (or pitch_label "All pitches") over a
+    term, from an outside source -- Nov 2026: spring 2026 from the staff
+    game-tracking workbooks. runs_saved_per_100 is positive when good (the
+    workbook's per-pitch RV is flipped on import)."""
+    __tablename__ = "season_pitch_splits"
+    __table_args__ = (UniqueConstraint("player_id", "term", "pitch_label", name="uq_season_pitch_split"),)
+
+    season_pitch_split_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    term = Column(String(20), nullable=False)  # e.g. "Spring 2026"
+    pitch_label = Column(String(30), nullable=False)
+    pitches = Column(Integer, nullable=False)
+    strike_pct = Column(Numeric(5, 1)); called_pct = Column(Numeric(5, 1)); swing_pct = Column(Numeric(5, 1))
+    whiff_pct = Column(Numeric(5, 1)); csw_pct = Column(Numeric(5, 1)); putaway_pct = Column(Numeric(5, 1))
+    gb_pct = Column(Numeric(5, 1)); runs_saved_per_100 = Column(Numeric(7, 2))
+    oba = Column(Numeric(5, 3)); woba = Column(Numeric(5, 3)); hits = Column(Integer); hr = Column(Integer)
+    source = Column(String(150), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    player = relationship("Player")
+
+
+class SeasonPitchingLine(Base):
+    """One pitcher's leaderboard line for a term from an outside source
+    (Nov 2026: spring 2026 staff leaderboard). Feeds the staff comparison on
+    Career Development -- staff only. runs_saved_per_100 positive = good."""
+    __tablename__ = "season_pitching_lines"
+    __table_args__ = (UniqueConstraint("player_id", "term", name="uq_season_pitching_line"),)
+
+    season_pitching_line_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    term = Column(String(20), nullable=False)
+    ip = Column(Numeric(6, 2)); pitches = Column(Integer)
+    strike_pct = Column(Numeric(5, 1)); fps_pct = Column(Numeric(5, 1)); ea_pct = Column(Numeric(5, 1)); k_pct = Column(Numeric(5, 1))
+    whiff_pct = Column(Numeric(5, 1)); csw_pct = Column(Numeric(5, 1)); dominance_pct = Column(Numeric(5, 1)); putaway_pct = Column(Numeric(5, 1))
+    gb_pct = Column(Numeric(5, 1)); ld_pct = Column(Numeric(5, 1)); fb_pct = Column(Numeric(5, 1))
+    oba = Column(Numeric(5, 3)); woba = Column(Numeric(5, 3)); runs_saved_per_100 = Column(Numeric(7, 2))
+    era = Column(Numeric(6, 2)); fip = Column(Numeric(6, 2)); whip = Column(Numeric(5, 2)); siera = Column(Numeric(6, 2))
+    source = Column(String(150), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    player = relationship("Player")
+
+
 class GamePlayRunScorer(Base):
     """Who scored on a PA-ending play, as confirmed (or fixed) by the coach
     in Game Tracking (Nov 2026, Ryker: track runs scored). One row per run,
