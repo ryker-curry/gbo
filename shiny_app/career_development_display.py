@@ -239,7 +239,7 @@ def register(input, output, session, app_state, profile_pid):
                       "deviation of his pitch-to-pitch spread and both seasons have 8 or more pitches.")
         if not rows:
             return ui.div(ui_helpers.card(intro, ui_helpers.empty_state("No Rapsodo pitches on file yet."), title=TAB),
-                          ui.output_ui("cd_games"))
+                          ui.output_ui("cd_games"), ui.output_ui("cd_physical"))
         pitch, s_from, s_to = cd.default_view(rows)
         ss = cd.seasons(rows)
         controls = ui.div(
@@ -249,7 +249,8 @@ def register(input, output, session, app_state, profile_pid):
             ui.input_select("cd_to", "to", choices=ss, selected=s_to),
             style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;",
         )
-        return ui.div(ui_helpers.card(intro, controls, title=TAB), ui.output_ui("cd_body"), ui.output_ui("cd_games"))
+        return ui.div(ui_helpers.card(intro, controls, title=TAB), ui.output_ui("cd_body"), ui.output_ui("cd_games"),
+                      ui.output_ui("cd_physical"))
 
     def _sel():
         d = _data()
@@ -352,3 +353,54 @@ def register(input, output, session, app_state, profile_pid):
         if not parts:
             return None
         return ui.div(*parts, style="display:grid;gap:16px;margin-top:16px;")
+
+
+    # --- Physical vs performance (Nov 2026, Ryker) -----------------------
+    # One pitcher's path: each testing period's test value against his
+    # Rapsodo fastball within +/-30 days of it. Team view + decline watch:
+    # Analytics -> Athlete vs Performance. Math: analytics/athlete_performance.py.
+    @reactive.calc
+    def _path():
+        d = _data()
+        if d is None:
+            return None
+        from analytics import athlete_performance as ap
+        db = get_session()
+        try:
+            return ap.player_path(db, d["pid"], d["rows"])
+        finally:
+            db.close()
+
+    @render.ui
+    def cd_physical():
+        req(_open())
+        from analytics import athlete_performance as ap
+        import athlete_performance_display as apd
+        res = _path()
+        if res is None:
+            return None
+        path, meta = res
+        if not path:
+            return ui.div(ui_helpers.card(ui_helpers.empty_state("No assessments on file yet."),
+                                          title="Physical vs performance"), style="margin-top:16px;")
+        seen = {}
+        for p in path:
+            for k in p["tests"]:
+                seen[k] = seen.get(k, 0) + 1
+        multi = [k for k in ap.DEFAULT_TESTS if seen.get(k, 0) >= 2] + \
+            sorted(k for k, n in seen.items() if n >= 2 and k not in ap.DEFAULT_TESTS)
+        opts = multi or [k for k in ap.DEFAULT_TESTS if k in seen] + sorted(k for k in seen if k not in ap.DEFAULT_TESTS)
+        cur = input.cd_ap_test() if "cd_ap_test" in input and input.cd_ap_test() in opts else opts[0]
+        unit = (meta.get(cur) or ("", ""))[0] or ""
+        pts = [(p["period"], p["tests"].get(cur), (p["perf"] or {}).get("velo")) for p in path]
+        svg = apd.path_svg(pts, f"{cur} ({unit})", "Fastball avg velo (mph)")
+        rows = [[p["period"], _fmt(p["tests"].get(cur), 2), _fmt((p["perf"] or {}).get("velo"), 1),
+                 _fmt((p["perf"] or {}).get("velo_max"), 1), str((p["perf"] or {}).get("n", 0))] for p in path]
+        return ui.div(ui_helpers.card(
+            _note("Each testing period's result against his Rapsodo fastballs within 30 days of the test. Up and to the "
+                  "right = the test and his velo improved together." + ("" if multi else
+                  " Only one testing period so far, so there's no path yet.")),
+            ui.input_select("cd_ap_test", "Physical test", choices=opts, selected=cur),
+            ui.HTML(svg) if svg else ui_helpers.empty_state("No Rapsodo fastballs within 30 days of these tests."),
+            _table(["Period", f"{cur} ({unit})", "FB avg mph", "FB max mph", "Fastballs"], [r for r in rows]),
+            title="Physical vs performance"), style="margin-top:16px;")

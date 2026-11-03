@@ -80,6 +80,7 @@ from modules import (  # noqa: E402
     pitcher_meeting_report, weekly_report, advance_scouting, hitter_meeting_report, team_game_report,
     data_health, arm_care, how_to_read, research_project, charter_training, staff_compensation, pitch_cards,
     player_types, exit_report, recovery_board, smartpark_import, arsenal_comparison,
+    athlete_performance,
 )
 
 # Registry of page keys (see nav.NavPage.key) that have a real Shiny
@@ -123,6 +124,7 @@ MODULE_UI = {
     "hitter_profile": lambda: hitter_profile.hitter_profile_ui("hitter_profile"),
     "pitching_leaderboard": lambda: pitching_leaderboard.pitching_leaderboard_ui("pitching_leaderboard"),
     "arsenal_comparison": lambda: arsenal_comparison.arsenal_comparison_ui("arsenal_comparison"),
+    "athlete_performance": lambda: athlete_performance.athlete_performance_ui("athlete_performance"),
     "staff_compensation": lambda: staff_compensation.staff_compensation_ui("staff_compensation"),
     "player_types": lambda: player_types.player_types_ui("player_types"),
     "pitch_cards": lambda: pitch_cards.pitch_cards_ui("pitch_cards"),
@@ -389,6 +391,7 @@ def server(input, output, session):
     hitter_profile.hitter_profile_server("hitter_profile", app_state)
     pitching_leaderboard.pitching_leaderboard_server("pitching_leaderboard", app_state)
     arsenal_comparison.arsenal_comparison_server("arsenal_comparison", app_state)
+    athlete_performance.athlete_performance_server("athlete_performance", app_state)
     staff_compensation.staff_compensation_server("staff_compensation", app_state)
     player_types.player_types_server("player_types", app_state)
     pitch_cards.pitch_cards_server("pitch_cards", app_state)
@@ -468,7 +471,7 @@ _NAV_GROUPS = [
     ("About", ["research_project"]),   # guest demo only (Oct 2026)
     ("Overview", ["dashboard", "how_to_read"]),
     ("Roster", ["roster", "player_profile", "players"]),
-    ("Development", ["assessments", "assessment_import", "idp", "training_routines", "player_assignments", "team_schedule"]),
+    ("Development", ["assessments", "athlete_performance", "assessment_import", "idp", "training_routines", "player_assignments", "team_schedule"]),
     # at_appointments/bullpen_scripts intentionally omitted from every group
     # below (Aug 31 2026 -- Ryker's call, kept in the codebase/MODULE_UI,
     # just out of the visible sidebar) -- see nav.py's matching comments.
@@ -528,6 +531,7 @@ _ICONS = {
     "hitter_profile": '<path d="M3 17l6-6 4 4 8-8M14 7h7v7"/><circle cx="12" cy="12" r="9"/>',
     "pitching_leaderboard": '<path d="M8 21h8M12 17v4M17 3H7v5a5 5 0 0010 0V3z"/><path d="M5 5H3v2a3 3 0 003 3M19 5h2v2a3 3 0 01-3 3"/>',
     "arsenal_comparison": '<circle cx="7" cy="12" r="4"/><circle cx="17" cy="12" r="4"/><path d="M11 12h2"/>',
+    "athlete_performance": '<path d="M4 20V10M10 20V4M4 20h16"/><path d="M14 16l3-5 4 2"/>',
     "staff_compensation": '<path d="M4 6h16M4 12h10M4 18h6"/><circle cx="18" cy="16" r="3"/>',
     "player_types": '<circle cx="8" cy="8" r="3"/><circle cx="16" cy="8" r="3"/><path d="M3 20c0-3 2.5-5 5-5s5 2 5 5M11 20c0-3 2.5-5 5-5s5 2 5 5"/>',
     "pitch_cards": '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
