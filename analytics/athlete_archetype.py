@@ -356,7 +356,7 @@ def how_he_moves(sig, kind):
     tail = {"Elastic": " He produces relative to his body weight rather than through size -- an aerial mover.",
             "Muscular": " He produces through force and mass more than spring -- a terrestrial mover.",
             "Hybrid": " He uses a mix of force and spring."}[kind]
-    return "On the plates he " + ", ".join(bits[:-1]) + (", and " if len(bits) > 1 else "") + bits[-1] + "." + tail
+    return "On the force plates he " + ", ".join(bits[:-1]) + (", and " if len(bits) > 1 else "") + bits[-1] + "." + tail
 
 
 # ---------------------------------------------------------------------------

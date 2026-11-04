@@ -144,7 +144,11 @@ def _signature(prof):
 def _table(kind, is_pitcher):
     from analytics.athlete_archetype import IN_THE_BOX, ON_THE_MOUND
     t = ON_THE_MOUND if is_pitcher else IN_THE_BOX
-    title = "On the mound: how each archetype pitches" if is_pitcher else "In the box: how each archetype hits"
+    # Nov 2026 (Ryker): the force plates are what we measured; the box /
+    # mound columns are what that type USUALLY looks like -- a guess to
+    # check on video, never a description of how he actually hits or pitches.
+    title = ("On the mound: what each type usually looks like" if is_pitcher
+             else "In the box: what each type usually looks like")
     head = "".join(f'<th style="color:{KIND_C[k]};{"background:rgba(255,255,255,.06);" if k == kind else ""}">{k.upper()}</th>'
                    for k in ("Muscular", "Hybrid", "Elastic"))
     rows = []
@@ -158,8 +162,9 @@ def _table(kind, is_pitcher):
     return (f'<details style="margin-top:12px" open><summary style="font-size:.75rem;font-weight:700;letter-spacing:.05em">'
             f'{_e(title.upper())}</summary><div style="overflow-x:auto"><table class="table table-sm" style="margin-top:6px">'
             f'<thead><tr><th></th>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
-            f'<div class="small text-muted">{_e(note)} The traits are what his archetype typically shows -- confirm them '
-            f'on video{"" if is_pitcher else " and bat-sensor data"}.</div></details>')
+            f'<div class="small text-muted">{_e(note)} This is a guess from how he moves on the force plates -- what his '
+            f'type usually looks like {"on the mound" if is_pitcher else "in the box"}, not how he actually '
+            f'{"pitches" if is_pitcher else "hits"}. Confirm it on video{"" if is_pitcher else " and bat-sensor data"}.</div></details>')
 
 
 def archetype_card(prof, is_pitcher=None):
@@ -188,7 +193,7 @@ def archetype_card(prof, is_pitcher=None):
              f'<div class="small" style="flex:1 1 200px">{_e(DESCRIPTION[k])}</div></div>'
              f'<div class="small" style="margin-top:6px;border-top:1px solid rgba(255,255,255,.1);padding-top:5px">'
              f'Spectrum index <b>{prof["index"]:+.2f}</b></div></div>')
-    how = (f'<div style="font-size:.7rem;font-weight:700;letter-spacing:.06em;margin-top:12px">HOW HE MOVES</div>'
+    how = (f'<div style="font-size:.7rem;font-weight:700;letter-spacing:.06em;margin-top:12px">HOW HE MOVES ON THE FORCE PLATES</div>'
            f'<div class="small">{_e(prof["how"])}</div>') if prof.get("how") else ""
     return (f'<div class="gbo-seq-sec"><h6 class="gbo-seq-h">Athlete archetype <span style="background:{c};color:#111;'
             f'padding:1px 8px;border-radius:6px;font-size:.75rem;margin-left:6px">{_e(prof.get("label", k)).upper()}</span></h6>'

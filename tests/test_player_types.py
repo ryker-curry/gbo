@@ -67,7 +67,7 @@ def test_archetype_gs_signature_and_spectrum():
     assert len(spring["signature"]) == 8 and sum(spring["counts"].values()) == 8
     assert [m["label"] for m in spring["metrics"]][0] == "Jump Ht" and len(spring["metrics"]) == 9
     assert spring["velocity"] > spring["force"]
-    assert spring["how"].startswith("On the plates he loads shallow")
+    assert spring["how"].startswith("On the force plates he loads shallow")
 
 
 def test_gs_index_matches_their_sample():
