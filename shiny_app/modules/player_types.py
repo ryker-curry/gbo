@@ -99,7 +99,8 @@ def player_types_server(input, output, session, app_state):
         table = ('<div class="gbo-sg-wrap"><table class="gbo-pt-board"><thead><tr><th>Player</th><th>Type</th>'
                  '<th>Force vs spring</th><th>Superpower</th><th>Biggest opportunity</th>'
                  f'<th>Training focus</th></tr></thead><tbody>{"".join(trs)}</tbody></table></div>')
-        how = ("From each player's latest countermovement jump, ranked against the team -- Georgia Southern's "
+        how = ("From each player's latest countermovement jump, ranked within his own group (pitchers vs pitchers, position "
+               "players vs position players) -- Georgia Southern's "
                "force-plate archetype: up to 11 signature rows (CMJ timing and per-pound measures, hop RSI and contact "
                "time, and DSI = CMJ peak force / IMTP peak force) each lean muscular, neutral or elastic; spectrum "
                "index = (elastic - muscular) / rows, Elastic at +0.25 or more, Muscular at -0.25 or less. "

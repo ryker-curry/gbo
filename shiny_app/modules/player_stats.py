@@ -37,7 +37,7 @@ from models import (
     Player, User, AssessmentCategory, Assessment, AssessmentResult,
     PitchType, IDPGoal, IDPStatus, BullpenPitch,
 )
-from bucket_system import compute_bucket_system
+from bucket_system import compute_bucket_system, player_groups
 from analytics import assessment_progress as ap
 from visualizations import progress_chart as pchart
 
@@ -186,7 +186,7 @@ def player_stats_server(input, output, session, app_state):
             h = ap.history(db, pid).get(name) if pid else None
             if not h:
                 return None
-            avg = ap.team_average(db, name)
+            avg = ap.team_average(db, name, is_pitcher=player_groups(db).get(pid, False))
         finally:
             db.close()
         pts, unit = h["points"], h["unit"]

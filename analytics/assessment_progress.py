@@ -169,10 +169,13 @@ def strengths_and_work_on(db, bucket_data, n=3):
     a test; with fewer than 2n tests they split what there is."""
     dirs = direction_map()
     start, end = bs.season_date_range(bucket_data.get("season_label") or bs.current_season_label())
+    groups = bs.player_groups(db)   # Nov 2026: rank within his own group (pitchers / position players)
+    mine = bool(bucket_data.get("is_pitcher"))
     ranked = []
     for name, raw, unit, _ in scored_metrics(bucket_data):
         d = dirs.get(name) or "higher"
         team = bs.get_latest_values_by_player(db, name, season_start=start, season_end=end)
+        team = {pid: v for pid, v in team.items() if groups.get(pid, False) == mine}
         r = team_rank_pct(float(raw), [float(v) for v in team.values()], d)
         if r is not None:
             ranked.append((name, raw, unit, r))
@@ -232,9 +235,15 @@ def changes_for_bucket(hist, bucket_data, dirs=None):
     return out
 
 
-def team_average(db, test_name):
-    """Current active roster's average of each player's latest result."""
+def team_average(db, test_name, is_pitcher=None):
+    """Current active roster's average of each player's latest result --
+    only his own group (pitchers / position players) when is_pitcher is
+    given (Nov 2026)."""
     start, end = bs.season_date_range(bs.current_season_label())  # same window the percentiles use
-    vals = list(bs.get_latest_values_by_player(db, test_name, season_start=start, season_end=end).values())
+    team = bs.get_latest_values_by_player(db, test_name, season_start=start, season_end=end)
+    if is_pitcher is not None:
+        groups = bs.player_groups(db)
+        team = {pid: v for pid, v in team.items() if groups.get(pid, False) == bool(is_pitcher)}
+    vals = list(team.values())
     vals = [float(v) for v in vals if v is not None]
     return sum(vals) / len(vals) if vals else None

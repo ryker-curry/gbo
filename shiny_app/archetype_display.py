@@ -193,7 +193,7 @@ def archetype_card(prof, is_pitcher=None):
     return (f'<div class="gbo-seq-sec"><h6 class="gbo-seq-h">Athlete archetype <span style="background:{c};color:#111;'
             f'padding:1px 8px;border-radius:6px;font-size:.75rem;margin-left:6px">{_e(prof.get("label", k)).upper()}</span></h6>'
             f'<p class="text-muted small gbo-seq-how">Georgia Southern&#39;s force-plate archetype from his countermovement jump: '
-            f'every metric is a team percentile (red at the center, green at the edge; dashed ring = team average). '
+            f'every metric is a percentile within his own group -- pitchers vs pitchers, position players vs position players (red at the center, green at the edge; dashed ring = team average). '
             f'Elastic = aerial, Muscular = terrestrial (Pat Davidson&#39;s terms) -- same read, two names. '
             f'Snapshot of his latest jump -- a trend needs regular jump testing.</p>'
             f'<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">'
