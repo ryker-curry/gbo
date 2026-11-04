@@ -782,7 +782,7 @@ def player_profile_server(input, output, session, app_state):
                 value=title,
             ))
         left = ui.accordion(*bucket_cards, open=False, class_="gbo-bucket-accordion") if bucket_cards else ui_helpers.card(ui_helpers.empty_state("No scored assessments yet."))
-        rings = ui_helpers.card(ui.div(bucket_display.build_score_rings(bd, key_prefix="profile_ov", mode=mode), class_="gbo-rings-row"), title="Composite scores", right="Total = Body comp + Power + Strength") if bd.get("total_score") is not None else None
+        rings = ui_helpers.card(ui.div(bucket_display.build_score_rings(bd, key_prefix="profile_ov", mode=mode), class_="gbo-rings-row"), title="Composite scores") if bd.get("total_score") is not None else None
         latest_pen = None
         if summ:
             latest_pen = ui_helpers.card(

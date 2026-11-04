@@ -103,7 +103,7 @@ def roster_ui():
             ui.div(ui.input_select("pos", "Position", {"all": "All positions", "P": "Pitchers", "C": "Catchers", "IF": "Infield", "OF": "Outfield"}), class_="gbo-filter"),
             ui.div(ui.input_select("status", "Status", {"active": "Active", "all": "All", "injured": "Injured / medical hold", "inactive": "Inactive"}), class_="gbo-filter"),
             ui.div(ui.input_select("flag", "Flag", {"any": "Any", "flag": "Priority only", "watch": "Attention + priority"}), class_="gbo-filter"),
-            ui.div(ui.input_select("sort", "Sort", {"flag": "Flagged first", "name": "Name", "total": "Overall score", "recent": "Most recent test"}), class_="gbo-filter"),
+            ui.div(ui.input_select("sort", "Sort", {"flag": "Flagged first", "name": "Name", "recent": "Most recent test"}), class_="gbo-filter"),
             style="display:flex; gap:12px; flex-wrap:wrap; align-items:end; margin-bottom:16px;",
         ),
         ui.output_ui("table"),
@@ -252,11 +252,10 @@ def roster_server(input, output, session, app_state):
             out.append(r)
         rank = {"flag": 0, "watch": 1, "good": 2, "neutral": 3}
         if sort == "flag": out.sort(key=lambda r: (rank[r["flag"]], r["player"].last_name))
-        elif sort == "total": out.sort(key=lambda r: -(r["bd"].get("total_score") or -1))
         elif sort == "recent": out.sort(key=lambda r: (r["last"] or date.min), reverse=True)
         else: out.sort(key=lambda r: (r["player"].last_name, r["player"].first_name))
 
-        head = ui.tags.tr(*[ui.tags.th(h, class_="text-end" if i >= 7 else "") for i, h in enumerate(["#", "Player", "Pos", "B/T", "Class", "Status", "Flag", "Overall", "Body", "Power", "Str", "Speed", "Arm", "Last test"])], ui.tags.th(""))
+        head = ui.tags.tr(*[ui.tags.th(h, class_="text-end" if i >= 7 else "") for i, h in enumerate(["#", "Player", "Pos", "B/T", "Class", "Status", "Flag", "Body", "Power", "Str", "Speed", "Arm", "Last test"])], ui.tags.th(""))
         body = []
         for r in out:
             p, bd = r["player"], r["bd"]
@@ -272,7 +271,6 @@ def roster_server(input, output, session, app_state):
                 ui.tags.td(cls or "—"),
                 ui.tags.td(st_chip),
                 ui.tags.td(ui_helpers.status_chip(r["flag"])),
-                ui.tags.td(ui.tags.b(f"{bd.get('total_score'):.0f}") if bd.get("total_score") is not None else "—", class_="text-end gbo-num", style="font-family:var(--gbo-mono); color:var(--gbo-text);"),
                 _score_cell(bd.get("body_comp_score")), _score_cell(bd.get("power_score")), _score_cell(bd.get("strength_score")), _score_cell(bd.get("speed_score")), _score_cell(bd.get("capacity_score")),
                 last_cell,
                 ui.tags.td(ui.tags.a("Profile", href="#", class_="gbo-player-link", style="color:var(--gbo-crimson); font-weight:600;", **{"data-player-id": str(p.player_id)})),

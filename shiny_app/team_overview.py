@@ -78,7 +78,7 @@ def build(db, players, player_ids, ns):
 
     # --- players needing attention ---
     flagged = [r for r in rows if r[2] in ("flag", "watch")]
-    flagged.sort(key=lambda r: (0 if r[2] == "flag" else 1, -(r[1].get("total_score") or 0) * -1))
+    flagged.sort(key=lambda r: (0 if r[2] == "flag" else 1, r[0].last_name, r[0].first_name))
     last_by_player = dict(db.query(Assessment.player_id, func.max(Assessment.assessment_date)).filter(Assessment.player_id.in_(player_ids)).group_by(Assessment.player_id).all())
     if flagged:
         trs = []
@@ -89,9 +89,8 @@ def build(db, players, player_ids, ns):
                 ui.tags.td(ui.tags.a(f"{p.first_name} {p.last_name}", href="#", class_="gbo-player-link", **{"data-player-id": str(p.player_id)})),
                 ui.tags.td(pos), ui.tags.td(ui_helpers.status_chip(f)), ui.tags.td(why, style="white-space:normal; min-width:200px; max-width:320px;"),
                 ui.tags.td(period_label(last), class_="text-end", style="font-family:var(--gbo-mono);"),
-                ui.tags.td(f"{bd.get('total_score'):.0f}" if bd.get("total_score") is not None else "—", class_="text-end", style="font-family:var(--gbo-mono); color:var(--gbo-text);"),
             ))
-        attention_table = ui.div(ui.tags.table(ui.tags.thead(ui.tags.tr(ui.tags.th("Player"), ui.tags.th("Pos"), ui.tags.th("Flag"), ui.tags.th("Why"), ui.tags.th("Last test", class_="text-end"), ui.tags.th("Overall", class_="text-end"))), ui.tags.tbody(*trs), class_="table"), class_="table-responsive")
+        attention_table = ui.div(ui.tags.table(ui.tags.thead(ui.tags.tr(ui.tags.th("Player"), ui.tags.th("Pos"), ui.tags.th("Flag"), ui.tags.th("Why"), ui.tags.th("Last test", class_="text-end"))), ui.tags.tbody(*trs), class_="table"), class_="table-responsive")
         if len(flagged) > 8:
             attention_table = ui.div(attention_table, ui.div(f"Showing 8 of {len(flagged)} · open the roster for the full list", class_="gbo-page-sub", style="margin-top:10px; font-size:.78rem;"))
     else:

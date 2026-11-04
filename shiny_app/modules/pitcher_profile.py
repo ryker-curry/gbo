@@ -929,9 +929,11 @@ def pitcher_profile_server(input, output, session, app_state):
                 )
 
                 sections.append(ui.hr())
-                sections.append(ui.p(ui.strong("Performance")))
+                # Nov 2026 (Ryker: remove the overall grades): the five
+                # grades stay, the blended Performance number is no longer shown.
+                sections.append(ui.p(ui.strong("Grades")))
                 sections.append(ui.p(
-                    "One overall number: his stuff, location, command, pitch mix and game results blended together. "
+                    "His stuff, location, command, pitch mix and game results, each vs the staff. "
                     "100 = staff average.",
                     class_="text-muted small",
                 ))
@@ -941,12 +943,11 @@ def pitcher_profile_server(input, output, session, app_state):
                     ("Command+", command_plus_value),
                     ("Arsenal", arsenal_pitching_value),
                     ("Results", results_score),
-                    ("Performance", performance_value),
                 ])
                 if performance_bars is not None:
                     sections.append(performance_bars)
                 else:
-                    sections.append(ui.p("Not enough graded pitches or team baseline yet for a Performance score.", class_="text-muted small"))
+                    sections.append(ui.p("Not enough graded pitches or team baseline yet for these grades.", class_="text-muted small"))
 
             total_pitches = sum(bundle["usage_counts"].values())
             if total_pitches:

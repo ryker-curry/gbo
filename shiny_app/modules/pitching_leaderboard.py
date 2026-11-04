@@ -101,7 +101,7 @@ STAT_META = [
     ("Command+", "Command+", True, 1),
     ("Arsenal", "Arsenal", True, 1),
     ("Results", "Results", True, 1),
-    ("Performance", "Performance", True, 1),
+    # ("Performance" composite removed Nov 2026 -- Ryker: no overall grades for now)
     # Oct 2026 (analytics/outperform.py, from Paradigm's "Outperform Your
     # Stuff"): RV/100 (negative = good), runs per 100 better than his
     # Stuff+ predicts, and how unusual his release is (largest staff z).
@@ -114,7 +114,7 @@ STAT_HIGHER_BETTER = {key: hib for key, _label, hib, _dec in STAT_META}
 STAT_DECIMALS = {key: dec for key, _label, _hib, dec in STAT_META}
 
 # Oct 2026 coach pass: defaults a pitching coach reads at a glance.
-DEFAULT_COLUMNS = ["ERA", "WHIP", "K %", "BB %", "Strike %", "FPS %", "ERA+", "FIP", "Performance"]
+DEFAULT_COLUMNS = ["ERA", "WHIP", "K %", "BB %", "Strike %", "FPS %", "ERA+", "FIP", "Results"]
 PLUS_KEYS = {"ERA+", "FIP+", "WHIP+", "K%+", "BB%+", "K-BB%+"}
 PLUS_MIN_IP = 15
 

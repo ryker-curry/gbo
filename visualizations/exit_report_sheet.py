@@ -198,7 +198,7 @@ def _body(rep):
     b = rep.get("body") or {}
     parts = []
     bk = b.get("bucket") or {}
-    scores = [("Total", bk.get("total_score")), ("Body comp", bk.get("body_comp_score")), ("Power", bk.get("power_score")),
+    scores = [("Body comp", bk.get("body_comp_score")), ("Power", bk.get("power_score")),
               ("Strength", bk.get("strength_score")), ("Speed", bk.get("speed_score"))]
     scores = [(k, v) for k, v in scores if v is not None]
     if scores:
