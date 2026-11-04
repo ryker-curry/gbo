@@ -101,8 +101,8 @@ def _spectrum(prof):
     pos = max(0, min(100, 50 + prof["index"] * 50))
     return (f'<div style="font-size:.7rem;font-weight:700;letter-spacing:.06em;margin-top:10px">WHERE HE SITS ON THE SPECTRUM</div>'
             f'<div style="margin:4px 0 2px;display:flex;justify-content:space-between;font-size:.64rem;font-weight:700">'
-            f'<span style="color:{FORCE_C}">MUSCULAR · FORCE-DRIVEN</span><span style="color:{HYB_C}">HYBRID</span>'
-            f'<span style="color:{VELO_C}">ELASTIC · VELOCITY-DRIVEN</span></div>'
+            f'<span style="color:{FORCE_C}">MUSCULAR · TERRESTRIAL</span><span style="color:{HYB_C}">HYBRID</span>'
+            f'<span style="color:{VELO_C}">ELASTIC · AERIAL</span></div>'
             f'<div style="position:relative;height:8px;border-radius:4px;background:linear-gradient(90deg,{FORCE_C},{HYB_C},{VELO_C})">'
             f'<div title="team average" style="position:absolute;left:50%;top:-4px;width:2px;height:16px;background:rgba(255,255,255,.6)"></div>'
             f'<div style="position:absolute;left:calc({pos:.0f}% - 8px);top:-5px;width:16px;height:16px;border-radius:50%;'
@@ -134,9 +134,11 @@ def _signature(prof):
             f'<b style="color:{VELO_C}">{k["elastic"]}</b> elastic · {k["neutral"]} neutral</div></div>'
             f'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:6px 18px;margin-top:6px">{"".join(cells)}</div>'
             f'<div class="small text-muted" style="margin-top:4px">Each row compares him to the team. Left of center points '
-            f'muscular (deeper dip, longer time to takeoff, more braking and push force per pound); right of center points '
-            f'elastic (more spring, speed, height and power per pound). Every row is a timing measure or per pound of body '
-            f'weight, so a bigger or stronger athlete does not automatically read muscular.</div>')
+            f'muscular / terrestrial (deeper dip, longer time to takeoff and hop contact, more braking and push force per '
+            f'pound); right of center points elastic / aerial (more spring, speed, height, hop RSI and power per pound). '
+            f'Every row is a timing measure or per pound of body weight, so a bigger or stronger athlete does not '
+            f'automatically read muscular. DSI (CMJ peak force ÷ IMTP peak force) uses fixed cutoffs instead of the team: '
+            f'under 0.60 muscular, over 0.80 elastic. Hop and DSI rows show only when he has those tests.</div>')
 
 
 def _table(kind, is_pitcher):
@@ -168,25 +170,31 @@ def archetype_card(prof, is_pitcher=None):
         return ('<div class="gbo-seq-sec"><h6 class="gbo-seq-h">Athlete archetype</h6><p class="small text-muted">'
                 "Needs a countermovement jump (VALD) with height, mRSI, peak velocity, power, impulse and force -- "
                 "and at least 6 teammates tested -- to place him on the spectrum.</p></div>")
-    from analytics.athlete_archetype import DESCRIPTION
+    from analytics.athlete_archetype import DESCRIPTION, ALT_NAME
     k = prof["kind"]
     c = KIND_C[k]
     lines = "".join(f"<li>{_e(x)}</li>" for x in prof["lines"][1:])
+    dsi_note = ""
+    if prof.get("dsi"):
+        dsi_note = ('<div class="small text-muted" style="margin-top:6px">DSI uses his latest CMJ and latest IMTP, '
+                    'which may be from different days -- most trustworthy when both are tested within a couple of weeks.</div>')
     subs = ('<div class="small text-muted" style="margin-top:6px">* Substitute until our VALD import has it: '
             + _e("; ".join(sorted(set(prof.get("substitutes") or [])))) + ".</div>") if prof.get("substitutes") else ""
     panel = (f'<div style="border-left:4px solid {c};background:rgba(255,255,255,.03);padding:8px 12px;border-radius:6px">'
              f'<div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">'
              f'<div><div style="font-size:.66rem;font-weight:700;letter-spacing:.08em">ARCHETYPE</div>'
-             f'<div style="font-size:1.5rem;font-weight:800;color:{c};line-height:1.1">{k.upper()}</div></div>'
+             f'<div style="font-size:1.5rem;font-weight:800;color:{c};line-height:1.1">{k.upper()}</div>'
+             f'<div style="font-size:.8rem;font-weight:700;color:{c}">{_e(ALT_NAME[k].upper()) if ALT_NAME[k] != k else ""}</div></div>'
              f'<div class="small" style="flex:1 1 200px">{_e(DESCRIPTION[k])}</div></div>'
              f'<div class="small" style="margin-top:6px;border-top:1px solid rgba(255,255,255,.1);padding-top:5px">'
-             f'Spectrum index <b>{prof["index"]:+.2f}</b> &nbsp;·&nbsp; Overall output <b>{_ord(prof["output"])} pct</b></div></div>')
+             f'Spectrum index <b>{prof["index"]:+.2f}</b></div></div>')
     how = (f'<div style="font-size:.7rem;font-weight:700;letter-spacing:.06em;margin-top:12px">HOW HE MOVES</div>'
            f'<div class="small">{_e(prof["how"])}</div>') if prof.get("how") else ""
     return (f'<div class="gbo-seq-sec"><h6 class="gbo-seq-h">Athlete archetype <span style="background:{c};color:#111;'
-            f'padding:1px 8px;border-radius:6px;font-size:.75rem;margin-left:6px">{k.upper()}</span></h6>'
+            f'padding:1px 8px;border-radius:6px;font-size:.75rem;margin-left:6px">{_e(prof.get("label", k)).upper()}</span></h6>'
             f'<p class="text-muted small gbo-seq-how">Georgia Southern&#39;s force-plate archetype from his countermovement jump: '
             f'every metric is a team percentile (red at the center, green at the edge; dashed ring = team average). '
+            f'Elastic = aerial, Muscular = terrestrial (Pat Davidson&#39;s terms) -- same read, two names. '
             f'Snapshot of his latest jump -- a trend needs regular jump testing.</p>'
             f'<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">'
             f'<div style="flex:0 1 340px">{_radar(prof["metrics"])}'
@@ -194,7 +202,7 @@ def archetype_card(prof, is_pitcher=None):
             f'<div style="flex:1 1 320px">{panel}{_spectrum(prof)}{_side_bars(prof)}{how}</div></div>'
             f'{_signature(prof)}'
             f'{_table(k, True if is_pitcher is None else is_pitcher)}'
-            f'{_training(k)}{subs}</div>')
+            f'{_training(k)}{dsi_note}{subs}</div>')
 
 
 STAGE_C = {"limiter": "#D64545", "ok": "#3FB27F", "untested": "#7A8594"}

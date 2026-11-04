@@ -83,3 +83,31 @@ def test_archetype_goal_spec():
     assert sp is not None and sp["target"] > sp["baseline"]
     assert sp["test"] in ("CMJ Concentric Impulse", "CMJ Concentric Peak Force", "CMJ Eccentric Peak Force",
                           "CMJ Concentric Peak Velocity")
+
+
+def test_archetype_hop_and_dsi_rows():
+    """Nov 2026: hop RSI / contact time and DSI join the signature; Elastic
+    also reads Aerial, Muscular Terrestrial."""
+    raw = _cmj()
+    n = 8
+    raw["Hop Test RSI (10/5)"] = {i: 0.8 + 0.1 * i for i in range(n)}
+    raw["Hop Test Mean Contact Time"] = {i: 260 - 10 * i for i in range(n)}
+    # CMJ concentric peak force 2300 - 40i; IMTP chosen so DSI runs ~0.50 (i=0) -> ~0.89 (i=7)
+    raw["Isometric Mid-Thigh Pull Peak Vertical Force"] = {i: (2300 - 40 * i) / (0.50 + 0.056 * i) for i in range(n)}
+    vals = aa.values(raw)
+    spring, force = aa.profile(7, vals), aa.profile(0, vals)
+    assert len(spring["signature"]) == 11
+    s_dsi = next(s for s in spring["signature"] if s["key"] == "dsi")
+    f_dsi = next(s for s in force["signature"] if s["key"] == "dsi")
+    assert s_dsi["lean"] == "elastic" and f_dsi["lean"] == "muscular"
+    assert force["dsi"]["band"] == "ballistic" and spring["dsi"]["band"] == "strength"
+    assert spring["label"] == "Elastic / Aerial" and force["label"] == "Muscular / Terrestrial"
+    assert "hop test" in spring["how"] and "aerial" in spring["how"]
+    # DSI without a full team pool still reads (absolute cutoffs)
+    only = {k: v for k, v in raw.items()}
+    only["Isometric Mid-Thigh Pull Peak Vertical Force"] = {0: 4600.0}
+    assert aa.profile(0, aa.values(only))["dsi"]["value"] == 0.5
+    assert aa.label("Hybrid") == "Hybrid"
+    only["Isometric Mid-Thigh Pull Peak Vertical Force"] = {0: 2000.0}   # DSI 1.15 -> flagged, no row
+    bad = aa.profile(0, aa.values(only))
+    assert bad["dsi"]["band"] == "check" and not any(s["key"] == "dsi" for s in bad["signature"])

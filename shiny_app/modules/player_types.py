@@ -77,7 +77,7 @@ def player_types_server(input, output, session, app_state):
             return ui_helpers.empty_state("No players have both a force test and a jump / spring test yet.")
         counts = {k: sum(1 for _p, pr in rows if pr["kind"] == k) for k in ("Elastic", "Hybrid", "Muscular")}
         summ = "".join(
-            f'<div><b style="color:{KIND_C[k]}">{n}</b><span class="small">{k} -- '
+            f'<div><b style="color:{KIND_C[k]}">{n}</b><span class="small">{_e(aa.label(k))} -- '
             f'{_e(aa.TRAINING[k]["focus"].lower())}</span></div>' for k, n in counts.items())
         trs = []
         for p, pr in rows:
@@ -87,21 +87,24 @@ def player_types_server(input, output, session, app_state):
                    f'background:linear-gradient(90deg,{KIND_C["Muscular"]},{KIND_C["Hybrid"]},{KIND_C["Elastic"]})">'
                    f'<div style="position:absolute;left:calc({pos_pct:.0f}% - 5px);top:-3px;width:10px;height:10px;'
                    f'border-radius:50%;background:#fff"></div></div>')
+            dsi_txt = (f'<div class="small text-muted">DSI {pr["dsi"]["value"]:.2f}{" (check IMTP)" if pr["dsi"]["band"] == "check" else ""}</div>' if pr.get("dsi") else "")
             trs.append(
                 f'<tr><td>{_e(p.first_name)} {_e(p.last_name)} <span class="text-muted small">{pos}</span></td>'
-                f'<td><span class="gbo-pt-badge" style="background:{KIND_C[pr["kind"]]}">{pr["kind"].upper()}</span></td>'
+                f'<td><span class="gbo-pt-badge" style="background:{KIND_C[pr["kind"]]}">{_e(aa.label(pr["kind"])).upper()}</span>'
+                f'{dsi_txt}</td>'
                 f'<td>{bar}<div class="small text-muted">force ← {pr["index"]:+.2f} → spring · {pr["counts"]["muscular"]}M {pr["counts"]["elastic"]}E</div></td>'
-                f'<td>{pr["output"]}</td>'
                 f'<td>{_e(pr["best"]["label"])} <span class="text-muted small">({pr["best"]["pct"]})</span></td>'
                 f'<td>{_e(pr["worst"]["label"])} <span class="text-muted small">({pr["worst"]["pct"]})</span></td>'
                 f'<td>{_e(aa.TRAINING[pr["kind"]]["focus"])}</td></tr>')
         table = ('<div class="gbo-sg-wrap"><table class="gbo-pt-board"><thead><tr><th>Player</th><th>Type</th>'
-                 '<th>Force vs spring</th><th>Overall output (team pct)</th><th>Superpower</th><th>Biggest opportunity</th>'
+                 '<th>Force vs spring</th><th>Superpower</th><th>Biggest opportunity</th>'
                  f'<th>Training focus</th></tr></thead><tbody>{"".join(trs)}</tbody></table></div>')
         how = ("From each player's latest countermovement jump, ranked against the team -- Georgia Southern's "
-               "force-plate archetype: 8 signature rows (timing and per-pound measures) each lean muscular, neutral or "
-               "elastic; spectrum index = (elastic - muscular) / rows, Elastic at +0.25 or more, Muscular at -0.25 or "
-               "less. Elastic = wins with speed and spring, Muscular = wins with force, Hybrid = no strong lean. Use "
+               "force-plate archetype: up to 11 signature rows (CMJ timing and per-pound measures, hop RSI and contact "
+               "time, and DSI = CMJ peak force / IMTP peak force) each lean muscular, neutral or elastic; spectrum "
+               "index = (elastic - muscular) / rows, Elastic at +0.25 or more, Muscular at -0.25 or less. "
+               "Elastic = aerial (wins with speed and spring), Muscular = terrestrial (wins with force), Hybrid = no "
+               "strong lean. Use "
                "it to group lifting: Elastic guys need strength under the spring, Muscular guys need speed and "
                "reactive work. Open a player's Player Profile → Assessments for his full card and a one-click IDP goal. "
                "A snapshot of the latest test -- regular jump testing turns it into a trend.")

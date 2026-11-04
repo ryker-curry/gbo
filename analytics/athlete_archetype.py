@@ -30,6 +30,22 @@ Substitutes (Ryker, Oct 2026 -- not in our VALD import yet):
   Dip depth      = CMJ eccentric duration (a deeper dip takes longer)
 Both are labeled as substitutes on the card.
 
+AERIAL / TERRESTRIAL (Nov 2026, Ryker: "yes add it" -- Pat Davidson's
+aerial vs terrestrial framing): Elastic reads as Aerial (springy, stiff,
+short ground contacts, uses the stretch reflex), Muscular as Terrestrial
+(grounded, deeper, pushes). Same classification, two names -- label().
+Three more signature rows join the CMJ eight when he has the tests:
+  Hop RSI           (hop test, higher = elastic / aerial)
+  Hop contact time  (hop test, longer = muscular / terrestrial)
+  DSI               dynamic strength index = CMJ concentric peak force /
+                    IMTP peak force. Fixed cutoffs, not team percentile:
+                    < 0.60 muscular (strong, can't express it fast -> speed
+                    work), > 0.80 elastic (expresses most of a smaller max
+                    -> strength work), 0.60-0.80 neutral; over 1.0 is flagged
+                    as a bad IMTP and left out of the lean. Latest CMJ and
+                    latest IMTP, which may be different days -- flagged.
+With all eleven rows the +/-0.25 band is a net 3 of 11.
+
 OVERALL OUTPUT = his rank on the team by his average radar percentile.
 SUPERPOWER / BIGGEST OPPORTUNITY = his highest / lowest radar percentile.
 """
@@ -51,7 +67,33 @@ T_CPF = "CMJ Concentric Peak Force"
 T_EPF = "CMJ Eccentric Peak Force"
 T_ECC_DUR = "CMJ Eccentric Duration"
 T_CON_DUR = "Countermovement Jump Concentric Duration"
-NAMES = [T_HEIGHT, T_VELO, T_RSI, T_POWER, T_BW, T_IMPULSE, T_CPF, T_EPF, T_ECC_DUR, T_CON_DUR, "Body Weight"]
+T_HOP_RSI = "Hop Test RSI (10/5)"
+T_HOP_CT = "Hop Test Mean Contact Time"
+T_IMTP = "Isometric Mid-Thigh Pull Peak Vertical Force"
+NAMES = [T_HEIGHT, T_VELO, T_RSI, T_POWER, T_BW, T_IMPULSE, T_CPF, T_EPF, T_ECC_DUR, T_CON_DUR, "Body Weight",
+         T_HOP_RSI, T_HOP_CT, T_IMTP]
+
+DSI_LO, DSI_HI = 0.60, 0.80
+DSI_MAX = 1.0   # above this the IMTP can't have been a true max -- flagged, not scored
+ALT_NAME = {"Elastic": "Aerial", "Muscular": "Terrestrial", "Hybrid": "Hybrid"}
+
+
+def label(kind):
+    """'Elastic / Aerial', 'Muscular / Terrestrial', 'Hybrid'."""
+    alt = ALT_NAME.get(kind)
+    return kind if not alt or alt == kind else f"{kind} / {alt}"
+
+
+def dsi_read(v):
+    """(band, advice) for a dynamic strength index."""
+    if v > DSI_MAX:
+        return "check", ("jump force above his IMTP max -- likely a sub-max pull or tests far apart; "
+                         "retest the IMTP before using it")
+    if v < DSI_LO:
+        return "ballistic", "strong but not expressing it fast -- prioritize speed-strength and reactive work"
+    if v > DSI_HI:
+        return "strength", "uses most of his max quickly -- prioritize raising max strength"
+    return "concurrent", "balanced -- train strength and speed together"
 
 # key -> (label, side, unit, substitute note)
 RADAR = {
@@ -81,6 +123,9 @@ SIGNATURE = [
     ("speed", "Takeoff speed", "peak_velo", False, ("higher than", "lower"), None),
     ("height", "Jump height", "jump_ht", False, ("higher than", "lower"), None),
     ("power", "Relative power", "rel_power", False, ("higher than", "lower"), None),
+    ("hop_rsi", "Hop RSI", "hop_rsi", False, ("higher than", "lower"), None),
+    ("contact", "Hop contact time", "hop_ct", True, ("longer than", "quicker"), None),
+    ("dsi", "DSI", "dsi", False, None, None),   # fixed cutoffs, see dsi_read
 ]
 NEUTRAL_LO, NEUTRAL_HI = 40, 60
 
@@ -186,7 +231,7 @@ def values(raw):
     pids = set()
     for d in raw.values():
         pids |= set(d)
-    out = {k: {} for k in list(RADAR) + ["dip", "ttt", "rel_push"]}
+    out = {k: {} for k in list(RADAR) + ["dip", "ttt", "rel_push", "hop_rsi", "hop_ct", "dsi"]}
     for pid in pids:
         g = lambda t: (float(raw[t][pid]) if raw.get(t, {}).get(pid) is not None else None)  # noqa: E731
         bw = _bw_kg(raw, pid)
@@ -206,6 +251,10 @@ def values(raw):
             put("rel_push", cpf / (bw * G) * 100 if cpf is not None else None)
         put("dip", ecc)
         put("ttt", ecc + con if ecc is not None and con is not None else None)
+        put("hop_rsi", g(T_HOP_RSI))
+        put("hop_ct", g(T_HOP_CT))
+        imtp = g(T_IMTP)
+        put("dsi", cpf / imtp if cpf is not None and imtp else None)
     return {k: d for k, d in out.items() if d}
 
 
@@ -225,15 +274,25 @@ def profile(pid, vals):
     f_side = [pcts[k] for k in FORCE_SIDE if k in pcts]
     v_side = [pcts[k] for k in VELO_SIDE if k in pcts]
     sig = []
-    for key, label, vk, musc_high, words, sub in SIGNATURE:
+    for key, row_label, vk, musc_high, words, sub in SIGNATURE:
         pool = vals.get(vk) or {}
-        if pid not in pool or len(pool) < MIN_POOL:
-            continue
-        pct = _pct_rank(pool[pid], list(pool.values()))
-        m = pct if musc_high else 100 - pct            # how far toward muscular
+        if key == "dsi":
+            # absolute cutoffs: 0.60 -> m 60 (muscular edge), 0.80 -> m 40 (elastic edge)
+            if pid not in pool or pool[pid] > DSI_MAX:
+                continue
+            v = pool[pid]
+            m = max(0, min(100, round(50 + (0.70 - v) * 100)))
+            pct = _pct_rank(v, list(pool.values())) if len(pool) >= MIN_POOL else None
+            text = f"{v:.2f} ({dsi_read(v)[0]})" + (f", higher than {pct}% of team" if pct is not None else "")
+        else:
+            if pid not in pool or len(pool) < MIN_POOL:
+                continue
+            pct = _pct_rank(pool[pid], list(pool.values()))
+            m = pct if musc_high else 100 - pct            # how far toward muscular
+            text = f"{words[0]} {pct}% of team"
         lean = "muscular" if m >= NEUTRAL_HI else ("elastic" if m <= NEUTRAL_LO else "neutral")
-        sig.append({"key": key, "label": label, "pct": pct, "m": m, "lean": lean,
-                    "text": f"{words[0]} {pct}% of team", "substitute": sub})
+        sig.append({"key": key, "label": row_label, "pct": pct, "m": m, "lean": lean,
+                    "text": text, "substitute": sub})
     if not f_side or not v_side or len(sig) < 3:
         return None
     counts = {k: sum(1 for s in sig if s["lean"] == k) for k in ("muscular", "elastic", "neutral")}
@@ -255,7 +314,13 @@ def profile(pid, vals):
     lines = [DESCRIPTION[kind], f"Superpower: {best['label']} ({_ord(best['pct'])} percentile on the team)."]
     if worst["pct"] < 40:
         lines.append(f"Biggest opportunity: {worst['label']} ({_ord(worst['pct'])}).")
-    return {"kind": kind, "index": idx, "output": output, "force": round(mean(f_side)), "velocity": round(mean(v_side)),
+    dsi = None
+    if pid in (vals.get("dsi") or {}):
+        v = vals["dsi"][pid]
+        band, advice = dsi_read(v)
+        dsi = {"value": v, "band": band, "advice": advice}
+        lines.append(f"DSI {v:.2f} ({band}): {advice}.")
+    return {"kind": kind, "label": label(kind), "dsi": dsi, "index": idx, "output": output, "force": round(mean(f_side)), "velocity": round(mean(v_side)),
             "metrics": metrics, "signature": sig, "counts": counts, "best": best, "worst": worst, "lines": lines,
             "how": how_he_moves(sig, kind),
             "substitutes": [s for s in [RADAR[m["key"]][3] for m in metrics] + [s["substitute"] for s in sig] if s]}
@@ -281,10 +346,15 @@ def how_he_moves(sig, kind):
         bits.append({"muscular": "puts a lot of braking and push force into the ground per pound",
                      "elastic": "runs lighter on braking and push force per pound",
                      "neutral": "has average braking and push force per pound"}[lean])
+    hop = by.get("hop_rsi") or by.get("contact")
+    if hop:
+        bits.append({"elastic": "bounces off the ground quickly in the hop test",
+                     "muscular": "spends longer on the ground in the hop test",
+                     "neutral": "is average off the ground in the hop test"}[hop["lean"]])
     if not bits:
         return ""
-    tail = {"Elastic": " He produces relative to his body weight rather than through size.",
-            "Muscular": " He produces through force and mass more than spring.",
+    tail = {"Elastic": " He produces relative to his body weight rather than through size -- an aerial mover.",
+            "Muscular": " He produces through force and mass more than spring -- a terrestrial mover.",
             "Hybrid": " He uses a mix of force and spring."}[kind]
     return "On the plates he " + ", ".join(bits[:-1]) + (", and " if len(bits) > 1 else "") + bits[-1] + "." + tail
 
