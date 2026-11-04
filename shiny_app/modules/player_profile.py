@@ -54,6 +54,7 @@ import bucket_display
 import profile_links
 import college_career_display
 import career_development_display
+import hitting_tab_display
 from assessment_period import period_label
 import ui_helpers
 
@@ -285,11 +286,17 @@ def player_profile_server(input, output, session, app_state):
                 rows = assessment_history_rows(assessment_history_query(db, pid, cat.category_id).all())
                 if rows:
                     history_panels.append(ui.accordion_panel(f"{cat.category_name} ({len(rows)})", ui_helpers.render_dict_table(rows)))
-            return _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, season_label, game_pitching_extras)
+            # Nov 2026, Ryker: position players get a Hitting tab instead of
+            # Pitching; a pitcher who also has charted plate appearances gets both.
+            from models import GamePitch
+            hits = (not p.is_pitcher) or db.query(GamePitch.game_pitch_id).filter(
+                ((GamePitch.is_our_team_batting.is_(True)) & (GamePitch.our_player_id == pid))
+                | ((GamePitch.is_our_team_batting.is_(False)) & (GamePitch.opponent_our_player_id == pid))).first() is not None
+            return _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, season_label, game_pitching_extras, show_hitting=hits)
         finally:
             db.close()
 
-    def _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, game_season_label, game_pitching_extras=(0, 0, 0)):
+    def _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, game_season_label, game_pitching_extras=(0, 0, 0), show_hitting=False):
         pos = p.player_position.position_name if p.player_position else None
         cls = p.player_class.class_name if p.player_class else None
         meta = " · ".join(x for x in [f"#{p.jersey_number}" if p.jersey_number else None, pos, cls, f"{p.bats or '-'}/{p.throws or '-'}",
@@ -361,7 +368,8 @@ def player_profile_server(input, output, session, app_state):
             ui.nav_panel("Overview", ui.div(overview, class_="gbo-tab-body")),
             ui.nav_panel("Assessments", ui.div(assessments_tab, class_="gbo-tab-body")),
             ui.nav_panel("Mobility", ui.div(mobility_tab, class_="gbo-tab-body")),
-            ui.nav_panel("Pitching", ui.div(pitching_tab, class_="gbo-tab-body")),
+            *([ui.nav_panel("Pitching", ui.div(pitching_tab, class_="gbo-tab-body"))] if p.is_pitcher or pitches else []),
+            *([ui.nav_panel("Hitting", ui.div(ui.output_ui("hitting_tab"), class_="gbo-tab-body"))] if show_hitting else []),
             ui.nav_panel("Development", ui.div(dev_tab, class_="gbo-tab-body")),
             ui.nav_panel("Video", ui.div(video_tab, class_="gbo-tab-body")),
             # Nov 2026, Ryker: official college seasons (PSU + previous schools).
@@ -482,6 +490,8 @@ def player_profile_server(input, output, session, app_state):
 
     college_career_display.register(input, output, session, app_state, _profile_pid)
     career_development_display.register(input, output, session, app_state, _profile_pid)
+    hitting_tab_display.register(input, output, session, app_state, _profile_pid,
+                                 lambda: _selected_season() or current_season_label())
 
     @render.ui
     def recovery_tab():
