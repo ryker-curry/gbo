@@ -422,7 +422,7 @@ def _score_ring_status(label, value):
     scale (_tier_for_total), Body Comp/Power/Strength keep the red/
     yellow/green scale (composite_score_status). See each function's
     docstring."""
-    return _tier_for_total(value) if label == "Total" else composite_score_status(value)
+    return composite_score_status(value)
 
 
 def build_score_rings(bucket_data, key_prefix, mode="dark"):
@@ -431,8 +431,11 @@ def build_score_rings(bucket_data, key_prefix, mode="dark"):
     them. Colored via _score_ring_status: Total uses the player card's
     Diamond/Gold/Silver/Bronze/Common tiers, the other three use red/
     yellow/green (see _tier_for_total / composite_score_status)."""
+    # Nov 2026 (Ryker: "get rid of the overall grades at this time ...
+    # keep the idea but remove it from gbo"): no Total ring and no
+    # Diamond/Gold/Silver/Bronze/Common tier color. total_score is still
+    # computed in bucket_system.py and _tier_for_total is kept above.
     specs = [
-        ("Total", bucket_data["total_score"]),
         ("Body Comp", bucket_data["body_comp_score"]),
         ("Power", bucket_data["power_score"]),
         ("Strength", bucket_data["strength_score"]),

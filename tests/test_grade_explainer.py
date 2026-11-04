@@ -16,7 +16,7 @@ def test_stuff_shares_add_to_100(pitch):
 
 def test_render_has_every_grade_and_pitch():
     html = gx.render_html()
-    for word in ("Stuff+", "Location+", "Command+", "Pitching+", "Arsenal", "Results", "Performance"):
+    for word in ("Stuff+", "Location+", "Command+", "Pitching+", "Arsenal", "Results"):
         assert word in html
     for pitch in STUFF_PLUS_FIXED_WEIGHTS:
         assert f"<summary>{pitch}</summary>" in html

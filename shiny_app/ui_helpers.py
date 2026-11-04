@@ -486,7 +486,6 @@ def remove_selected_grid_rows(rows: list, selected_records: list) -> list:
 def show_card(player, bucket_data, pitch_summary=None, flag="neutral", fastball_summary=None):
     """MLB-The-Show-style player card (design doc section 8). Reads
     only what the bucket system already computes:
-      Overall  = total_score
       BODY/PWR/STR/SPD/ARM = bucket scores (percentile-based, 0-100)
       ROM      = movement_flag's deficit-count-based color (red/orange/
       yellow/green), NOT a percentile -- see flag_bar() below.
@@ -511,12 +510,17 @@ def show_card(player, bucket_data, pitch_summary=None, flag="neutral", fastball_
     names already lined up. Thresholds tightened from the original
     4-tier 90/80/70 split to 5 tiers on request, Aug 2026).
     Positions never get pitching rows; nothing is invented when data is
-    missing -- the row shows a dash."""
+    missing -- the row shows a dash.
+
+    Nov 2026 (Ryker: "get rid of the overall grades at this time. keep
+    the idea but remove it from gbo"): the card no longer shows the
+    Overall number or a Diamond/Gold/Silver/Bronze/Common tier -- the
+    accent is the team crimson for everyone and the attribute bars stay.
+    To bring tiers back: tier = _tier_for_total(bd["total_score"]) in
+    bucket_display.py, --tier from the tier color, and restore the
+    gbo-show-ovr block + "{tier} tier" footer span (see git history)."""
     bd = bucket_data or {}
-    overall = bd.get("total_score")
-    tier = ("diamond" if (overall or 0) >= 90 else "gold" if (overall or 0) >= 85 else "silver" if (overall or 0) >= 80
-            else "bronze" if (overall or 0) >= 75 else "common")
-    tier_color = {"diamond": "var(--gbo-diamond)", "gold": "var(--gbo-gold)", "silver": "var(--gbo-silver)", "bronze": "var(--gbo-bronze)", "common": "var(--gbo-common)"}[tier]
+    tier_color = "var(--gbo-crimson)"
     mf = bd.get("movement_flag") or {}
     rom_color = mf.get("color")
     rom_deficits = mf.get("deficit_count")
@@ -611,13 +615,12 @@ def show_card(player, bucket_data, pitch_summary=None, flag="neutral", fastball_
     photo = ui.tags.img(src=player.photo_url, class_="gbo-show-photo-img", alt="") if getattr(player, "photo_url", None) else ui.HTML('<svg viewBox="0 0 24 24" fill="currentColor" class="gbo-show-silhouette"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0z"/></svg>')
     return ui.div(
         ui.div(
-            ui.div(f"{overall:.0f}" if overall is not None else "—", ui.tags.small("Overall"), class_="gbo-show-ovr"),
             ui.div(ui.div(player.first_name, class_="gbo-show-nm"), ui.div(player.last_name, class_="gbo-show-ln"), ui.div(*meta, class_="gbo-show-meta"), class_="gbo-show-who"),
-            class_="gbo-show-hd",
+            class_="gbo-show-hd", style="grid-template-columns:1fr",
         ),
         ui.div(photo, ui.div(str(player.jersey_number) if player.jersey_number else "", class_="gbo-show-num"), class_="gbo-show-photo"),
         ui.div(*attrs, class_="gbo-show-attrs"),
-        ui.div(ui.tags.img(src=theme.LOGO_URL, alt=""), ui.span("Pitt State"), ui.span(f"{tier} tier", class_="rt"), class_="gbo-show-ft"),
+        ui.div(ui.tags.img(src=theme.LOGO_URL, alt=""), ui.span("Pitt State"), class_="gbo-show-ft"),
         class_="gbo-show", style=f"--tier:{tier_color}",
     )
 

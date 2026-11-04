@@ -182,13 +182,6 @@ the time, the fastball is 60% of your Arsenal grade.</p>
 {res_bars}
 </div>
 
-<div class="card">
-<h4>Performance -- the overall number</h4>
-<p class="what">The five grades above, counted equally. One number for "how well is he pitching".</p>
-{perf_bars}
-<p class="recipe">Arsenal is built from Stuff+ and Location+, so how good your pitches are counts for a little more
-than it looks here.</p>
-</div>
 
 <p class="note">Small samples bounce around. Trust a grade more once it's built from a few outings, not one.</p>
 </div>

@@ -448,45 +448,11 @@ def hitter_profile_server(input, output, session, app_state):
             sections.append(ui_helpers.plus_stat_cards(plus, league_baselines.HITTING_PLUS_ORDER, league_baselines.hitting_actuals(line)))
             sections.append(ui.p(league_baselines.PLUS_HELP, class_="text-muted small"))
 
-            # Performance: results-based composite (Aug 31 2026 design
-            # call with Ryker -- see analytics/performance_score.py's
-            # module docstring). Hitters don't get a Stuff+/Location+/
-            # Command+/Arsenal equivalent (pitcher-only, pitch-quality
-            # concepts) -- this IS the whole Hitter Performance score,
-            # not a blend of several pieces the way pitcher Performance
-            # is. Needs compute_hitter_discipline for its Chase %/
-            # Whiff %/Zone Swing % inputs -- the Plate Discipline view
-            # computes the same thing again for its own KPI cards, same
-            # "each gated section computes what it needs" convention
-            # pitcher_profile.py's own views already follow.
-            discipline = compute_hitter_discipline(pitches)
-            sections.append(ui.hr())
-            sections.append(ui.p(ui.strong("Performance")))
-            sections.append(ui.p(
-                "Results-based composite -- wOBA, AVG, Chase % (lower better), Whiff % (lower better), Zone "
-                "Swing % (higher better), all team-relative -- game production, separate from the Bucket "
-                "System's physical/athletic score. Hitters don't have a pitch-quality grade to blend in the way "
-                "pitcher Performance does, so this is the Results score in full.",
-                class_="text-muted small",
-            ))
-            if discipline["Pitches Seen"] == 0:
-                sections.append(ui.p("Not enough pitches with plate-discipline data yet for a Performance score.", class_="text-muted small"))
-            else:
-                hitter_results_line = dict(line, **{
-                    "Chase %": discipline["Chase %"],
-                    "Whiff %": discipline["Whiff %"],
-                    "Zone Swing %": discipline["Zone Swing %"],
-                })
-                team_hitting_lines = profile_queries.team_hitting_lines(db, date_from=f["date_from"], date_to=f["date_to"])
-                performance_value = None
-                if len(team_hitting_lines) >= performance_score.MIN_BASELINE_PLAYERS:
-                    results_baseline = performance_score.team_hitter_results_baseline(team_hitting_lines)
-                    performance_value = performance_score.hitter_results_score(hitter_results_line, results_baseline)
-                performance_bars = ui_helpers.render_percentile_bars([("Performance", performance_value)])
-                if performance_bars is not None:
-                    sections.append(performance_bars)
-                else:
-                    sections.append(ui.p("Not enough team baseline yet for a Performance score.", class_="text-muted small"))
+            # Nov 2026 (Ryker: "get rid of the overall grades at this time ...
+            # keep the idea but remove it from gbo"): the hitter Performance
+            # composite (wOBA/AVG/Chase/Whiff/Zone Swing blend) is no longer
+            # shown -- performance_score.hitter_results_score still exists.
+            # The per-metric team-percentile bars elsewhere on this page stay.
 
             return ui.div(*sections)
         finally:
@@ -576,7 +542,7 @@ def hitter_profile_server(input, output, session, app_state):
                 sections.append(ui.p(ui.strong("Team Percentile (this window)")))
                 sections.append(ui.p(
                     "Each stat's own percentile against the rest of the team over this same date range -- same "
-                    "grade/percentile scale as the Performance bar on Overview, one metric at a time instead of "
+                    "grade/percentile scale (100 = team average), one metric at a time instead of "
                     "blended together.",
                     class_="text-muted small",
                 ))
