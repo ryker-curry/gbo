@@ -59,6 +59,13 @@ def assessment_history_rows(assessments):
         row["Notes"] = a.notes or ""
         for r in a.results:
             unit_label = f" ({r.test_type.unit})" if r.test_type.unit else ""
-            row[f"{r.test_type.test_name}{unit_label}"] = round(float(r.value), 2)
+            v = round(float(r.value), 2)
+            # Nov 2026 (Ryker): a substitute lift is stored under the test it
+            # stands in for, with "*<test name> = <actual lift>" in the notes
+            # -- the value gets the asterisk so it can't be mistaken for the
+            # real lift.
+            if a.notes and f"*{r.test_type.test_name} =" in a.notes:
+                v = f"{v:g}*"
+            row[f"{r.test_type.test_name}{unit_label}"] = v
         rows.append(row)
     return rows

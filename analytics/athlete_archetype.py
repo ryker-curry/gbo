@@ -363,16 +363,26 @@ def how_he_moves(sig, kind):
 # DB
 # ---------------------------------------------------------------------------
 
+def _own_group(db, raw, pid):
+    """Nov 2026 (Ryker): pitchers are compared to pitchers, position
+    players to position players -- narrow the team pool to his group."""
+    import bucket_system as bs
+    groups = bs.player_groups(db)
+    mine = groups.get(pid, False)
+    return {t: {p: v for p, v in d.items() if p == pid or groups.get(p, False) == mine} for t, d in raw.items()}
+
+
 def load(db, pid):
     import bucket_system as bs
     raw, _units = bs._batch_fetch_latest_values(db, NAMES, include_player_id=pid)
-    return profile(pid, values(raw))
+    return profile(pid, values(_own_group(db, raw, pid)))
 
 
 def load_full(db, pid):
     """(profile, raw) -- raw is needed to build an IDP goal."""
     import bucket_system as bs
     raw, _units = bs._batch_fetch_latest_values(db, NAMES, include_player_id=pid)
+    raw = _own_group(db, raw, pid)
     return profile(pid, values(raw)), raw
 
 
@@ -381,10 +391,12 @@ def team(db):
     import bucket_system as bs
     from models import Player
     raw, _units = bs._batch_fetch_latest_values(db, NAMES)
-    vals = values(raw)
+    groups = bs.player_groups(db)
+    by_group = {g: values({t: {p: v for p, v in d.items() if groups.get(p, False) == g} for t, d in raw.items()})
+                for g in (True, False)}   # Nov 2026: each group ranked within itself
     out = []
     for p in db.query(Player).filter(Player.active.is_(True)).all():
-        prof = profile(p.player_id, vals)
+        prof = profile(p.player_id, by_group[bool(p.is_pitcher)])
         if prof:
             out.append((p, prof))
     out.sort(key=lambda t: -t[1]["index"])

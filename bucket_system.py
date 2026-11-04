@@ -667,6 +667,32 @@ def get_bucket_test_names_for_category(category_name):
     return set()
 
 
+def is_substitute(notes, test_name):
+    """Nov 2026 (Ryker): a substitute lift (safety bar squat, leg press,
+    belt squat...) is stored under the test it stands in for with
+    "*<test name> = <actual lift>" in the assessment notes. It shows in
+    Full History with an asterisk but is LEFT OUT OF SCORING -- every
+    latest-value fetch skips it, so the player's last real result (if
+    any) counts instead."""
+    return bool(notes and test_name and f"*{test_name} =" in notes)
+
+
+@cached("player_groups", {"players"})
+def player_groups(session):
+    """{player_id: True (pitcher) / False (position player)}."""
+    return {pid: bool(ip) for pid, ip in session.query(Player.player_id, Player.is_pitcher).all()}
+
+
+def same_group_pool(cache, session, player_id, is_pitcher):
+    """Nov 2026 (Ryker: "compare position players to position players and
+    pitchers to pitchers"): narrow every {player_id: value} comparison
+    pool to the subject's own group (plus the subject himself). Returns a
+    new dict; the shared cache is left alone."""
+    groups = player_groups(session)
+    return {name: {pid: v for pid, v in by_player.items() if pid == player_id or groups.get(pid, False) == is_pitcher}
+            for name, by_player in cache.items()}
+
+
 def get_latest_values_by_player(session, test_name, _cache=None, season_start=None, season_end=None, active_only=True, include_player_id=None):
     """{player_id: value} -- each player's most recent result for this
     test type. Returns {} if the test type doesn't exist yet (e.g. not
@@ -727,7 +753,7 @@ def get_latest_values_by_player(session, test_name, _cache=None, season_start=No
     if test_type is None:
         return {}
     query = (
-        session.query(AssessmentResult, Assessment.player_id, Assessment.assessment_date)
+        session.query(AssessmentResult, Assessment.player_id, Assessment.assessment_date, Assessment.notes)
         .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
         .join(Player, Assessment.player_id == Player.player_id)
         .filter(AssessmentResult.test_type_id == test_type.test_type_id)
@@ -743,7 +769,9 @@ def get_latest_values_by_player(session, test_name, _cache=None, season_start=No
         query = query.filter(Assessment.assessment_date < season_end)
     rows = query.all()
     latest = {}
-    for result, player_id, assessment_date in rows:
+    for result, player_id, assessment_date, notes in rows:
+        if is_substitute(notes, test_name):
+            continue
         if player_id not in latest or assessment_date > latest[player_id][1]:
             latest[player_id] = (float(result.value), assessment_date)
     return {pid: v for pid, (v, _) in latest.items()}
@@ -863,7 +891,8 @@ def _batch_fetch_latest_values_uncached(session, test_names, season_start=None, 
         return {}, {}
 
     result_query = (
-        session.query(AssessmentResult.test_type_id, AssessmentResult.value, Assessment.player_id, Assessment.assessment_date)
+        session.query(AssessmentResult.test_type_id, AssessmentResult.value, Assessment.player_id, Assessment.assessment_date,
+                      Assessment.notes)
         .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
         .join(Player, Assessment.player_id == Player.player_id)
         .filter(AssessmentResult.test_type_id.in_(type_ids))
@@ -881,7 +910,9 @@ def _batch_fetch_latest_values_uncached(session, test_names, season_start=None, 
 
     # {test_type_id: {player_id: (value, date)}} -- latest per player, per test
     latest_by_type_id = {}
-    for test_type_id, value, player_id, assessment_date in result_rows:
+    for test_type_id, value, player_id, assessment_date, notes in result_rows:
+        if is_substitute(notes, name_by_type_id.get(test_type_id)):
+            continue
         bucket = latest_by_type_id.setdefault(test_type_id, {})
         if player_id not in bucket or assessment_date > bucket[player_id][1]:
             bucket[player_id] = (float(value), assessment_date)
@@ -2079,6 +2110,10 @@ def compute_bucket_system(session, player_id, season_label=None, _cache=None, _u
     # players with no change needed here. Also skippable via _throws_map.
     if _throws_map is None:
         _throws_map = get_player_throws_map(session)
+    # Pitchers are scored against pitchers, position players against
+    # position players (Nov 2026) -- every percentile, GIRD pool and
+    # body-comp median below reads this narrowed cache.
+    _cache = same_group_pool(_cache, session, player_id, is_pitcher)
 
     # Body Comp -- score is averaged from ONLY the 2 scoring metrics
     # (BODY_COMP_METRICS), but the metrics dict returned for display
