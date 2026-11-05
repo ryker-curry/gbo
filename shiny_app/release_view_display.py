@@ -1,12 +1,12 @@
 """
-GBO -- player-facing release view, rendering (Nov 2026, Ryker: release card on
-login + tap-in detail + "Pitchers Like You"). Data: analytics/release_view.py.
+GBO -- player-facing release view, rendering (Nov 2026, Ryker: release card +
+detail + "Pitchers Like You", on Pitcher Deep Dive's Release Point view). Data: analytics/release_view.py.
 
 Plain HTML/SVG strings (like release_graphics.py) -- render with ui.HTML().
 Plots sit on the release card's own dark panel (INK) so they read the same in
 light and dark mode; text around them uses the app's CSS variables.
 
-    dashboard_card_html(profile, types, alert)  -- Dashboard
+    dashboard_card_html(profile, alert)         -- card + tiles (+ alert)
     window_html(types, throws)                  -- release window by pitch + table
     trend_html(outs)                            -- arm angle by outing
     takeaways_html(lines)                       -- "What this means"
