@@ -30,7 +30,7 @@ def _p(names):
 
 BATTERY = [
     ("Body Composition", [n for n, _ in bs.BODY_COMP_DISPLAY_METRICS if n not in ("Basal Metabolic Rate (BMR)", "Recommended Caloric Intake")]),
-    ("Explosive Power", [n for sub, ms in bs.POWER_SUBGROUPS.items() if sub != "Med Ball Throw" for n, _ in ms]),
+    ("Jump Power", [n for sub, ms in bs.POWER_SUBGROUPS.items() if sub != "Med Ball Throw" for n, _ in ms]),
     ("Rotational Power", [n for n, _ in bs.POWER_SUBGROUPS.get("Med Ball Throw", [])] + [n for n, _ in bs.MED_BALL_THROW_REFERENCE_METRICS]),
     ("Lower Body Strength", _p([n for sub in ("Lower Body Strength", "Rate of Force Development")
                                 for n, _ in bs.STRENGTH_SUBGROUPS.get(sub, [])])),

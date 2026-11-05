@@ -767,7 +767,7 @@ def player_profile_server(input, output, session, app_state):
         body_comp_bar_metrics = {n: d for n, d in (bd.get("body_comp_metrics") or {}).items() if n in bucket_display.BODY_COMP_BAR_NAMES}
         buckets = [
             ("Body composition", bd.get("body_comp_score"), body_comp_bar_metrics),
-            ("Explosive & rotational power", bd.get("power_score"), flat(bd.get("power_subgroup_metrics"))),
+            ("Jump & rotational power", bd.get("power_score"), flat(bd.get("power_subgroup_metrics"))),
             ("Strength", bd.get("strength_score"), flat(bd.get("strength_subgroup_metrics"))),
             ("Speed", bd.get("speed_score"), bd.get("speed_metrics") or {}),
             ("Arm capacity", bd.get("capacity_score"), flat(bd.get("capacity_subgroup_metrics"))),

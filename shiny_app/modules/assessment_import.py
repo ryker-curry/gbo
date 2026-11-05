@@ -23,7 +23,7 @@ permission.
 
 assessment_import_spec.CATEGORY_SPECS only covers 8 of the 11 real
 categories (Body Composition, Mobility & ROM, Arm Health, Upper Body
-Strength, Lower Body Strength, Explosive Power, Rotational Power, Speed)
+Strength, Lower Body Strength, Jump Power, Rotational Power, Speed)
 -- Anthropometrics was dropped (never measured), Baseball Performance has
 no data yet, and Pitcher-Specific has its own per-pitch-type shape that
 doesn't fit this generic sheet layout (it's still entered by hand on

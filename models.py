@@ -63,7 +63,7 @@ class Role(Base):
 class AssessmentCategory(Base):
     """The 11 real assessment buckets, per Ryker's Master Player Profile
     Data Dictionary: Anthropometrics, Body Composition, Mobility & ROM,
-    Arm Health, Upper Body Strength, Lower Body Strength, Explosive
+    Arm Health, Upper Body Strength, Lower Body Strength, Jump
     Power, Rotational Power, Speed, Baseball Performance (all universal),
     plus Pitcher-Specific (position-specific).
 

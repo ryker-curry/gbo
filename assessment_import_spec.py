@@ -19,7 +19,7 @@ which list to use from the category name the caller passes in.
 kind values, and what services/assessment_import.py does with each:
   "value"          -- plain number -> one AssessmentResult row.
   "ftin_to_in"      -- a "43'10\"" -- style string -> decimal inches ->
-                       one AssessmentResult row (Explosive Power's jump
+                       one AssessmentResult row (Jump Power's jump
                        distances/heights).
   "ftin_to_ft"      -- same parse, decimal feet instead (Rotational
                        Power's Medicine Ball Shot Put Distance).
@@ -47,7 +47,7 @@ kind values, and what services/assessment_import.py does with each:
                        unmapped instead of leaving it a mystery. As of
                        Sept 2026 no column below actually uses this kind
                        -- the last of the original gaps (Body
-                       Composition's Age/BMI/FFMI/TBW/ICW/ECW, Explosive
+                       Composition's Age/BMI/FFMI/TBW/ICW/ECW, Jump
                        Power's 9 CMJ force-plate metrics, Upper Body
                        Strength's Glove Hand grip test) were closed by
                        adding their AssessmentTestType rows to
@@ -134,7 +134,7 @@ LOWER_BODY_STRENGTH = _value_cols([
 
 _FT_IN_UNIT = "ft'in\""
 
-EXPLOSIVE_POWER = [
+JUMP_POWER = [
     ColumnSpec("Vertical Jump (Jump Mat) (in)", "value", "Vertical Jump (Jump Mat)", "in"),
     ColumnSpec(f"Broad Jump Distance ({_FT_IN_UNIT})", "ftin_to_in", "Broad Jump Distance", "in"),
     ColumnSpec(f"Lateral Jump Distance (Drive Leg) ({_FT_IN_UNIT})", "ftin_to_in", "Lateral Jump Distance (Drive Leg)", "in"),
@@ -218,7 +218,7 @@ CATEGORY_SPECS = {
     "Arm Health": ARM_HEALTH,
     "Upper Body Strength": UPPER_BODY_STRENGTH,
     "Lower Body Strength": LOWER_BODY_STRENGTH,
-    "Explosive Power": EXPLOSIVE_POWER,
+    "Jump Power": JUMP_POWER,
     "Rotational Power": ROTATIONAL_POWER,
     "Speed": SPEED,
 }

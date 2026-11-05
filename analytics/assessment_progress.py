@@ -28,7 +28,7 @@ NOT_A_STRENGTH = {"Body Weight", "Shoulder ROM: GIRD"}
 
 # Categories the progress chart offers, in page order. Anthropometrics and
 # Pitcher-Specific (Rapsodo, per pitch type) stay in the full history table.
-CHART_CATEGORIES = ["Body Composition", "Explosive Power", "Rotational Power", "Upper Body Strength",
+CHART_CATEGORIES = ["Body Composition", "Jump Power", "Rotational Power", "Upper Body Strength",
                     "Lower Body Strength", "Speed", "Arm Health", "Mobility & ROM"]
 
 

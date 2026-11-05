@@ -60,7 +60,7 @@ ASSESSMENT_CATEGORIES = [
     ("Arm Health", True, 4),
     ("Upper Body Strength", True, 5),
     ("Lower Body Strength", True, 6),
-    ("Explosive Power", True, 7),
+    ("Jump Power", True, 7),
     ("Rotational Power", True, 8),
     ("Speed", True, 9),
     ("Baseball Performance", True, 10),
@@ -215,7 +215,7 @@ LOWER_BODY_STRENGTH_TESTS = [
 # directly (unit relabeled, values x12) rather than through this file,
 # since seed_tests() only adds missing test types and never touches
 # ones that already exist.
-EXPLOSIVE_POWER_TESTS = [
+JUMP_POWER_TESTS = [
     ("Vertical Jump (Jump Mat)", "in"),
     ("Broad Jump Distance", "in"),
     ("Lateral Jump Distance (Drive Leg)", "in"), ("Lateral Jump Distance (Plant Leg)", "in"),
@@ -229,8 +229,8 @@ EXPLOSIVE_POWER_TESTS = [
     ("Single-Leg Jump Height (Drive Leg)", "in"), ("Single-Leg Jump Concentric Impulse (Drive Leg)", "Ns"),
     ("Single-Leg Jump Height (Plant Leg)", "in"), ("Single-Leg Jump Concentric Impulse (Plant Leg)", "Ns"),
     # Sept 2026 addition -- the 9 CMJ force-plate variables Ryker sent
-    # verbatim, closing the Assessment Importer's remaining Explosive
-    # Power schema gap (assessment_import_spec.py's EXPLOSIVE_POWER list
+    # verbatim, closing the Assessment Importer's remaining Jump
+    # Power schema gap (assessment_import_spec.py's JUMP_POWER list
     # already expected these 9, flagged "unmapped_new"/"*NEW*" until now).
     # Named "CMJ ..." (not spelled out "Countermovement Jump ...", unlike
     # the CMJ tests above) to match the import template's header text
@@ -318,7 +318,7 @@ def seed_assessment_categories_and_tests(session):
     seed_tests("Arm Health", ARM_HEALTH_TESTS)
     seed_tests("Upper Body Strength", UPPER_BODY_STRENGTH_TESTS)
     seed_tests("Lower Body Strength", LOWER_BODY_STRENGTH_TESTS)
-    seed_tests("Explosive Power", EXPLOSIVE_POWER_TESTS)
+    seed_tests("Jump Power", JUMP_POWER_TESTS)
     seed_tests("Rotational Power", ROTATIONAL_POWER_TESTS)
     seed_tests("Speed", SPEED_TESTS)
     seed_tests("Pitcher-Specific", PITCHER_SPECIFIC_TESTS)

@@ -30,7 +30,7 @@ NEW_ORDER = {
     "Rotational Power": [
         "Medicine Ball Shot Put Distance",
     ],
-    "Explosive Power": [
+    "Jump Power": [
         "Vertical Jump (Jump Mat)",
         "Broad Jump Distance",
         "Lateral Jump Distance (Drive Leg)", "Lateral Jump Distance (Plant Leg)",
