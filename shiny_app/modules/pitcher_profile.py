@@ -750,8 +750,9 @@ def pitcher_profile_server(input, output, session, app_state):
     @render.ui
     def pp_release_view():
         """Release Point view (Nov 2026, Ryker: player-facing release card +
-        tap-in detail + "Pitchers Like You"). The player Dashboard's release
-        card links here. Release window / trend use games + bullpens (more
+        "Pitchers Like You"). Players open it from My Pitcher Deep
+        Dive > View > Release Point -- not shown on the Dashboard (Ryker:
+        "it needs to be something they can click to view"). Release window / trend use games + bullpens (more
         readings per pitch type); comps use the staff comp pool (game pitches
         only, release_comps.MIN_COMP_GAME_PITCHES+). Data:
         analytics/release_view.py, rendering: release_view_display.py."""
