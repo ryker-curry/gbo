@@ -249,10 +249,14 @@ def _zone_hand_filtered(db, pitches, hand_choice):
 PLUS_MIN_IP = 15   # Oct 2026 coach pass: plus stats hidden below this
 
 
+# Nov 2026: the view a player opens on (the Coach Summary is staff-only).
+PLAYER_DEFAULT_VIEW = "overview"
+
+
 @module.ui
 def pitcher_profile_ui():
     return ui.div(
-        ui_helpers.page_header("Pitcher Deep Dive", "Everything on one pitcher -- start with the Coach Summary, then open a view for the detail.", actions=ui_helpers.how_to_link("pitcher_profile")),
+        ui_helpers.page_header("Pitcher Deep Dive", "Everything on one pitcher -- pick a view below for the detail.", actions=ui_helpers.how_to_link("pitcher_profile")),
         ui.output_ui("pp_player_picker"),
         ui.output_ui("pp_filters"),
         # Sept 2026, Ryker: a "View" dropdown instead of every section
@@ -574,9 +578,18 @@ def pitcher_profile_server(input, output, session, app_state):
             if app_state.role_name() in STAFF_ROLES:
                 view_choices["Staff tools"] = {"fastball_shape": "Fastball Shape Check",
                                                "pitch_type_check": "Pitch Type Check"}
+            default_view = "summary"
+            if app_state.role_name() == "Player":
+                # Nov 2026, Ryker: players don't see the Coach Summary --
+                # it's written for staff. They open on Overview instead.
+                view_choices.pop("Start here", None)
+                default_view = PLAYER_DEFAULT_VIEW
+            pending = _take_pending_view()
+            if pending == "summary" and app_state.role_name() == "Player":
+                pending = None
             return ui.div(
                 ui.hr(),
-                ui.input_select("pp_view", "View", choices=view_choices, selected=_take_pending_view() or "summary"),
+                ui.input_select("pp_view", "View", choices=view_choices, selected=pending or default_view),
             )
         finally:
             db.close()
@@ -1752,6 +1765,8 @@ def pitcher_profile_server(input, output, session, app_state):
         view = input.pp_view()
         if view not in _INSIGHT_VIEWS:
             return None
+        if view == "summary" and role == "Player":
+            return None
         extra = None
         if view == "summary":
             extra = ui.div(
@@ -1785,6 +1800,8 @@ def pitcher_profile_server(input, output, session, app_state):
         req("pp_view" in input)
         view = input.pp_view()
         if view not in _INSIGHT_VIEWS:
+            return None
+        if view == "summary" and app_state.role_name() == "Player":
             return None
         import pitch_insights_display as pid_html
         from analytics import pitch_insights as pins
