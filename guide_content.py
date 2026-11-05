@@ -267,6 +267,21 @@ GUIDE = [
         "good": ["Everyone you plan to use is green on game day; no workload spikes."],
     },
     {
+        "key": "throwing_workload", "title": "Throwing Workload", "who": "staff", "pages": ["Throwing Workload"],
+        "shows": "Every throw a pitcher makes -- games, bullpens, catch play, long toss, warm-ups, and sensor counts "
+                 "(PULSE / Motus) -- with his 9-day vs 28-day ratio and his weekly build.",
+        "use": [
+            "Gray bars are assumed throws: a warm-up before each bullpen or outing, and catch play on throwing days. "
+            "Log the real number (or 'No throwing') and the assumption for that day goes away.",
+            "Ratio = average throws a day, last 9 days / last 28. 0.8-1.2 is in range, 0.7-0.8 or 1.2-1.3 watch, "
+            "under 0.7 or over 1.3 outside. Hollow points mean under 4 weeks of history -- don't trust those yet.",
+            "Weekly chart: built-up pros sit around 500-700 throws a week (starters ~600-665, relievers ~490). "
+            "The first time he gets there should be in the fall or preseason, not in season.",
+            "A sensor day uses the sensor's count for the whole day, so nothing is counted twice.",
+        ],
+        "good": ["Ratios in the green band, a steady climb in weekly throws before the season, and few assumed days."],
+    },
+    {
         "key": "team_report", "title": "Team Game Report", "who": "staff", "pages": ["Team Game Report"],
         "shows": "How we did as a team -- pitching and hitting -- for one game, a series, the season or any dates, "
                  "with every player's own report one click away. Coaches also get it by email after each game.",

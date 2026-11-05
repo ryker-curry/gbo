@@ -2555,3 +2555,51 @@ class SmartParkPlayerLink(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     player = relationship("Player")
+
+
+# ---------------------------------------------------------------------------
+# Throwing workload (Nov 2026, Ryker: count every throw, not just pitches --
+# catch play, long toss, warm-ups, plyos -- with a 9-day / 28-day ratio and a
+# weekly build vs benchmarks; ready for PULSE / Motus sensor exports).
+# Table setup: python3 -m migrations.migrate_throwing_workload
+# ---------------------------------------------------------------------------
+
+class ThrowLog(Base):
+    """Throws that aren't charted pitches. One row per player / day / type.
+      source "manual" -- typed in by staff on the Throwing Workload page
+      source "pulse" / "motus" / "sensor" -- a sensor export; a day with
+                 sensor throws uses the sensor total for that day instead of
+                 adding up pitches + logs + assumed throws (the sensor saw
+                 every throw).
+    throw_type "No throwing" with throws = 0 marks a real rest day so no
+    assumed catch play gets added for it."""
+    __tablename__ = "throw_logs"
+
+    throw_log_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    log_date = Column(Date, nullable=False)
+    throw_type = Column(String(20), nullable=False)
+    throws = Column(Integer, nullable=False, default=0)
+    high_intent = Column(Integer, nullable=True)          # throws at or near full effort, if known
+    source = Column(String(12), nullable=False, default="manual")
+    workload = Column(Numeric(10, 2), nullable=True)       # the sensor's own workload / stress number
+    peak_torque = Column(Numeric(6, 1), nullable=True)     # sensor peak elbow torque (Nm), if exported
+    notes = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    player = relationship("Player")
+
+
+class ThrowingAssumption(Base):
+    """One row (setting_id = 1): the throws GBO assumes when nobody logged
+    them -- warm-up before a bullpen / game outing, and daily catch play."""
+    __tablename__ = "throwing_assumptions"
+
+    setting_id = Column(Integer, primary_key=True)
+    pen_warmup = Column(Integer, nullable=False, default=25)
+    game_warmup = Column(Integer, nullable=False, default=35)
+    catch_play = Column(Integer, nullable=False, default=40)
+    catch_play_days = Column(String(12), nullable=False, default="practice")   # practice / weekdays / daily / off
+    updated_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)

@@ -81,6 +81,8 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
         if show_bullpen_pages or role_name in ("Sports Scientist", "Data Analyst", "Athletic Trainer", "Strength Coach"):
             # Oct 2026: who can throw today (staff only).
             pd_pages.append(NavPage("arm_care", "Arm Care & Availability", "heart"))
+            # Nov 2026, Ryker: every throw (catch play, warm-ups, sensors), 9 vs 28-day ratio.
+            pd_pages.append(NavPage("throwing_workload", "Throwing Workload", "activity"))
         # Oct 2026, Ryker: WHOOP pilot -- every staff role (and players, below).
         pd_pages.append(NavPage("recovery_board", "Recovery Board", "moon"))
         if show_bullpen_pages or role_name in ("Sports Scientist", "Data Analyst"):
