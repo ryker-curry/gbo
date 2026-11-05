@@ -135,8 +135,7 @@ def player_stats_server(input, output, session, app_state):
                 or bool(bucket_data.get("mobility_rom_report"))
                 or bool(bucket_data.get("movement_flag"))
             )
-            legend = ui.p("Bars = % of the team's best mark (100 = you have the best). "
-                          "Green ▲/▼ = better than your last test, red = worse.", class_="text-muted small")
+            legend = bucket_display.bar_legend()
             panels = [ui.nav_panel("Overview", ui.div(*overview) if overview else
                                    ui_helpers.empty_state("No physical testing data yet."), value="overview")]
             if has_any_data:

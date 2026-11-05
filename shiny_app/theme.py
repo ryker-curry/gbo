@@ -479,6 +479,17 @@ hr { border-color: var(--gbo-border); opacity: 1; }
 .gbo-metric-bar-raw { color: var(--gbo-text); font-family: var(--gbo-mono); font-size: .82rem; font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; flex: none; }
 .gbo-metric-bar-raw small, .gbo-metric-bar-raw .unit { color: var(--gbo-text-muted); font-family: var(--gbo-font); font-size: .74rem; margin-left: 3px; }
 .gbo-metric-bar-track { background: var(--gbo-bg-raised); border-radius: 3px; height: 6px; overflow: hidden; }
+/* Nov 2026 (bucket bars): lane holds the track plus the last-test ring and team-median tick */
+.gbo-metric-bar-lane { position: relative; height: 16px; display: flex; align-items: center; }
+.gbo-metric-bar-lane .gbo-metric-bar-track { flex: 1; height: 8px; border-radius: 4px; }
+.gbo-bar-median { position: absolute; top: 1px; width: 2px; height: 14px; margin-left: -1px; border-radius: 1px; background: var(--gbo-text); opacity: .65; }
+.gbo-bar-last { position: absolute; top: 2px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; box-sizing: border-box; border: 2px solid var(--gbo-text); background: var(--gbo-bg-card); }
+.gbo-change-summary { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 2px 0 10px; font-size: .82rem; }
+.gbo-change-summary > div { display: flex; gap: 8px; align-items: flex-start; flex: 1 1 240px; }
+.gbo-sum-text { display: flex; flex-direction: column; gap: 1px; }
+.gbo-sum-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex: none; }
+.gbo-sum-dot.better { background: var(--gbo-status-good); }
+.gbo-sum-dot.worse { background: var(--gbo-status-flag); }
 .gbo-metric-bar-fill { background: var(--gbo-status-good); height: 100%; border-radius: 3px; transition: width .6s ease; }
 .gbo-metric-bar-fill.good { background: var(--gbo-status-good); }
 .gbo-metric-bar-fill.watch { background: var(--gbo-status-watch); }
