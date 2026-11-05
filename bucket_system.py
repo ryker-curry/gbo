@@ -209,6 +209,18 @@ def season_date_range(label):
 BODY_COMP_METRICS = [
     ("Body Weight", "higher"),
     ("Skeletal Muscle Mass", "higher"),
+    # Nov 2026 (Ryker: "all of the testing we have done should go into ...
+    # all the buckets"): the InBody lean-mass and fat measures from the
+    # testing workbook now count too.
+    ("Skeletal Muscle Mass %", "higher"),
+    ("Fat-Free Mass", "higher"),
+    ("Fat-Free Mass Index (FFMI)", "higher"),
+    ("Skeletal Muscle Index (SMI)", "higher"),
+    ("Trunk Lean Mass", "higher"),
+    ("Lean Mass (Drive Leg)", "higher"),
+    ("Lean Mass (Plant Leg)", "higher"),
+    ("Percent Body Fat", "lower"),
+    ("Fat Mass Index (FMI)", "lower"),
 ]
 
 # Body Comp raw fields enterable via the assessment ENTRY FORM (Ryker
@@ -243,6 +255,14 @@ BODY_COMP_DISPLAY_METRICS = [
     ("Skeletal Muscle Mass", "higher"),
     ("Body Fat Mass", "lower"),
     ("Percent Body Fat", "lower"),
+    ("Skeletal Muscle Mass %", "higher"),
+    ("Fat-Free Mass", "higher"),
+    ("Fat-Free Mass Index (FFMI)", "higher"),
+    ("Skeletal Muscle Index (SMI)", "higher"),
+    ("Trunk Lean Mass", "higher"),
+    ("Lean Mass (Drive Leg)", "higher"),
+    ("Lean Mass (Plant Leg)", "higher"),
+    ("Fat Mass Index (FMI)", "lower"),
     # BMR/Recommended Caloric Intake (Sept 1 2026): direction is unused
     # for these two -- neither is in BODY_COMP_METRICS/BODY_COMP_BAR_
     # NAMES, so bucket_display.build_full_breakdown routes them straight
@@ -258,6 +278,7 @@ BODY_COMP_DISPLAY_METRICS = [
 POWER_SUBGROUPS = {
     "Med Ball Throw": [
         ("Medicine Ball Shot Put Distance", "higher"),
+        ("Medicine Ball Shot Put Velocity", "higher"),
     ],
     "Field Jumps": [
         ("Vertical Jump (Jump Mat)", "higher"),
@@ -265,22 +286,61 @@ POWER_SUBGROUPS = {
         ("Lateral Jump Distance (Drive Leg)", "higher"),
         ("Lateral Jump Distance (Plant Leg)", "higher"),
     ],
+    # Nov 2026 (Ryker: "all the force plate metrics should go into one of
+    # the buckets, there should be a bunch of force plate stuff under
+    # power"): every VALD jump / hop metric is scored now. Bodyweight
+    # columns are the only ones left out (body size, not performance).
+    # Eccentric peak velocity is negative (downward), so "lower" = faster.
     "Countermovement Jump": [
         ("Countermovement Jump Height", "higher"),
         ("Countermovement Jump RSI-Modified", "higher"),
         ("Countermovement Jump Concentric Duration", "lower"),
         ("Countermovement Jump Concentric Mean Force", "higher"),
+        ("CMJ Peak Power", "higher"),
+        ("CMJ Concentric Impulse", "higher"),
+        ("CMJ Concentric Peak Force", "higher"),
+        ("CMJ Concentric Peak Velocity", "higher"),
+        ("CMJ Eccentric Peak Force", "higher"),
+        ("CMJ Eccentric Peak Power", "higher"),
+        ("CMJ Eccentric Peak Velocity", "lower"),
+        ("CMJ Eccentric Duration", "lower"),
     ],
     "Repeated Hop": [
         ("Hop Test RSI (10/5)", "higher"),
         ("Hop Test Average Force", "higher"),
         ("Hop Test Mean Contact Time", "lower"),
+        ("Hop Test Jump Height", "higher"),
+        ("Hop Test Flight Time", "higher"),
+        ("Hop Test Average Power", "higher"),
+        ("Hop Test Peak Power", "higher"),
+        ("Hop Test Peak Force", "higher"),
+        ("Hop Test Impulse", "higher"),
+        ("Hop Test Time to Peak Force", "lower"),
+        ("Hop Test Landing RFD", "higher"),
     ],
     "Single Leg Jump": [
         ("Single-Leg Jump Height (Drive Leg)", "higher"),
         ("Single-Leg Jump Height (Plant Leg)", "higher"),
         ("Single-Leg Jump Concentric Impulse (Drive Leg)", "higher"),
         ("Single-Leg Jump Concentric Impulse (Plant Leg)", "higher"),
+        ("Single-Leg Jump Peak Power (Drive Leg)", "higher"),
+        ("Single-Leg Jump Peak Power (Plant Leg)", "higher"),
+        ("Single-Leg Jump Concentric Peak Force (Drive Leg)", "higher"),
+        ("Single-Leg Jump Concentric Peak Force (Plant Leg)", "higher"),
+        ("Single-Leg Jump Concentric Peak Velocity (Drive Leg)", "higher"),
+        ("Single-Leg Jump Concentric Peak Velocity (Plant Leg)", "higher"),
+        ("Single-Leg Jump RSI-Modified (Drive Leg)", "higher"),
+        ("Single-Leg Jump RSI-Modified (Plant Leg)", "higher"),
+        ("Single-Leg Jump Concentric Duration (Drive Leg)", "lower"),
+        ("Single-Leg Jump Concentric Duration (Plant Leg)", "lower"),
+        ("Single-Leg Jump Eccentric Peak Force (Drive Leg)", "higher"),
+        ("Single-Leg Jump Eccentric Peak Force (Plant Leg)", "higher"),
+        ("Single-Leg Jump Eccentric Peak Power (Drive Leg)", "higher"),
+        ("Single-Leg Jump Eccentric Peak Power (Plant Leg)", "higher"),
+        ("Single-Leg Jump Eccentric Peak Velocity (Drive Leg)", "lower"),
+        ("Single-Leg Jump Eccentric Peak Velocity (Plant Leg)", "lower"),
+        ("Single-Leg Jump Eccentric Duration (Drive Leg)", "lower"),
+        ("Single-Leg Jump Eccentric Duration (Plant Leg)", "lower"),
     ],
 }
 
@@ -300,9 +360,7 @@ POWER_SUBGROUPS = {
 # satisfy compute_metric_percentiles' signature, not a real scoring
 # call -- same convention as BODY_COMP_DISPLAY_METRICS' BMR/Calories
 # entries above.
-MED_BALL_THROW_REFERENCE_METRICS = [
-    ("Medicine Ball Shot Put Velocity", "higher"),
-]
+MED_BALL_THROW_REFERENCE_METRICS = []   # Nov 2026: velocity is scored now (in "Med Ball Throw" above)
 
 STRENGTH_SUBGROUPS = {
     "Lower Body Strength": [
@@ -321,11 +379,54 @@ STRENGTH_SUBGROUPS = {
         ("Isometric Mid-Thigh Pull Peak Vertical Force", "higher"),
         ("Isometric Mid-Thigh Pull Peak Vertical Force (Drive Leg)", "higher"),
         ("Isometric Mid-Thigh Pull Peak Vertical Force (Plant Leg)", "higher"),
+        # Nov 2026 (Ryker: "strength should have ... all strength metrics"):
+        # the rest of the IMTP export, the ForceFrame hip averages /
+        # impulse, and the isometric belt squat (position players).
+        ("IMTP Peak Vertical Force (Net of BW)", "higher"),
+        ("IMTP Net Peak Vertical Force", "higher"),
+        ("IMTP Peak Vertical Force / BM", "higher"),
+        ("IMTP Net Peak Vertical Force (Drive Leg)", "higher"),
+        ("IMTP Net Peak Vertical Force (Plant Leg)", "higher"),
+        ("Hip Abduction Avg Force (Drive Leg)", "higher"),
+        ("Hip Abduction Avg Force (Plant Leg)", "higher"),
+        ("Hip Adduction Avg Force (Drive Leg)", "higher"),
+        ("Hip Adduction Avg Force (Plant Leg)", "higher"),
+        ("Hip Abduction Impulse (Drive Leg)", "higher"),
+        ("Hip Abduction Impulse (Plant Leg)", "higher"),
+        ("Hip Adduction Impulse (Drive Leg)", "higher"),
+        ("Hip Adduction Impulse (Plant Leg)", "higher"),
+        ("Hip Abduction Time to Peak Force (Drive Leg)", "lower"),
+        ("Hip Abduction Time to Peak Force (Plant Leg)", "lower"),
+        ("Hip Adduction Time to Peak Force (Drive Leg)", "lower"),
+        ("Hip Adduction Time to Peak Force (Plant Leg)", "lower"),
+        ("Isometric Belt Squat Peak Vertical Force", "higher"),
+        ("Isometric Belt Squat Peak Vertical Force / BM", "higher"),
+    ],
+    # Nov 2026: how fast force comes on in the IMTP / belt squat -- its own
+    # strength subgroup so early-force numbers don't drown out max strength.
+    "Rate of Force Development": [
+        ("IMTP RFD 0-100 ms", "higher"),
+        ("IMTP RFD 0-150 ms", "higher"),
+        ("IMTP RFD 0-200 ms", "higher"),
+        ("IMTP RFD 0-250 ms", "higher"),
+        ("IMTP Net Force at 100 ms", "higher"),
+        ("IMTP Net Force at 150 ms", "higher"),
+        ("IMTP Net Force at 200 ms", "higher"),
+        ("IMTP Impulse (Net of BW) 0-100 ms", "higher"),
+        ("IMTP Impulse (Net of BW) 0-150 ms", "higher"),
+        ("IMTP Impulse (Net of BW) 0-200 ms", "higher"),
+        ("Isometric Belt Squat RFD 0-100 ms", "higher"),
+        ("Isometric Belt Squat Force at 100 ms", "higher"),
+        ("Isometric Belt Squat Time to 80% Net Peak Force", "lower"),
     ],
     "Upper Body Strength": [
         ("Neutral Grip/DB Bench Press Max Load", "higher"),
+        ("Bench Press Max", "higher"),                       # position players' bench (Nov 2026)
         ("Neutral Grip Chin Up Max External Load", "higher"),
+        ("Pull Strength: Chin Up Repetitions", "higher"),
+        ("Push-Up Repetitions", "higher"),
         ("Grip Strength (Seated, Throwing Hand)", "higher"),
+        ("Grip Strength (Seated, Glove Hand)", "higher"),
     ],
 }
 
@@ -399,6 +500,15 @@ CAPACITY_SUBGROUPS = {
     "Shoulder Strength": [
         ("Shoulder Strength: Throwing Arm ER Peak Force", "higher"),
         ("Shoulder Strength: Throwing Arm IR Peak Force", "higher"),
+        # Nov 2026: the rest of the ForceFrame shoulder test (throwing arm)
+        ("Shoulder ER Avg Force (Throwing Arm)", "higher"),
+        ("Shoulder IR Avg Force (Throwing Arm)", "higher"),
+        ("Shoulder ER Impulse (Throwing Arm)", "higher"),
+        ("Shoulder IR Impulse (Throwing Arm)", "higher"),
+        ("Shoulder ER Time to Peak Force (Throwing Arm)", "lower"),
+        ("Shoulder IR Time to Peak Force (Throwing Arm)", "lower"),
+        ("Shoulder Strength: Non-Throwing Arm ER Peak Force", "higher"),
+        ("Shoulder Strength: Non-Throwing Arm IR Peak Force", "higher"),
     ],
     "Scapular Strength": [
         ("Shoulder Strength: I Position Peak Force", "higher"),
@@ -1869,7 +1979,7 @@ def compute_movement_flag(session, player_id, mobility_rom_report):
 # Body Fat Mass / Percent Body Fat bars are unchanged (reference only).
 # ---------------------------------------------------------------------------
 
-BODY_COMP_TARGET_NAMES = tuple(n for n, _d in BODY_COMP_METRICS)
+BODY_COMP_TARGET_NAMES = ("Body Weight", "Skeletal Muscle Mass")   # staff targets stay on these two (Nov 2026)
 _TARGET_CACHE = {"at": 0.0, "data": None}
 TARGET_CACHE_SECONDS = 60
 
@@ -1936,10 +2046,40 @@ def apply_body_comp_targets(metrics, targets):
     return metrics
 
 
+# Nov 2026 (Ryker: "would like a few of them to headline" -- picked with
+# him): within each test group the headline metrics make up HEADLINE_WEIGHT
+# of the score and every other metric shares the rest, so one minor number
+# (eccentric duration, hop landing RFD...) can't swing a bucket. A group with
+# only headliners, or none, is a plain mean.
+HEADLINE_WEIGHT = 2 / 3
+HEADLINE_METRICS = {
+    # Power
+    "Countermovement Jump Height", "Countermovement Jump RSI-Modified", "CMJ Peak Power", "CMJ Concentric Impulse",
+    "Hop Test RSI (10/5)",
+    "Single-Leg Jump Height (Drive Leg)", "Single-Leg Jump Height (Plant Leg)",
+    "Single-Leg Jump Peak Power (Drive Leg)", "Single-Leg Jump Peak Power (Plant Leg)",
+    "Medicine Ball Shot Put Velocity", "Medicine Ball Shot Put Distance",
+    "Broad Jump Distance", "Lateral Jump Distance (Drive Leg)", "Lateral Jump Distance (Plant Leg)",
+    # Strength
+    "IMTP Peak Vertical Force / BM", "IMTP Net Peak Vertical Force", "Hex Bar Deadlift Max", "Front Squat Max",
+    "IMTP RFD 0-200 ms", "IMTP Net Force at 100 ms",
+    "Neutral Grip/DB Bench Press Max Load", "Bench Press Max", "Neutral Grip Chin Up Max External Load",
+    # Arm
+    "Shoulder Strength: Throwing Arm ER Peak Force", "Shoulder Strength: Throwing Arm IR Peak Force",
+    # Body comp
+    "Body Weight", "Skeletal Muscle Mass", "Fat-Free Mass",
+}
+
+
 def average_percentiles(metric_dict):
-    """Plain mean of whatever percentiles are present (no weighting),
-    rounded. None if nothing to average."""
-    values = [m["percentile"] for m in metric_dict.values() if m["percentile"] is not None]
+    """Mean of whatever percentiles are present, rounded; headline metrics
+    (HEADLINE_METRICS) carry HEADLINE_WEIGHT of it when the group has both
+    headline and supporting metrics. None if nothing to average."""
+    head = [m["percentile"] for n, m in metric_dict.items() if m["percentile"] is not None and n in HEADLINE_METRICS]
+    rest = [m["percentile"] for n, m in metric_dict.items() if m["percentile"] is not None and n not in HEADLINE_METRICS]
+    if head and rest:
+        return round(HEADLINE_WEIGHT * sum(head) / len(head) + (1 - HEADLINE_WEIGHT) * sum(rest) / len(rest))
+    values = head or rest
     if not values:
         return None
     return round(sum(values) / len(values))
@@ -2149,7 +2289,7 @@ def compute_bucket_system(session, player_id, season_label=None, _cache=None, _u
         power_subgroup_metrics[sub_name] = m
     power_score = round(sum(v for v in power_subgroup_scores.values() if v is not None) / len([v for v in power_subgroup_scores.values() if v is not None])) if any(v is not None for v in power_subgroup_scores.values()) else None
 
-    # Strength (3 sub-groups)
+    # Strength (sub-groups: lower body, rate of force development, upper body)
     strength_subgroup_scores = {}
     strength_subgroup_metrics = {}
     for sub_name, metrics in STRENGTH_SUBGROUPS.items():

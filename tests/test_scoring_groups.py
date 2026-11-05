@@ -20,3 +20,16 @@ def test_same_group_pool(monkeypatch):
     pool = bs.same_group_pool(cache, None, 3, False)["Front Squat Max"]
     assert bs.compute_percentile(400.0, list(pool.values()), "higher") == 89
     assert cache["Front Squat Max"][1] == 300.0   # shared cache untouched
+
+
+def test_headline_weighting():
+    """Nov 2026: headline metrics carry 2/3 of a group's score."""
+    m = {"Countermovement Jump Height": {"percentile": 90}, "CMJ Peak Power": {"percentile": 90},
+         "CMJ Eccentric Duration": {"percentile": 30}, "CMJ Eccentric Peak Velocity": {"percentile": 30}}
+    assert bs.average_percentiles(m) == 70          # 2/3*90 + 1/3*30
+    assert bs.average_percentiles({"CMJ Eccentric Duration": {"percentile": 30}}) == 30
+    assert bs.average_percentiles({"30-Yard Sprint Time": {"percentile": 80}, "Acceleration: 10-Yard Sprint Time": {"percentile": 60}}) == 70
+    assert bs.average_percentiles({"X": {"percentile": None}}) is None
+    every = {n for g in (list(bs.POWER_SUBGROUPS.values()) + list(bs.STRENGTH_SUBGROUPS.values())
+                         + list(bs.CAPACITY_SUBGROUPS.values()) + [bs.BODY_COMP_METRICS]) for n, _ in g}
+    assert bs.HEADLINE_METRICS <= every            # every headliner is a scored metric

@@ -498,8 +498,10 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark", is_pitcher=None, cha
     if not metrics_dict:
         return ui.p("No data yet.", class_="text-muted small")
 
+    from bucket_system import HEADLINE_METRICS
     rows = []
-    for name, d in metrics_dict.items():
+    # Nov 2026: headline metrics first, tagged KEY -- they carry 2/3 of the score.
+    for name, d in sorted(metrics_dict.items(), key=lambda kv: kv[0] not in HEADLINE_METRICS):
         raw_percentile = d["percentile"]
         pct = raw_percentile if raw_percentile is not None else 0
         pct = max(0, min(100, pct))
@@ -524,7 +526,9 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark", is_pitcher=None, cha
             src = "staff target" if d.get("target_source") == "set" else "team median"
             percentile_label = f"{raw_percentile}% of target ({d['target']:.1f}{d['unit'] or ''}, {src})"
         header_children = [
-            ui.span(name, class_="gbo-metric-bar-name"),
+            ui.span(name, ui.span(" KEY", title="Headline metric -- counts for 2/3 of this group's score",
+                                  style="font-size:.6rem;font-weight:700;color:var(--gbo-gold,#E9C46A);margin-left:4px;")
+                    if name in HEADLINE_METRICS else None, class_="gbo-metric-bar-name"),
             ui.span(raw_label, class_="gbo-metric-bar-raw"),
         ]
         tier = force_plate_standards.classify(name, d["raw"], is_pitcher) if is_pitcher is not None else None

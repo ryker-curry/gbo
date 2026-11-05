@@ -20,12 +20,21 @@ FASTBALLS = ("4-Seam Fastball", "Fastball", "2-Seam Fastball")
 
 # (category, [tests]) -- the predictor battery, in page order. Only tests
 # that are part of the scored / reference physical testing.
+_HITTERS_ONLY = ("Bench Press Max", "Push-Up Repetitions", "Pull Strength: Chin Up Repetitions", "Isometric Belt Squat")
+
+
+def _p(names):
+    """Pitcher study battery: drop position-player-only tests (Nov 2026)."""
+    return [n for n in names if not n.startswith(_HITTERS_ONLY)]
+
+
 BATTERY = [
     ("Body Composition", [n for n, _ in bs.BODY_COMP_DISPLAY_METRICS if n not in ("Basal Metabolic Rate (BMR)", "Recommended Caloric Intake")]),
     ("Explosive Power", [n for sub, ms in bs.POWER_SUBGROUPS.items() if sub != "Med Ball Throw" for n, _ in ms]),
     ("Rotational Power", [n for n, _ in bs.POWER_SUBGROUPS.get("Med Ball Throw", [])] + [n for n, _ in bs.MED_BALL_THROW_REFERENCE_METRICS]),
-    ("Lower Body Strength", [n for n, _ in bs.STRENGTH_SUBGROUPS.get("Lower Body Strength", [])]),
-    ("Upper Body Strength", [n for n, _ in bs.STRENGTH_SUBGROUPS.get("Upper Body Strength", [])]),
+    ("Lower Body Strength", _p([n for sub in ("Lower Body Strength", "Rate of Force Development")
+                                for n, _ in bs.STRENGTH_SUBGROUPS.get(sub, [])])),
+    ("Upper Body Strength", _p([n for n, _ in bs.STRENGTH_SUBGROUPS.get("Upper Body Strength", [])])),
     ("Speed", [n for n, _ in bs.SPEED_METRICS]),
 ]
 

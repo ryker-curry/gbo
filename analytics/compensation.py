@@ -75,7 +75,18 @@ def pearson(xs, ys):
 
 
 def _tests(groups, rel=False, skip=()):
-    return [(n, d, rel) for g in groups for n, d in g if n not in skip]
+    # Nov 2026: the bucket lists now hold every force-plate column -- per-kg
+    # numbers, timings and rep counts are never divided by body weight again,
+    # and position-player-only tests have no pitchers to compare.
+    hitters_only = ("Bench Press Max", "Push-Up Repetitions", "Pull Strength: Chin Up Repetitions", "Isometric Belt Squat")
+    out = []
+    for g in groups:
+        for n, d in g:
+            if n in skip or n.startswith(hitters_only):
+                continue
+            r = rel and not ("/ BM" in n or "Time to" in n or "Repetitions" in n)
+            out.append((n, d, r))
+    return out
 
 
 DOMAINS = [
