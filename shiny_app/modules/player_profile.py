@@ -241,6 +241,13 @@ def player_profile_server(input, output, session, app_state):
             # real value once the coach (or player) has actually picked
             # a season from season_picker() above.
             bd = compute_bucket_system(db, pid, season_label=_selected_season() or None) or {}
+            # Nov 2026 (bucket bars): change since last test + last-test ring on
+            # the breakdown bars, same as My Assessments.
+            try:
+                from analytics import assessment_progress as _ap
+                bd_changes = _ap.changes_for_bucket(_ap.history(db, pid), bd) if bd else {}
+            except Exception:
+                bd_changes = {}
             last_by_cat = db.query(AssessmentCategory.category_name, func.max(Assessment.assessment_date)).join(Assessment, Assessment.category_id == AssessmentCategory.category_id).filter(Assessment.player_id == pid).group_by(AssessmentCategory.category_name).all()
             last_date = max((d for _, d in last_by_cat), default=None)
             last_cat = next((c for c, d in last_by_cat if d == last_date), None)
@@ -292,11 +299,11 @@ def player_profile_server(input, output, session, app_state):
             hits = (not p.is_pitcher) or db.query(GamePitch.game_pitch_id).filter(
                 ((GamePitch.is_our_team_batting.is_(True)) & (GamePitch.our_player_id == pid))
                 | ((GamePitch.is_our_team_batting.is_(False)) & (GamePitch.opponent_our_player_id == pid))).first() is not None
-            return _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, season_label, game_pitching_extras, show_hitting=hits)
+            return _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, season_label, game_pitching_extras, show_hitting=hits, bd_changes=bd_changes)
         finally:
             db.close()
 
-    def _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, game_season_label, game_pitching_extras=(0, 0, 0), show_hitting=False):
+    def _render(p, bd, last_date, last_cat, bullpen, pitches, n_bullpens, goals, videos, mode, app_state, history_panels, game_fastball_summ, game_pitches, game_season_label, game_pitching_extras=(0, 0, 0), show_hitting=False, bd_changes=None):
         pos = p.player_position.position_name if p.player_position else None
         cls = p.player_class.class_name if p.player_class else None
         meta = " · ".join(x for x in [f"#{p.jersey_number}" if p.jersey_number else None, pos, cls, f"{p.bats or '-'}/{p.throws or '-'}",
@@ -340,7 +347,7 @@ def player_profile_server(input, output, session, app_state):
 
         # --- tabs ---
         overview = ui.div(ui.output_ui("recent_games"), _overview_tab(bd, summ, pitches, bullpen, goals, mode))
-        breakdown_block = bucket_display.build_full_breakdown(bd, key_prefix="profile", mode=mode,
+        breakdown_block = bucket_display.build_full_breakdown(bd, key_prefix="profile", mode=mode, changes=bd_changes,
                                                                      show_proposal=app_state.role_name() != "Player") if bd.get("total_score") is not None else ui_helpers.card(ui_helpers.empty_state("No scored assessments yet. Log Body Composition, Power, or Strength tests to populate the breakdown."))
         # Full History -- collapsed by default, same treatment the raw
         # history table always got on the (now data-entry-only)

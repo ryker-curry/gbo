@@ -1090,7 +1090,15 @@ def compute_metric_percentiles(session, player_id, metrics, _cache=None, _units=
         else:
             test_type = session.query(AssessmentTestType).filter(AssessmentTestType.test_name == test_name).first()
             unit = test_type.unit if test_type else None
-        out[test_name] = {"raw": value, "percentile": pct, "unit": unit}
+        # Nov 2026 (Ryker: bucket bars with last test + team median): the
+        # comparison pool rides along so the bar can place his previous
+        # result on today's scale, and the team median percentile (same
+        # pool, same formula) draws as a tick on the bar.
+        team_values = list(by_player.values())
+        team_pcts = [x for x in (compute_percentile(v, team_values, direction) for v in team_values) if x is not None]
+        out[test_name] = {"raw": value, "percentile": pct, "unit": unit, "direction": direction,
+                          "team_values": team_values,
+                          "team_median_pct": round(_median(team_pcts)) if len(team_pcts) >= 3 else None}
     return out
 
 

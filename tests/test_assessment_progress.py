@@ -71,3 +71,33 @@ def test_breakdown_groups_split_into_tabs():
     keys = [k for k, _, _ in bucket_display.breakdown_groups(bd, "t")]
     assert keys == ["body_comp", "power", "strength", "speed"]       # no Mobility tab without ROM data
     assert "Body Weight" in str(bucket_display.build_full_breakdown(bd, "t"))
+
+
+def test_bucket_bars_last_test_median_and_summary():
+    """Nov 2026 bucket bars: last-test ring on today's scale, team-median
+    tick, and the Biggest gain / Went down summary."""
+    import datetime as dt
+    import bucket_display
+    team = [16.0, 15.0, 14.0, 13.0, 12.0]          # he's the 15.0
+    m = {"CMJ Height": {"raw": 15.0, "percentile": 94, "unit": "in", "direction": "higher",
+                        "team_values": team, "team_median_pct": 88},
+         "Concentric Duration": {"raw": 0.30, "percentile": 80, "unit": "s", "direction": "lower",
+                                 "team_values": [0.24, 0.27, 0.30, 0.31], "team_median_pct": 82},
+         "Old Row": {"raw": 10.0, "percentile": 70, "unit": "in"}}      # pre-feature dict: no markers
+    ch = {"CMJ Height": {"delta": 1.2, "prev_date": dt.date(2026, 3, 1), "latest_date": dt.date(2026, 10, 1), "better": True},
+          "Concentric Duration": {"delta": 0.03, "prev_date": dt.date(2026, 3, 1), "latest_date": dt.date(2026, 10, 1), "better": False}}
+    # previous 13.8 against today's best 16.0 -> 86; previous 0.27 s against best 0.24 -> 89
+    assert bucket_display.previous_pct(m["CMJ Height"], ch["CMJ Height"]) == 86
+    assert bucket_display.previous_pct(m["Concentric Duration"], ch["Concentric Duration"]) == 89
+    assert bucket_display.previous_pct(m["Old Row"], None) is None
+    html = str(bucket_display.build_metric_bars(m, "t", changes=ch))
+    assert html.count("gbo-bar-median") == 2 and html.count("gbo-bar-last") == 2
+    assert "team median 88" in html and "left:86%" in html
+    s = str(bucket_display.change_summary([m], ch))
+    assert "Biggest gain" in s and "CMJ Height" in s
+    assert "Went down" in s and "Concentric Duration" in s and "now below team median" in s
+    assert bucket_display.change_summary([m], {}) is None
+    # target-scored rows (Body Comp proposal scale) never get markers
+    t = {"Body Weight": {"raw": 190.0, "percentile": 97, "unit": "lb", "target": 195.0, "direction": "higher",
+                         "team_values": [170.0, 190.0, 210.0], "team_median_pct": 90}}
+    assert "gbo-bar-median" not in str(bucket_display.build_metric_bars(t, "t"))

@@ -538,17 +538,93 @@ def build_metric_bars(metrics_dict, chart_key, mode="dark", is_pitcher=None, cha
                 class_=f"gbo-tier-badge {tier['status']}",
             ))
         status = individual_metric_status(raw_percentile)
+        # Nov 2026 (Ryker, bucket bars mockup): hollow ring = his last test
+        # on today's scale, thin tick = team median. Skipped on target-
+        # scored rows (a different scale) and when there's nothing to show.
+        change = (changes or {}).get(name)
+        median = None if d.get("target") else d.get("team_median_pct")
+        last = None if d.get("target") else previous_pct(d, change)
+        markers = []
+        if median is not None:
+            markers.append(ui.span(class_="gbo-bar-median", style=f"left:{max(0, min(100, median))}%;",
+                                   title=f"Team median: {median}"))
+            percentile_label += f" · team median {median}"
+        if last is not None:
+            markers.append(ui.span(class_="gbo-bar-last", style=f"left:{last}%;", title=f"Last test: {last}"))
         rows.append(ui.div(
             ui.div(*header_children, class_="gbo-metric-bar-header"),
             ui.div(
-                ui.div(class_=f"gbo-metric-bar-fill {status}", style=f"width: {pct}%;"),
-                class_="gbo-metric-bar-track",
+                ui.div(
+                    ui.div(class_=f"gbo-metric-bar-fill {status}", style=f"width: {pct}%;"),
+                    class_="gbo-metric-bar-track",
+                ),
+                *markers,
+                class_="gbo-metric-bar-lane",
             ),
-            ui.div(ui.span(percentile_label), change_chip((changes or {}).get(name), d["unit"]),
+            ui.div(ui.span(percentile_label), change_chip(change, d["unit"]),
                    class_="gbo-metric-bar-percentile gbo-metric-bar-foot"),
             class_="gbo-metric-bar-row",
         ))
     return ui.div(*rows, class_="gbo-metric-bar-group")
+
+
+def previous_pct(d, change):
+    """His previous result placed on TODAY's scale (same pool and formula as
+    the current bar), so the ring only moves when HE changed -- not when the
+    team's best changed. None if there's no previous test or no pool."""
+    if not change or d.get("raw") is None or not d.get("team_values") or not d.get("direction"):
+        return None
+    from bucket_system import compute_percentile
+    prev_raw = float(d["raw"]) - float(change["delta"])
+    pool = list(d["team_values"]) + [prev_raw]
+    p = compute_percentile(prev_raw, pool, d["direction"])
+    return None if p is None else max(0, min(100, p))
+
+
+BAR_LEGEND_TEXT = ("Bars = % of the team's best mark (100 = you have the best). "
+                   "Hollow ring = your last test, thin line = team median. "
+                   "Green ▲/▼ = better than your last test, red = worse.")
+
+
+def bar_legend():
+    return ui.p(BAR_LEGEND_TEXT, class_="text-muted small")
+
+
+def change_summary(metric_dicts, changes):
+    """"Biggest gain" / "Went down" lines for one bucket, by how far each
+    bar moved since the last test (percentile points on today's scale, so
+    different units compare). None when nothing changed."""
+    if not changes:
+        return None
+    moves = []
+    for metrics in metric_dicts:
+        for name, d in (metrics or {}).items():
+            c = changes.get(name)
+            if not c or d.get("target") or d.get("percentile") is None:
+                continue
+            prev = previous_pct(d, c)
+            if prev is None or c.get("better") is None:
+                continue
+            moves.append((d["percentile"] - prev, name, c, d))
+    if not moves:
+        return None
+    items = []
+    gains = [m for m in moves if m[2]["better"] and m[0] > 0]
+    if gains:
+        _pts, name, c, d = max(gains, key=lambda m: m[0])
+        items.append(ui.div(ui.span(class_="gbo-sum-dot better"),
+                            ui.div(ui.strong("Biggest gain"), ui.span(f"{name}, ▲ {_fmt_delta(c['delta'], d['unit'])}"),
+                                   class_="gbo-sum-text")))
+    drops = sorted([m for m in moves if m[2]["better"] is False], key=lambda m: m[0])
+    if drops:
+        parts = []
+        for _pts, name, c, d in drops[:2]:
+            med = d.get("team_median_pct")
+            below = " (now below team median)" if med is not None and d["percentile"] < med else ""
+            parts.append(f"{name}, ▼ {_fmt_delta(c['delta'], d['unit'])}{below}")
+        items.append(ui.div(ui.span(class_="gbo-sum-dot worse"),
+                            ui.div(ui.strong("Went down"), ui.span("; ".join(parts)), class_="gbo-sum-text")))
+    return ui.div(*items, class_="gbo-change-summary") if items else None
 
 
 def _fmt_value(raw, unit, name=None):
@@ -656,6 +732,9 @@ def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact
     body_comp_metrics = bucket_data["body_comp_metrics"]
     bar_metrics = {name: v for name, v in body_comp_metrics.items() if name in BODY_COMP_BAR_NAMES}
     raw_only_metrics = {name: v for name, v in body_comp_metrics.items() if name not in BODY_COMP_BAR_NAMES}
+    _sum = change_summary([bar_metrics], changes)
+    if _sum is not None:
+        sections.append(_sum)
     sections.append(build_metric_bars(bar_metrics, f"{key_prefix}_body_comp", mode=mode, is_pitcher=is_pitcher, changes=changes))
     if show_proposal:
         prop = body_comp_proposal(bucket_data)
@@ -667,6 +746,9 @@ def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact
 
     sections = start("power", "Power")
     sections.append(ui.p(f"Power — {bucket_data['power_score'] if bucket_data['power_score'] is not None else '—'}", class_="gbo-category-title"))
+    _sum = change_summary(bucket_data["power_subgroup_metrics"].values(), changes)
+    if _sum is not None:
+        sections.append(_sum)
     for sub_name, sub_score in bucket_data["power_subgroup_scores"].items():
         metrics = bucket_data["power_subgroup_metrics"][sub_name]
         if not metrics:
@@ -687,6 +769,9 @@ def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact
 
     sections = start("strength", "Strength")
     sections.append(ui.p(f"Strength — {bucket_data['strength_score'] if bucket_data['strength_score'] is not None else '—'}", class_="gbo-category-title"))
+    _sum = change_summary(bucket_data["strength_subgroup_metrics"].values(), changes)
+    if _sum is not None:
+        sections.append(_sum)
     for sub_name, sub_score in bucket_data["strength_subgroup_scores"].items():
         metrics = bucket_data["strength_subgroup_metrics"][sub_name]
         if not metrics:
@@ -697,12 +782,18 @@ def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact
     if bucket_data["speed_metrics"]:
         sections = start("speed", "Speed")
         sections.append(ui.p(f"Speed (reference only, not in Total) — {bucket_data['speed_score'] if bucket_data['speed_score'] is not None else '—'}", class_="gbo-category-title"))
+        _sum = change_summary([bucket_data["speed_metrics"]], changes)
+        if _sum is not None:
+            sections.append(_sum)
         sections.append(build_metric_bars(bucket_data["speed_metrics"], f"{key_prefix}_speed", mode=mode, is_pitcher=is_pitcher, changes=changes))
 
     capacity_metrics_present = any(bucket_data.get("capacity_subgroup_metrics", {}).values())
     if capacity_metrics_present:
         sections = start("capacity", "Arm Capacity")
         sections.append(ui.p(f"Capacity (reference only, not in Total) — {bucket_data['capacity_score'] if bucket_data['capacity_score'] is not None else '—'}", class_="gbo-category-title"))
+        _sum = change_summary(bucket_data["capacity_subgroup_metrics"].values(), changes)
+        if _sum is not None:
+            sections.append(_sum)
         for sub_name, sub_score in bucket_data["capacity_subgroup_scores"].items():
             metrics = bucket_data["capacity_subgroup_metrics"][sub_name]
             if not metrics:
@@ -741,7 +832,7 @@ def build_full_breakdown(bucket_data, key_prefix, mode="dark", changes=None, com
     """Every breakdown group, one after another (see breakdown_groups)."""
     groups = breakdown_groups(bucket_data, key_prefix, mode=mode, changes=changes, compact_mobility=compact_mobility,
                               show_proposal=show_proposal)
-    return ui.div(*[el for _, _, els in groups for el in els])
+    return ui.div(bar_legend(), *[el for _, _, els in groups for el in els])
 
 
 
