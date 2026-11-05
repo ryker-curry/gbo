@@ -25,3 +25,4 @@ _to_delete/
 # Local scratch / previews (not app code)
 Claude outputs/
 _style_preview/
+data/backups/

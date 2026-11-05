@@ -55,6 +55,21 @@ class WorkbookError(Exception):
     pass
 
 
+def tests_by_name(db):
+    """{test_name: AssessmentTestType}. A few ForceFrame names exist twice --
+    an older "Dynamometry" copy and the workbook's "ForceFrame" one (Nov
+    2026) -- so the workbook's own categories always win instead of
+    whichever row the database returns last."""
+    from models import AssessmentCategory
+    cats = {c.category_id: c.category_name for c in db.query(AssessmentCategory).all()}
+    prefer = {"ForceFrame": 2, "Force Plate Detail": 2, "Dynamometry": 0}
+    out = {}
+    for t in sorted(db.query(AssessmentTestType).all(),
+                    key=lambda t: (prefer.get(cats.get(t.category_id), 1), t.test_type_id)):
+        out[t.test_name] = t
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Reading
 # ---------------------------------------------------------------------------
@@ -209,7 +224,7 @@ def build_plan(db, file_bytes, test_date, overrides=None):
             matches[k] = ({"player_id": None, "how": "skipped", "score": 0.0} if not v else
                           {"player_id": int(v), "how": "chosen", "score": 1.0})
 
-    tests = {t.test_name: t for t in db.query(AssessmentTestType).all()}
+    tests = tests_by_name(db)
 
     # sheet hand per player (HAND / Handedness columns), used when the roster has none
     sheet_hand = {}
@@ -344,7 +359,7 @@ def commit_plan(db, plan, user_id):
     day = plan["test_date"]
     if day is None:
         raise WorkbookError("Pick the test date first.")
-    tests = {t.test_name: t for t in db.query(AssessmentTestType).all()}
+    tests = tests_by_name(db)
     counts = {"assessments_created": 0, "values": 0, "players_updated": 0, "fb_outcomes": 0, "notes": 0}
     season = _season_label(day)
     try:
