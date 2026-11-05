@@ -266,6 +266,7 @@ def pitcher_profile_ui():
         ui.output_ui("pp_overview_section"),
         ui.output_ui("pp_outperform"),
         ui.output_ui("pp_release_comps"),
+        ui.output_ui("pp_release_view"),
         ui.output_ui("pp_metrics_section"),
         ui.output_ui("pp_results_section"),
         ui.output_ui("pp_zone_hand_filter"),
@@ -560,7 +561,7 @@ def pitcher_profile_server(input, output, session, app_state):
             view_choices = {
                 "Start here": {"summary": "Coach Summary"},
                 "Summary": {"overview": "Overview (grades)", "trends": "Trends"},
-                "Stuff & Shape": {"metrics": "Metrics (Physical Profile)", "arsenal": "Arsenal",
+                "Stuff & Shape": {"release": "Release Point", "metrics": "Metrics (Physical Profile)", "arsenal": "Arsenal",
                                   "arsenal_plan": "Arsenal Plan"},
                 "Command": {"command": "Command & Execution", "zone": "Zone"},
                 "Usage & Results": {"results": "Results", "get_ahead": "Get Ahead, Miss Bats",
@@ -745,6 +746,94 @@ def pitcher_profile_server(input, output, session, app_state):
                              "command and contact; 100% = identical, categories with no data yet are skipped.",
                              class_="text-muted small", style="margin:6px 0 0;"))
         return ui_helpers.card(*children, title="Closest teammates")
+
+    @render.ui
+    def pp_release_view():
+        """Release Point view (Nov 2026, Ryker: player-facing release card +
+        tap-in detail + "Pitchers Like You"). The player Dashboard's release
+        card links here. Release window / trend use games + bullpens (more
+        readings per pitch type); comps use the staff comp pool (game pitches
+        only, release_comps.MIN_COMP_GAME_PITCHES+). Data:
+        analytics/release_view.py, rendering: release_view_display.py."""
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "release":
+            return None
+        f = _current_filters()
+        from analytics import release_view, release_comps
+        import release_view_display as rvd
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            player = db.query(Player).filter(Player.player_id == pid).first()
+            if player is None:
+                return None
+            if f["game_id"] is not None:
+                raps = profile_queries.get_pitcher_rapsodo_pitches(db, pid, game_id=f["game_id"]) or []
+            else:
+                raps = release_view.player_pitches(db, pid, f["date_from"], f["date_to"])
+            fb_pitches, fb_label = release_graphics.card_pitches(raps)
+            profile = release_graphics.profile_from_rapsodo(
+                player, raps, subtitle=f"{fb_label} avg -- {len(fb_pitches)} pitches (games + bullpens)")
+            types = release_view.by_type(raps, player)
+            outs = release_view.outings(raps, player)
+            try:
+                summ = release_comps.staff_pool(db, f["date_from"], f["date_to"], f["game_scope"])
+            except Exception:
+                summ = None
+            comps = release_view.slot_comps(summ, pid) if summ else []
+            best = {}
+            for pl, _sim, _prof in comps:
+                try:
+                    best[pl.player_id] = release_view.best_pitch(db, pl.player_id, f["date_from"], f["date_to"], f["game_scope"])
+                except Exception:
+                    best[pl.player_id] = None
+            points = release_view.staff_points(summ) if summ else []
+        finally:
+            db.close()
+
+        throws = player.throws or "R"
+        if profile is None:
+            return ui_helpers.card(
+                ui.p(f"Needs {release_graphics.MIN_CARD_READINGS}+ Rapsodo fastball readings with a release point "
+                     "in this date range.", class_="text-muted small"), title="Release Point")
+        lines = release_view.takeaways(types, outs)
+        children = [
+            ui_helpers.card(
+                ui.HTML(rvd.dashboard_card_html(profile)),
+                ui.p("Games and bullpens in this date range. The Pitch Type filter doesn't apply here -- every pitch "
+                     "type is shown below.", class_="text-muted small", style="margin:0;"),
+                title="Where it comes out", right=f"{fb_label} · catcher's view"),
+            ui_helpers.card(ui.HTML(rvd.window_html(types, throws)), title="Release window by pitch"),
+            ui_helpers.card(ui.HTML(rvd.trend_html(outs)), title="Arm angle by outing"),
+            ui_helpers.card(ui.HTML(rvd.takeaways_html(lines)), title="What this means"),
+        ]
+        me_angle = next((p[3] for p in points if p[0] == pid), None)
+        slot = release_view.slot_word(me_angle, [p[3] for p in points])
+        if comps:
+            children.append(ui_helpers.card(
+                ui.p("Teammates who release the ball from about where you do, and what works for them.",
+                     class_="text-muted small"),
+                ui.HTML(rvd.staff_fit_html(pid, points, comps, throws, slot, me_angle)),
+                ui.h6("Similar arm slots", style="margin-top:14px;"),
+                ui.HTML(rvd.comps_html(comps, best)),
+                ui.p("Use these for pitch ideas to talk through with your pitching coach -- your arm slot is yours, "
+                     "not something to copy.", style="margin:6px 0 4px;"),
+                ui.p(f"Game pitches in this date range. Teammates need {release_comps.MIN_COMP_GAME_PITCHES}+ charted "
+                     "game pitches to appear. No rankings here.", class_="text-muted small", style="margin:0;"),
+                title="Pitchers like you"))
+        else:
+            children.append(ui_helpers.card(
+                ui.p(f"Shows up once you and at least 3 teammates have {release_comps.MIN_COMP_GAME_PITCHES}+ charted "
+                     "game pitches with Rapsodo release data in this date range.", class_="text-muted small"),
+                title="Pitchers like you"))
+        return ui.div(*children)
 
     @reactive.effect
     @reactive.event(input.pp_comp_open)
