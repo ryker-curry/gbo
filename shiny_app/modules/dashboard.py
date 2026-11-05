@@ -141,6 +141,21 @@ def dashboard_server(input, output, session, app_state):
         return None
 
     @reactive.effect
+    @reactive.event(input.open_release)
+    def _open_release():
+        """Player's release card -> his Pitcher Deep Dive on the Release Point view."""
+        db = get_session()
+        try:
+            me = db.query(User).filter(User.user_id == app_state.user_id()).first()
+            pid = me.player_id if me is not None else None
+        finally:
+            db.close()
+        if pid is None:
+            return
+        app_state.deep_link_pitcher.set((int(pid), "release"))
+        ui.update_navs("main_nav", selected="My Pitcher Deep Dive", session=session.root_scope())
+
+    @reactive.effect
     @reactive.event(input.open_player)
     def _open_player():
         app_state.deep_link_player_id.set(int(input.open_player()))
@@ -298,6 +313,16 @@ def _player_dashboard_ui(db, current_user_id, mode, allowed=None):
     except Exception as exc:
         sections.append(ui_helpers.empty_state(f"Today box unavailable: {exc}"))
 
+    # Nov 2026, Ryker: every pitcher sees his release card when he logs in;
+    # the button opens the full Release Point view on My Pitcher Deep Dive.
+    if my_player.is_pitcher:
+        try:
+            card = _release_card_section(db, my_player)
+        except Exception as exc:
+            card = ui_helpers.empty_state(f"Release card unavailable: {exc}")
+        if card is not None:
+            sections.append(card)
+
     # --- Physical testing: the big overall scores, shown right up top
     # like the reference dashboard layout. Full breakdown by metric
     # lives on My Assessments, not here -- this is just
@@ -421,6 +446,30 @@ def _player_dashboard_ui(db, current_user_id, mode, allowed=None):
     ))
 
     return ui.div(*sections)
+
+
+RELEASE_CARD_DAYS = 365   # same default window as Pitcher Deep Dive's From/To
+
+
+def _release_card_section(db, player):
+    """Compact release card for the player Dashboard (analytics/release_view.py).
+    None when he has too few fastball readings to draw one."""
+    from analytics import release_view
+    import release_graphics
+    import release_view_display as rvd
+    raps = release_view.player_pitches(db, player.player_id, date.today() - timedelta(days=RELEASE_CARD_DAYS), date.today())
+    fb_pitches, fb_label = release_graphics.card_pitches(raps)
+    profile = release_graphics.profile_from_rapsodo(player, raps)
+    if profile is None:
+        return None
+    alert = release_view.headline_alert(release_view.by_type(raps, player), release_view.outings(raps, player))
+    return ui_helpers.card(
+        ui.p(f"{fb_label} avg · {len(fb_pitches)} pitches · last 12 months (games + bullpens)",
+             class_="text-muted small", style="margin:0 0 6px;"),
+        ui.HTML(rvd.dashboard_card_html(profile, alert)),
+        ui.input_action_button("open_release", "See release details", class_="btn-sm"),
+        title="Release Point", right="Catcher's view",
+    )
 
 
 # =============================================================================
