@@ -646,7 +646,9 @@ def player_profile_server(input, output, session, app_state):
         _arch_tick()
         db = get_session()
         try:
-            pid = _selected()
+            # Nov 2026 fix: _selected() is the staff picker -- a player on his
+            # own profile has none, so his spider chart never drew.
+            pid = _profile_pid(db)
             if pid is None:
                 return None
             prof, raw = aa.load_full(db, pid)
