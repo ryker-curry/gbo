@@ -32,8 +32,8 @@ import ui_helpers
 
 
 _BUCKETS = [("Body comp", "body_comp_score"), ("Power", "power_score"), ("Strength", "strength_score"), ("Speed", "speed_score"), ("Arm capacity", "capacity_score")]
-_COVERAGE_CATS = ["Body Composition", "Mobility & ROM", "Arm Health", "Lower Body Strength", "Explosive Power", "Speed"]
-_COVERAGE_SHORT = {"Body Composition": "Body", "Mobility & ROM": "ROM", "Arm Health": "Arm", "Lower Body Strength": "Str", "Explosive Power": "Power", "Speed": "Speed"}
+_COVERAGE_CATS = ["Body Composition", "Mobility & ROM", "Arm Health", "Lower Body Strength", "Jump Power", "Speed"]
+_COVERAGE_SHORT = {"Body Composition": "Body", "Mobility & ROM": "ROM", "Arm Health": "Arm", "Lower Body Strength": "Str", "Jump Power": "Power", "Speed": "Speed"}
 
 
 def build(db, players, player_ids, ns):

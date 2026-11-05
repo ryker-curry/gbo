@@ -9,7 +9,7 @@ Full port of pages/dashboard.py -- role-adaptive:
   - Athletic Trainer: injury / return-to-play focus (player status
     breakdown, recent Arm Health pain scores, recent Arm Care sessions)
   - Strength Coach: S&C focus (recent Upper/Lower Body Strength,
-    Explosive Power, Rotational Power assessments; recent Conditioning
+    Jump Power, Rotational Power assessments; recent Conditioning
     sessions)
   - Sports Scientist: data/analytics focus (assessment volume, IDP
     goals needing attention -- overdue ones specifically, team-wide
@@ -522,7 +522,7 @@ def _athletic_trainer_section(db, players, player_ids):
 # =============================================================================
 
 def _strength_coach_section(db, players, player_ids, week_ago):
-    sc_categories = ["Upper Body Strength", "Lower Body Strength", "Explosive Power", "Rotational Power"]
+    sc_categories = ["Upper Body Strength", "Lower Body Strength", "Jump Power", "Rotational Power"]
 
     assessments_this_week = (
         db.query(Assessment)

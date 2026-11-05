@@ -745,7 +745,7 @@ DEVELOPMENT_PROFILE_BANDS = {
 # compute_gird_percentiles below, it's now auto-calculated from the
 # Mobility sheet's Internal Rotation fields instead.
 BUCKET_RELEVANT_CATEGORIES = {
-    "Body Composition", "Explosive Power", "Rotational Power",
+    "Body Composition", "Jump Power", "Rotational Power",
     "Lower Body Strength", "Upper Body Strength", "Speed",
 }
 
@@ -762,7 +762,7 @@ def get_bucket_test_names_for_category(category_name):
             {name for name, _ in POWER_SUBGROUPS["Med Ball Throw"]}
             | {name for name, _ in MED_BALL_THROW_REFERENCE_METRICS}
         )
-    if category_name == "Explosive Power":
+    if category_name == "Jump Power":
         names = set()
         for sub_name, metrics in POWER_SUBGROUPS.items():
             if sub_name != "Med Ball Throw":  # that one's under Rotational Power in GBO's category structure

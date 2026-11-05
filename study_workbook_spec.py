@@ -319,7 +319,7 @@ def new_test_types():
     import seed_lookups as sl
     existing = {n for lst in (sl.ANTHROPOMETRICS_TESTS, sl.BODY_COMPOSITION_TESTS, sl.MOBILITY_ROM_TESTS,
                               sl.ARM_HEALTH_TESTS, sl.UPPER_BODY_STRENGTH_TESTS, sl.LOWER_BODY_STRENGTH_TESTS,
-                              sl.EXPLOSIVE_POWER_TESTS, sl.ROTATIONAL_POWER_TESTS, sl.SPEED_TESTS,
+                              sl.JUMP_POWER_TESTS, sl.ROTATIONAL_POWER_TESTS, sl.SPEED_TESTS,
                               sl.PITCHER_SPECIFIC_TESTS) for n, _u in lst}
     out, seen = [], set()
     for tab, t in TABS.items():

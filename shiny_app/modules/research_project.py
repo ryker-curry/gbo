@@ -73,7 +73,7 @@ def research_project_server(input, output, session, app_state):
             ui.div("What is being measured", class_="lbl"),
             ui.tags.ul(
                 ui.tags.li(ui.strong("Strength & conditioning tests (the predictors): "),
-                           "body composition (InBody 770), explosive power (jumps), rotational power (med ball shot "
+                           "body composition (InBody 770), jump power, rotational power (med ball shot "
                            "put), lower- and upper-body strength, and sprint speed. Every result is entered into GBO "
                            "on the Assessments page and kept with its test date."),
                 ui.tags.li(ui.strong("Pitch characteristics (the outcomes): "),

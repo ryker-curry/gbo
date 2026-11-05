@@ -14,7 +14,7 @@ like the same app rather than a second, differently-shaped importer:
     unrecognized_columns in the preview. A column this file DOES
     recognize but has no AssessmentTestType for yet (assessment_import_
     spec.py's kind="unmapped_new" -- Body Composition's AGE_yrs/BMI/
-    FFMI/TBW/ICW/ECW, Explosive Power's *NEW* CMJ metrics) is reported
+    FFMI/TBW/ICW/ECW, Jump Power's *NEW* CMJ metrics) is reported
     separately, with the reason, so it's clear this is a known schema
     gap rather than a typo.
   - Two-phase validate-then-commit, same split as
