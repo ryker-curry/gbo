@@ -139,11 +139,15 @@ def build(db, players, player_ids, ns):
     # --- team status by bucket ---
     bucket_rows = []
     for label, key in _BUCKETS:
-        vals = [bd.get(key) for _, bd, _, _ in rows if bd.get(key) is not None]
-        if not vals:
+        # Nov 2026 (Ryker): each player's category status comes from his
+        # own tests (bucket_display.category_status), not a category score.
+        from bucket_display import category_status
+        sts = [category_status(bd, key)[0] for _, bd, _, _ in rows]
+        sts = [x for x in sts if x is not None]
+        if not sts:
             continue
-        nf = sum(1 for v in vals if v < 35); nw = sum(1 for v in vals if 35 <= v < 60); ng = len(vals) - nf - nw
-        tot = len(vals)
+        nf = sts.count("flag"); nw = sts.count("watch"); ng = len(sts) - nf - nw
+        tot = len(sts)
         seg = lambda n, var: ui.div(style=f"width:{100*n/tot:.1f}%; background:var(--{var});") if n else None
         bucket_rows.append(ui.div(
             ui.div(ui.span(label, class_="gbo-metric-bar-name"), ui.span(f"{nf} ", ui.span("priority", class_="unit"), class_="gbo-metric-bar-raw", style="color:var(--gbo-status-flag);" if nf else ""), class_="gbo-metric-bar-header"),

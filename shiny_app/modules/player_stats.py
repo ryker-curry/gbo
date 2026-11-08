@@ -103,6 +103,10 @@ def player_stats_server(input, output, session, app_state):
             if sw is not None:
                 overview.append(sw)
             rings = bucket_display.build_score_rings(bucket_data, "myassess_top", mode=mode)
+            # Nov 2026 (Ryker): no combined scores -- the score rings and the
+            # Output vs. Capacity development profile (also built from
+            # combined scores) both stay hidden; build_score_rings now
+            # returns None, so neither shows.
             if rings is not None:
                 overview.append(rings)
                 profile = bucket_display.build_development_profile(bucket_data, "myassess_top", mode=mode)
