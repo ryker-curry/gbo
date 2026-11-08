@@ -124,7 +124,7 @@ def exit_report_server(input, output, session, app_state):
             groups = {"Pitchers": {}, "Hitters": {}}
             for p in players:
                 mark = "  ✓ plan saved" if p.player_id in saved else ""
-                groups["Pitchers" if p.is_pitcher else "Hitters"][str(p.player_id)] = f"{p.last_name}, {p.first_name}{mark}"
+                groups["Pitchers" if p.is_pitcher else "Hitters"][str(p.player_id)] = f"{p.name_last_first}{mark}"
             with reactive.isolate():
                 keep = input.player() if "player" in input else None
             return ui.div(

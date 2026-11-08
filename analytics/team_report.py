@@ -169,7 +169,7 @@ def build(db, games, names=None):
             continue
         b = stat_bundle(ps, names, db)
         pl = players.get(pid)
-        pitcher_rows.append({"player_id": pid, "name": f"{pl.last_name}, {pl.first_name}" if pl else f"#{pid}",
+        pitcher_rows.append({"player_id": pid, "name": f"{pl.name_last_first}" if pl else f"#{pid}",
                              "games": b["games"], "ip": b["ip_display"], "outs": b["outs"], "pitches": b["pitches"],
                              "bf": b["bf"], "h": b["hits"], "r": b["runs"], "bb": b["bb"], "k": b["ks"],
                              "strike_pct": b["strike_pct"], "fps_pct": b["fps_pct"], "whiff_pct": b["whiff_pct"],
@@ -190,7 +190,7 @@ def build(db, games, names=None):
         pl = players.get(bid)
         pas = hi.plate_appearances(ps)
         ends = [pa[-1].ab_outcome for pa in pas if pa[-1].ends_plate_appearance]
-        hitter_rows.append({"player_id": bid, "name": f"{pl.last_name}, {pl.first_name}" if pl else f"#{bid}",
+        hitter_rows.append({"player_id": bid, "name": f"{pl.name_last_first}" if pl else f"#{bid}",
                             "pa": m["PA"], "ab": m["AB"], "h": m["H"], "bb": m["BB"], "k": m["K"],
                             "2b": ends.count("2B"), "3b": ends.count("3B"), "hr": ends.count("HR"),
                             "avg": m["AVG"], "obp": m["OBP"], "slg": m["SLG"],

@@ -685,8 +685,11 @@ def _guest_banner(app_state):
         for key, label in GUEST_VIEWS
     ]
     return ui.div(
-        ui.div(ui.strong("Guest demo"), " · a made-up team, nothing here is real player data (except the counts on "
-               "Research Project) · changes stay in your copy only", class_="gbo-guest-text"),
+        ui.div(ui.strong("Guest demo"),
+               (" · Pitt State's real data with names removed (Player 1, 2, 3...) · changes stay in your copy only"
+                if demo_db.DEMO_SOURCE == "real" else
+                " · a made-up team, nothing here is real player data (except the counts on Research Project)"
+                " · changes stay in your copy only"), class_="gbo-guest-text"),
         ui.div(ui.span("View as", class_="gbo-guest-lbl"), *buttons, class_="gbo-guest-btns"),
         class_="gbo-guest-banner",
     )

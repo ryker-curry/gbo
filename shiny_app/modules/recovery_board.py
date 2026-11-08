@@ -92,7 +92,7 @@ def recovery_board_server(input, output, session, app_state):
                     return ms["label"]
                 return f"{spec.format(ms['now'])} vs {spec.format(ms['base_mean'])}"
             js = f"Shiny.setInputValue('{session.ns('open')}', {p.player_id}, {{priority: 'event'}})"
-            label = f"{p.last_name}, {p.first_name}"
+            label = f"{p.name_last_first}"
             name = ui.tags.a(label, onclick=js, role="button", style="cursor:pointer;font-weight:600")
             sleep = (f"{t['sleep_hours']:.1f} h" if t.get("sleep_hours") is not None else "—") + \
                     (f" / {t['sleep_need_hours']:.1f}" if t.get("sleep_need_hours") else "")

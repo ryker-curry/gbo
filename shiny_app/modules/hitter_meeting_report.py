@@ -120,7 +120,7 @@ def hitter_meeting_report_server(input, output, session, app_state):
                        .order_by(Player.last_name, Player.first_name).all()) if ids else []
             if not players:
                 return ui_helpers.empty_state("No hitters with tracked games yet.")
-            choices = {str(p.player_id): f"{p.last_name}, {p.first_name}" for p in players}
+            choices = {str(p.player_id): f"{p.name_last_first}" for p in players}
             return ui.input_select("pitcher", "Hitter", choices=choices, selected=_dl.take("pid", choices))
         finally:
             db.close()

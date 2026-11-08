@@ -206,6 +206,15 @@ class Team(Base):
 class Player(Base):
     __tablename__ = "players"
 
+    @property
+    def name_last_first(self):
+        """'Last, First' for pickers and tables -- except the anonymized guest
+        demo (demo_real.py), whose players are first_name='Player',
+        last_name='7', which reads as 'Player 7' instead of '7, Player'."""
+        if self.first_name == "Player" and str(self.last_name or "").isdigit():
+            return f"Player {self.last_name}"
+        return f"{self.last_name}, {self.first_name}"
+
     player_id = Column(Integer, primary_key=True)
     team_id = Column(Integer, ForeignKey("teams.team_id"), nullable=False)
     first_name = Column(String(80), nullable=False)

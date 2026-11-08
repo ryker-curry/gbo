@@ -149,7 +149,7 @@ def smartpark_import_server(input, output, session, app_state):
             opp_team_name = game.opponent_team.team_name if game.opponent_team else "the opponent"
             roster = db.query(Player).order_by(Player.active.desc(), Player.last_name, Player.first_name).all()
             roster_choices = {"": "-- pick a player --"}
-            roster_choices.update({str(p.player_id): f"{p.last_name}, {p.first_name}" + ("" if p.active else " (inactive)") for p in roster})
+            roster_choices.update({str(p.player_id): f"{p.name_last_first}" + ("" if p.active else " (inactive)") for p in roster})
         finally:
             db.close()
 

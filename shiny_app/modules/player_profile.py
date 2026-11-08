@@ -168,7 +168,7 @@ def player_profile_server(input, output, session, app_state):
             players = _visible_players(db)
         finally:
             db.close()
-        choices = {str(p.player_id): f"{p.last_name}, {p.first_name}" + (f"  #{p.jersey_number}" if p.jersey_number else "") for p in players}
+        choices = {str(p.player_id): f"{p.name_last_first}" + (f"  #{p.jersey_number}" if p.jersey_number else "") for p in players}
         sel = str(_selected()) if _selected() and str(_selected()) in choices else (next(iter(choices)) if choices else None)
         return ui.div(ui.input_select("pick", "Player", choices, selected=sel, width="320px"), style="margin-bottom:8px;")
 

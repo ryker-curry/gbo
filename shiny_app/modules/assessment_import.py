@@ -421,7 +421,7 @@ def assessment_import_server(input, output, session, app_state):
         try:
             from models import Player
             roster = db.query(Player).order_by(Player.last_name, Player.first_name).all()
-            choices = {"0": "Skip this name"} | {str(p.player_id): f"{p.last_name}, {p.first_name}" for p in roster}
+            choices = {"0": "Skip this name"} | {str(p.player_id): f"{p.name_last_first}" for p in roster}
         finally:
             db.close()
         rows = []

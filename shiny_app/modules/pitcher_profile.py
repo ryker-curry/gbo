@@ -403,7 +403,7 @@ def pitcher_profile_server(input, output, session, app_state):
             db.close()
         if not pitchers:
             return ui_helpers.empty_state("No pitchers to show yet.")
-        choices = {str(p.player_id): f"{p.last_name}, {p.first_name}" + (f"  #{p.jersey_number}" if p.jersey_number else "") for p in pitchers}
+        choices = {str(p.player_id): f"{p.name_last_first}" + (f"  #{p.jersey_number}" if p.jersey_number else "") for p in pitchers}
         _pending_tick()
         sel = str(_pending["pid"]) if _pending["pid"] is not None and str(_pending["pid"]) in choices else None
         _pending["pid"] = None
@@ -4204,7 +4204,7 @@ def pitcher_profile_server(input, output, session, app_state):
             res = pitch_class.check_pitcher(raps, pl.throws or "R", centers)
             if not res["points"]:
                 continue
-            rows.append({"Pitcher": f"{pl.last_name}, {pl.first_name}", "Pitches": len(res["points"]),
+            rows.append({"Pitcher": f"{pl.name_last_first}", "Pitches": len(res["points"]),
                          "Flagged": len(res["flags"]), "Agree %": res["agree_pct"] if res["agree_pct"] is not None else "--"})
         return sorted(rows, key=lambda r: (-r["Flagged"], r["Pitcher"]))
 

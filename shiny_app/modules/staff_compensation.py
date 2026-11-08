@@ -297,7 +297,7 @@ def staff_compensation_server(input, output, session, app_state):
                 z = v["z"]
                 cls = "z s" if z >= comp.STRONG else ("z w" if z <= comp.WEAK else "z")
                 cells.append(ui.tags.td(f"{z:+.1f}", class_=cls, title=f"{d}: {z:+.2f} SD from the staff average"))
-            body.append(ui.tags.tr(ui.tags.td(f"{p.last_name}, {p.first_name}", style="white-space:nowrap;"),
+            body.append(ui.tags.tr(ui.tags.td(f"{p.name_last_first}", style="white-space:nowrap;"),
                                    ui.tags.td(f"{pr[2]:+.1f}" if pr else "—", class_=vcls), *cells))
         return ui_helpers.card(
             ui.p("Each number is how far he is from the staff average on that group of tests, in standard deviations: "

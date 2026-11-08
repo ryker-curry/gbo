@@ -162,7 +162,7 @@ def hitter_profile_server(input, output, session, app_state):
             db.close()
         if not hitters:
             return ui_helpers.empty_state("No hitters to show yet.")
-        choices = {str(p.player_id): f"{p.last_name}, {p.first_name}" + (f"  #{p.jersey_number}" if p.jersey_number else "") for p in hitters}
+        choices = {str(p.player_id): f"{p.name_last_first}" + (f"  #{p.jersey_number}" if p.jersey_number else "") for p in hitters}
         return ui.div(ui.input_select("hp_player_select", "Hitter", choices=choices, selected=_dl.take("pid", choices), width="320px"), style="margin-bottom:8px;")
 
     @render.ui

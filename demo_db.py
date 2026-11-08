@@ -22,6 +22,7 @@ How it plugs in:
 """
 
 import contextlib
+import os
 import datetime as dt
 import io
 import random
@@ -38,6 +39,7 @@ import bucket_system as bs
 from strike_zone import derive_old_zone
 
 SEED = 20261006
+DEMO_SOURCE = None   # "real" (anonymized live team) or "fake" (made-up team), set when the master is built
 DEMO_COACH_EMAIL = "guest.coach@demo.gbo"
 DEMO_PLAYER_EMAIL = "guest.pitcher@demo.gbo"
 DEMO_HITTER_EMAIL = "guest.hitter@demo.gbo"
@@ -572,16 +574,37 @@ def _master_conn():
     global _master
     with _lock:
         if _master is None:
-            conn = sqlite3.connect(":memory:", check_same_thread=False)
-            eng = create_engine("sqlite://", poolclass=StaticPool, creator=lambda: conn)
-            m.Base.metadata.create_all(eng)
-            db = sessionmaker(bind=eng, autoflush=False)()
-            try:
-                _populate(db)
-            finally:
-                db.close()
-            _master = conn
+            _master = _build(real=os.environ.get("GBO_DEMO_SOURCE", "real").lower() != "fake")
         return _master
+
+
+def _build(real):
+    """Nov 2026, Ryker: the guest demo now shows the REAL team, anonymized
+    (Player 1, 2, 3 -- see demo_real.py). If Supabase can't be read (or
+    GBO_DEMO_SOURCE=fake), fall back to the made-up team below."""
+    global DEMO_SOURCE
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    eng = create_engine("sqlite://", poolclass=StaticPool, creator=lambda: conn)
+    m.Base.metadata.create_all(eng)
+    db = sessionmaker(bind=eng, autoflush=False)()
+    try:
+        if real:
+            import demo_real
+            demo_real.populate_from_live(db)
+            DEMO_SOURCE = "real"
+        else:
+            _populate(db)
+            DEMO_SOURCE = "fake"
+    except Exception as exc:
+        db.close()
+        conn.close()
+        if not real:
+            raise
+        print(f"[GBO guest demo] real-data copy failed, using the made-up team: {exc!r}")
+        return _build(real=False)
+    finally:
+        db.close()
+    return conn
 
 
 def build_master():

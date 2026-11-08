@@ -170,7 +170,7 @@ def arm_care_server(input, output, session, app_state):
         rows = _rows()
         if not rows:
             return None
-        choices = {str(r["player"].player_id): f"{r['player'].last_name}, {r['player'].first_name}" for r in
+        choices = {str(r["player"].player_id): f"{r['player'].name_last_first}" for r in
                    sorted(rows, key=lambda r: r["player"].last_name)}
         today = input.as_of() if "as_of" in input else date.today()
         return ui.layout_columns(
