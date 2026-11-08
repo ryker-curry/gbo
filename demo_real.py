@@ -18,8 +18,8 @@ scrubs anything that identifies a person on the way in:
   - Opponent teams keep their real names; opponent players become
     "Opponent 1", "Opponent 2", ... within each team, no jersey numbers.
   - Every text and JSON value is scrubbed for real player, staff and
-    opponent names (full name, "Last, First", and last names; first names
-    only when capitalized).
+    opponent names: any capitalized first or last name is replaced with
+    that person's label (names typed in all lowercase are not caught).
   - Video/photo URLs are dropped (faces can't be anonymized, and the links
     point at private storage), and tables that only hold secrets or
     outgoing-mail logs are skipped: WHOOP connect links, app error logs,
@@ -70,18 +70,18 @@ def _label_maps(src):
         for i, oid in enumerate(team_ids):
             opp_num[oid] = i + 1
 
-    pairs = []   # (regex, replacement)
+    pairs = []   # (kind, text, label): kind "full" = case-insensitive phrase, "word" = exact capitalized word
 
     def add_person(first, last, label):
         first = (first or "").strip()
         last = (last or "").strip()
         if first and last:
-            pairs.append((re.compile(rf"\b{re.escape(first)}\s+{re.escape(last)}\b", re.I), label))
-            pairs.append((re.compile(rf"\b{re.escape(last)},\s*{re.escape(first)}\b", re.I), label))
+            pairs.append(("full", f"{first} {last}", label))
+            pairs.append(("full", f"{last}, {first}", label))
         if len(last) >= 3:
-            pairs.append((re.compile(rf"\b{re.escape(last)}\b"), label))
+            pairs.append(("word", last, label))
         if len(first) >= 3:
-            pairs.append((re.compile(rf"\b{re.escape(first)}\b"), label))
+            pairs.append(("word", first, label))
 
     for p in players:
         add_person(p["first_name"], p["last_name"], f"Player {player_num[p['player_id']]}")
@@ -97,17 +97,30 @@ def _label_maps(src):
             add_person(parts[0], " ".join(parts[1:]), label)
         elif parts:
             add_person("", parts[0], label)
-    # longest patterns first so "First Last" wins over "Last"
-    pairs.sort(key=lambda pr: -len(pr[0].pattern))
     return player_num, staff_num, opp_num, pairs
 
 
+_TOKEN = re.compile(r"\b[A-Z][A-Za-z'\-]*\b")
+_DUP = re.compile(r"\b((?:Player|Staff|Opponent) \d+)(?:\s*,?\s+\1\b)+")
+
+
 def _scrubber(pairs):
+    """Fast name scrub: every capitalized word is looked up in one dict of
+    real first/last names (a single regex pass + dict lookups, so it stays
+    quick across thousands of rows), then "Player 7 Player 7" (a first and
+    last name side by side) collapses to "Player 7". Names typed all in
+    lowercase are not caught."""
+    word = {}
+    for kind, text, label in pairs:
+        if kind == "word":
+            word.setdefault(text, label)
+
     def scrub(value):
         if isinstance(value, str):
-            for rx, label in pairs:
-                value = rx.sub(label, value)
-            return value
+            if not any(c.isupper() for c in value):
+                return value
+            value = _TOKEN.sub(lambda mm: word.get(mm.group(0), mm.group(0)), value)
+            return _DUP.sub(r"\1", value)
         if isinstance(value, list):
             return [scrub(v) for v in value]
         if isinstance(value, dict):
