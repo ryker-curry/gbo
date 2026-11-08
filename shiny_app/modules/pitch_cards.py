@@ -131,7 +131,7 @@ def pitch_cards_server(input, output, session, app_state):
             hitters, default_h = _hitter_choices(db, g)
             pitchers = (db.query(Player).filter(Player.active.is_(True), Player.is_pitcher.is_(True))
                         .order_by(Player.last_name, Player.first_name).all())
-            pchoices = {str(p.player_id): f"{p.last_name}, {p.first_name} ({p.throws or '?'})" for p in pitchers}
+            pchoices = {str(p.player_id): f"{p.name_last_first} ({p.throws or '?'})" for p in pitchers}
             default_p = _default_pitchers(db, g, pitchers)
             return ui.div(
                 ui.layout_columns(
@@ -167,7 +167,7 @@ def pitch_cards_server(input, output, session, app_state):
                            if (o.position or "").upper() not in ("P", "RHP", "LHP", "PITCHER")][:9]
             return choices, default
         hitters = (db.query(Player).filter(Player.active.is_(True)).order_by(Player.last_name, Player.first_name).all())
-        choices = {f"our:{p.player_id}": f"{p.last_name}, {p.first_name} ({p.bats or '?'})" for p in hitters
+        choices = {f"our:{p.player_id}": f"{p.name_last_first} ({p.bats or '?'})" for p in hitters
                    if not p.is_pitcher}
         slots = (db.query(GameLineupSlot).filter(GameLineupSlot.game_id == g.game_id)
                  .order_by(GameLineupSlot.squad, GameLineupSlot.batting_order).all())

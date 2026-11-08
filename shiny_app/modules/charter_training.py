@@ -111,7 +111,7 @@ def charter_training_server(input, output, session, app_state):
 
     def _name(pl):
         num = f" #{pl.jersey_number}" if getattr(pl, "jersey_number", None) else ""
-        return f"{pl.last_name}, {pl.first_name}{num}"
+        return f"{pl.name_last_first}{num}"
 
     # ---- Arsenal cards ----------------------------------------------------
     @render.ui

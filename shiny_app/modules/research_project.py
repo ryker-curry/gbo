@@ -11,6 +11,7 @@ from the live database even while the rest of the guest demo runs on the
 fictional team (database.SessionLocal, not get_session()).
 """
 
+import demo_db
 import datetime as dt
 
 from shiny import module, ui, render, reactive, req
@@ -134,8 +135,12 @@ def research_project_server(input, output, session, app_state):
 
         tour = [
             ui.div("Exploring GBO", class_="lbl"),
-            ui.p("Everything else in this guest view is the real GBO app running on a made-up team -- every name and "
-                 "number outside this page is fictional. Use the sidebar to click around as a head coach, or switch to "
+            ui.p(("Everything else in this guest view is the real GBO app running on Pitt State's own data with every "
+                  "name removed -- players show as Player 1, 2, 3 and staff as Staff 1, 2, 3. "
+                  if demo_db.DEMO_SOURCE == "real" else
+                  "Everything else in this guest view is the real GBO app running on a made-up team -- every name and "
+                  "number outside this page is fictional. ")
+                 + "Use the sidebar to click around as a head coach, or switch to "
                  "a player's view with the buttons at the top. Good places to start:"),
             ui.tags.ul(
                 ui.tags.li(ui.strong("Player Profile / My Assessments: "), "the physical testing breakdown, change since "
@@ -211,7 +216,7 @@ def research_project_server(input, output, session, app_state):
             p = r["player"]
             fb = r["fb"]
             body.append(ui.tags.tr(
-                ui.tags.td(ui.strong(f"{p.last_name}, {p.first_name}")), ui.tags.td(p.throws or "—"),
+                ui.tags.td(ui.strong(f"{p.name_last_first}")), ui.tags.td(p.throws or "—"),
                 *[_cell(r["cats"][c]) for c in cats],
                 ui.tags.td(ui.span(str(fb["n_velo"]), class_="ok" if fb["avg_velo"] is not None else "no"), class_="c",
                            title=f"{ra.MIN_FB}+ fastball readings needed"),

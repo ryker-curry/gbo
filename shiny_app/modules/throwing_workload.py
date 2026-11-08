@@ -143,7 +143,7 @@ def throwing_workload_server(input, output, session, app_state):
         try:
             ps = (db.query(Player).filter(Player.active.is_(True), Player.is_pitcher.is_(True))
                   .order_by(Player.last_name, Player.first_name).all())
-            return {str(p.player_id): f"{p.last_name}, {p.first_name}" for p in ps}
+            return {str(p.player_id): f"{p.name_last_first}" for p in ps}
         finally:
             db.close()
 

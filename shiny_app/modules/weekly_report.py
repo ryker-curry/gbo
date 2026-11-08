@@ -100,8 +100,8 @@ def weekly_report_server(input, output, session, app_state):
                   .order_by(Player.last_name, Player.first_name).all())
             # Oct 2026: hitters too (grouped so the dropdown stays easy to scan).
             groups = {
-                "Pitchers": {str(p.player_id): f"{p.last_name}, {p.first_name}" for p in ps if p.is_pitcher},
-                "Hitters": {str(p.player_id): f"{p.last_name}, {p.first_name}" for p in ps if not p.is_pitcher},
+                "Pitchers": {str(p.player_id): f"{p.name_last_first}" for p in ps if p.is_pitcher},
+                "Hitters": {str(p.player_id): f"{p.name_last_first}" for p in ps if not p.is_pitcher},
             }
             flat = {k for g in groups.values() for k in g}
             return ui.input_select("pitcher", "Player", {k: v for k, v in groups.items() if v}, selected=_dl.take("pid", flat))
@@ -142,7 +142,7 @@ def weekly_report_server(input, output, session, app_state):
             for p in ps:
                 s = sends.get(p.player_id)
                 rows.append({
-                    "Pitcher": f"{p.last_name}, {p.first_name}",
+                    "Pitcher": f"{p.name_last_first}",
                     "Rapsodo pitches": raps.get(p.player_id, 0), "Game pitches": gp.get(p.player_id, 0),
                     "Coach note": "✓" if p.player_id in notes else "—",
                     "Email": (s.status if s else ("not yet" if (raps.get(p.player_id) or gp.get(p.player_id)) else "no activity")),
@@ -161,7 +161,7 @@ def weekly_report_server(input, output, session, app_state):
                 s = sends.get(p.player_id)
                 pa = len(plate_appearances(bat.get(p.player_id, [])))
                 hrows.append({
-                    "Hitter": f"{p.last_name}, {p.first_name}", "Plate appearances": pa,
+                    "Hitter": f"{p.name_last_first}", "Plate appearances": pa,
                     "Coach note": "✓" if p.player_id in notes else "—",
                     "Email": (s.status if s else ("not yet" if pa else "no activity")),
                 })

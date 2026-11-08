@@ -80,7 +80,7 @@ def arsenal_comparison_server(input, output, session, app_state):
             ids = [i for i in ids if i in vis]
         players = [summ["players"][i] for i in ids if i in summ["players"]]
         players.sort(key=lambda p: (p.last_name, p.first_name))
-        return {str(p.player_id): f"{p.last_name}, {p.first_name}" for p in players}
+        return {str(p.player_id): f"{p.name_last_first}" for p in players}
 
     @render.ui
     def ac_filters():
