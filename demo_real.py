@@ -167,6 +167,7 @@ def populate_from_live(dst):
     demo master), anonymized. Returns {table: rows copied}."""
     import database
     counts = {}
+    skipped = {}
     _row_transform.__dict__.pop("_prev_school_seen", None)
     with database.engine.connect() as src:
         player_num, staff_num, opp_num, pairs = _label_maps(src)
@@ -183,13 +184,46 @@ def populate_from_live(dst):
             if not rows:
                 continue
             out = [_row_transform(table, r, player_num, staff_num, opp_num, scrub) for r in rows]
+            copied = 0
             for i in range(0, len(out), 500):
-                dconn.execute(table.insert(), out[i:i + 500])
-            counts[table.name] = len(out)
+                chunk = out[i:i + 500]
+                try:
+                    with dconn.begin_nested():
+                        dconn.execute(table.insert(), chunk)
+                    copied += len(chunk)
+                except Exception:
+                    # One bad row shouldn't cost the guest the whole real
+                    # demo: retry the chunk row by row and skip only the
+                    # rows SQLite refuses (noted in `skipped`).
+                    for row in chunk:
+                        try:
+                            with dconn.begin_nested():
+                                dconn.execute(table.insert(), [row])
+                            copied += 1
+                        except Exception as exc:
+                            skipped.setdefault(table.name, [0, repr(exc)[:300]])[0] += 1
+            counts[table.name] = copied
     dst.flush()
     _add_demo_logins(dst)
     dst.commit()
+    if skipped:
+        _log_skipped(skipped)
     return counts
+
+
+def _log_skipped(skipped):
+    """Save a one-line note to app_errors when some rows couldn't be copied
+    (the demo still runs on everything else)."""
+    try:
+        import error_log
+        msg = "; ".join(f"{t}: {n} rows skipped ({why})" for t, (n, why) in skipped.items())
+        try:
+            raise RuntimeError(f"Guest demo copy skipped rows -- {msg}")
+        except RuntimeError as exc:
+            import sys
+            error_log.record(type(exc), exc, sys.exc_info()[2], output_name="guest_demo_real_copy_skipped")
+    except Exception:
+        pass
 
 
 def _add_demo_logins(db):
