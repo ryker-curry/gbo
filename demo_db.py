@@ -601,6 +601,12 @@ def _build(real):
         if not real:
             raise
         print(f"[GBO guest demo] real-data copy failed, using the made-up team: {exc!r}")
+        try:   # Nov 2026: also save it to app_errors so it shows up without Posit logs
+            import sys as _sys
+            import error_log
+            error_log.record(type(exc), exc, _sys.exc_info()[2], output_name="guest_demo_real_copy")
+        except Exception:
+            pass
         return _build(real=False)
     finally:
         db.close()
