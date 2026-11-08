@@ -134,10 +134,17 @@ def _row_transform(table, row, player_num, staff_num, opp_num, scrub):
         r.update(whoop_user_id=None, whoop_name=None, last_error=None)
     elif t == "college_season_stats":
         if "pittsburg" not in (r.get("school") or "").lower():
-            r["school"] = "Previous school"
+            # (player, side, year, school) is unique -- number repeats so two
+            # prior schools in one year can't collide once both are renamed.
+            key = (r.get("player_id"), r.get("side"), r.get("season_year"))
+            seen = _row_transform.__dict__.setdefault("_prev_school_seen", {})
+            seen[key] = seen.get(key, 0) + 1
+            r["school"] = "Previous school" + (f" {seen[key]}" if seen[key] > 1 else "")
         r["source_url"] = None
     elif t == "rapsodo_history":
-        r["source_uid"] = f"player{r['player_id']}"
+        # source_uid is part of a (player, source, source_uid) unique key and
+        # held Rapsodo's per-pitch id, so keep it unique per row.
+        r["source_uid"] = f"demo-{r['rapsodo_history_id']}"
     elif t == "smartpark_player_links":
         r["source_name"] = f"Player {player_num.get(r['player_id'], '?')}"
         r["source_key"] = f"demo:{r['link_id']}"
@@ -160,6 +167,7 @@ def populate_from_live(dst):
     demo master), anonymized. Returns {table: rows copied}."""
     import database
     counts = {}
+    _row_transform.__dict__.pop("_prev_school_seen", None)
     with database.engine.connect() as src:
         player_num, staff_num, opp_num, pairs = _label_maps(src)
         scrub = _scrubber(pairs)
