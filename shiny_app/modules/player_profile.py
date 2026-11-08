@@ -774,7 +774,7 @@ def player_profile_server(input, output, session, app_state):
         ]
         bucket_cards = []
         for title, score, metrics in buckets:
-            if score is None and not metrics:
+            if not metrics:
                 continue
             # Sept 1 2026 fix: this accordion used to grade both the
             # panel's own composite score AND each individual metric bar
@@ -787,21 +787,23 @@ def player_profile_server(input, output, session, app_state):
             # the Composite scores ring for the identical value), individual_
             # metric_status for each metric row and the flagged/watch
             # counts that drive this panel's chip.
-            st = bucket_display.composite_score_status(score) or ui_helpers.STATUS_NEUTRAL
+            st = ui_helpers.STATUS_GOOD if metrics else ui_helpers.STATUS_NEUTRAL   # Nov 2026: status from the tests, not a category score
             flagged = sum(1 for d in metrics.values() if bucket_display.individual_metric_status(d.get("percentile")) == "flag")
             watch = sum(1 for d in metrics.values() if bucket_display.individual_metric_status(d.get("percentile")) == "watch")
             if flagged: st = ui_helpers.STATUS_FLAG
             elif watch and st == ui_helpers.STATUS_GOOD: st = ui_helpers.STATUS_WATCH
             rows = [ui_helpers.metric_bar(n, f"{d.get('raw')}", d.get("percentile"), status=bucket_display.individual_metric_status(d.get("percentile")), unit=d.get("unit"), percentile_text=f"{bucket_display.ordinal(d['percentile'])} percentile" if d.get("percentile") is not None else "No team comparison yet") for n, d in metrics.items()]
             bucket_cards.append(ui.accordion_panel(
-                ui.div(ui.span(f"{score:.0f}" if score is not None else "—", class_=f"gbo-bucket-score {('gold' if (score or 0) >= 90 else (bucket_display.composite_score_status(score) or 'neutral'))}"),
-                       ui.div(title, class_="gbo-bucket-title"),
+                # Nov 2026 (Ryker): no category score number -- the panel
+                # header is just the category and its priority/attention
+                # chip; each test inside keeps its own percentile.
+                ui.div(ui.div(title, class_="gbo-bucket-title"),
                        ui_helpers.status_chip(st, f"{flagged} priority · {watch} attention" if (flagged or watch) else None), class_="gbo-bucket-head"),
                 ui.div(*rows, class_="gbo-metric-bar-group") if rows else ui_helpers.empty_state("No metrics recorded."),
                 value=title,
             ))
         left = ui.accordion(*bucket_cards, open=False, class_="gbo-bucket-accordion") if bucket_cards else ui_helpers.card(ui_helpers.empty_state("No scored assessments yet."))
-        rings = ui_helpers.card(ui.div(bucket_display.build_score_rings(bd, key_prefix="profile_ov", mode=mode), class_="gbo-rings-row"), title="Composite scores") if bd.get("total_score") is not None else None
+        rings = None   # Nov 2026 (Ryker): "Composite scores" rings removed -- no combined/category scores
         latest_pen = None
         if summ:
             latest_pen = ui_helpers.card(

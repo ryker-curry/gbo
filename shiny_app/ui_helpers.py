@@ -572,10 +572,23 @@ def show_card(player, bucket_data, pitch_summary=None, flag="neutral", fastball_
         st = status_from_color_word(color)
         return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_=st, style="width:100%"), class_="b"), ui.span(str(count) if count is not None else "—", class_="v"), class_="gbo-at")
 
+    from bucket_display import category_status, category_count_text
+
+    def count_bar(label, key):
+        """Nov 2026 (Ryker: no category scores on the card): a solid
+        status bar per category -- red if any test in it is a priority,
+        yellow if any needs attention, green otherwise -- with the counts
+        as the value ("2P 1A", or "OK"). Same bucket_display.category_
+        status the roster and profile use, so they always agree."""
+        st, nf, nw, n = category_status(bd, key)
+        if st is None:
+            return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_="neutral", style="width:0"), class_="b"), ui.span("—", class_="v"), class_="gbo-at")
+        return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_=st, style="width:100%"), class_="b"), ui.span(category_count_text(nf, nw), class_="v"), class_="gbo-at")
+
     attrs = [
-        bar("BODY", bd.get("body_comp_score")), bar("PWR", bd.get("power_score")),
-        bar("STR", bd.get("strength_score")), bar("SPD", bd.get("speed_score")),
-        bar("ARM", bd.get("capacity_score")), flag_bar("ROM", rom_color, rom_deficits),
+        count_bar("BODY", "body_comp_score"), count_bar("PWR", "power_score"),
+        count_bar("STR", "strength_score"), count_bar("SPD", "speed_score"),
+        count_bar("ARM", "capacity_score"), flag_bar("ROM", rom_color, rom_deficits),
     ]
     if getattr(player, "is_pitcher", False):
         # VELO and SPIN are both fastball-only averages (Aug/Sept 2026,

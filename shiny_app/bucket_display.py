@@ -369,6 +369,43 @@ def composite_score_status(value):
     return "flag"
 
 
+CATEGORY_METRIC_KEYS = {
+    "body_comp_score": "body_comp_metrics", "power_score": "power_subgroup_metrics",
+    "strength_score": "strength_subgroup_metrics", "speed_score": "speed_metrics",
+    "capacity_score": "capacity_subgroup_metrics",
+}
+
+
+def category_status(bucket_data, score_key):
+    """Nov 2026 (Ryker: no category/combined scores anywhere): a
+    category's status comes from its own tests instead of a 0-100
+    category score -- "flag" if any test is a priority, "watch" if any
+    needs attention, "good" otherwise. Returns (status, n_priority,
+    n_attention, n_tests); status is None when the player has no scored
+    test in that category. score_key is the old *_score key so callers
+    can keep their category lists unchanged."""
+    bd = bucket_data or {}
+    raw = bd.get(CATEGORY_METRIC_KEYS.get(score_key, ""), None) or {}
+    if raw and all(isinstance(v, dict) and "percentile" not in v for v in raw.values()):
+        flat = {}
+        for mm in raw.values():
+            flat.update(mm or {})
+        raw = flat
+    if score_key == "body_comp_score":
+        raw = {n: d for n, d in raw.items() if n in BODY_COMP_BAR_NAMES}
+    pcts = [d.get("percentile") for d in raw.values() if isinstance(d, dict) and d.get("percentile") is not None]
+    if not pcts:
+        return None, 0, 0, 0
+    sts = [individual_metric_status(x) for x in pcts]
+    nf, nw = sts.count("flag"), sts.count("watch")
+    return ("flag" if nf else "watch" if nw else "good"), nf, nw, len(pcts)
+
+
+def category_count_text(nf, nw):
+    """'2P 1A' / '1P' / 'OK' -- the compact count used on the card and roster."""
+    return " ".join(t for t in (f"{nf}P" if nf else "", f"{nw}A" if nw else "") if t) or "OK"
+
+
 def individual_metric_status(pct):
     """Color rule for build_metric_bars' individual metric bars (Body
     Comp/Power/Strength/Speed rows in the Physical Testing Breakdown)
@@ -435,6 +472,12 @@ def build_score_rings(bucket_data, key_prefix, mode="dark"):
     # keep the idea but remove it from gbo"): no Total ring and no
     # Diamond/Gold/Silver/Bronze/Common tier color. total_score is still
     # computed in bucket_system.py and _tier_for_total is kept above.
+    # Nov 2026 (Ryker: remove ALL category scores too -- Body Comp/
+    # Power/Strength are averages of several tests, i.e. combined
+    # scores; only each test's own percentile stays). The rings are
+    # gone everywhere this is called (Player Profile, Dashboard, My
+    # Assessments); the code below is kept so they can come back.
+    return None
     specs = [
         ("Body Comp", bucket_data["body_comp_score"]),
         ("Power", bucket_data["power_score"]),
@@ -709,6 +752,7 @@ def body_comp_proposal(bucket_data):
     )
 
 
+# Nov 2026 (Ryker): category/subgroup headers show names only -- no combined scores.
 def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact_mobility=False, show_proposal=False):
     """Sub-group score headers + a bar chart per sub-group, for Body
     Comp, Power, Strength, and (if present) Speed/Capacity/Mobility/
@@ -728,7 +772,7 @@ def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact
 
     is_pitcher = bucket_data.get("is_pitcher")  # None for any pre-Aug-2026 caller's bucket_data that predates this key -- build_metric_bars treats None as "skip badges", same as before this feature existed
     sections = start("body_comp", "Body Comp")
-    sections.append(ui.p(f"Body Comp — {bucket_data['body_comp_score'] if bucket_data['body_comp_score'] is not None else '—'}", class_="gbo-category-title"))
+    sections.append(ui.p("Body Comp", class_="gbo-category-title"))
     body_comp_metrics = bucket_data["body_comp_metrics"]
     bar_metrics = {name: v for name, v in body_comp_metrics.items() if name in BODY_COMP_BAR_NAMES}
     raw_only_metrics = {name: v for name, v in body_comp_metrics.items() if name not in BODY_COMP_BAR_NAMES}
@@ -745,7 +789,7 @@ def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact
         sections.append(raw_ui)
 
     sections = start("power", "Power")
-    sections.append(ui.p(f"Power — {bucket_data['power_score'] if bucket_data['power_score'] is not None else '—'}", class_="gbo-category-title"))
+    sections.append(ui.p("Power", class_="gbo-category-title"))
     _sum = change_summary(bucket_data["power_subgroup_metrics"].values(), changes)
     if _sum is not None:
         sections.append(_sum)
@@ -753,7 +797,7 @@ def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact
         metrics = bucket_data["power_subgroup_metrics"][sub_name]
         if not metrics:
             continue
-        sections.append(ui.p(f"{sub_name} — {sub_score if sub_score is not None else '—'}", class_="gbo-subgroup-label"))
+        sections.append(ui.p(sub_name, class_="gbo-subgroup-label"))
         if sub_name == "Med Ball Throw":
             # Same bar-vs-raw split as Body Comp above -- Distance is
             # scored (bar), Velocity is reference-only (KPI tile), see
@@ -768,7 +812,7 @@ def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact
             sections.append(build_metric_bars(metrics, f"{key_prefix}_power_{sub_name}", mode=mode, is_pitcher=is_pitcher, changes=changes))
 
     sections = start("strength", "Strength")
-    sections.append(ui.p(f"Strength — {bucket_data['strength_score'] if bucket_data['strength_score'] is not None else '—'}", class_="gbo-category-title"))
+    sections.append(ui.p("Strength", class_="gbo-category-title"))
     _sum = change_summary(bucket_data["strength_subgroup_metrics"].values(), changes)
     if _sum is not None:
         sections.append(_sum)
@@ -776,12 +820,12 @@ def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact
         metrics = bucket_data["strength_subgroup_metrics"][sub_name]
         if not metrics:
             continue
-        sections.append(ui.p(f"{sub_name} — {sub_score if sub_score is not None else '—'}", class_="gbo-subgroup-label"))
+        sections.append(ui.p(sub_name, class_="gbo-subgroup-label"))
         sections.append(build_metric_bars(metrics, f"{key_prefix}_strength_{sub_name}", mode=mode, is_pitcher=is_pitcher, changes=changes))
 
     if bucket_data["speed_metrics"]:
         sections = start("speed", "Speed")
-        sections.append(ui.p(f"Speed (reference only, not in Total) — {bucket_data['speed_score'] if bucket_data['speed_score'] is not None else '—'}", class_="gbo-category-title"))
+        sections.append(ui.p("Speed (reference only)", class_="gbo-category-title"))
         _sum = change_summary([bucket_data["speed_metrics"]], changes)
         if _sum is not None:
             sections.append(_sum)
@@ -790,7 +834,7 @@ def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact
     capacity_metrics_present = any(bucket_data.get("capacity_subgroup_metrics", {}).values())
     if capacity_metrics_present:
         sections = start("capacity", "Arm Capacity")
-        sections.append(ui.p(f"Capacity (reference only, not in Total) — {bucket_data['capacity_score'] if bucket_data['capacity_score'] is not None else '—'}", class_="gbo-category-title"))
+        sections.append(ui.p("Capacity (reference only)", class_="gbo-category-title"))
         _sum = change_summary(bucket_data["capacity_subgroup_metrics"].values(), changes)
         if _sum is not None:
             sections.append(_sum)
@@ -798,7 +842,7 @@ def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact
             metrics = bucket_data["capacity_subgroup_metrics"][sub_name]
             if not metrics:
                 continue
-            sections.append(ui.p(f"{sub_name} — {sub_score if sub_score is not None else '—'}", class_="gbo-subgroup-label"))
+            sections.append(ui.p(sub_name, class_="gbo-subgroup-label"))
             sections.append(build_metric_bars(metrics, f"{key_prefix}_capacity_{sub_name}", mode=mode, is_pitcher=is_pitcher, changes=changes))
 
     mobility_rom_report = bucket_data.get("mobility_rom_report", [])
@@ -815,14 +859,14 @@ def breakdown_groups(bucket_data, key_prefix, mode="dark", changes=None, compact
     # data).
     sections = start("mobility", "Mobility & ROM")
     if movement_ring is not None or mobility_rom_ui is not None:
-        sections.append(ui.p("Mobility & ROM (reference only, not in Total)", class_="gbo-category-title"))
+        sections.append(ui.p("Mobility & ROM (reference only)", class_="gbo-category-title"))
         if movement_ring is not None:
             sections.append(movement_ring)
         if mobility_rom_ui is not None:
             sections.append(mobility_rom_ui)
 
     if bucket_data.get("shoulder_health_metrics"):
-        sections.append(ui.p(f"Shoulder Health (reference only, not in Total) — {bucket_data['shoulder_health_score'] if bucket_data['shoulder_health_score'] is not None else '—'}", class_="gbo-category-title"))
+        sections.append(ui.p("Shoulder Health (reference only)", class_="gbo-category-title"))
         sections.append(build_metric_bars(bucket_data["shoulder_health_metrics"], f"{key_prefix}_shoulder_health", mode=mode, is_pitcher=is_pitcher, changes=changes))
 
     return [g for g in groups if g[2]]

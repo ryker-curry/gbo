@@ -44,24 +44,29 @@ def _flag_for(bucket_data):
         worst = ui_helpers.STATUS_FLAG; reasons.append(mf.get("reason") or "Movement flag")
     elif mf.get("color") in ("orange", "yellow"):
         worst = ui_helpers.STATUS_WATCH; reasons.append(mf.get("reason") or "Movement flag")
+    # Nov 2026 (Ryker): flag from each category's own tests, not a
+    # 0-100 category score (category/combined scores are gone).
+    from bucket_display import category_status
     for key, label in (("body_comp_score", "Body comp"), ("power_score", "Power"), ("strength_score", "Strength"), ("speed_score", "Speed"), ("capacity_score", "Arm capacity")):
-        v = bucket_data.get(key)
-        if v is None:
+        st, nf, nw, _n = category_status(bucket_data, key)
+        if st is None:
             continue
-        st = ui_helpers.status_from_percentile(v)
-        if st == ui_helpers.STATUS_FLAG:
-            worst = ui_helpers.STATUS_FLAG; reasons.append(f"{label} {v:.0f}")
-        elif st == ui_helpers.STATUS_WATCH and worst != ui_helpers.STATUS_FLAG:
-            worst = ui_helpers.STATUS_WATCH; reasons.append(f"{label} {v:.0f}")
+        if st == "flag":
+            worst = ui_helpers.STATUS_FLAG; reasons.append(f"{label}: {nf} priority")
+        elif st == "watch" and worst != ui_helpers.STATUS_FLAG:
+            worst = ui_helpers.STATUS_WATCH; reasons.append(f"{label}: {nw} attention")
     return worst, " · ".join(reasons[:2]) if reasons else "All buckets in range"
 
 
-def _score_cell(v):
-    if v is None:
+def _score_cell(bd, key):
+    """Nov 2026 (Ryker: no category scores): priority/attention counts
+    for the category ("2P 1A", "OK"), colored by the worst test."""
+    from bucket_display import category_status, category_count_text
+    st, nf, nw, n = category_status(bd, key)
+    if st is None:
         return ui.tags.td("—", class_="text-end", style="color:var(--gbo-text-muted)")
-    st = ui_helpers.status_from_percentile(v)
     color = {"flag": "var(--gbo-status-flag)", "watch": "var(--gbo-status-watch)"}.get(st, "inherit")
-    return ui.tags.td(f"{v:.0f}", class_="text-end gbo-num", style=f"color:{color}; font-family:var(--gbo-mono);")
+    return ui.tags.td(category_count_text(nf, nw), class_="text-end gbo-num", style=f"color:{color}; font-family:var(--gbo-mono);")
 
 
 def _season_choices():
@@ -271,7 +276,7 @@ def roster_server(input, output, session, app_state):
                 ui.tags.td(cls or "—"),
                 ui.tags.td(st_chip),
                 ui.tags.td(ui_helpers.status_chip(r["flag"])),
-                _score_cell(bd.get("body_comp_score")), _score_cell(bd.get("power_score")), _score_cell(bd.get("strength_score")), _score_cell(bd.get("speed_score")), _score_cell(bd.get("capacity_score")),
+                _score_cell(bd, "body_comp_score"), _score_cell(bd, "power_score"), _score_cell(bd, "strength_score"), _score_cell(bd, "speed_score"), _score_cell(bd, "capacity_score"),
                 last_cell,
                 ui.tags.td(ui.tags.a("Profile", href="#", class_="gbo-player-link", style="color:var(--gbo-crimson); font-weight:600;", **{"data-player-id": str(p.player_id)})),
             ))
@@ -287,7 +292,7 @@ def roster_server(input, output, session, app_state):
           }});
         }})();""")
         return ui.div(
-            ui_helpers.card(ui.div(table, class_="table-responsive"), ui.div(f"{len(out)} of {len(rows)} players · scores are % of team best (latest tests), colored when Attention or Priority · hover a name for the flag reason", class_="gbo-page-sub", style="margin-top:12px; font-size:.78rem;")),
+            ui_helpers.card(ui.div(table, class_="table-responsive"), ui.div(f"{len(out)} of {len(rows)} players · categories show how many tests are Priority (P) or Attention (A), from the latest tests · hover a name for the flag reason", class_="gbo-page-sub", style="margin-top:12px; font-size:.78rem;")),
             js,
         )
 
