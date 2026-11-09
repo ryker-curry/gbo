@@ -333,7 +333,7 @@ def player_profile_server(input, output, session, app_state):
 
         card = ui_helpers.show_card(p, bd, summ, flag, fastball_summary=game_fastball_summ)
         tiles = ui.div(
-            ui_helpers.kpi_tile("Status", ui_helpers.status_chip(flag), delta=f"{sum(1 for s,_,_ in pris if s=='flag')} priority · {sum(1 for s,_,_ in pris if s=='watch')} attention" if pris else "No flags"),
+            ui_helpers.kpi_tile("Status", ui_helpers.status_chip(flag), delta=f"{len(pris)} development {'priority' if len(pris) == 1 else 'priorities'}" if pris else "No flags"),
             ui_helpers.kpi_tile("Last assessed", period_label(last_date), delta=f"{last_cat}" if last_date else "No assessments yet"),
             ui_helpers.kpi_tile("Movement flag", (mf.get("color") or "—").title(), delta=mf.get("reason") or ("Score " + str(mf.get("score")) if mf.get("score") is not None else "Not assessed"), status="flag" if mf.get("color") == "red" else "watch" if mf.get("color") in ("yellow", "orange") else None),
             class_="gbo-kpi-row", style="margin-bottom:16px;",
@@ -795,10 +795,10 @@ def player_profile_server(input, output, session, app_state):
             rows = [ui_helpers.metric_bar(n, f"{d.get('raw')}", d.get("percentile"), status=bucket_display.individual_metric_status(d.get("percentile")), unit=d.get("unit"), percentile_text=f"{bucket_display.ordinal(d['percentile'])} percentile" if d.get("percentile") is not None else "No team comparison yet") for n, d in metrics.items()]
             bucket_cards.append(ui.accordion_panel(
                 # Nov 2026 (Ryker): no category score number -- the panel
-                # header is just the category and its priority/attention
-                # chip; each test inside keeps its own percentile.
+                # header is just the category and a status dot (no
+                # priority/attention counts); each test inside keeps its own percentile.
                 ui.div(ui.div(title, class_="gbo-bucket-title"),
-                       ui_helpers.status_chip(st, f"{flagged} priority · {watch} attention" if (flagged or watch) else None), class_="gbo-bucket-head"),
+                       ui.span(style=f"display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--gbo-status-{st if st in ('good', 'watch', 'flag') else 'neutral'}, #8A8A8E);"), class_="gbo-bucket-head"),
                 ui.div(*rows, class_="gbo-metric-bar-group") if rows else ui_helpers.empty_state("No metrics recorded."),
                 value=title,
             ))

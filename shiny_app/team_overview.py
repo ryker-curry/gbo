@@ -150,12 +150,12 @@ def build(db, players, player_ids, ns):
         tot = len(sts)
         seg = lambda n, var: ui.div(style=f"width:{100*n/tot:.1f}%; background:var(--{var});") if n else None
         bucket_rows.append(ui.div(
-            ui.div(ui.span(label, class_="gbo-metric-bar-name"), ui.span(f"{nf} ", ui.span("priority", class_="unit"), class_="gbo-metric-bar-raw", style="color:var(--gbo-status-flag);" if nf else ""), class_="gbo-metric-bar-header"),
+            ui.div(ui.span(label, class_="gbo-metric-bar-name"), class_="gbo-metric-bar-header"),
             ui.div(seg(nf, "gbo-status-flag"), seg(nw, "gbo-status-watch"), seg(ng, "gbo-status-good"), class_="gbo-stack-bar"),
-            ui.div(f"{nf} · {nw} · {ng} of {tot} tested", class_="gbo-metric-bar-percentile"),
+            ui.div(f"{tot} tested", class_="gbo-metric-bar-percentile"),
             class_="gbo-metric-bar-row",
         ))
-    bucket_card = ui_helpers.card(ui.div(*(bucket_rows or [ui_helpers.empty_state("No scored assessments yet.")]), class_="gbo-metric-bar-group"), title="Team status by bucket", right="priority · attention · good")
+    bucket_card = ui_helpers.card(ui.div(*(bucket_rows or [ui_helpers.empty_state("No scored assessments yet.")]), class_="gbo-metric-bar-group"), title="Team status by bucket", right="red · yellow · green")
 
     # --- coverage chart (last 60 days) ---
     since = today - timedelta(days=60)

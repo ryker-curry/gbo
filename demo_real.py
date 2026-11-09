@@ -48,6 +48,23 @@ SKIP_TABLES = {
 }
 URL_COLUMNS_SUFFIX = ("url",)
 
+# Nov 2026 fix: GBO's own built-in labels are never names. An opposing
+# player surnamed "Peak" turned every "... Peak ..." test name into
+# "Opponent N", which emptied 6 of the 9 athlete-archetype radar axes in
+# the demo. These lookup tables are copied as-is, and every word in them
+# (plus exercise / routine names) is kept out of the name scrub, so a test
+# name inside a note survives too.
+REFERENCE_TABLES = {
+    "assessment_categories", "assessment_test_types", "body_comp_targets", "bullpen_types",
+    "hitter_session_types", "idp_statuses", "opponent_teams", "organizations", "pitch_types",
+    "player_classes", "player_statuses", "positions", "roles", "run_expectancy", "seasons",
+    "session_types", "team_event_types", "teams", "research_projects",
+}
+VOCAB_COLUMNS = (("assessment_test_types", "test_name"), ("assessment_categories", "category_name"),
+                 ("pitch_types", "type_name"), ("bullpen_types", "type_name"), ("session_types", "type_name"),
+                 ("hitter_session_types", "type_name"), ("positions", "position_name"),
+                 ("routine_exercises", "exercise_name"), ("training_routines", "routine_name"))
+
 
 def _label_maps(src):
     """Build id -> anonymized label maps and the name -> label scrub list."""
@@ -104,7 +121,20 @@ _TOKEN = re.compile(r"\b[A-Z][A-Za-z'\-]*\b")
 _DUP = re.compile(r"\b((?:Player|Staff|Opponent) \d+)(?:\s*,?\s+\1\b)+")
 
 
-def _scrubber(pairs):
+def _vocab(src):
+    """Capitalized words used in GBO's own labels -- never treated as names."""
+    from sqlalchemy import text
+    words = set()
+    for tbl, col in VOCAB_COLUMNS:
+        try:
+            for (v,) in src.execute(text(f"SELECT {col} FROM {tbl}")):
+                words |= set(_TOKEN.findall(v or ""))
+        except Exception:
+            src.rollback()
+    return words
+
+
+def _scrubber(pairs, keep=frozenset()):
     """Fast name scrub: every capitalized word is looked up in one dict of
     real first/last names (a single regex pass + dict lookups, so it stays
     quick across thousands of rows), then "Player 7 Player 7" (a first and
@@ -112,7 +142,7 @@ def _scrubber(pairs):
     lowercase are not caught."""
     word = {}
     for kind, text, label in pairs:
-        if kind == "word":
+        if kind == "word" and text not in keep:
             word.setdefault(text, label)
 
     def scrub(value):
@@ -170,7 +200,7 @@ def _row_transform(table, row, player_num, staff_num, opp_num, scrub):
             continue
         if name.endswith(URL_COLUMNS_SUFFIX):
             r[name] = None if col.nullable else ""
-        elif isinstance(col.type, (String, Text, JSON)) and t not in ("players", "users", "opponent_players"):
+        elif isinstance(col.type, (String, Text, JSON)) and t not in ("players", "users", "opponent_players") and t not in REFERENCE_TABLES:
             r[name] = scrub(r[name])
     return r
 
@@ -184,7 +214,7 @@ def populate_from_live(dst):
     _row_transform.__dict__.pop("_prev_school_seen", None)
     with database.engine.connect() as src:
         player_num, staff_num, opp_num, pairs = _label_maps(src)
-        scrub = _scrubber(pairs)
+        scrub = _scrubber(pairs, _vocab(src))
         dconn = dst.connection()
         for table in m.Base.metadata.sorted_tables:
             if table.name in SKIP_TABLES:
