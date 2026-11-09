@@ -23,9 +23,10 @@ Renderer._auto_register).
 """
 
 from shiny import ui, render, reactive
+from sqlalchemy import func
 
 from database import get_session
-from models import Game, GamePitch, RapsodoPitch, GameVideoClip, RapsodoImport
+from models import Game, GamePitch, RapsodoPitch, GameVideoClip, RapsodoImport, Umpire
 
 
 def register_game_tracking_manage(input, output, session, _refresh_tick, _active_game_id, _bump_refresh, _access_ok, _can_edit):
@@ -42,6 +43,7 @@ def register_game_tracking_manage(input, output, session, _refresh_tick, _active
         return ui.div(
             ui.output_ui("game_status_controls"),
             ui.output_ui("intrasquad_home_away_controls"),
+            ui.output_ui("home_plate_umpire_controls"),
             ui.output_ui("game_delete_section"),
         )
 
@@ -149,6 +151,93 @@ def register_game_tracking_manage(input, output, session, _refresh_tick, _active
             db.commit()
             ui.notification_show("Saved.", type="message", duration=5)
             _bump_refresh()
+        finally:
+            db.close()
+
+    @render.ui
+    def home_plate_umpire_controls():
+        """Nov 2026, Ryker: home plate umpire per game, for umpire
+        scorecards and umpire-adjusted catcher framing
+        (analytics/umpire_scorecard.py, analytics/catcher_framing.py).
+        SmartPark doesn't record the umpire, so it's picked here.
+
+        External games only -- intrasquads usually have no real umpire,
+        and their calls shouldn't feed umpire scorecards. Editable at any
+        status (incl. Final): the umpire doesn't change any recorded
+        pitch, so filling it in after the game is safe. New umpires are
+        typed inline (no separate page), matched case-insensitively so
+        the same name isn't added twice."""
+        _refresh_tick()
+        if not _access_ok() or not _can_edit():
+            return None
+        game_id = _active_game_id()
+        if game_id is None:
+            return None
+        db = get_session()
+        try:
+            game = db.query(Game).filter(Game.game_id == game_id).first()
+            if game is None or game.is_intrasquad:
+                return None
+            umps = (db.query(Umpire)
+                    .filter((Umpire.active.is_(True)) | (Umpire.umpire_id == game.home_plate_umpire_id))
+                    .order_by(Umpire.full_name).all())
+            choices = {"": "Not set"}
+            choices.update({str(u.umpire_id): u.full_name for u in umps})
+            current = str(game.home_plate_umpire_id) if game.home_plate_umpire_id else ""
+            return ui.div(
+                ui.h6("Home plate umpire", class_="gbo-section-title"),
+                ui.input_select("manage_hp_umpire", "Umpire", choices=choices, selected=current),
+                ui.input_text("manage_hp_umpire_new", "Or add a new umpire", placeholder="Full name"),
+                ui.input_action_button("save_hp_umpire_btn", "Save umpire", class_="btn-outline-primary btn-sm"),
+                ui.p(
+                    "Used for umpire scorecards and catcher framing. A new name typed here is used "
+                    "instead of the dropdown.",
+                    class_="text-muted small",
+                ),
+            )
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.save_hp_umpire_btn)
+    def _save_hp_umpire():
+        if not _can_edit():
+            return
+        game_id = _active_game_id()
+        if game_id is None:
+            return
+        db = get_session()
+        try:
+            game = db.query(Game).filter(Game.game_id == game_id).first()
+            if game is None or game.is_intrasquad:
+                return
+            new_name = " ".join((input.manage_hp_umpire_new() if "manage_hp_umpire_new" in input else "").split())
+            picked = input.manage_hp_umpire() if "manage_hp_umpire" in input else ""
+            if new_name:
+                ump = db.query(Umpire).filter(func.lower(Umpire.full_name) == new_name.lower()).first()
+                if ump is None:
+                    ump = Umpire(full_name=new_name, active=True)
+                    db.add(ump)
+                    db.flush()
+                elif not ump.active:
+                    ump.active = True
+                game.home_plate_umpire_id = ump.umpire_id
+                msg = f"Umpire set to {ump.full_name}."
+            elif picked:
+                game.home_plate_umpire_id = int(picked)
+                msg = "Umpire saved."
+            else:
+                game.home_plate_umpire_id = None
+                msg = "Umpire cleared."
+            db.commit()
+            ui.notification_show(msg, type="message", duration=5)
+            _bump_refresh()
+        except Exception:
+            db.rollback()
+            import traceback
+            traceback.print_exc()
+            ui.notification_show("Couldn't save the umpire -- nothing was changed. Please try again.",
+                                 type="error", duration=10)
         finally:
             db.close()
 
