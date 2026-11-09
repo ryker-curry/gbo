@@ -1078,6 +1078,21 @@ class Season(Base):
     games = relationship("Game", back_populates="season")
 
 
+class Umpire(Base):
+    """Home plate umpires (lookup table). SmartPark doesn't record who the
+    plate umpire is, so it's picked per game -- feeds umpire scorecards
+    and umpire-adjusted catcher framing (analytics/umpire_scorecard.py,
+    analytics/catcher_framing.py). Table created by
+    migrations/migrate_umpires.py."""
+    __tablename__ = "umpires"
+
+    umpire_id = Column(Integer, primary_key=True)
+    full_name = Column(String(120), nullable=False, unique=True)
+    active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class Game(Base):
     """A tracked game -- opponent, date, home/away. Both our hitting
     (our batters facing the opposing pitcher) and our pitching (our
@@ -1185,10 +1200,14 @@ class Game(Base):
     # PitchingChange-style history for Squad C either.
     squad_c_starting_pitcher_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)
     notes = Column(Text, nullable=True)
+    # Home plate umpire (nullable -- entered per game; added via
+    # migrations/migrate_umpires.py).
+    home_plate_umpire_id = Column(Integer, ForeignKey("umpires.umpire_id"), nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     created_by = relationship("User")
+    home_plate_umpire = relationship("Umpire")
     season = relationship("Season", back_populates="games")
     opponent_team = relationship("OpponentTeam")
     lineup_slots = relationship("GameLineupSlot", back_populates="game", cascade="all, delete-orphan", order_by="GameLineupSlot.batting_order")
