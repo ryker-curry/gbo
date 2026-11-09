@@ -572,18 +572,20 @@ def show_card(player, bucket_data, pitch_summary=None, flag="neutral", fastball_
         st = status_from_color_word(color)
         return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_=st, style="width:100%"), class_="b"), ui.span(str(count) if count is not None else "—", class_="v"), class_="gbo-at")
 
-    from bucket_display import category_status, category_count_text
+    from bucket_display import category_status
 
     def count_bar(label, key):
         """Nov 2026 (Ryker: no category scores on the card): a solid
         status bar per category -- red if any test in it is a priority,
         yellow if any needs attention, green otherwise -- with the counts
         as the value ("2P 1A", or "OK"). Same bucket_display.category_
-        status the roster and profile use, so they always agree."""
+        status the roster and profile use, so they always agree.
+        Nov 2026 (Ryker: "i don't want the priority and attention thing"):
+        color only -- no counts beside the bar."""
         st, nf, nw, n = category_status(bd, key)
         if st is None:
             return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_="neutral", style="width:0"), class_="b"), ui.span("—", class_="v"), class_="gbo-at")
-        return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_=st, style="width:100%"), class_="b"), ui.span(category_count_text(nf, nw), class_="v"), class_="gbo-at")
+        return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_=st, style="width:100%"), class_="b"), ui.span("", class_="v"), class_="gbo-at")
 
     attrs = [
         count_bar("BODY", "body_comp_score"), count_bar("PWR", "power_score"),

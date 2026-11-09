@@ -52,21 +52,21 @@ def _flag_for(bucket_data):
         if st is None:
             continue
         if st == "flag":
-            worst = ui_helpers.STATUS_FLAG; reasons.append(f"{label}: {nf} priority")
+            worst = ui_helpers.STATUS_FLAG; reasons.append(label)
         elif st == "watch" and worst != ui_helpers.STATUS_FLAG:
-            worst = ui_helpers.STATUS_WATCH; reasons.append(f"{label}: {nw} attention")
+            worst = ui_helpers.STATUS_WATCH; reasons.append(label)
     return worst, " · ".join(reasons[:2]) if reasons else "All buckets in range"
 
 
 def _score_cell(bd, key):
-    """Nov 2026 (Ryker: no category scores): priority/attention counts
-    for the category ("2P 1A", "OK"), colored by the worst test."""
-    from bucket_display import category_status, category_count_text
-    st, nf, nw, n = category_status(bd, key)
+    """Nov 2026 (Ryker: no category scores, then no priority/attention
+    counts): a status dot for the category, colored by its worst test."""
+    from bucket_display import category_status
+    st, _nf, _nw, _n = category_status(bd, key)
     if st is None:
         return ui.tags.td("—", class_="text-end", style="color:var(--gbo-text-muted)")
-    color = {"flag": "var(--gbo-status-flag)", "watch": "var(--gbo-status-watch)"}.get(st, "inherit")
-    return ui.tags.td(category_count_text(nf, nw), class_="text-end gbo-num", style=f"color:{color}; font-family:var(--gbo-mono);")
+    color = {"flag": "var(--gbo-status-flag)", "watch": "var(--gbo-status-watch)"}.get(st, "var(--gbo-status-good)")
+    return ui.tags.td(ui.span(style=f"display:inline-block;width:10px;height:10px;border-radius:50%;background:{color};"), class_="text-end")
 
 
 def _season_choices():
@@ -292,7 +292,7 @@ def roster_server(input, output, session, app_state):
           }});
         }})();""")
         return ui.div(
-            ui_helpers.card(ui.div(table, class_="table-responsive"), ui.div(f"{len(out)} of {len(rows)} players · categories show how many tests are Priority (P) or Attention (A), from the latest tests · hover a name for the flag reason", class_="gbo-page-sub", style="margin-top:12px; font-size:.78rem;")),
+            ui_helpers.card(ui.div(table, class_="table-responsive"), ui.div(f"{len(out)} of {len(rows)} players · category dots are red if any latest test is well behind the team, yellow if any is close, green otherwise · hover a name for the flag reason", class_="gbo-page-sub", style="margin-top:12px; font-size:.78rem;")),
             js,
         )
 
