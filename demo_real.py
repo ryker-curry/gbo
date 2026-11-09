@@ -173,6 +173,8 @@ def _row_transform(table, row, player_num, staff_num, opp_num, scrub):
         r.update(email=f"user{r['user_id']}@demo.gbo", auth_subject_id=None, photo_url=None)
     elif t == "opponent_players":
         r.update(player_name=f"Opponent {opp_num[r['opponent_player_id']]}", jersey_number=None)
+    elif t == "umpires":
+        r["full_name"] = f"Umpire {r['umpire_id']}"
     elif t == "whoop_connections":
         r.update(whoop_user_id=None, whoop_name=None, last_error=None)
     elif t == "college_season_stats":
