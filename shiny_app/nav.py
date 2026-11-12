@@ -51,6 +51,8 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             NavPage("players", "Player setup", "person"),
             NavPage("assessments", "Assessments", "clipboard-check"),
             NavPage("assessment_import", "Import Assessments", "upload"),
+            # Nov 2026, Ryker: VALD ForceDecks / ForceFrame exports -- display only.
+            NavPage("vald_import", "Import VALD", "upload"),
             # Nov 2026, Ryker: physical test changes vs fastball changes
             # (change-vs-change scatter + decline watch) -- S&C staff too.
             NavPage("athlete_performance", "Athlete vs Performance", "graph-up"),

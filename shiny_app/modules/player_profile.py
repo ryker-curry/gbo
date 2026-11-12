@@ -54,6 +54,7 @@ import bucket_display
 import profile_links
 import college_career_display
 import career_development_display
+import vald_display
 import hitting_tab_display
 from assessment_period import period_label
 import ui_helpers
@@ -375,6 +376,9 @@ def player_profile_server(input, output, session, app_state):
             ui.nav_panel("Overview", ui.div(overview, class_="gbo-tab-body")),
             ui.nav_panel("Assessments", ui.div(assessments_tab, class_="gbo-tab-body")),
             ui.nav_panel("Mobility", ui.div(mobility_tab, class_="gbo-tab-body")),
+            # Nov 2026, Ryker: raw VALD ForceDecks / ForceFrame results -- reference
+            # only, not scored (shiny_app/vald_display.py).
+            ui.nav_panel("VALD Testing", ui.div(ui.output_ui("vald_tab"), class_="gbo-tab-body")),
             *([ui.nav_panel("Pitching", ui.div(pitching_tab, class_="gbo-tab-body"))] if p.is_pitcher or pitches else []),
             *([ui.nav_panel("Hitting", ui.div(ui.output_ui("hitting_tab"), class_="gbo-tab-body"))] if show_hitting else []),
             ui.nav_panel("Development", ui.div(dev_tab, class_="gbo-tab-body")),
@@ -497,6 +501,7 @@ def player_profile_server(input, output, session, app_state):
 
     college_career_display.register(input, output, session, app_state, _profile_pid)
     career_development_display.register(input, output, session, app_state, _profile_pid)
+    vald_display.register(input, output, session, app_state, _profile_pid)
     hitting_tab_display.register(input, output, session, app_state, _profile_pid,
                                  lambda: _selected_season() or current_season_label())
 

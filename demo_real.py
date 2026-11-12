@@ -193,6 +193,14 @@ def _row_transform(table, row, player_num, staff_num, opp_num, scrub):
     elif t == "smartpark_player_links":
         r["source_name"] = f"Player {player_num.get(r['player_id'], '?')}"
         r["source_key"] = f"demo:{r['link_id']}"
+    elif t == "vald_tests":
+        # VALD spellings are often wrong, so the name scrub can't catch them.
+        r["vald_name"] = None
+    elif t == "vald_name_links":
+        r["vald_name"] = f"Player {player_num.get(r['player_id'], '?')}"
+        r["vald_name_key"] = f"demo:{r['vald_name_link_id']}"
+    elif t == "vald_imports":
+        r["file_name"] = None
     elif t == "weekly_report_sends":
         r["email"] = None
     # URLs anywhere -> gone; text/JSON anywhere -> names scrubbed
