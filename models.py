@@ -2631,3 +2631,70 @@ class ThrowingAssumption(Base):
     catch_play_days = Column(String(12), nullable=False, default="practice")   # practice / weekdays / daily / off
     updated_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# VALD testing (Nov 2026, Ryker: put every VALD test on GBO -- display only,
+# NOT an assessment: nothing here feeds Assessments, percentiles or the
+# Bucket System). Loaded from VALD Hub CSV exports on Import VALD
+# (services/vald_import.py); shown on Player Profile's VALD Testing tab.
+# Table setup: python3 -m migrations.migrate_vald
+# ---------------------------------------------------------------------------
+
+class ValdImport(Base):
+    """One uploaded VALD export file."""
+    __tablename__ = "vald_imports"
+
+    vald_import_id = Column(Integer, primary_key=True)
+    system = Column(String(20), nullable=False)          # ForceDecks / ForceFrame
+    file_name = Column(String(200), nullable=True)
+    first_test_date = Column(Date, nullable=True)
+    last_test_date = Column(Date, nullable=True)
+    test_count = Column(Integer, nullable=False, default=0)
+    imported_by_user_id = Column(Integer, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ValdTest(Base):
+    """One VALD test for one player. ForceDecks: one test (e.g. an IMTP).
+    ForceFrame: one test + position on one day, both directions and both
+    sides merged -- metrics = {"directions": {"IR": {"L": {...}, "R": {...}},
+    "ER": {...}}}. ForceDecks metrics = {"values": {VALD column: number},
+    "asym": {VALD column: {"value", "side"}}}. test_key makes re-imports
+    update instead of duplicate."""
+    __tablename__ = "vald_tests"
+    __table_args__ = (UniqueConstraint("player_id", "system", "test_key", name="uq_vald_test"),)
+
+    vald_test_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False, index=True)
+    vald_import_id = Column(Integer, ForeignKey("vald_imports.vald_import_id", ondelete="SET NULL"), nullable=True)
+    system = Column(String(20), nullable=False)
+    test_type = Column(String(100), nullable=False)      # IMTP, CMJ, Shoulder IR/ER, ...
+    position = Column(String(150), nullable=True)        # ForceFrame position
+    test_key = Column(String(250), nullable=False)
+    test_date = Column(Date, nullable=False, index=True)
+    tested_at = Column(DateTime, nullable=False)
+    body_weight_kg = Column(Numeric(6, 2), nullable=True)
+    reps = Column(Integer, nullable=True)
+    metrics = Column(JSON, nullable=False, default=dict)
+    vald_name = Column(String(150), nullable=True)       # name as spelled in VALD
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    player = relationship("Player")
+
+
+class ValdNameLink(Base):
+    """Remembers which roster player a (misspelled) VALD name is, so staff
+    only fix a name once."""
+    __tablename__ = "vald_name_links"
+    __table_args__ = (UniqueConstraint("vald_name_key", name="uq_vald_name_link_key"),)
+
+    vald_name_link_id = Column(Integer, primary_key=True)
+    vald_name_key = Column(String(150), nullable=False)  # normalized (lowercase, letters only)
+    vald_name = Column(String(150), nullable=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    player = relationship("Player")
