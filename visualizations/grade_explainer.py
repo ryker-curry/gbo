@@ -30,6 +30,8 @@ FEATURE_WORDS = {
     "release_height": ("Release height", "how high you let go of the ball"),
     "release_side": ("Release side", "how far out to the side you let go"),
     "velocity_differential": ("Speed gap off your fastball", "how much slower it is than your own fastball"),
+    "vb_differential": ("Up/down gap off your fastball", "how differently it moves up and down than your own fastball"),
+    "hb_differential": ("Side-to-side gap off your fastball", "how differently it moves side to side than your own fastball"),
 }
 
 PITCH_ORDER = ["4-Seam Fastball", "2-Seam Fastball", "Cutter", "Slider", "Curveball", "Changeup", "Splitter"]

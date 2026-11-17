@@ -60,6 +60,7 @@ from analytics.command_metrics import (
     session_command_scorecard,
 )
 from analytics.pitch_grading import (
+    OPTIONAL_STUFF_FEATURES,
     _stuff_plus_features,  # reused so demo Stuff+ uses the exact same feature math as production -- see module docstring
     _stuff_plus_weights_for,
     location_plus,
@@ -214,7 +215,10 @@ def _build_stuff_plus_model(pitch_type_label, pitches_of_type, fastball_velo_by_
     standardize against this population's own mean/stdev) -- see module
     docstring for why this doesn't call that function directly."""
     weights = _stuff_plus_weights_for(pitch_type_label)
-    required = [name for name, w in weights.items() if w]
+    # Nov 2026: fastball-separation features are optional (see
+    # pitch_grading.OPTIONAL_STUFF_FEATURES) -- the demo roster has no
+    # fastball shape reference, so they simply drop out here.
+    required = [name for name, w in weights.items() if w and name not in OPTIONAL_STUFF_FEATURES]
     rows = []
     for p in pitches_of_type:
         pitcher_velo = fastball_velo_by_player.get(p.player_id)

@@ -309,6 +309,41 @@ def team_pitcher_primary_fastball_velocity(db):
     return result
 
 
+@cached("fb_shape", {"rapsodo_pitches", "game_pitches", "pitch_types"})
+def team_pitcher_primary_fastball_shape(db):
+    """{player_id: {"vb": float, "hb": float}} -- each pitcher's own
+    average measured break (signed vb_trajectory/hb_trajectory, inches)
+    on his PRIMARY fastball, picked the same way as
+    team_pitcher_primary_fastball_velocity (whichever of 4-Seam/2-Seam he
+    has thrown more of in real games). Feeds pitch_grading's Nov 2026
+    vb_differential/hb_differential (movement separation of each
+    secondary from his own fastball). Same MIN_PITCHER_FASTBALL_VELO_PITCHES
+    floor; a pitcher below it is left out (his gaps score as team average)."""
+    from statistics import mean
+    from analytics.pitch_grading import MIN_PITCHER_FASTBALL_VELO_PITCHES
+
+    rows = (
+        db.query(RapsodoPitch.player_id, RapsodoPitch.vb_trajectory, RapsodoPitch.hb_trajectory, PitchType.type_name)
+        .join(GamePitch, RapsodoPitch.game_pitch_id == GamePitch.game_pitch_id)
+        .join(PitchType, RapsodoPitch.pitch_type_id == PitchType.pitch_type_id)
+        .filter(PitchType.type_name.in_(["4-Seam Fastball", "2-Seam Fastball"]))
+        .filter(RapsodoPitch.vb_trajectory.isnot(None))
+        .filter(RapsodoPitch.hb_trajectory.isnot(None))
+        .all()
+    )
+    by_player_type = {}
+    for player_id, vb, hb, type_name in rows:
+        by_player_type.setdefault(player_id, {}).setdefault(type_name, []).append((float(vb), float(hb)))
+
+    result = {}
+    for player_id, readings_by_type in by_player_type.items():
+        _primary_type, readings = max(readings_by_type.items(), key=lambda item: len(item[1]))
+        if len(readings) < MIN_PITCHER_FASTBALL_VELO_PITCHES:
+            continue
+        result[player_id] = {"vb": mean(r[0] for r in readings), "hb": mean(r[1] for r in readings)}
+    return result
+
+
 @cached("stuff_models", {"rapsodo_pitches", "game_pitches", "pitch_types"})
 def team_stuff_plus_baselines(db):
     """{pitch_type_label: model} across every canonical pitch type that
@@ -336,6 +371,10 @@ def team_stuff_plus_baselines(db):
     # reference back up at SCORING time straight from the model, and
     # every existing stuff_plus() call site keeps working unchanged.
     pitcher_fastball_velocities = team_pitcher_primary_fastball_velocity(db)
+    # Nov 2026: each pitcher's own fastball break, for the movement-gap
+    # features every secondary is now graded on (stored on the model the
+    # same way as the velocities above).
+    pitcher_fastball_shapes = team_pitcher_primary_fastball_shape(db)
     models = {}
     for label, pairs in training_by_type.items():
         # Sept 2026: Stuff+'s weights are fixed per pitch type now, not
@@ -343,7 +382,7 @@ def team_stuff_plus_baselines(db):
         # type's weight set out of pitch_grading.STUFF_PLUS_FIXED_WEIGHTS
         # (see that function's docstring). This is still the one and
         # only call site.
-        model = fit_stuff_plus_model(pairs, label, pitcher_fastball_velocities)
+        model = fit_stuff_plus_model(pairs, label, pitcher_fastball_velocities, pitcher_fastball_shapes)
         if model is not None:
             models[label] = model
     return models

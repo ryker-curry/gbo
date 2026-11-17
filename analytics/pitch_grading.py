@@ -101,6 +101,30 @@ changeup's fade/tumble relative to the pitcher's own fastball shape is
 a real thing too, per the plan doc, and remains unimplemented -- see
 the V1 simplifications note below).
 
+Nov 2026 update (Ryker's call), two changes:
+  1. Fastball separation for every secondary. Besides the changeup's
+     speed gap, every secondary (cutter, slider, curveball, changeup,
+     splitter) is now graded on how far it sits from the SAME pitcher's
+     own primary fastball: speed gap (velocity_differential) and
+     movement gap, vertical and horizontal (vb_differential/
+     hb_differential). These are optional features (see
+     OPTIONAL_STUFF_FEATURES): a pitcher without enough real-game
+     fastballs for a reference still gets graded, the gap just sits at
+     the team average for him. Cutter's speed-gap weight stays 0, since
+     a cutter loses value as it slows toward slider speed.
+  2. Data-tuned fixed weights. The hand-set per-type weights now live in
+     STUFF_PLUS_PRIOR_WEIGHTS; STUFF_PLUS_FIXED_WEIGHTS (what scoring
+     uses) is those priors nudged toward GBO's own real-game called-
+     strike + whiff data by calibrate_stuff_plus_weights(), with a noise
+     gate, shrinkage toward the prior and a 50% cap per weight, and no
+     sign flips. Weights are still FIXED between calibrations -- nothing
+     is fit at scoring time. Re-run scripts/calibrate_stuff_plus_weights.py
+     as more game data comes in. First run (Nov 17 2026, 1,641 pitches):
+     only Slider vb_trajectory (1.0 -> 1.22) and Cutter hb_differential
+     (1.0 -> 1.04) cleared the noise bar; every other weight kept its
+     prior. Fall data alone isn't strong enough to overturn the
+     pitch-design priors yet, which is the point of the gate.
+
 V1 simplifications, called out explicitly rather than silently guessed
 at (see plan doc sections 4 and 8 for the open items these map to):
   - Stuff+ uses a fixed, hand-set weight per feature per pitch type (see
@@ -221,7 +245,17 @@ STUFF_PLUS_FEATURE_NAMES = (
     "velocity", "vb_trajectory", "hb_trajectory", "total_spin",
     "spin_axis_offset", "spin_efficiency", "gyro_degree",
     "release_height", "release_side", "velocity_differential",
+    "vb_differential", "hb_differential",
 )
+
+# Nov 2026 (Ryker's call): the three "separation from his own fastball"
+# features. They need a per-pitcher fastball reference that not every
+# pitcher has (see MIN_PITCHER_FASTBALL_VELO_PITCHES), so they're
+# OPTIONAL: a training row missing one is still used (it just sits at the
+# team average for that feature, contributing 0 to the composite) instead
+# of being dropped -- otherwise every pitcher without enough real-game
+# fastballs would silently disappear from his secondaries' training pools.
+OPTIONAL_STUFF_FEATURES = frozenset({"velocity_differential", "vb_differential", "hb_differential"})
 
 # Sept 2026 methodology fix (see module docstring): fixed, hand-set
 # per-feature weights, one set PER CANONICAL PITCH TYPE, replacing the
@@ -335,7 +369,7 @@ STUFF_PLUS_FEATURE_NAMES = (
 # Not a validated set of numbers -- a starting point Ryker can adjust
 # per type once he's seen how each one scores real pitchers, same
 # caveat as PITCHING_PLUS_STUFF_WEIGHT below.
-STUFF_PLUS_FIXED_WEIGHTS = {
+STUFF_PLUS_PRIOR_WEIGHTS = {
     "4-Seam Fastball": {
         "velocity": 3.0,
         "vb_trajectory": 1.75,
@@ -347,6 +381,8 @@ STUFF_PLUS_FIXED_WEIGHTS = {
         "release_height": 0.0,
         "release_side": 0.0,
         "velocity_differential": 0.0,
+        "vb_differential": 0.0,
+        "hb_differential": 0.0,
     },
     "2-Seam Fastball": {
         "velocity": 3.0,
@@ -359,6 +395,8 @@ STUFF_PLUS_FIXED_WEIGHTS = {
         "release_height": 0.0,
         "release_side": 0.0,
         "velocity_differential": 0.0,
+        "vb_differential": 0.0,
+        "hb_differential": 0.0,
     },
     "Cutter": {
         "velocity": 2.25,
@@ -371,6 +409,8 @@ STUFF_PLUS_FIXED_WEIGHTS = {
         "release_height": 0.0,
         "release_side": 0.0,
         "velocity_differential": 0.0,
+        "vb_differential": 0.5,
+        "hb_differential": 1.0,
     },
     "Slider": {
         "velocity": 1.5,
@@ -382,7 +422,9 @@ STUFF_PLUS_FIXED_WEIGHTS = {
         "gyro_degree": -0.25,
         "release_height": 0.0,
         "release_side": 0.0,
-        "velocity_differential": 0.0,
+        "velocity_differential": 0.25,
+        "vb_differential": 0.75,
+        "hb_differential": 1.0,
     },
     "Curveball": {
         "velocity": 0.75,
@@ -394,7 +436,9 @@ STUFF_PLUS_FIXED_WEIGHTS = {
         "gyro_degree": -0.5,
         "release_height": 0.0,
         "release_side": 0.0,
-        "velocity_differential": 0.0,
+        "velocity_differential": 0.5,
+        "vb_differential": 1.25,
+        "hb_differential": 0.5,
     },
     "Changeup": {
         "velocity": 0.0,
@@ -407,6 +451,8 @@ STUFF_PLUS_FIXED_WEIGHTS = {
         "release_height": 0.0,
         "release_side": 0.0,
         "velocity_differential": 2.5,
+        "vb_differential": 1.25,
+        "hb_differential": 1.0,
     },
     "Splitter": {
         "velocity": 0.5,
@@ -418,7 +464,119 @@ STUFF_PLUS_FIXED_WEIGHTS = {
         "gyro_degree": -0.25,
         "release_height": 0.0,
         "release_side": 0.0,
+        "velocity_differential": 1.0,
+        "vb_differential": 1.75,
+        "hb_differential": 0.5,
+    },
+}
+
+# Nov 2026 (Ryker's call): the weights Stuff+ actually SCORES with.
+# STUFF_PLUS_PRIOR_WEIGHTS above stays the hand-set pitch-design starting
+# point; these are those priors nudged toward what GBO's own real-game
+# pitches show, by calibrate_stuff_plus_weights() below -- see its
+# docstring for the method. Re-run scripts/calibrate_stuff_plus_weights.py
+# after each new chunk of game data and paste its output here.
+# Calibrated Nov 17 2026 on every real-game Rapsodo pitch in GBO (1,641
+# pitches, fall 2026). Only weights whose CSW correlation cleared the noise
+# bar moved; everything else equals its prior.
+STUFF_PLUS_FIXED_WEIGHTS = {
+    "4-Seam Fastball": {  # n=649 game pitches, moved: none
+        "velocity": 3.0,
+        "vb_trajectory": 1.75,
+        "hb_trajectory": 0.75,
+        "total_spin": 0.5,
+        "spin_axis_offset": 0.25,
+        "spin_efficiency": 2.0,
+        "gyro_degree": -1.0,
+        "release_height": 0.0,
+        "release_side": 0.0,
         "velocity_differential": 0.0,
+        "vb_differential": 0.0,
+        "hb_differential": 0.0,
+    },
+    "2-Seam Fastball": {  # n=328 game pitches, moved: none
+        "velocity": 3.0,
+        "vb_trajectory": 0.75,
+        "hb_trajectory": 1.75,
+        "total_spin": 0.5,
+        "spin_axis_offset": 0.25,
+        "spin_efficiency": 1.25,
+        "gyro_degree": -0.5,
+        "release_height": 0.0,
+        "release_side": 0.0,
+        "velocity_differential": 0.0,
+        "vb_differential": 0.0,
+        "hb_differential": 0.0,
+    },
+    "Cutter": {  # n=27 game pitches, moved: hb_differential
+        "velocity": 2.25,
+        "vb_trajectory": 1.0,
+        "hb_trajectory": 1.5,
+        "total_spin": 0.5,
+        "spin_axis_offset": 0.25,
+        "spin_efficiency": 1.0,
+        "gyro_degree": -0.5,
+        "release_height": 0.0,
+        "release_side": 0.0,
+        "velocity_differential": 0.0,
+        "vb_differential": 0.5,
+        "hb_differential": 1.04,
+    },
+    "Slider": {  # n=270 game pitches, moved: vb_trajectory
+        "velocity": 1.5,
+        "vb_trajectory": 1.22,
+        "hb_trajectory": 2.0,
+        "total_spin": 0.75,
+        "spin_axis_offset": 0.25,
+        "spin_efficiency": 0.5,
+        "gyro_degree": -0.25,
+        "release_height": 0.0,
+        "release_side": 0.0,
+        "velocity_differential": 0.25,
+        "vb_differential": 0.75,
+        "hb_differential": 1.0,
+    },
+    "Curveball": {  # n=132 game pitches, moved: none
+        "velocity": 0.75,
+        "vb_trajectory": 2.25,
+        "hb_trajectory": 0.75,
+        "total_spin": 1.0,
+        "spin_axis_offset": 0.25,
+        "spin_efficiency": 1.25,
+        "gyro_degree": -0.5,
+        "release_height": 0.0,
+        "release_side": 0.0,
+        "velocity_differential": 0.5,
+        "vb_differential": 1.25,
+        "hb_differential": 0.5,
+    },
+    "Changeup": {  # n=207 game pitches, moved: none
+        "velocity": 0.0,
+        "vb_trajectory": 1.25,
+        "hb_trajectory": 1.5,
+        "total_spin": 0.25,
+        "spin_axis_offset": 0.25,
+        "spin_efficiency": 0.75,
+        "gyro_degree": 0.0,
+        "release_height": 0.0,
+        "release_side": 0.0,
+        "velocity_differential": 2.5,
+        "vb_differential": 1.25,
+        "hb_differential": 1.0,
+    },
+    "Splitter": {  # n=28 game pitches, moved: none
+        "velocity": 0.5,
+        "vb_trajectory": 2.0,
+        "hb_trajectory": 0.75,
+        "total_spin": -0.5,
+        "spin_axis_offset": 0.25,
+        "spin_efficiency": 0.25,
+        "gyro_degree": -0.25,
+        "release_height": 0.0,
+        "release_side": 0.0,
+        "velocity_differential": 1.0,
+        "vb_differential": 1.75,
+        "hb_differential": 0.5,
     },
 }
 
@@ -454,7 +612,7 @@ def _spin_axis_offset(spin_axis_degrees):
     return min(degrees, 360.0 - degrees)
 
 
-def _stuff_plus_features(rapsodo_pitch, pitcher_fastball_velo=None):
+def _stuff_plus_features(rapsodo_pitch, pitcher_fastball_velo=None, pitcher_fastball_shape=None):
     """Extract Stuff+'s physical inputs from one RapsodoPitch, in the form
     used consistently for BOTH fitting and scoring. vb_trajectory/
     hb_trajectory (actual measured vertical/horizontal break) are taken
@@ -507,10 +665,29 @@ def _stuff_plus_features(rapsodo_pitch, pitcher_fastball_velo=None):
             if pitcher_fastball_velo is not None and velocity is not None
             else None
         ),
+        # Nov 2026 (Ryker's call): movement separation from the SAME
+        # pitcher's own primary fastball -- how far this pitch's actual
+        # measured break sits from his fastball's average break, in
+        # inches, vertical and horizontal separately. Uses the SIGNED
+        # trajectory values on both sides (same pitcher, same handedness,
+        # so the signs are comparable) and takes the absolute gap, so
+        # more separation is always a bigger positive number. None when
+        # this pitcher has no usable fastball reference (see
+        # profile_queries.team_pitcher_primary_fastball_shape).
+        "vb_differential": (
+            abs(float(rapsodo_pitch.vb_trajectory) - pitcher_fastball_shape["vb"])
+            if pitcher_fastball_shape and rapsodo_pitch.vb_trajectory is not None
+            else None
+        ),
+        "hb_differential": (
+            abs(float(rapsodo_pitch.hb_trajectory) - pitcher_fastball_shape["hb"])
+            if pitcher_fastball_shape and rapsodo_pitch.hb_trajectory is not None
+            else None
+        ),
     }
 
 
-def fit_stuff_plus_model(training_pairs, pitch_type_label, pitcher_fastball_velocities=None):
+def fit_stuff_plus_model(training_pairs, pitch_type_label, pitcher_fastball_velocities=None, pitcher_fastball_shapes=None):
     """training_pairs: list of (RapsodoPitch, run_value) for ONE
     canonical pitch type -- caller groups by pitch_type_id/normalized
     name first (same convention every baseline in this module uses) and
@@ -583,15 +760,21 @@ def fit_stuff_plus_model(training_pairs, pitch_type_label, pitcher_fastball_velo
     whose feature_baseline entry is missing, so this needs no special
     handling there."""
     weights_for_type = _stuff_plus_weights_for(pitch_type_label)
-    required_features = tuple(name for name in STUFF_PLUS_FEATURE_NAMES if weights_for_type.get(name, 0.0))
+    weighted_features = tuple(name for name in STUFF_PLUS_FEATURE_NAMES if weights_for_type.get(name, 0.0))
+    # Nov 2026: the fastball-separation features are optional (see
+    # OPTIONAL_STUFF_FEATURES) -- a row missing one still trains.
+    required_features = tuple(name for name in weighted_features if name not in OPTIONAL_STUFF_FEATURES)
+    optional_features = tuple(name for name in weighted_features if name in OPTIONAL_STUFF_FEATURES)
     pitcher_fastball_velocities = dict(pitcher_fastball_velocities or {})
+    pitcher_fastball_shapes = dict(pitcher_fastball_shapes or {})
 
     rows = []
     for rapsodo_pitch, run_value in training_pairs:
         if run_value is None:
             continue
         pitcher_velo = pitcher_fastball_velocities.get(rapsodo_pitch.player_id)
-        features = _stuff_plus_features(rapsodo_pitch, pitcher_velo)
+        pitcher_shape = pitcher_fastball_shapes.get(rapsodo_pitch.player_id)
+        features = _stuff_plus_features(rapsodo_pitch, pitcher_velo, pitcher_shape)
         if any(features[name] is None for name in required_features):
             continue
         rows.append(features)
@@ -608,12 +791,20 @@ def fit_stuff_plus_model(training_pairs, pitch_type_label, pitcher_fastball_velo
         # division-by-zero -- when every value is identical, (value -
         # mean) is also 0 for every row, so the guard changes nothing.
         feature_baseline[name] = (mean(vals), stdev(vals) or 1e-9)
+    for name in optional_features:
+        # Baseline from the rows that HAVE the feature; needs the same
+        # floor as a whole pitch type, or the feature is left out of
+        # this type's model entirely (scored as if at the team average).
+        vals = [f[name] for f in rows if f[name] is not None]
+        if len(vals) >= MIN_STUFF_TRAINING_PITCHES:
+            feature_baseline[name] = (mean(vals), stdev(vals) or 1e-9)
 
     quality_weights = weights_for_type
+    used_features = tuple(name for name in weighted_features if name in feature_baseline)
 
     composites = [
         sum(quality_weights[name] * (f[name] - feature_baseline[name][0]) / feature_baseline[name][1]
-            for name in required_features)
+            for name in used_features if f[name] is not None)
         for f in rows
     ]
     prediction_baseline = (mean(composites), stdev(composites))
@@ -623,6 +814,7 @@ def fit_stuff_plus_model(training_pairs, pitch_type_label, pitcher_fastball_velo
         "quality_weights": quality_weights,
         "prediction_baseline": prediction_baseline,
         "pitcher_fastball_velocities": pitcher_fastball_velocities,
+        "pitcher_fastball_shapes": pitcher_fastball_shapes,
         "n": n,
     }
 
@@ -654,7 +846,8 @@ def stuff_plus(rapsodo_pitch, model):
     if model is None:
         return None
     pitcher_velo = model.get("pitcher_fastball_velocities", {}).get(rapsodo_pitch.player_id)
-    features = _stuff_plus_features(rapsodo_pitch, pitcher_velo)
+    pitcher_shape = model.get("pitcher_fastball_shapes", {}).get(rapsodo_pitch.player_id)
+    features = _stuff_plus_features(rapsodo_pitch, pitcher_velo, pitcher_shape)
     composite = 0.0
     used_any = False
     for name, weight in model["quality_weights"].items():
@@ -670,6 +863,102 @@ def stuff_plus(rapsodo_pitch, model):
     if not p_sd:
         return None
     return round(100 + 10 * (composite - p_mean) / p_sd, 1)
+
+
+# Nov 2026 (Ryker's call): tune the fixed Stuff+ weights to GBO's own data.
+# Outcome = called strike or swinging strike (CSW). Checked on fall 2026
+# data before choosing it: a Stuff+ trained on run value graded harder
+# fastballs as WORSE (r = -0.65 with velocity) -- the same small-sample
+# overfitting the Sept 2026 fix moved away from -- while a CSW-based one
+# behaved as expected (r = +0.70). CSW is a far less noisy per-pitch
+# outcome than run value, so it is the one used to tune.
+STUFF_CALIBRATION_OUTCOMES = frozenset({"Called Strike", "Swing and Miss"})
+# Shrinkage: how many real-game pitches of a type it takes for the data to
+# get HALF the say over the hand-set prior. With fewer pitches the weight
+# stays close to the prior; with many it moves most of the way to the data.
+STUFF_CALIBRATION_SHRINK_PITCHES = 400
+# A feature's weight only moves when its correlation with CSW is clearly
+# bigger than noise for that sample: |r| > STUFF_CALIBRATION_MIN_Z / sqrt(n)
+# (about a 95% bar). And no weight moves more than
+# STUFF_CALIBRATION_MAX_CHANGE of its prior in one calibration.
+STUFF_CALIBRATION_MIN_Z = 2.0
+STUFF_CALIBRATION_MAX_CHANGE = 0.5
+
+
+def _pearson(xs, ys):
+    n = len(xs)
+    if n < 3:
+        return None
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    sxx = sum((x - mx) ** 2 for x in xs)
+    syy = sum((y - my) ** 2 for y in ys)
+    if not sxx or not syy:
+        return None
+    return sxy / math.sqrt(sxx * syy)
+
+
+def calibrate_stuff_plus_weights(rows_by_type, prior_weights=None, shrink_pitches=STUFF_CALIBRATION_SHRINK_PITCHES):
+    """Suggest tuned fixed weights from real-game data. Pure function: the
+    caller builds rows_by_type = {pitch_type_label: [(features_dict, csw)]}
+    where features_dict is _stuff_plus_features(...) for one real-game
+    pitch and csw is 1 for a called/swinging strike, else 0.
+
+    Method, per pitch type and per feature the prior actually uses
+    (nonzero prior weight -- a feature the design deliberately zeroes,
+    like release_height/side, stays zero):
+      1. r = correlation between the feature and CSW over the pitches
+         that have the feature.
+      2. Data weight = r rescaled so this type's data weights have the
+         same total size (sum of |weight|) as its prior weights.
+      3. Only features whose |r| clears STUFF_CALIBRATION_MIN_Z / sqrt(n)
+         (clearly more than noise for that sample) move at all; the rest
+         keep their prior weight.
+      4. Blend: prior + lambda * (data - prior), lambda = n / (n +
+         shrink_pitches), n = that type's real-game pitch count.
+      5. Limits: no weight moves more than STUFF_CALIBRATION_MAX_CHANGE
+         (50%) of its prior, and none flips sign -- one fall of data
+         isn't enough to overturn pitch-design basics.
+    Returns {pitch_type_label: {feature: weight}} plus, under each type's
+    "__meta__" key, n, lambda and the raw r values, for the review."""
+    prior_weights = prior_weights or STUFF_PLUS_PRIOR_WEIGHTS
+    out = {}
+    for label, prior in prior_weights.items():
+        rows = rows_by_type.get(label, [])
+        n = len(rows)
+        tuned = dict(prior)
+        meta = {"n": n, "lambda": 0.0, "r": {}}
+        active = [name for name, w in prior.items() if w]
+        rs = {}
+        for name in active:
+            pairs = [(f[name], y) for f, y in rows if f.get(name) is not None]
+            r = _pearson([p[0] for p in pairs], [p[1] for p in pairs]) if pairs else None
+            if r is not None:
+                rs[name] = r
+        meta["r"] = {k: round(v, 3) for k, v in rs.items()}
+        total_prior = sum(abs(prior[name]) for name in active)
+        total_r = sum(abs(v) for v in rs.values())
+        if n and rs and total_r:
+            lam = n / (n + shrink_pitches)
+            meta["lambda"] = round(lam, 3)
+            scale = total_prior / total_r
+            for name in active:
+                if name not in rs:
+                    continue
+                n_feat = sum(1 for f, _y in rows if f.get(name) is not None)
+                if abs(rs[name]) <= STUFF_CALIBRATION_MIN_Z / math.sqrt(n_feat):
+                    continue
+                data_w = rs[name] * scale
+                new = prior[name] + lam * (data_w - prior[name])
+                cap = abs(prior[name]) * STUFF_CALIBRATION_MAX_CHANGE
+                new = max(prior[name] - cap, min(prior[name] + cap, new))
+                if (new > 0) != (prior[name] > 0):
+                    new = 0.0
+                tuned[name] = round(new, 2)
+                meta.setdefault("moved", []).append(name)
+        tuned["__meta__"] = meta
+        out[label] = tuned
+    return out
 
 
 # ---------------------------------------------------------------------------

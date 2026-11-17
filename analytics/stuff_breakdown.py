@@ -29,6 +29,8 @@ from analytics.pitch_grading import _stuff_plus_features
 FEATURE_LABELS = {
     "velocity": ("Velocity", "mph", 1),
     "velocity_differential": ("Speed gap vs FB", "mph", 1),
+    "vb_differential": ("Vertical gap vs FB", "in", 1),
+    "hb_differential": ("Horizontal gap vs FB", "in", 1),
     "vb_trajectory": ("Vertical break", "in", 1),
     "hb_trajectory": ("Horizontal break", "in", 1),
     "total_spin": ("Spin rate", "rpm", 0),
@@ -44,6 +46,8 @@ FEATURE_LABELS = {
 FEATURE_TIPS = {
     "velocity": "more velo",
     "velocity_differential": "more speed separation from his fastball",
+    "vb_differential": "more up/down movement separation from his fastball",
+    "hb_differential": "more side-to-side movement separation from his fastball",
     "vb_trajectory": "more vertical break",
     "hb_trajectory": "more horizontal break",
     "total_spin": "more spin",
@@ -71,7 +75,8 @@ def _type_name(p):
 def _contribs_for_pitch(rp, model):
     """{feature: Stuff+ points} for one pitch, or None if nothing scored."""
     pv = model.get("pitcher_fastball_velocities", {}).get(rp.player_id)
-    feats = _stuff_plus_features(rp, pv)
+    shape = model.get("pitcher_fastball_shapes", {}).get(rp.player_id)
+    feats = _stuff_plus_features(rp, pv, shape)
     p_mean, p_sd = model["prediction_baseline"]
     if not p_sd:
         return None
@@ -123,9 +128,10 @@ def stuff_breakdown(rapsodo_pitches, models, training_by_type):
         base = 100.0 - 10.0 * p_mean / p_sd
         names = [n for n, w in model["quality_weights"].items() if w and n in model["feature_baseline"]]
         pv_map = model.get("pitcher_fastball_velocities", {})
+        shape_map = model.get("pitcher_fastball_shapes", {})
         his_vals = {n: [] for n in names}
         for rp in rps:
-            f = _stuff_plus_features(rp, pv_map.get(rp.player_id))
+            f = _stuff_plus_features(rp, pv_map.get(rp.player_id), shape_map.get(rp.player_id))
             for n in names:
                 if f.get(n) is not None:
                     his_vals[n].append(f[n])
@@ -136,7 +142,7 @@ def stuff_breakdown(rapsodo_pitches, models, training_by_type):
         pool = [trp for trp, _rv in training_by_type.get(label, []) if _type_name(trp) == label]
         team_vals = {n: [] for n in names}
         for trp in pool:
-            f = _stuff_plus_features(trp, pv_map.get(trp.player_id))
+            f = _stuff_plus_features(trp, pv_map.get(trp.player_id), shape_map.get(trp.player_id))
             for n in names:
                 if f.get(n) is not None:
                     team_vals[n].append(f[n])
