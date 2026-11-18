@@ -1,4 +1,9 @@
 """
+RETIRED (Nov 2026): run_expectancy now holds real MIAA D2 values
+(see migrate_run_expectancy.py), so there is nothing to rescale. Running
+this would shrink the MIAA table about 9% toward a flat 0.80 target, so
+main() now exits without touching the database. Kept for history only.
+
 GBO -- Migration: put the run-expectancy table on the D2 run environment
 (Oct 2026 stat audit, Ryker approved).
 
@@ -26,6 +31,8 @@ TARGET_START_RE = 0.80   # 2026 D2 runs per inning (start of inning, 0 outs, emp
 
 
 def main(dry_run=False):
+    print("Retired: run_expectancy already holds MIAA D2 values. Nothing to do.")
+    return
     with engine.begin() as conn:
         cur = conn.execute(text(
             "SELECT re_value FROM run_expectancy WHERE outs = 0 AND bases = '000' AND count = '0-0'")).scalar()
