@@ -6,9 +6,11 @@ the same Postgres instance. This client is only for Supabase's Auth API
 (sign in, sign out, and -- for admins -- creating new user accounts).
 
 Reads from a local .env file (via python-dotenv) when running on a
-laptop, or from Streamlit Cloud's secrets manager once deployed there --
-.env files aren't used in that environment, so this falls back to
-st.secrets if the environment variable isn't set.
+laptop, or from the deployment platform's own environment variables in
+production -- same os.environ path either way. (Previously also fell
+back to st.secrets for Streamlit Cloud; removed now that the UI layer
+is Shiny, not Streamlit -- this module has no UI-framework dependency
+at all anymore.)
 """
 
 import os
@@ -19,14 +21,7 @@ load_dotenv()
 
 
 def _get_secret(key: str):
-    value = os.environ.get(key)
-    if not value:
-        try:
-            import streamlit as st
-            value = st.secrets.get(key)
-        except Exception:
-            pass
-    return value
+    return os.environ.get(key)
 
 
 SUPABASE_URL = _get_secret("SUPABASE_URL")
@@ -50,6 +45,9 @@ def get_supabase_admin_client() -> Client:
     Only use this in Administrator-only code paths (e.g. the future User
     Management page). Never expose the service role key to end users.
     """
+    from database import in_guest_demo
+    if in_guest_demo():
+        raise RuntimeError("Turned off in the guest demo (nothing is saved outside this demo).")
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         raise RuntimeError(
             "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in .env "

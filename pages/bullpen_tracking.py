@@ -3,7 +3,7 @@ GBO — Bullpen Tracking (manual zone-tap workflow).
 
 A real bullpen tracking sheet: pick a pitcher, start a session (typed by
 bullpen type -- Standard Bullpen, Pitch Design, Command, Velocity,
-Recovery, Live BP, Assessment, Other), then log each pitch live with a
+Recovery, Live AB, Assessment, Other), then log each pitch live with a
 tap-friendly 3x3 target-zone grid (catcher's-eye view) -- fast enough to
 use mound-side, no device needed in the moment.
 
@@ -25,7 +25,7 @@ The summary at the bottom adapts to the bullpen type, since different
 bullpens are about different things: Command shows zone hit-rate %,
 Velocity shows a velocity summary, Pitch Design shows movement/spin
 metrics, Recovery just shows a simple pitch count (no grading -- it's
-lower-intent, feel-focused work). Standard Bullpen/Live BP/Assessment/
+lower-intent, feel-focused work). Standard Bullpen/Live AB/Assessment/
 Other fall through to a plain pitch-count summary (see the final `else`
 branch below).
 

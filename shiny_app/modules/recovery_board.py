@@ -1,0 +1,154 @@
+"""
+GBO -- Recovery Board (Oct 2026 WHOOP pilot). One row per player with a
+connected WHOOP: today's readiness, recovery, HRV and resting HR vs his own
+normal, last night's sleep, and when it last synced. Click a name to open
+his Player Profile on the Recovery tab. Staff only (Nov 2026, Ryker --
+was open to players during the pilot): a player with a WHOOP sees just his
+own data on My Profile's Recovery tab. Math: analytics/whoop_metrics.py.
+"""
+
+from datetime import date
+
+from shiny import module, ui, render, reactive, req
+
+from database import get_session
+from analytics import whoop_metrics as wm
+
+import ui_helpers
+import whoop_display as wd
+
+
+@module.ui
+def recovery_board_ui():
+    return ui.div(
+        ui_helpers.page_header("Recovery Board",
+                               "WHOOP sleep, HRV and recovery for every connected player, each compared to his own normal.",
+                               actions=ui_helpers.how_to_link("whoop")),
+        ui.output_ui("controls"),
+        ui.output_ui("summary"),
+        ui.output_ui("table"),
+        ui.output_ui("team_perf"),
+        ui.p(wd.EXPLAIN, class_="text-muted small", style="margin-top:14px;"),
+    )
+
+
+@module.server
+def recovery_board_server(input, output, session, app_state):
+
+    def _staff():
+        return app_state.is_authenticated() and app_state.role_name() != "Player"
+
+    @render.ui
+    def controls():
+        if not app_state.is_authenticated():
+            return None
+        if not _staff():
+            return ui_helpers.card(ui_helpers.empty_state(
+                "The Recovery Board is for staff. If you have a WHOOP connected, your own recovery is on My Profile's Recovery tab."))
+        return ui.input_date("as_of", "As of", value=date.today(), width="200px")
+
+    @reactive.calc
+    def _board():
+        req(_staff() and "as_of" in input and input.as_of())
+        db = get_session()
+        try:
+            return wm.team_board(db, input.as_of())
+        finally:
+            db.close()
+
+    @render.ui
+    def summary():
+        rows = _board()
+        if not rows:
+            return ui_helpers.card(ui_helpers.empty_state(
+                "No players have a WHOOP connected yet. Open a player's profile, go to the Recovery tab, and make a "
+                "Connect WHOOP link for him."))
+        counts = {s: sum(1 for r in rows if r["ready"]["status"] == s) for s in (wm.GOOD, wm.WATCH, wm.FLAG, wm.NEUTRAL)}
+        return ui.div(
+            ui_helpers.kpi_tile("Connected", str(len(rows))),
+            ui_helpers.kpi_tile("Ready", str(counts[wm.GOOD]), status="good" if counts[wm.GOOD] else None),
+            ui_helpers.kpi_tile("Monitor", str(counts[wm.WATCH]), status="watch" if counts[wm.WATCH] else None),
+            ui_helpers.kpi_tile("Back off", str(counts[wm.FLAG]), status="flag" if counts[wm.FLAG] else None),
+            ui_helpers.kpi_tile("Building baseline", str(counts[wm.NEUTRAL])),
+            class_="gbo-kpi-row", style="margin-bottom:16px;",
+        )
+
+    @render.ui
+    def table():
+        rows = _board()
+        if not rows:
+            return None
+        head = ["Player", "Readiness", "Recovery", "HRV 7d / normal", "RHR 7d / normal",
+                "Sleep", "Sleep %", "Sleep 7-day avg", "Strain", "Health", "Last data", "Sync"]
+        body = []
+        for r in rows:
+            p, rd, c = r["player"], r["ready"], r["connection"]
+            t = rd["today"] or {}
+            zone = rd["zone"]
+            rec = (f"{t['recovery']:.0f}%" if t.get("recovery") is not None else "—")
+            rec_style = f"color:var(--gbo-status-{wm.ZONE_STATUS[zone]});font-weight:700" if zone else ""
+            def vs(ms, spec="{:.0f}"):
+                if ms["now"] is None or ms["base_mean"] is None:
+                    return ms["label"]
+                return f"{spec.format(ms['now'])} vs {spec.format(ms['base_mean'])}"
+            js = f"Shiny.setInputValue('{session.ns('open')}', {p.player_id}, {{priority: 'event'}})"
+            label = f"{p.name_last_first}"
+            name = ui.tags.a(label, onclick=js, role="button", style="cursor:pointer;font-weight:600")
+            sleep = (f"{t['sleep_hours']:.1f} h" if t.get("sleep_hours") is not None else "—") + \
+                    (f" / {t['sleep_need_hours']:.1f}" if t.get("sleep_need_hours") else "")
+            flagged = [h["label"] for h in rd.get("health") or [] if h["status"] in ("watch", "flag")]
+            health = ui_helpers.status_chip("watch", ", ".join(flagged)) if flagged else ui.span("normal", class_="text-muted small")
+            sd = rd.get("stale_days")
+            last = "—" if sd is None else ("today" if sd == 0 else ("yesterday" if sd == 1 else f"{sd} days ago"))
+            last_style = "color:var(--gbo-status-watch);font-weight:700;" if (sd or 0) >= 2 else ""
+            body.append(ui.tags.tr(
+                ui.tags.td(name), ui.tags.td(wd.readiness_chip(rd)),
+                ui.tags.td(rec, style=rec_style), ui.tags.td(vs(rd["hrv"])), ui.tags.td(vs(rd["rhr"])),
+                ui.tags.td(sleep), ui.tags.td(wd.fmt(t.get("sleep_performance"), "{:.0f}%")),
+                ui.tags.td(wd.fmt(rd["sleep_avg_7d"], "{:.1f} h")), ui.tags.td(wd.fmt(t.get("strain"), "{:.1f}")),
+                ui.tags.td(health), ui.tags.td(last, style=last_style),
+                ui.tags.td(wd.synced_text(c), class_="text-muted small"),
+            ))
+        return ui_helpers.card(ui.div(ui.tags.table(ui.tags.thead(ui.tags.tr(*[ui.tags.th(h) for h in head])),
+                                                    ui.tags.tbody(*body), class_="table table-sm", style="font-size:.85rem;"),
+                                      class_="table-responsive"), title="Today")
+
+    @render.ui
+    def team_perf():
+        """Team WHOOP vs performance (pooled within-player)."""
+        if not _board():
+            return None
+        from analytics import whoop_performance as wp
+        db = get_session()
+        try:
+            outcomes = wp.outcome_choices(db)
+        finally:
+            db.close()
+        with reactive.isolate():
+            so = input.tp_outcome() if "tp_outcome" in input else None
+            sp = input.tp_predictor() if "tp_predictor" in input else None
+        return ui_helpers.card(wd.explorer_controls("tp_outcome", "tp_predictor", outcomes, so, sp),
+                               ui.output_ui("team_perf_result"),
+                               title="WHOOP vs performance, team", right="every connected player, each vs himself")
+
+    @render.ui
+    def team_perf_result():
+        req(_staff() and "tp_outcome" in input and input.tp_outcome() and "tp_predictor" in input and input.tp_predictor())
+        from analytics import whoop_performance as wp
+        db = get_session()
+        try:
+            key = input.tp_outcome()
+            label = wp.outcome_choices(db).get(key, key)
+            res = wp.team_read(db, key, input.tp_predictor())
+        finally:
+            db.close()
+        return wd.team_explorer(res, key, label, input.tp_predictor())
+
+    @reactive.effect
+    @reactive.event(input.open)
+    def _open():
+        if not _staff():
+            return
+        app_state.deep_link_player_id.set((int(input.open()), "Recovery"))
+        target = "My Profile" if app_state.role_name() == "Player" else "Player Profile"
+        ui.update_navs("main_nav", selected=target, session=session.root_scope())

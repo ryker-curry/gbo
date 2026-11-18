@@ -22,10 +22,37 @@ spreadsheet's actual data (not guessed):
     inputs, per Ryker's explicit call each time a new bucket's been
     added (Capacity, now Mobility/Shoulder Health) not to touch it.
 
-"Team" comparison population = every player (active and inactive) with
-at least one result for that test type, using each player's most recent value per
-metric (an ongoing system, not a one-time snapshot like the original
-spreadsheet).
+"Team" comparison population = every player with at least one result for
+that test type WITHIN THE SELECTED SEASON (see the Seasons section
+below), using each player's most recent value per metric within that
+same window -- an ongoing system scoped to one season at a time, not a
+one-time snapshot like the original spreadsheet and not (as of Aug
+2026) an all-time "most recent ever" either.
+
+Whether "every player" means active-only or everyone depends on WHICH
+season: the CURRENT season is active-roster-only (Player.active ==
+True, Ryker's Aug 2026 call) -- current-team percentiles shouldn't be
+set by someone no longer on the roster. Any OTHER (past) season
+includes inactive players too (Ryker's follow-up call, same week): a
+guy who's since gone inactive was still genuinely on the roster during
+that earlier season, so excluding him from THAT season's standard would
+compare last season's results against today's active list instead of
+who was actually there at the time. See active_only on
+get_latest_values_by_player/_batch_fetch_latest_values, and
+compute_bucket_system's season_label param for how this gets decided
+automatically per season.
+
+Season scoping (Aug 2026, Ryker's call, the same week as the active-
+roster change above): a player's OLD data from a prior season was still
+counting as their "current" value indefinitely under the active-roster-
+only fix alone -- a player tested once last August and never again
+still looked freshly current a year later, and worse, that stale value
+could still be setting the team max/min other players were percentile-
+ranked against. Every percentile/ROM/GIRD computation in this file is
+now scoped to one season's date window, CURRENT season by default --
+see SEASONS/current_season_label/season_date_range/list_seasons below,
+and compute_bucket_system's season_label param for how a caller (e.g.
+the Player Profile page) looks at a past season instead.
 
 ---
 
@@ -65,15 +92,12 @@ reversing the "Shoulder Health (GIRD) is excluded entirely" line
 above -- that original call was about not building a composite at
 all, not a permanent decision):
 
-  - Mobility: "higher is better" for every field, same simplification
-    most S&C mobility screens use -- more range generally supports
-    better movement quality. See MOBILITY_SUBGROUPS (Hip) and
-    MOBILITY_SHOULDER_SIDED_FIELDS (Shoulder) for exactly which fields
-    (deliberately scoped to only what's actively tested right now, not
-    the full ~30-field Mobility & ROM sheet). Shoulder fields are
-    entered anatomically (Right/Left) and resolved to Throwing Arm/
-    Non-Throwing Arm per player from Player.throws at scoring time --
-    see resolve_side_by_throws.
+  - Mobility: NOT percentile-ranked ("higher is better") -- per
+    Ryker's later call (Aug 2026), each field is instead checked
+    pass/fail against a fixed minimum degree value. See MOBILITY_ROM_
+    THRESHOLDS and compute_mobility_rom_report for the current design
+    and research sourcing (this replaced an earlier percentile-based
+    version of this bucket).
   - Shoulder Health: GIRD only for now, "lower is better" (smaller
     deficit = healthier), reusing this file's existing lower-is-better
     formula. Auto-calculated live from the Right/Left Internal
@@ -93,8 +117,87 @@ all, not a permanent decision):
     without an explicit, separate go-ahead.
 """
 
+from datetime import date
+
+from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
 from models import Player, Assessment, AssessmentResult, AssessmentTestType
+from gbo_cache import cached
+
+# ---------------------------------------------------------------------
+# Seasons (Aug 2026, Ryker's call -- see the module docstring's "Season
+# scoping" paragraph above for why this exists). Every percentile/ROM/
+# GIRD number this file computes is scoped to one season's date window,
+# CURRENT season unless a caller asks for a specific one.
+#
+# Each season is just (label, start_date) -- deliberately NO separate
+# end date. A season runs from its own start_date up to (but not
+# including) the NEXT season's start_date, or through today if it's the
+# newest/current one -- see list_seasons below for exactly how that's
+# derived. Real season end dates vary year to year ("ends sometime in
+# mid-June depending on how the season goes") -- a start-date-only list
+# sidesteps ever needing to track or update an end date at all; a season
+# effectively "ends" the moment the next one is added below.
+#
+# Add ONE new (label, start_date) line here every August (Ryker's call:
+# a plain hardcoded list here, not a database table -- same "plain
+# Python config" convention every other threshold/grouping in this file
+# already uses) -- nothing else in this file needs to change for the
+# prior season to become historical. Keep this list sorted oldest ->
+# newest.
+SEASONS = [
+    ("2026-2027", date(2026, 8, 1)),
+]
+
+# Label for "everything on file before the earliest season above" --
+# Ryker's call: existing historical data isn't broken out into its own
+# named 2025-2026-style season retroactively, it's just one lump
+# "before" bucket a coach can still look at on the Player Profile
+# season picker.
+BEFORE_SEASONS_LABEL = f"Before {SEASONS[0][0]}"
+
+
+def list_seasons():
+    """[(label, start_date_or_None, end_date_or_None), ...], NEWEST
+    first, with a trailing BEFORE_SEASONS_LABEL entry (start_date=None,
+    end_date=the earliest season's start_date). end_date is EXCLUSIVE
+    and None means "no upper bound" (the current/newest season, open
+    through today). Powers the Player Profile season picker -- see
+    player_profile.py -- and season_date_range below."""
+    ordered = sorted(SEASONS, key=lambda s: s[1])
+    out = []
+    for i, (label, start) in enumerate(ordered):
+        end = ordered[i + 1][1] if i + 1 < len(ordered) else None
+        out.append((label, start, end))
+    out.reverse()
+    out.append((BEFORE_SEASONS_LABEL, None, ordered[0][1]))
+    return out
+
+
+def current_season_label():
+    """The season label whose start_date is today or most recently
+    passed -- "current season" as of right now. Falls back to the
+    earliest configured season if today is somehow before every
+    configured start_date (shouldn't happen in practice with SEASONS
+    kept up to date, but avoids this ever returning nothing)."""
+    today = date.today()
+    candidates = [(label, start) for label, start in SEASONS if start <= today]
+    if not candidates:
+        return SEASONS[0][0]
+    return max(candidates, key=lambda s: s[1])[0]
+
+
+def season_date_range(label):
+    """label -> (start_date_or_None, end_date_or_None), end_date
+    EXCLUSIVE -- see list_seasons. Falls back to the current season's
+    range for an unrecognized label, same "don't silently show nothing"
+    caution the rest of this file uses (e.g. MOBILITY_ROM_THRESHOLDS'
+    None-vs-real-value handling)."""
+    for l, start, end in list_seasons():
+        if l == label:
+            return start, end
+    return season_date_range(current_season_label())
+
 
 # (test_name, direction) -- direction is "higher" or "lower" (lower =
 # lower raw value is the better score, e.g. sprint times).
@@ -106,33 +209,76 @@ from models import Player, Assessment, AssessmentResult, AssessmentTestType
 BODY_COMP_METRICS = [
     ("Body Weight", "higher"),
     ("Skeletal Muscle Mass", "higher"),
+    # Nov 2026 (Ryker: "all of the testing we have done should go into ...
+    # all the buckets"): the InBody lean-mass and fat measures from the
+    # testing workbook now count too.
+    ("Skeletal Muscle Mass %", "higher"),
+    ("Fat-Free Mass", "higher"),
+    ("Fat-Free Mass Index (FFMI)", "higher"),
+    ("Skeletal Muscle Index (SMI)", "higher"),
+    ("Trunk Lean Mass", "higher"),
+    ("Lean Mass (Drive Leg)", "higher"),
+    ("Lean Mass (Plant Leg)", "higher"),
+    ("Percent Body Fat", "lower"),
+    ("Fat Mass Index (FMI)", "lower"),
 ]
 
-# All 4 Body Comp raw fields that are actually in the bucket
-# spreadsheet -- used to scope the assessment ENTRY FORM (Ryker wants
-# all 4 enterable, even though only 2 feed the calculation above).
-BODY_COMP_ENTRY_FIELDS = {"Body Weight", "Body Fat Mass", "Skeletal Muscle Mass", "Percent Body Fat"}
+# Body Comp raw fields enterable via the assessment ENTRY FORM (Ryker
+# wants all of these enterable, even though only 2 -- BODY_COMP_METRICS
+# above -- feed the composite calculation). Sept 1 2026: added Basal
+# Metabolic Rate (BMR) and Recommended Caloric Intake, the InBody770's
+# two metabolic-guidance fields ("our machine gives bmr and recommended
+# caloric intake") -- same reference-only treatment as Body Fat Mass/
+# Percent Body Fat, not part of the composite (a bigger player naturally
+# has a higher BMR/calorie target; that's body size, not fitness, so
+# ranking players against each other on it would be misleading).
+BODY_COMP_ENTRY_FIELDS = {
+    "Body Weight", "Body Fat Mass", "Skeletal Muscle Mass", "Percent Body Fat",
+    "Basal Metabolic Rate (BMR)", "Recommended Caloric Intake",
+}
 
-# Same 4 fields as BODY_COMP_ENTRY_FIELDS, but as (test_name, direction)
-# pairs for DISPLAY (percentile bars in the Body Comp breakdown, per
-# Ryker's call) -- players see percentile bars for all 4, even though
+# The original 4 BODY_COMP_ENTRY_FIELDS, as (test_name, direction) pairs
+# for DISPLAY (percentile bars in the Body Comp breakdown, per Ryker's
+# call) -- players see percentile bars for all 4, even though
 # body_comp_score above still only averages the first 2. Body Fat Mass/
 # Percent Body Fat use "lower" (less body fat scores toward 100), per
 # Ryker's call -- the professor's original scoring never assigned them
 # a direction at all since they were never part of the composite math,
 # so this is a new, display-only decision, not a re-derivation of his
 # spreadsheet. Order here is the order the bars render in.
+#
+# Sept 1 2026: BMR/Recommended Caloric Intake also live here (needed so
+# compute_metric_percentiles picks them up at all) but are deliberately
+# NOT additional bars -- see the inline comment on those two entries.
 BODY_COMP_DISPLAY_METRICS = [
     ("Body Weight", "higher"),
     ("Skeletal Muscle Mass", "higher"),
     ("Body Fat Mass", "lower"),
     ("Percent Body Fat", "lower"),
+    ("Skeletal Muscle Mass %", "higher"),
+    ("Fat-Free Mass", "higher"),
+    ("Fat-Free Mass Index (FFMI)", "higher"),
+    ("Skeletal Muscle Index (SMI)", "higher"),
+    ("Trunk Lean Mass", "higher"),
+    ("Lean Mass (Drive Leg)", "higher"),
+    ("Lean Mass (Plant Leg)", "higher"),
+    ("Fat Mass Index (FMI)", "lower"),
+    # BMR/Recommended Caloric Intake (Sept 1 2026): direction is unused
+    # for these two -- neither is in BODY_COMP_METRICS/BODY_COMP_BAR_
+    # NAMES, so bucket_display.build_full_breakdown routes them straight
+    # to build_raw_metrics' plain "Reference only, not scored" line
+    # (same as Body Fat Mass/Percent Body Fat), never a percentile bar.
+    # "higher" is a placeholder to satisfy compute_metric_percentiles'
+    # signature, not a real scoring call.
+    ("Basal Metabolic Rate (BMR)", "higher"),
+    ("Recommended Caloric Intake", "higher"),
 ]
 
 # sub_group_name -> [(test_name, direction), ...]
 POWER_SUBGROUPS = {
     "Med Ball Throw": [
         ("Medicine Ball Shot Put Distance", "higher"),
+        ("Medicine Ball Shot Put Velocity", "higher"),
     ],
     "Field Jumps": [
         ("Vertical Jump (Jump Mat)", "higher"),
@@ -140,24 +286,81 @@ POWER_SUBGROUPS = {
         ("Lateral Jump Distance (Drive Leg)", "higher"),
         ("Lateral Jump Distance (Plant Leg)", "higher"),
     ],
+    # Nov 2026 (Ryker: "all the force plate metrics should go into one of
+    # the buckets, there should be a bunch of force plate stuff under
+    # power"): every VALD jump / hop metric is scored now. Bodyweight
+    # columns are the only ones left out (body size, not performance).
+    # Eccentric peak velocity is negative (downward), so "lower" = faster.
     "Countermovement Jump": [
         ("Countermovement Jump Height", "higher"),
         ("Countermovement Jump RSI-Modified", "higher"),
         ("Countermovement Jump Concentric Duration", "lower"),
         ("Countermovement Jump Concentric Mean Force", "higher"),
+        ("CMJ Peak Power", "higher"),
+        ("CMJ Concentric Impulse", "higher"),
+        ("CMJ Concentric Peak Force", "higher"),
+        ("CMJ Concentric Peak Velocity", "higher"),
+        ("CMJ Eccentric Peak Force", "higher"),
+        ("CMJ Eccentric Peak Power", "higher"),
+        ("CMJ Eccentric Peak Velocity", "lower"),
+        ("CMJ Eccentric Duration", "lower"),
     ],
     "Repeated Hop": [
         ("Hop Test RSI (10/5)", "higher"),
         ("Hop Test Average Force", "higher"),
         ("Hop Test Mean Contact Time", "lower"),
+        ("Hop Test Jump Height", "higher"),
+        ("Hop Test Flight Time", "higher"),
+        ("Hop Test Average Power", "higher"),
+        ("Hop Test Peak Power", "higher"),
+        ("Hop Test Peak Force", "higher"),
+        ("Hop Test Impulse", "higher"),
+        ("Hop Test Time to Peak Force", "lower"),
+        ("Hop Test Landing RFD", "higher"),
     ],
     "Single Leg Jump": [
         ("Single-Leg Jump Height (Drive Leg)", "higher"),
         ("Single-Leg Jump Height (Plant Leg)", "higher"),
         ("Single-Leg Jump Concentric Impulse (Drive Leg)", "higher"),
         ("Single-Leg Jump Concentric Impulse (Plant Leg)", "higher"),
+        ("Single-Leg Jump Peak Power (Drive Leg)", "higher"),
+        ("Single-Leg Jump Peak Power (Plant Leg)", "higher"),
+        ("Single-Leg Jump Concentric Peak Force (Drive Leg)", "higher"),
+        ("Single-Leg Jump Concentric Peak Force (Plant Leg)", "higher"),
+        ("Single-Leg Jump Concentric Peak Velocity (Drive Leg)", "higher"),
+        ("Single-Leg Jump Concentric Peak Velocity (Plant Leg)", "higher"),
+        ("Single-Leg Jump RSI-Modified (Drive Leg)", "higher"),
+        ("Single-Leg Jump RSI-Modified (Plant Leg)", "higher"),
+        ("Single-Leg Jump Concentric Duration (Drive Leg)", "lower"),
+        ("Single-Leg Jump Concentric Duration (Plant Leg)", "lower"),
+        ("Single-Leg Jump Eccentric Peak Force (Drive Leg)", "higher"),
+        ("Single-Leg Jump Eccentric Peak Force (Plant Leg)", "higher"),
+        ("Single-Leg Jump Eccentric Peak Power (Drive Leg)", "higher"),
+        ("Single-Leg Jump Eccentric Peak Power (Plant Leg)", "higher"),
+        ("Single-Leg Jump Eccentric Peak Velocity (Drive Leg)", "lower"),
+        ("Single-Leg Jump Eccentric Peak Velocity (Plant Leg)", "lower"),
+        ("Single-Leg Jump Eccentric Duration (Drive Leg)", "lower"),
+        ("Single-Leg Jump Eccentric Duration (Plant Leg)", "lower"),
     ],
 }
+
+# Reference-only addition to the Med Ball Throw sub-group (Sept 2026,
+# Ryker: "add med ball shotput velocity to the rotational power
+# assessment"). Distance (POWER_SUBGROUPS["Med Ball Throw"] above)
+# stays the sole SCORED metric in this sub-group -- Ryker's explicit
+# call to keep the Bucket System's verified-exact match to the
+# professor's spreadsheet, since Velocity isn't in it. Velocity is
+# still entered on the Assessments form and shown on the player's
+# card (compute_bucket_system merges this into power_subgroup_metrics
+# AFTER power_subgroup_scores is computed from the scored-only dict --
+# see the Power loop below -- and bucket_display.py's build_full_
+# breakdown renders it via build_raw_metrics' unranked KPI-tile
+# treatment, same as Body Comp's BMR/Recommended Caloric Intake), but
+# never averaged into power_score/Total. "higher" is a placeholder to
+# satisfy compute_metric_percentiles' signature, not a real scoring
+# call -- same convention as BODY_COMP_DISPLAY_METRICS' BMR/Calories
+# entries above.
+MED_BALL_THROW_REFERENCE_METRICS = []   # Nov 2026: velocity is scored now (in "Med Ball Throw" above)
 
 STRENGTH_SUBGROUPS = {
     "Lower Body Strength": [
@@ -167,25 +370,122 @@ STRENGTH_SUBGROUPS = {
         ("Hip Abduction Force (Plant Leg)", "higher"),
         ("Hip Adduction Force (Drive Leg)", "higher"),
         ("Hip Adduction Force (Plant Leg)", "higher"),
-    ],
-    "Upper Body Strength": [
-        ("Neutral Grip/DB Bench Press Max Load", "higher"),
-        ("Neutral Grip Chin Up Max External Load", "higher"),
-        ("Grip Strength (Seated, Throwing Hand)", "higher"),
-    ],
-    "Mid-Thigh Pull": [
+        # Isometric Mid-Thigh Pull -- previously its own "Mid-Thigh Pull"
+        # subgroup (a separate "Mid-Thigh Pull — <score>" header on the
+        # Development Profile breakdown), folded into Lower Body Strength
+        # per Ryker's explicit call so it's just part of the one Lower
+        # Body Strength score/bar group instead of a standalone section.
         ("Isometric Mid-Thigh Pull Average Force", "higher"),
         ("Isometric Mid-Thigh Pull Peak Vertical Force", "higher"),
         ("Isometric Mid-Thigh Pull Peak Vertical Force (Drive Leg)", "higher"),
         ("Isometric Mid-Thigh Pull Peak Vertical Force (Plant Leg)", "higher"),
+        # Nov 2026 (Ryker: "strength should have ... all strength metrics"):
+        # the rest of the IMTP export, the ForceFrame hip averages /
+        # impulse, and the isometric belt squat (position players).
+        ("IMTP Peak Vertical Force (Net of BW)", "higher"),
+        ("IMTP Net Peak Vertical Force", "higher"),
+        ("IMTP Peak Vertical Force / BM", "higher"),
+        ("IMTP Net Peak Vertical Force (Drive Leg)", "higher"),
+        ("IMTP Net Peak Vertical Force (Plant Leg)", "higher"),
+        ("Hip Abduction Avg Force (Drive Leg)", "higher"),
+        ("Hip Abduction Avg Force (Plant Leg)", "higher"),
+        ("Hip Adduction Avg Force (Drive Leg)", "higher"),
+        ("Hip Adduction Avg Force (Plant Leg)", "higher"),
+        ("Hip Abduction Impulse (Drive Leg)", "higher"),
+        ("Hip Abduction Impulse (Plant Leg)", "higher"),
+        ("Hip Adduction Impulse (Drive Leg)", "higher"),
+        ("Hip Adduction Impulse (Plant Leg)", "higher"),
+        ("Hip Abduction Time to Peak Force (Drive Leg)", "lower"),
+        ("Hip Abduction Time to Peak Force (Plant Leg)", "lower"),
+        ("Hip Adduction Time to Peak Force (Drive Leg)", "lower"),
+        ("Hip Adduction Time to Peak Force (Plant Leg)", "lower"),
+        ("Isometric Belt Squat Peak Vertical Force", "higher"),
+        ("Isometric Belt Squat Peak Vertical Force / BM", "higher"),
+    ],
+    # Nov 2026: how fast force comes on in the IMTP / belt squat -- its own
+    # strength subgroup so early-force numbers don't drown out max strength.
+    "Rate of Force Development": [
+        ("IMTP RFD 0-100 ms", "higher"),
+        ("IMTP RFD 0-150 ms", "higher"),
+        ("IMTP RFD 0-200 ms", "higher"),
+        ("IMTP RFD 0-250 ms", "higher"),
+        ("IMTP Net Force at 100 ms", "higher"),
+        ("IMTP Net Force at 150 ms", "higher"),
+        ("IMTP Net Force at 200 ms", "higher"),
+        ("IMTP Impulse (Net of BW) 0-100 ms", "higher"),
+        ("IMTP Impulse (Net of BW) 0-150 ms", "higher"),
+        ("IMTP Impulse (Net of BW) 0-200 ms", "higher"),
+        ("Isometric Belt Squat RFD 0-100 ms", "higher"),
+        ("Isometric Belt Squat Force at 100 ms", "higher"),
+        ("Isometric Belt Squat Time to 80% Net Peak Force", "lower"),
+    ],
+    "Upper Body Strength": [
+        ("Neutral Grip/DB Bench Press Max Load", "higher"),
+        ("Bench Press Max", "higher"),                       # position players' bench (Nov 2026)
+        ("Neutral Grip Chin Up Max External Load", "higher"),
+        ("Pull Strength: Chin Up Repetitions", "higher"),
+        ("Push-Up Repetitions", "higher"),
+        ("Grip Strength (Seated, Throwing Hand)", "higher"),
+        ("Grip Strength (Seated, Glove Hand)", "higher"),
     ],
 }
 
-# Shown for reference, excluded from the final Total.
+# Shown for reference, excluded from the final Total. 30-Yard Sprint
+# Time (Sept 2026 addition) gets the same treatment as the other two --
+# see seed_lookups.SPEED_TESTS' comment for why it's here despite not
+# being in the professor's spreadsheet.
 SPEED_METRICS = [
     ("Acceleration: 10-Yard Sprint Time", "lower"),
     ("Top Speed: Flying 10 Sprint Time", "lower"),
+    ("30-Yard Sprint Time", "lower"),
 ]
+
+# The exact AssessmentTestType.test_name for the Flying 10 (top speed)
+# test -- shared between compute_bucket_system/flying_10_mph below and
+# bucket_display.build_metric_bars, which appends the mph conversion
+# onto this one row's raw-value label (Sept 2026, Ryker: "I would also
+# like to have top speed from the 20/10 fly to be the time itself as
+# well as in mph").
+FLYING_10_TEST_NAME = "Top Speed: Flying 10 Sprint Time"
+
+# The timed segment of the "20/10 fly" test is 10 yards -- a 20-yard
+# running start (untimed) before the clock starts on the 10-yard "fly"
+# segment, so the runner is already at (roughly) top speed for the
+# whole timed portion. That's what "10 yard is distance" in Ryker's
+# request means -- this is not a from-a-stop sprint.
+FLYING_10_YARDS = 10
+
+
+def flying_10_mph(time_seconds):
+    """Convert a Flying 10 (top speed) sprint TIME (seconds) to mph.
+    mph = (yards / time_seconds) * (3600 sec/hr / 1760 yards/mile) --
+    yards/sec to miles/hr, the standard unit conversion (1 mile = 1760
+    yards). Returns None for a missing or non-positive time -- can't
+    divide by zero, and a zero/negative time isn't valid sprint data
+    anyway."""
+    if time_seconds is None or time_seconds <= 0:
+        return None
+    return round((FLYING_10_YARDS / float(time_seconds)) * (3600 / 1760), 1)
+
+
+# Oct 2026, Ryker: "for the 30 yard sprint i want to put it underneath in
+# mph just like how we did for top speed for the 10 yd fly". Sprint
+# tests that get an mph shown next to the time -> timed distance (yards).
+# The 30 is from a standing start, so its mph is AVERAGE speed over the
+# whole 30 (start included) -- lower than the fly-10's top speed.
+THIRTY_YARD_TEST_NAME = "30-Yard Sprint Time"
+# Oct 2026, Ryker: "add mph to 10 yd acceleration too" -- also from a
+# standing start, so average speed over the 10.
+ACCEL_10_TEST_NAME = "Acceleration: 10-Yard Sprint Time"
+SPRINT_MPH_YARDS = {FLYING_10_TEST_NAME: FLYING_10_YARDS, THIRTY_YARD_TEST_NAME: 30, ACCEL_10_TEST_NAME: 10}
+
+
+def sprint_mph(test_name, time_seconds):
+    """mph for a sprint test in SPRINT_MPH_YARDS, else None."""
+    yards = SPRINT_MPH_YARDS.get(test_name)
+    if yards is None or time_seconds is None or time_seconds <= 0:
+        return None
+    return round((yards / float(time_seconds)) * (3600 / 1760), 1)
 
 # Feeds the new Capacity score (Physical Development extension) --
 # throwing-arm strength/stability metrics only, matching the
@@ -200,6 +500,15 @@ CAPACITY_SUBGROUPS = {
     "Shoulder Strength": [
         ("Shoulder Strength: Throwing Arm ER Peak Force", "higher"),
         ("Shoulder Strength: Throwing Arm IR Peak Force", "higher"),
+        # Nov 2026: the rest of the ForceFrame shoulder test (throwing arm)
+        ("Shoulder ER Avg Force (Throwing Arm)", "higher"),
+        ("Shoulder IR Avg Force (Throwing Arm)", "higher"),
+        ("Shoulder ER Impulse (Throwing Arm)", "higher"),
+        ("Shoulder IR Impulse (Throwing Arm)", "higher"),
+        ("Shoulder ER Time to Peak Force (Throwing Arm)", "lower"),
+        ("Shoulder IR Time to Peak Force (Throwing Arm)", "lower"),
+        ("Shoulder Strength: Non-Throwing Arm ER Peak Force", "higher"),
+        ("Shoulder Strength: Non-Throwing Arm IR Peak Force", "higher"),
     ],
     "Scapular Strength": [
         ("Shoulder Strength: I Position Peak Force", "higher"),
@@ -215,76 +524,164 @@ CAPACITY_SUBGROUPS = {
     ],
 }
 
-# Range of Motion / Mobility bucket (Physical Development extension,
-# reference only -- not in Total yet, see module docstring below).
-# "Higher is better" per Ryker's call -- the standard simplification
-# most S&C mobility screens use (more range generally supports better
-# movement quality), same direction convention as Power/Strength/
-# Capacity above.
+# Range of Motion / Mobility (Physical Development extension). Per
+# Ryker's explicit call (Aug 2026), Mobility & ROM is NOT percentile-
+# ranked against the team ("higher is better") like every other bucket
+# in this file -- more range past a healthy point isn't meaningfully
+# "better," so instead each metric is checked pass/fail against a
+# fixed minimum degree value. This REPLACES the percentile-based
+# Mobility scoring an earlier round of this file had (MOBILITY_
+# SUBGROUPS / MOBILITY_SHOULDER_SIDED_FIELDS / compute_mobility_
+# shoulder_metrics, all removed -- see git history if that scoring
+# model is ever wanted back) -- there's no more "Shoulder — 82" or
+# "Hip — 78" score, no percentile bars, just a met/did-not-meet flag
+# per metric. See compute_mobility_rom_report below for how this dict
+# gets turned into that report.
 #
-# Scoped to ONLY what's actually being tested right now, per Ryker's
-# explicit correction: Shoulder ER/IR/Flexion/Extension, and the full
-# Hip block. The rest of the Mobility & ROM sheet (Cervical Spine,
-# Elbow, T-Spine, Lumbar Spine, Ankle, Shoulder Total Arc) is already
-# in the data model and entry form (see MOBILITY_ROM_TESTS in
-# seed_lookups.py) but isn't real data yet -- add those sub-groups
-# here once the team actually starts collecting them, rather than
-# scoring a bunch of always-empty fields now.
+# Values are the degree BELOW WHICH a metric is flagged, or None if no
+# threshold is configured yet for that metric (still displays with its
+# raw value, just no pass/fail flag -- same "don't fabricate a number"
+# caution this file uses everywhere else, e.g. DEVELOPMENT_PROFILE_
+# BANDS' "not validated thresholds" note). Shoulder External/Internal
+# Rotation and Hip Internal/External Rotation below are backed by
+# actual baseball-pitcher research (see each value's source comment);
+# the rest (Shoulder/Elbow Flexion/Extension, Hip Abduction/Adduction/
+# Flexion/Extension) are left at None because the research found was
+# either general-population goniometry ceilings (AAOS reference
+# values -- a MAXIMUM most healthy people can reach, not a validated
+# MINIMUM floor to flag against) or simply didn't exist for a
+# baseball-specific population. Using a general-population max as a
+# "flag if below" floor would false-positive constantly, so those stay
+# unconfigured until there's a real baseball-specific number or
+# Ryker's own clinical call to set them. Fill in a real number instead
+# of guessing.
 #
-# Shoulder fields are entered anatomically -- Right/Left, per Ryker's
-# explicit call, so a coach measuring a player doesn't have to think
-# about that player's handedness while testing -- rather than by role
-# (Throwing/Non-Throwing Arm, the old convention). The system resolves
-# which raw column ("Right" or "Left") is a given player's throwing
-# arm using Player.throws, at SCORING time, in resolve_side_by_throws
-# below. This means the raw entry form and the composite score use two
-# different vocabularies on purpose: anatomical for data entry,
-# role-based for the score everyone actually reads.
+# Shoulder fields are entered anatomically (Right/Left), not by
+# Throwing/Non-Throwing Arm role -- so a coach measuring a player
+# doesn't need to know that player's handedness at data-entry time.
+# The threshold check below is applied directly to whichever raw
+# Right/Left value was entered (no Player.throws resolution needed for
+# a flat pass/fail floor) -- unlike GIRD/Total Arc below, which ARE
+# resolved to Throwing/Non-Throwing Arm since they're inherently a
+# side-to-side comparison, not an absolute floor.
 #
-# Hip fields stay role-based (Drive Leg / Plant Leg, not Right/Left)
-# -- unlike the shoulder, "which leg is which" is unambiguous from the
-# pitching motion itself (drive leg = push-off/back leg, same side as
-# the throwing arm; plant leg = front/landing leg, the glove side), so
-# there's no anatomical-vs-role translation needed there. ("Plant Leg"
-# per Ryker's call -- was "Stride Leg" in an earlier round of this
-# file; renamed here, not a new concept.)
+# Hip fields are ALSO entered anatomically (Right/Left) as of Ryker's
+# follow-up call -- an earlier version of this dict had hip entered
+# directly as Drive Leg/Plant Leg (reasoning: "which leg is which" is
+# unambiguous from the pitching motion itself, so why not enter it that
+# way), but that turned out to be confusing to actually type in at
+# assessment time (a coach has to stop and work out which leg is
+# "drive" for this particular player). Drive Leg/Plant Leg is still the
+# right framing for INTERPRETING the result -- the McCulloch et al.
+# 2014 thresholds below are keyed to that role, not to anatomical side
+# -- so entry stays Right/Left (via HIP_ROM_BASE_METRICS, resolved the
+# same Player.throws-based way as GIRD/Total Arc below: drive leg =
+# throwing-side leg, plant leg = glove-side leg) while the threshold
+# dict below and the report stay keyed by role. See
+# compute_mobility_rom_report for where that resolution happens.
 #
-# "Shoulder: GIRD" (also on the Mobility sheet, a leftover manual-entry
-# field) is deliberately NOT included here even though it's a Shoulder
-# field -- it's a deficit score, not a raw ROM angle, so "higher is
-# better" would score it backwards (rewarding a bigger injury-risk
-# deficit). GIRD is instead auto-computed from the Right/Left Internal
-# Rotation fields below -- see compute_gird_percentiles.
-MOBILITY_SUBGROUPS = {
-    "Hip": [
-        ("Hip: Drive Leg Internal Rotation", "higher"),
-        ("Hip: Drive Leg External Rotation", "higher"),
-        ("Hip: Plant Leg Internal Rotation", "higher"),
-        ("Hip: Plant Leg External Rotation", "higher"),
-        ("Hip: Drive Leg Abduction", "higher"),
-        ("Hip: Plant Leg Abduction", "higher"),
-        ("Hip: Drive Leg Adduction", "higher"),
-        ("Hip: Plant Leg Adduction", "higher"),
-        ("Hip: Flexion", "higher"),
-        ("Hip: Extension", "higher"),
-    ],
+# One consequence worth knowing: a player with no Player.throws on
+# file can't be resolved to a side, so their hip ROM values won't show
+# on the report until handedness is set on their profile -- same
+# limitation GIRD/Total Arc already had.
+MOBILITY_ROM_THRESHOLDS = {
+    # Shoulder External Rotation (throwing arm, 90° abduction) --
+    # CITATION FIX (Aug 2026): this and the Internal Rotation floor
+    # below were previously attributed to "Wilk et al. 2011" (Am J
+    # Sports Med 39(2):329-335) -- that's a real paper, but it's about
+    # GIRD/total-rotation injury correlation in PROFESSIONAL pitchers
+    # and doesn't report these mean/SD values at all. The actual source
+    # is Hurd WJ, Kaplan KM, ElAttrache NS, Jobe FW, Morrey BF, Kaufman
+    # KR. "A Profile of Glenohumeral Internal and External Rotation
+    # Motion in the Uninjured High School Baseball Pitcher, Part I:
+    # Motion." J Athl Train. 2011;46(3):282-288. N=210 HS pitchers,
+    # PASSIVE ROM (goniometer, supine): throwing-arm mean ER 130° ±
+    # 11°. Floor set ~2 SD below that mean.
+    "Shoulder: Right External Rotation": 110,
+    "Shoulder: Left External Rotation": 110,
+    # Shoulder Internal Rotation (throwing arm, 90° abduction) -- same
+    # Hurd et al. 2011 source as External Rotation above: throwing-arm
+    # mean IR 60° ± 11° (HS pitchers, passive ROM). College/pro cohorts
+    # run closer to 62-65° per Wilcox CL, Plummer HA, Ostrander RV III.
+    # "Comparison of Glenohumeral Range of Motion Deficits in Youth,
+    # Collegiate, and Professional Baseball Players." Int J Sports Phys
+    # Ther. 2021;16(6):1485-1491 (passive ROM; small samples, n=9-12
+    # per group -- treat as supportive, not definitive). Floor set
+    # conservatively below both.
+    # Note: a same-side absolute floor is a supplementary check only --
+    # GIRD (IR deficit vs. the non-throwing arm, computed separately
+    # below via compute_gird_percentiles) is the better-validated,
+    # more commonly cited red flag in this literature than any single
+    # absolute IR number.
+    "Shoulder: Right Internal Rotation": 45,
+    "Shoulder: Left Internal Rotation": 45,
+    "Shoulder: Right Flexion": None,
+    "Shoulder: Left Flexion": None,
+    "Shoulder: Right Extension": None,
+    "Shoulder: Left Extension": None,
+    "Elbow: Right Flexion": None,
+    "Elbow: Left Flexion": None,
+    # Elbow Extension is a well-documented throwing-elbow finding
+    # (pitchers commonly develop a flexion contracture -- can't reach
+    # full 0° extension -- from repetitive valgus loading). Polarity
+    # confirmed (per Ryker, Aug 2026): standard goniometry convention,
+    # 0° = fully straight, POSITIVE = hyperextension past straight,
+    # NEGATIVE = flexion contracture (short of straight). A red-flag
+    # threshold for this would be a NEGATIVE floor (e.g. "flag if worse
+    # than -X°," not "flag if below X°" the way every other metric in
+    # this dict works) -- _mobility_rom_status's current "raw < X ->
+    # red" comparison already reads correctly for a negative threshold
+    # (more negative = worse = still "less than"), so no code change is
+    # needed there, just a real research-backed negative number here
+    # once one exists. Left None for now -- no baseball-specific
+    # contracture-degree threshold was found in the same literature
+    # sweep that sourced the other values in this dict.
+    "Elbow: Right Extension": None,
+    "Elbow: Left Extension": None,
+    # Hip Internal/External Rotation -- McCulloch et al. 2014,
+    # professional pitchers (right-handed, n=77): Drive/stance leg IR
+    # 32.2° ± 8.2°, ER 30.8° ± 9.7°; Plant/stride leg IR 30.8° ± 8.4°,
+    # ER 36.3° ± 7.7° (stride leg runs higher in ER -- an adaptive
+    # asymmetry the study found in most pitchers, not a per-leg data
+    # entry error). Floors set ~1.5 SD below each leg's own mean.
+    "Hip: Drive Leg Internal Rotation": 20,
+    "Hip: Plant Leg Internal Rotation": 20,
+    "Hip: Drive Leg External Rotation": 18,
+    "Hip: Plant Leg External Rotation": 24,
+    # Hip Abduction/Adduction -- Robb AJ, Fleisig G, Wilk K, Macrina L,
+    # Bolt B, Pajaczkowski J. "Passive Ranges of Motion of the Hips and
+    # Their Relationship With Pitching Biomechanics and Ball Velocity
+    # in Professional Baseball Pitchers." Am J Sports Med.
+    # 2010;38(12):2487-2493. N=19 pro pitchers, PASSIVE ROM (fluid
+    # goniometer), dominant (drive leg) vs. non-dominant (plant leg):
+    # Abduction 43.4° ± 12.0° (drive) / 35.7° ± 10.7° (plant) -- side
+    # difference was NOT quite statistically significant (p=.06), so
+    # take the drive/plant split here as weaker than the other hip
+    # metrics below. Adduction 50.8° ± 8.4° (drive) / 31.6° ± 6.2°
+    # (plant) -- side difference WAS significant (p<.001). Floors set
+    # ~1.5 SD below each leg's own mean, same approach as Hip Internal/
+    # External Rotation above. Smaller sample (n=19) than the rotation
+    # data (n=77/111) -- treat these floors as more provisional.
+    "Hip: Drive Leg Abduction": 25,
+    "Hip: Plant Leg Abduction": 20,
+    "Hip: Drive Leg Adduction": 38,
+    "Hip: Plant Leg Adduction": 22,
+    "Hip: Drive Leg Flexion": None,
+    "Hip: Plant Leg Flexion": None,
+    "Hip: Drive Leg Extension": None,
+    "Hip: Plant Leg Extension": None,
 }
 
-# The Mobility bucket's "Shoulder" sub-group is NOT a plain
-# (test_name, direction) list like MOBILITY_SUBGROUPS above -- each of
-# these 4 measured quantities is entered as a Right/Left pair (see
-# comment above), and needs to be resolved into a "Throwing Arm X" /
-# "Non-Throwing Arm X" pair PER PLAYER via resolve_side_by_throws
-# before it can be percentile-ranked against the team. See
-# compute_mobility_shoulder_metrics below for how this list gets
-# turned into 8 derived metrics (4 quantities x 2 sides).
-#
-# (display_name, right_test_name, left_test_name, direction, unit)
-MOBILITY_SHOULDER_SIDED_FIELDS = [
-    ("External Rotation", "Shoulder: Right External Rotation", "Shoulder: Left External Rotation", "higher", "°"),
-    ("Internal Rotation", "Shoulder: Right Internal Rotation", "Shoulder: Left Internal Rotation", "higher", "°"),
-    ("Flexion", "Shoulder: Right Flexion", "Shoulder: Left Flexion", "higher", "°"),
-    ("Extension", "Shoulder: Right Extension", "Shoulder: Left Extension", "higher", "°"),
+# The 6 hip metrics above are entered as "Hip: Right {base}" / "Hip:
+# Left {base}" (see seed_lookups.py's MOBILITY_ROM_TESTS), NOT as the
+# "Hip: Drive Leg {base}" / "Hip: Plant Leg {base}" names used as keys
+# in MOBILITY_ROM_THRESHOLDS above -- compute_mobility_rom_report
+# resolves Right/Left -> Drive Leg/Plant Leg per player (via
+# resolve_side_by_throws, same as GIRD/Total Arc) before doing the
+# threshold lookup/status check, so this list is what drives that
+# resolution loop.
+HIP_ROM_BASE_METRICS = [
+    "Internal Rotation", "External Rotation", "Abduction", "Adduction", "Flexion", "Extension",
 ]
 
 # Shoulder Health bucket (Physical Development extension, reference
@@ -348,7 +745,7 @@ DEVELOPMENT_PROFILE_BANDS = {
 # compute_gird_percentiles below, it's now auto-calculated from the
 # Mobility sheet's Internal Rotation fields instead.
 BUCKET_RELEVANT_CATEGORIES = {
-    "Body Composition", "Explosive Power", "Rotational Power",
+    "Body Composition", "Jump Power", "Rotational Power",
     "Lower Body Strength", "Upper Body Strength", "Speed",
 }
 
@@ -361,19 +758,18 @@ def get_bucket_test_names_for_category(category_name):
     if category_name == "Body Composition":
         return set(BODY_COMP_ENTRY_FIELDS)
     if category_name == "Rotational Power":
-        return {name for name, _ in POWER_SUBGROUPS["Med Ball Throw"]}
-    if category_name == "Explosive Power":
+        return (
+            {name for name, _ in POWER_SUBGROUPS["Med Ball Throw"]}
+            | {name for name, _ in MED_BALL_THROW_REFERENCE_METRICS}
+        )
+    if category_name == "Jump Power":
         names = set()
         for sub_name, metrics in POWER_SUBGROUPS.items():
             if sub_name != "Med Ball Throw":  # that one's under Rotational Power in GBO's category structure
                 names.update(name for name, _ in metrics)
         return names
     if category_name == "Lower Body Strength":
-        names = set()
-        for sub_name, metrics in STRENGTH_SUBGROUPS.items():
-            if sub_name in ("Lower Body Strength", "Mid-Thigh Pull"):
-                names.update(name for name, _ in metrics)
-        return names
+        return {name for name, _ in STRENGTH_SUBGROUPS["Lower Body Strength"]}
     if category_name == "Upper Body Strength":
         return {name for name, _ in STRENGTH_SUBGROUPS["Upper Body Strength"]}
     if category_name == "Speed":
@@ -381,29 +777,264 @@ def get_bucket_test_names_for_category(category_name):
     return set()
 
 
-def get_latest_values_by_player(session, test_name):
-    """{player_id: (value, assessment_date)} -- each player's most
-    recent result for this test type, across the whole roster --
-    ACTIVE AND INACTIVE both count toward the comparison pool (Ryker's
-    explicit call, so last year's players' data still contributes to
-    percentiles even though they're hidden from the current roster
-    everywhere else in the app). Returns {} if the test type doesn't
-    exist yet (e.g. not seeded)."""
+def is_substitute(notes, test_name):
+    """Nov 2026 (Ryker): a substitute lift (safety bar squat, leg press,
+    belt squat...) is stored under the test it stands in for with
+    "*<test name> = <actual lift>" in the assessment notes. It shows in
+    Full History with an asterisk but is LEFT OUT OF SCORING -- every
+    latest-value fetch skips it, so the player's last real result (if
+    any) counts instead."""
+    return bool(notes and test_name and f"*{test_name} =" in notes)
+
+
+@cached("player_groups", {"players"})
+def player_groups(session):
+    """{player_id: True (pitcher) / False (position player)}."""
+    return {pid: bool(ip) for pid, ip in session.query(Player.player_id, Player.is_pitcher).all()}
+
+
+def same_group_pool(cache, session, player_id, is_pitcher):
+    """Nov 2026 (Ryker: "compare position players to position players and
+    pitchers to pitchers"): narrow every {player_id: value} comparison
+    pool to the subject's own group (plus the subject himself). Returns a
+    new dict; the shared cache is left alone."""
+    groups = player_groups(session)
+    return {name: {pid: v for pid, v in by_player.items() if pid == player_id or groups.get(pid, False) == is_pitcher}
+            for name, by_player in cache.items()}
+
+
+def get_latest_values_by_player(session, test_name, _cache=None, season_start=None, season_end=None, active_only=True, include_player_id=None):
+    """{player_id: value} -- each player's most recent result for this
+    test type. Returns {} if the test type doesn't exist yet (e.g. not
+    seeded).
+
+    active_only: True (the default) restricts to ACTIVE ROSTER ONLY
+    (Ryker's call, Aug 2026, superseding the earlier "active and
+    inactive both count" behavior: a departed player's old mark was
+    setting the ceiling for a team he's no longer part of, which
+    doesn't reflect "where do I stand against my current teammates").
+    Pass False when scoping to a PAST season (Aug 2026, Ryker's
+    follow-up call): a player who's since gone inactive was still on
+    the roster during that earlier season, so excluding him from THAT
+    season's comparison pool would be comparing today's active list
+    against yesterday's results, not "who else was actually on the
+    team then." compute_bucket_system sets this automatically based on
+    whether the requested season is the current one -- see its
+    season_label param.
+
+    include_player_id: (Aug 2026, Ryker's follow-up call --
+    "inactive players should have a score") when active_only=True,
+    this SAME filter was also excluding an inactive SUBJECT player's
+    own results from the query, not just from the comparison pool --
+    so an inactive player could never get a score at all, even for a
+    season where he has real data on file. Passing his player_id here
+    carves out an exception so his own rows are always included,
+    while the comparison pool (everyone else) stays active-only.
+    compute_bucket_system always passes the player whose rollup is
+    being computed.
+
+    season_start/season_end: optional date bounds (season_start
+    inclusive, season_end EXCLUSIVE, same convention as season_date_
+    range) restricting which Assessment rows count toward "most recent"
+    -- Aug 2026, Ryker's season-scoping call (see the Seasons section
+    near the top of this file). Only applied on a cache MISS -- when
+    _cache already has this test_name, it's trusted as-is, since
+    whoever built it (compute_bucket_system, via
+    _batch_fetch_latest_values) already applied the same season bounds
+    (and the same active_only choice) when it ran that query.
+
+    _cache: an optional pre-fetched {test_name: {player_id: value}}
+    dict from _batch_fetch_latest_values() -- when provided and this
+    test_name is in it, this skips the database round trip entirely
+    and returns straight from memory. compute_bucket_system() below
+    passes one in so a single player's full score rollup (~60 metrics)
+    costs a couple of queries total instead of one (or two) queries
+    PER METRIC -- that per-metric query loop was the actual cause of
+    Assessments/Dashboard/My Assessments feeling slow (and, over a
+    hosted DB connection with real network latency per round trip,
+    occasionally slow enough to trip the browser's websocket timeout
+    and show "Disconnected from the server"). Falls back to a live
+    query when _cache is None or doesn't have this test_name, so this
+    function is still correct as a plain standalone call."""
+    if _cache is not None and test_name in _cache:
+        return _cache[test_name]
+
     test_type = session.query(AssessmentTestType).filter(AssessmentTestType.test_name == test_name).first()
     if test_type is None:
         return {}
-    rows = (
-        session.query(AssessmentResult, Assessment.player_id, Assessment.assessment_date)
+    query = (
+        session.query(AssessmentResult, Assessment.player_id, Assessment.assessment_date, Assessment.notes)
         .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
         .join(Player, Assessment.player_id == Player.player_id)
         .filter(AssessmentResult.test_type_id == test_type.test_type_id)
-        .all()
     )
+    if active_only:
+        if include_player_id is not None:
+            query = query.filter(or_(Player.active == True, Player.player_id == include_player_id))
+        else:
+            query = query.filter(Player.active == True)
+    if season_start is not None:
+        query = query.filter(Assessment.assessment_date >= season_start)
+    if season_end is not None:
+        query = query.filter(Assessment.assessment_date < season_end)
+    rows = query.all()
     latest = {}
-    for result, player_id, assessment_date in rows:
+    for result, player_id, assessment_date, notes in rows:
+        if is_substitute(notes, test_name):
+            continue
         if player_id not in latest or assessment_date > latest[player_id][1]:
             latest[player_id] = (float(result.value), assessment_date)
     return {pid: v for pid, (v, _) in latest.items()}
+
+
+def _all_bucket_test_names():
+    """Every AssessmentTestType name this file's scoring touches,
+    anywhere -- unioned once so compute_bucket_system() can batch-fetch
+    all of them in a couple of queries instead of one round trip per
+    metric (see _batch_fetch_latest_values). Keep this in sync any time
+    a new (test_name, direction) pair is added to one of the subgroup
+    dicts/lists above -- a name missing from here just means that one
+    metric quietly falls back to its own live query instead of using
+    the batch, not a correctness problem."""
+    names = set()
+    names.update(name for name, _ in BODY_COMP_DISPLAY_METRICS)
+    for metrics in POWER_SUBGROUPS.values():
+        names.update(name for name, _ in metrics)
+    names.update(name for name, _ in MED_BALL_THROW_REFERENCE_METRICS)
+    for metrics in STRENGTH_SUBGROUPS.values():
+        names.update(name for name, _ in metrics)
+    names.update(name for name, _ in SPEED_METRICS)
+    for metrics in CAPACITY_SUBGROUPS.values():
+        names.update(name for name, _ in metrics)
+    # Shoulder/Elbow ROM: entered anatomically, so the threshold dict's
+    # own keys ARE the entry field names.
+    names.update(name for name in MOBILITY_ROM_THRESHOLDS if not name.startswith("Hip:"))
+    # Hip ROM: threshold dict keys are Drive Leg/Plant Leg (role-based),
+    # but the actual entry fields are Right/Left -- see HIP_ROM_BASE_
+    # METRICS' comment above.
+    for base_metric in HIP_ROM_BASE_METRICS:
+        names.add(f"Hip: Right {base_metric}")
+        names.add(f"Hip: Left {base_metric}")
+    return names
+
+
+def _batch_fetch_latest_values(session, test_names, season_start=None, season_end=None, active_only=True, include_player_id=None):
+    """Cached front door for _batch_fetch_latest_values_uncached (Oct 2026,
+    Supabase egress fix): this team-wide pull ran on every bucket-score
+    render -- ~1,100 rows each time, tens of thousands of times -- and was
+    the biggest single source of database egress. Now it goes through
+    gbo_cache (10-minute entries, cleared on any assessment/player save in
+    this process). include_player_id only matters for a player who has
+    gone inactive, so it's dropped for active players to let every active
+    player share one cache entry. Returns copies so callers can't mutate
+    the cached dicts."""
+    import copy
+    if active_only and include_player_id is not None:
+        active = session.query(Player.active).filter(Player.player_id == include_player_id).scalar()
+        if active:
+            include_player_id = None
+    values, units = _batch_fetch_latest_values_cached(
+        session, tuple(sorted(set(test_names))), season_start, season_end, bool(active_only), include_player_id)
+    return copy.deepcopy(values), dict(units)
+
+
+@cached("bucket_latest_values", {"assessment_results", "assessments", "players", "assessment_test_types"})
+def _batch_fetch_latest_values_cached(session, test_names, season_start, season_end, active_only, include_player_id):
+    return _batch_fetch_latest_values_uncached(session, list(test_names), season_start=season_start, season_end=season_end,
+                                               active_only=active_only, include_player_id=include_player_id)
+
+
+def _batch_fetch_latest_values_uncached(session, test_names, season_start=None, season_end=None, active_only=True, include_player_id=None):
+    """Batched replacement for calling get_latest_values_by_player()
+    once per metric -- the naive per-metric loop compute_bucket_system()
+    used to run cost roughly 60 metrics x up to 2 queries each, more
+    than a hundred sequential round trips to the database for one
+    player's page load. This does the same lookup for every requested
+    test name in exactly 2 queries total: one to resolve test_type_id +
+    unit for all of them, one to pull every result row for all of them
+    -- then groups down to latest-per-player in Python, which is fast.
+
+    season_start/season_end: same meaning as get_latest_values_by_player
+    -- applied to the one result_rows query below, so every metric in
+    this batch (and therefore compute_bucket_system's whole rollup, once
+    it's threaded through) is scoped to the same season window
+    together.
+
+    active_only: same meaning as get_latest_values_by_player -- True
+    (current season) restricts to today's active roster, False (a past
+    season) includes everyone who has a result in that season's window
+    regardless of today's active/inactive status, since roster
+    membership AT THE TIME is what a past season's "team" comparison
+    pool should reflect (Aug 2026, Ryker's call).
+
+    include_player_id: same meaning as get_latest_values_by_player --
+    guarantees this player's own rows are fetched even when active_
+    only=True and he's since gone inactive, so he still gets a score
+    from his own current-season data (Aug 2026, Ryker's follow-up
+    call). compute_bucket_system always passes the subject player.
+
+    Returns (values_by_test_name, units_by_test_name):
+      - values_by_test_name: {test_name: {player_id: value}} -- every
+        SEEDED test_name from the input is guaranteed a key here (an
+        empty dict if it's seeded but has no results yet), so callers
+        never need to fall back to a live query for a name that's
+        simply data-less. A test_name that isn't seeded at all (no
+        AssessmentTestType row) is absent, matching
+        get_latest_values_by_player's existing "not found" behavior.
+      - units_by_test_name: {test_name: unit_or_None}, for the same
+        seeded names -- avoids a second redundant per-metric query
+        compute_metric_percentiles used to run just to read the unit.
+    """
+    test_names = list(set(test_names))
+    if not test_names:
+        return {}, {}
+
+    type_rows = (
+        session.query(AssessmentTestType.test_type_id, AssessmentTestType.test_name, AssessmentTestType.unit)
+        .filter(AssessmentTestType.test_name.in_(test_names))
+        .all()
+    )
+    name_by_type_id = {row.test_type_id: row.test_name for row in type_rows}
+    units_by_test_name = {row.test_name: row.unit for row in type_rows}
+    type_ids = list(name_by_type_id.keys())
+    if not type_ids:
+        return {}, {}
+
+    result_query = (
+        session.query(AssessmentResult.test_type_id, AssessmentResult.value, Assessment.player_id, Assessment.assessment_date,
+                      Assessment.notes)
+        .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
+        .join(Player, Assessment.player_id == Player.player_id)
+        .filter(AssessmentResult.test_type_id.in_(type_ids))
+    )
+    if active_only:
+        if include_player_id is not None:
+            result_query = result_query.filter(or_(Player.active == True, Player.player_id == include_player_id))
+        else:
+            result_query = result_query.filter(Player.active == True)
+    if season_start is not None:
+        result_query = result_query.filter(Assessment.assessment_date >= season_start)
+    if season_end is not None:
+        result_query = result_query.filter(Assessment.assessment_date < season_end)
+    result_rows = result_query.all()
+
+    # {test_type_id: {player_id: (value, date)}} -- latest per player, per test
+    latest_by_type_id = {}
+    for test_type_id, value, player_id, assessment_date, notes in result_rows:
+        if is_substitute(notes, name_by_type_id.get(test_type_id)):
+            continue
+        bucket = latest_by_type_id.setdefault(test_type_id, {})
+        if player_id not in bucket or assessment_date > bucket[player_id][1]:
+            bucket[player_id] = (float(value), assessment_date)
+
+    # Every seeded name gets an entry (possibly empty) -- see docstring.
+    values_by_test_name = {name: {} for name in name_by_type_id.values()}
+    for test_type_id, by_player in latest_by_type_id.items():
+        test_name = name_by_type_id.get(test_type_id)
+        if test_name is not None:
+            values_by_test_name[test_name] = {pid: v for pid, (v, _) in by_player.items()}
+
+    return values_by_test_name, units_by_test_name
 
 
 def compute_percentile(value, team_values, direction):
@@ -414,6 +1045,18 @@ def compute_percentile(value, team_values, direction):
     lower-is-better metric)."""
     if not team_values or value is None:
         return None
+    # Oct 2026 fix: the ratio formula only works when every value is
+    # positive. GIRD (non-throwing IR minus throwing IR) can be zero or
+    # negative, which turned every positive GIRD into a NEGATIVE
+    # "percentile" -- an empty bar that read as plain gray. When the
+    # pool has a zero/negative value, scale across the team's range
+    # instead (best = 100, worst = 0).
+    if min(team_values) <= 0 or value <= 0:
+        lo, hi = min(team_values), max(team_values)
+        if hi == lo:
+            return 100
+        frac = (value - lo) / (hi - lo) if direction == "higher" else (hi - value) / (hi - lo)
+        return round(max(0.0, min(1.0, frac)) * 100)
     if direction == "higher":
         team_max = max(team_values)
         if team_max == 0:
@@ -426,31 +1069,52 @@ def compute_percentile(value, team_values, direction):
         return round((team_min / value) * 100)
 
 
-def compute_metric_percentiles(session, player_id, metrics):
+def compute_metric_percentiles(session, player_id, metrics, _cache=None, _units=None):
     """metrics: [(test_name, direction), ...]. Returns
     {test_name: {"raw": value, "percentile": pct, "unit": unit}} for
-    whichever of these metrics the player actually has a result for."""
+    whichever of these metrics the player actually has a result for.
+
+    _cache/_units: optional pre-fetched dicts from
+    _batch_fetch_latest_values() -- see get_latest_values_by_player's
+    docstring. When provided, this skips both the per-metric results
+    query AND the per-metric unit lookup query."""
     out = {}
     for test_name, direction in metrics:
-        by_player = get_latest_values_by_player(session, test_name)
+        by_player = get_latest_values_by_player(session, test_name, _cache=_cache)
         if player_id not in by_player:
             continue
         value = by_player[player_id]
         pct = compute_percentile(value, list(by_player.values()), direction)
-        test_type = session.query(AssessmentTestType).filter(AssessmentTestType.test_name == test_name).first()
-        out[test_name] = {"raw": value, "percentile": pct, "unit": test_type.unit if test_type else None}
+        if _units is not None and test_name in _units:
+            unit = _units[test_name]
+        else:
+            test_type = session.query(AssessmentTestType).filter(AssessmentTestType.test_name == test_name).first()
+            unit = test_type.unit if test_type else None
+        # Nov 2026 (Ryker: bucket bars with last test + team median): the
+        # comparison pool rides along so the bar can place his previous
+        # result on today's scale, and the team median percentile (same
+        # pool, same formula) draws as a tick on the bar.
+        team_values = list(by_player.values())
+        team_pcts = [x for x in (compute_percentile(v, team_values, direction) for v in team_values) if x is not None]
+        out[test_name] = {"raw": value, "percentile": pct, "unit": unit, "direction": direction,
+                          "team_values": team_values,
+                          "team_median_pct": round(_median(team_pcts)) if len(team_pcts) >= 3 else None}
     return out
 
 
 def get_player_throws_map(session):
     """{player_id: 'R'/'L'/None} for every player -- active and
-    inactive, matching get_latest_values_by_player's scope. Used to
-    resolve anatomical Right/Left mobility entries to throwing/
-    non-throwing arm per player."""
+    inactive both included here (this is just a handedness lookup, not
+    itself a comparison pool -- resolve_side_by_throws below only ever
+    keeps entries for players who also show up in the now-active-only
+    right_by_player/left_by_player dicts, so an inactive player's
+    handedness being present here is harmless). Used to resolve
+    anatomical Right/Left mobility entries to throwing/non-throwing
+    arm per player."""
     return {p.player_id: p.throws for p in session.query(Player).all()}
 
 
-def resolve_side_by_throws(session, right_test_name, left_test_name):
+def resolve_side_by_throws(session, right_test_name, left_test_name, _cache=None, _throws_map=None):
     """Takes a raw Right/Left pair of AssessmentTestType names (e.g.
     "Shoulder: Right External Rotation" / "...Left...") and resolves
     each player's own THROWING-ARM value and NON-THROWING-ARM value
@@ -458,8 +1122,9 @@ def resolve_side_by_throws(session, right_test_name, left_test_name):
     ('R' or 'L').
 
     This is the core of the Right/Left -> Throwing/Non-Throwing
-    translation described in the MOBILITY_SHOULDER_SIDED_FIELDS
-    comment above: a right-handed pitcher's throwing arm is his Right
+    translation used by GIRD and Total Arc (compute_gird_percentiles/
+    compute_mobility_rom_report below): a right-handed pitcher's
+    throwing arm is his Right
     column, a left-handed pitcher's throwing arm is his Left column --
     so the "Throwing Arm X" comparison pool is a mix of different raw
     columns depending on each player's own handedness.
@@ -468,12 +1133,16 @@ def resolve_side_by_throws(session, right_test_name, left_test_name):
     resolve a side without knowing handedness) -- not defaulted to
     either side, since guessing would silently mis-score them.
 
+    _cache/_throws_map: optional pre-fetched data (see
+    get_latest_values_by_player/get_player_throws_map) -- when
+    provided, skips their live queries.
+
     Returns (throwing_by_player, non_throwing_by_player), each a plain
     {player_id: value} dict, only including players who have both a
     known throws side AND a raw value for the appropriate column."""
-    right_by_player = get_latest_values_by_player(session, right_test_name)
-    left_by_player = get_latest_values_by_player(session, left_test_name)
-    throws_map = get_player_throws_map(session)
+    right_by_player = get_latest_values_by_player(session, right_test_name, _cache=_cache)
+    left_by_player = get_latest_values_by_player(session, left_test_name, _cache=_cache)
+    throws_map = _throws_map if _throws_map is not None else get_player_throws_map(session)
 
     throwing_by_player = {}
     non_throwing_by_player = {}
@@ -491,37 +1160,7 @@ def resolve_side_by_throws(session, right_test_name, left_test_name):
     return throwing_by_player, non_throwing_by_player
 
 
-def compute_mobility_shoulder_metrics(session, player_id):
-    """Builds the Mobility bucket's "Shoulder" sub-group scores from
-    MOBILITY_SHOULDER_SIDED_FIELDS -- 4 measured quantities x 2 derived
-    labels (Throwing Arm / Non-Throwing Arm) = up to 8 metrics, each
-    resolved per-player via resolve_side_by_throws rather than read
-    directly off a single raw test_name the way compute_metric_
-    percentiles handles every other bucket.
-
-    Returns {label: {"raw":, "percentile":, "unit":}}, e.g.
-    {"Throwing Arm External Rotation": {...}, "Non-Throwing Arm
-    External Rotation": {...}, ...} -- same flat shape
-    compute_metric_percentiles returns, so render_metric_bars doesn't
-    need to know this sub-group is computed differently under the
-    hood. A player missing Player.throws, or missing a given side's
-    raw value, simply doesn't get that label -- no partial/garbage
-    entries."""
-    out = {}
-    for display_name, right_test, left_test, direction, unit in MOBILITY_SHOULDER_SIDED_FIELDS:
-        throwing_by_player, non_throwing_by_player = resolve_side_by_throws(session, right_test, left_test)
-        if player_id in throwing_by_player:
-            value = throwing_by_player[player_id]
-            pct = compute_percentile(value, list(throwing_by_player.values()), direction)
-            out[f"Throwing Arm {display_name}"] = {"raw": value, "percentile": pct, "unit": unit}
-        if player_id in non_throwing_by_player:
-            value = non_throwing_by_player[player_id]
-            pct = compute_percentile(value, list(non_throwing_by_player.values()), direction)
-            out[f"Non-Throwing Arm {display_name}"] = {"raw": value, "percentile": pct, "unit": unit}
-    return out
-
-
-def compute_gird_percentiles(session, player_id):
+def compute_gird_percentiles(session, player_id, _cache=None, _throws_map=None):
     """GIRD (Glenohumeral Internal Rotation Deficit), computed live --
     non-throwing arm IR minus throwing arm IR, in degrees -- from the
     Right/Left Internal Rotation fields (GIRD_RIGHT_IR_TEST /
@@ -544,7 +1183,9 @@ def compute_gird_percentiles(session, player_id):
     computed differently under the hood. Kept the "Shoulder ROM: GIRD"
     label (its old Arm Health field name) purely for display
     continuity -- it's no longer read from that stored field."""
-    throwing_ir, non_throwing_ir = resolve_side_by_throws(session, GIRD_RIGHT_IR_TEST, GIRD_LEFT_IR_TEST)
+    throwing_ir, non_throwing_ir = resolve_side_by_throws(
+        session, GIRD_RIGHT_IR_TEST, GIRD_LEFT_IR_TEST, _cache=_cache, _throws_map=_throws_map
+    )
     gird_by_player = {
         pid: non_throwing_ir[pid] - throwing_ir[pid]
         for pid in throwing_ir
@@ -556,10 +1197,897 @@ def compute_gird_percentiles(session, player_id):
     return {"Shoulder ROM: GIRD": {"raw": gird_by_player[player_id], "percentile": pct, "unit": "°"}}
 
 
+SHOULDER_RIGHT_ER_TEST = "Shoulder: Right External Rotation"
+SHOULDER_LEFT_ER_TEST = "Shoulder: Left External Rotation"
+SHOULDER_RIGHT_FLEXION_TEST = "Shoulder: Right Flexion"
+SHOULDER_LEFT_FLEXION_TEST = "Shoulder: Left Flexion"
+SHOULDER_RIGHT_EXTENSION_TEST = "Shoulder: Right Extension"
+SHOULDER_LEFT_EXTENSION_TEST = "Shoulder: Left Extension"
+
+ELBOW_RIGHT_FLEXION_TEST = "Elbow: Right Flexion"
+ELBOW_LEFT_FLEXION_TEST = "Elbow: Left Flexion"
+ELBOW_RIGHT_EXTENSION_TEST = "Elbow: Right Extension"
+ELBOW_LEFT_EXTENSION_TEST = "Elbow: Left Extension"
+
+
+# ---------------------------------------------------------------------
+# Shoulder ROM compound classification (Aug 2026, per Ryker's detailed
+# ROM redesign spec -- "Phase 1: Shoulder logic"). This is a DIFFERENT
+# kind of check than everything in MOBILITY_ROM_THRESHOLDS above: those
+# are single-value floor checks (one raw number vs. one threshold).
+# These are DERIVED, bilateral, and in GIRD's case CONTEXTUAL --
+# they're computed from two raw fields (or, for GIRD, from another
+# derived value too) and explicitly must NOT flag a normal throwing
+# adaptation just because a same-side absolute number looks "low."
+# See compute_shoulder_rom_profile below for where these get applied.
+#
+# Each entry carries the full metadata Ryker's spec asked for
+# (population/level/protocol/citation/evidence strength/notes) so this
+# can grow into a real reference-standards table later without a
+# reshape -- for now it's still a plain Python dict (per Ryker's call:
+# a structured config file now, a DB-backed staff-editable table is a
+# later phase, not this one).
+#
+# "direction" controls which side of the bound is "bad":
+#   "ceiling" -- LOWER is better (a magnitude/deficit metric: Total Arc
+#     Deficit, GIRD). value <= green_threshold -> green, <=
+#     yellow_threshold -> yellow, above that -> red.
+#   "floor" -- HIGHER is better (ERG: the throwing arm is EXPECTED to
+#     gain ER, so a small or negative gain is the concerning direction,
+#     the reverse of every other metric in this file). value >=
+#     green_threshold -> green, >= yellow_threshold -> yellow, below
+#     that -> red.
+SHOULDER_ROM_STANDARDS = {
+    "Total Arc Deficit": {
+        "variable": "Throwing Arm Total Arc Deficit vs. Non-Throwing Arm",
+        "population": "Baseball pitchers",
+        "position": "Pitcher",
+        "level_of_play": "College (Ryker's call -- not level-differentiated yet)",
+        "direction": "ceiling",
+        "green_threshold": 5,   # <=5 deg deficit
+        "yellow_threshold": 10,  # <=10 deg deficit (>10 = red)
+        "unit": "°",
+        "measurement_protocol": (
+            "Total Arc = Shoulder Internal Rotation + Shoulder External Rotation, each arm. "
+            "Total Arc Deficit = Throwing Arm Total Arc - Non-Throwing Arm Total Arc, evaluated "
+            "one-directionally (only a THROWING-side loss is flagged -- a throwing arm with MORE "
+            "total arc than the non-throwing arm is not penalized)."
+        ),
+        "research_source": (
+            "Concept -- total rotational motion, not isolated IR, is the more clinically meaningful "
+            "shoulder ROM measure in throwing athletes -- per Wilk et al. 2011. The specific 5/10 "
+            "degree cut points here are a GBO starting point pending stronger baseball-specific "
+            "total-arc-deficit literature, not a number pulled directly from that citation."
+        ),
+        "citation": "Wilk KE, et al. Correlation of glenohumeral internal rotation deficit and total rotation with shoulder injuries in professional baseball pitchers. Am J Sports Med. 2011;39(2):329-335.",
+        "evidence_strength": "Moderate (concept well-supported; exact cut points are GBO-set, not directly cited)",
+        "notes": "This is the primary shoulder red flag per Ryker's spec -- total arc loss matters more than isolated IR loss alone.",
+    },
+    "GIRD": {
+        "variable": "GIRD (Glenohumeral Internal Rotation Deficit), contextualized by Total Arc",
+        "population": "Baseball pitchers",
+        "position": "Pitcher",
+        "level_of_play": "College (Ryker's call -- not level-differentiated yet)",
+        "direction": "ceiling",
+        "green_threshold": 15,
+        "green_inclusive": False,  # Ryker's spec: "Green: <15°" (strict), vs. Total Arc Deficit's inclusive "0-5°" -- these two tables use different boundary conventions in his own spec, kept exact rather than normalized to one style
+        "yellow_threshold": 20,
+        "unit": "°",
+        "measurement_protocol": "Non-Throwing Arm Internal Rotation - Throwing Arm Internal Rotation, at 90° abduction.",
+        "research_source": "Wilk et al. 2011; Burkhart's 'disabled throwing shoulder' GIRD work.",
+        "citation": "Wilk KE, et al. Am J Sports Med. 2011;39(2):329-335.",
+        "evidence_strength": "Moderate -- GIRD alone is a widely-cited screen, but per the same literature it should be read alongside Total Arc, not in isolation (see 'contextual override' below).",
+        "notes": (
+            "CONTEXTUAL OVERRIDE (per Ryker's explicit call): a raw-threshold GIRD status of yellow or "
+            "red is downgraded ONE tier (red->yellow, yellow->green) whenever this player's Total Arc "
+            "Deficit status is green -- i.e. total rotational motion is preserved. Isolated IR loss "
+            "with a preserved total arc is a common, likely-benign throwing adaptation, not a true "
+            "mobility deficit -- flagging it the same as a GIRD paired with real total-arc loss would "
+            "over-flag normal throwing shoulders. See compute_shoulder_rom_profile for where this is "
+            "applied and _shoulder_rom_explanation for how it's worded to the user."
+        ),
+    },
+    "External Rotation Gain (ERG)": {
+        "variable": "Throwing Arm ER Gain vs. Non-Throwing Arm (Throwing ER - Non-Throwing ER)",
+        "population": "Baseball pitchers",
+        "position": "Pitcher",
+        "level_of_play": "College (Ryker's call -- not level-differentiated yet)",
+        "direction": "floor",  # inverted vs. everything else here -- LOWER is worse
+        "green_threshold": 5,   # >=5 deg gain = expected adaptation present
+        "yellow_threshold": 0,  # 0-5 deg gain = monitor; <0 (throwing arm has LESS ER) = red
+        "unit": "°",
+        "measurement_protocol": "Throwing Arm External Rotation - Non-Throwing Arm External Rotation, at 90° abduction.",
+        "research_source": (
+            "The throwing shoulder developing additional external rotation is a well-documented "
+            "adaptation in the literature; the specific 5°/0° cut points are GBO's own interpretation "
+            "of Ryker's spec ('pay particular attention when throwing ER is <5° greater than "
+            "non-throwing ER') -- not a number drawn from a specific cited study. Treat as a starting "
+            "point to refine once Pitt State's own pitcher data accumulates."
+        ),
+        "citation": None,
+        "evidence_strength": "Low-moderate (adaptation concept is well-supported; exact cut points are a GBO estimate, not directly cited)",
+        "notes": "Direction is inverted vs. every other metric here -- a LOWER (or negative) ERG is the concerning direction, since it means the expected throwing-arm adaptation didn't develop.",
+    },
+}
+
+
+def _shoulder_rom_classify(value, standard):
+    """Applies one SHOULDER_ROM_STANDARDS entry's green/yellow/red
+    bounds to a computed value. direction="ceiling" -> lower is better
+    (value <= green -> green [or < green if the standard sets
+    green_inclusive=False -- Ryker's spec worded GIRD's green cutoff as
+    a strict "<15°" but Total Arc Deficit's as an inclusive "0-5°", so
+    this is per-standard, not normalized to one style], <= yellow ->
+    yellow, else red). direction="floor" -> higher is better (value >=
+    green -> green, >= yellow -> yellow, else red)."""
+    green, yellow, direction = standard["green_threshold"], standard["yellow_threshold"], standard["direction"]
+    if direction == "ceiling":
+        is_green = value < green if standard.get("green_inclusive", True) is False else value <= green
+        if is_green:
+            return "green"
+        if value <= yellow:
+            return "yellow"
+        return "red"
+    if value >= green:
+        return "green"
+    if value >= yellow:
+        return "yellow"
+    return "red"
+
+
+_STATUS_DOWNGRADE = {"red": "yellow", "yellow": "green", "green": "green"}
+
+
+def _shoulder_rom_explanation(metric_key, raw, status, extra=None):
+    """Plain-language 'why this matters' text for one Shoulder ROM
+    compound metric + its final status, matching the tone/format of
+    Ryker's spec examples exactly (numbers first, then a short causal
+    sentence -- never language stating an injury WILL happen; red uses
+    'associated with' / 'priority review' framing only, per his
+    explicit safety requirement). Returns (explanation, recommendation)
+    -- recommendation is None for green (nothing to act on)."""
+    extra = extra or {}
+    if metric_key == "Total Arc Deficit":
+        deficit = max(0, -raw)  # raw = throwing_arc - non_throwing_arc; deficit only counts a THROWING-side loss
+        if status == "green":
+            return (
+                f"Total rotational motion is well-preserved between the throwing and non-throwing "
+                f"shoulders (throwing-side difference: {raw:+.0f}°).",
+                None,
+            )
+        if status == "yellow":
+            return (
+                f"The throwing shoulder has {deficit:.0f}° less total rotational motion than the "
+                f"non-throwing shoulder. Worth monitoring as part of this player's development plan.",
+                "Consider targeted mobility work and re-check at the next testing cycle.",
+            )
+        return (
+            f"The throwing shoulder has {deficit:.0f}° less total rotational motion than the "
+            f"non-throwing shoulder. A substantial loss of total arc is more concerning than internal "
+            f"rotation loss alone.",
+            "Red Flag — Priority Review: recommend evaluation by appropriate performance/sports medicine staff.",
+        )
+    if metric_key == "GIRD":
+        tad_status = extra.get("total_arc_deficit_status")
+        downgraded = extra.get("downgraded", False)
+        tad_raw = extra.get("total_arc_deficit_raw")
+        tad_label = f"{-max(0, -tad_raw):.0f}°" if tad_raw is not None else "—"  # signed throwing-vs-non-throwing diff, for display
+        if downgraded:
+            return (
+                f"The throwing shoulder has reduced internal rotation (GIRD: {raw:.0f}°), but total "
+                f"rotational motion is preserved (Total Arc difference: {tad_label}). This pattern may "
+                f"represent a normal throwing adaptation rather than a mobility deficit.",
+                None,
+            )
+        if status == "green":
+            return (f"GIRD ({raw:.0f}°) is within the expected range for a healthy throwing shoulder.", None)
+        if status == "yellow":
+            return (
+                f"GIRD is {raw:.0f}°, and total rotational motion is not fully preserved "
+                f"(Total Arc difference: {tad_label}). Worth monitoring alongside total arc at the "
+                f"next testing cycle.",
+                "Consider targeted internal rotation mobility work and re-check at the next testing cycle.",
+            )
+        return (
+            f"GIRD is {raw:.0f}°, and total rotational motion is also compromised "
+            f"(Total Arc difference: {tad_label}). This combination -- IR loss WITHOUT a preserved "
+            f"total arc -- is a more concerning pattern than an isolated internal rotation loss.",
+            "Red Flag — Priority Review: recommend evaluation by appropriate performance/sports medicine staff.",
+        )
+    if metric_key == "External Rotation Gain (ERG)":
+        if status == "green":
+            return (
+                f"The throwing shoulder shows {raw:.0f}° more external rotation than the non-throwing "
+                f"shoulder, consistent with the expected throwing-arm adaptation.",
+                None,
+            )
+        if status == "yellow":
+            return (
+                f"The throwing shoulder shows only {raw:.0f}° more external rotation than the "
+                f"non-throwing shoulder -- less than the gain typically seen in throwing athletes.",
+                "Worth incorporating into this player's mobility development plan and re-checking at the next testing cycle.",
+            )
+        return (
+            f"The throwing shoulder does NOT show the expected external rotation gain -- it actually "
+            f"has {abs(raw):.0f}° LESS external rotation than the non-throwing shoulder, an atypical "
+            f"pattern worth flagging for review.",
+            "Red Flag — Priority Review: recommend evaluation by appropriate performance/sports medicine staff.",
+        )
+    return ("", None)
+
+
+_SHOULDER_ROM_STATUS_LABELS = {"green": "Good", "yellow": "Monitor", "red": "Red Flag — Priority Review"}
+
+
+def compute_shoulder_rom_profile(session, player_id, _cache=None, _throws_map=None):
+    """Shoulder ROM 'Phase 1' compound classification, per Ryker's Aug
+    2026 ROM redesign spec -- Total Arc Deficit, GIRD (contextualized
+    by Total Arc), and External Rotation Gain, each with a real
+    red/yellow/green status, a plain-language explanation, and a
+    recommendation (yellow/red only). Also includes Flexion/Extension
+    side-to-side differences as REFERENCE-ONLY rows (status=None) --
+    no baseball-specific research threshold exists for these yet, same
+    "don't fabricate a flag" rule this file uses everywhere else (see
+    MOBILITY_ROM_THRESHOLDS' docstring); they still show the raw
+    difference so staff can watch for a real research-backed cutoff or
+    a meaningful CHANGE over time later.
+
+    Returns a list of row dicts, richer than compute_mobility_rom_
+    report's plain rows: {"test_name", "raw", "unit", "threshold":
+    None (these aren't a single-value floor check), "status",
+    "status_label": the spec's own wording ("Good"/"Monitor"/"Red Flag
+    — Priority Review") instead of the simpler existing "Clear"/
+    "Caution"/"Below threshold" pill wording -- deliberately distinct
+    since these are the injury-risk-aware compound metrics Ryker's
+    spec specifically asked to word this way, "explanation", and
+    "recommendation" (None unless yellow/red).
+
+    Only includes rows for players who have all the needed raw values
+    on file AND a known Player.throws (same "can't resolve a side
+    without knowing handedness" limitation the rest of this Shoulder/
+    Hip resolution logic already has)."""
+    throwing_ir, non_throwing_ir = resolve_side_by_throws(
+        session, GIRD_RIGHT_IR_TEST, GIRD_LEFT_IR_TEST, _cache=_cache, _throws_map=_throws_map
+    )
+    throwing_er, non_throwing_er = resolve_side_by_throws(
+        session, SHOULDER_RIGHT_ER_TEST, SHOULDER_LEFT_ER_TEST, _cache=_cache, _throws_map=_throws_map
+    )
+    throwing_flex, non_throwing_flex = resolve_side_by_throws(
+        session, SHOULDER_RIGHT_FLEXION_TEST, SHOULDER_LEFT_FLEXION_TEST, _cache=_cache, _throws_map=_throws_map
+    )
+    throwing_ext, non_throwing_ext = resolve_side_by_throws(
+        session, SHOULDER_RIGHT_EXTENSION_TEST, SHOULDER_LEFT_EXTENSION_TEST, _cache=_cache, _throws_map=_throws_map
+    )
+
+    out = []
+
+    has_rotation = player_id in throwing_ir and player_id in non_throwing_ir and player_id in throwing_er and player_id in non_throwing_er
+    total_arc_deficit_status = None
+    if has_rotation:
+        throwing_arc = throwing_ir[player_id] + throwing_er[player_id]
+        non_throwing_arc = non_throwing_ir[player_id] + non_throwing_er[player_id]
+        tad_raw = throwing_arc - non_throwing_arc  # negative = throwing-side loss
+        tad_standard = SHOULDER_ROM_STANDARDS["Total Arc Deficit"]
+        total_arc_deficit_status = _shoulder_rom_classify(max(0, -tad_raw), tad_standard)
+        explanation, recommendation = _shoulder_rom_explanation("Total Arc Deficit", tad_raw, total_arc_deficit_status)
+        out.append({
+            "test_name": "Shoulder: Total Arc Deficit (Throwing vs. Non-Throwing)", "raw": tad_raw, "unit": "°",
+            "threshold": None, "status": total_arc_deficit_status,
+            "status_label": _SHOULDER_ROM_STATUS_LABELS[total_arc_deficit_status],
+            "explanation": explanation, "recommendation": recommendation,
+        })
+
+        gird_raw = non_throwing_ir[player_id] - throwing_ir[player_id]
+        gird_standard = SHOULDER_ROM_STANDARDS["GIRD"]
+        base_status = _shoulder_rom_classify(gird_raw, gird_standard)
+        downgraded = total_arc_deficit_status == "green" and base_status in ("yellow", "red")
+        gird_status = _STATUS_DOWNGRADE[base_status] if downgraded else base_status
+        explanation, recommendation = _shoulder_rom_explanation(
+            "GIRD", gird_raw, gird_status,
+            extra={"total_arc_deficit_status": total_arc_deficit_status, "total_arc_deficit_raw": tad_raw, "downgraded": downgraded},
+        )
+        out.append({
+            "test_name": "Shoulder: GIRD (contextualized by Total Arc)", "raw": gird_raw, "unit": "°",
+            "threshold": None, "status": gird_status,
+            "status_label": _SHOULDER_ROM_STATUS_LABELS[gird_status],
+            "explanation": explanation, "recommendation": recommendation,
+        })
+
+        erg_raw = throwing_er[player_id] - non_throwing_er[player_id]
+        erg_standard = SHOULDER_ROM_STANDARDS["External Rotation Gain (ERG)"]
+        erg_status = _shoulder_rom_classify(erg_raw, erg_standard)
+        explanation, recommendation = _shoulder_rom_explanation("External Rotation Gain (ERG)", erg_raw, erg_status)
+        out.append({
+            "test_name": "Shoulder: External Rotation Gain (ERG)", "raw": erg_raw, "unit": "°",
+            "threshold": None, "status": erg_status,
+            "status_label": _SHOULDER_ROM_STATUS_LABELS[erg_status],
+            "explanation": explanation, "recommendation": recommendation,
+        })
+
+    if player_id in throwing_flex and player_id in non_throwing_flex:
+        diff = throwing_flex[player_id] - non_throwing_flex[player_id]
+        out.append({
+            "test_name": "Shoulder: Flexion Difference (Throwing vs. Non-Throwing)", "raw": diff, "unit": "°",
+            "threshold": None, "status": None, "status_label": None, "explanation": None, "recommendation": None,
+        })
+    if player_id in throwing_ext and player_id in non_throwing_ext:
+        diff = throwing_ext[player_id] - non_throwing_ext[player_id]
+        out.append({
+            "test_name": "Shoulder: Extension Difference (Throwing vs. Non-Throwing)", "raw": diff, "unit": "°",
+            "threshold": None, "status": None, "status_label": None, "explanation": None, "recommendation": None,
+        })
+
+    return out
+
+
+# ---------------------------------------------------------------------
+# Elbow ROM compound classification (Aug 2026), per Wright RW,
+# Steger-May K, Wasserlauf BL, O'Neal ME, Weinberg BW, Paletta GA.
+# "Elbow Range of Motion in Professional Baseball Pitchers." Am J
+# Sports Med. 2006;34(2):190-193. N=33 pro pitchers, goniometer,
+# throwing arm vs. non-throwing arm: Extension loss 7.9° ± 7.4°,
+# Flexion loss 5.5° ± 7.8° (no correlation found with age, innings
+# pitched, or injury history in that sample).
+#
+# Same DERIVED/bilateral shape as Shoulder's Total Arc Deficit above
+# (a throwing-side loss vs. the non-throwing arm) -- NOT a flat
+# per-side floor, which is a different, still-unanswered question (see
+# MOBILITY_ROM_THRESHOLDS' "Elbow: Right/Left Extension" entries,
+# still None -- an absolute "normal" elbow extension number, as
+# opposed to a side-to-side loss, wasn't part of what Wright et al.
+# reports).
+#
+# IMPORTANT evidence caveat (per Ryker's "no injury WILL happen"
+# safety requirement, same as every other compound metric here):
+# unlike GIRD/Total Arc Deficit, which DO have an injury-correlation
+# literature behind them, Wright et al. 2006 explicitly found NO such
+# correlation for these two metrics. So this is presented as a
+# monitoring reference against a real baseball-pitcher population, not
+# a validated injury predictor -- status labels and explanation text
+# below are deliberately softer than Shoulder's ("Monitor Closely"
+# instead of "Red Flag — Priority Review") to avoid overstating that.
+ELBOW_ROM_STANDARDS = {
+    "Extension Loss": {
+        "variable": "Throwing Arm Elbow Extension Loss vs. Non-Throwing Arm",
+        "population": "Professional baseball pitchers",
+        "position": "Pitcher",
+        "level_of_play": "Professional (Wright et al. 2006 sample) -- applied here to college per Ryker's call, same as every other metric in this file",
+        "direction": "ceiling",
+        "green_threshold": 8,    # <=8 deg loss -- at/below the study's own sample mean (7.9°)
+        "yellow_threshold": 15,  # <=15 deg loss (~mean + 1 SD); >15 deg = red
+        "unit": "°",
+        "measurement_protocol": "Elbow Extension, dominant (throwing) arm minus non-dominant (non-throwing) arm, goniometer.",
+        "research_source": (
+            "Mean throwing-arm extension loss in pro pitchers: 7.9° ± 7.4° (n=33). Cut points here are "
+            "GBO's own interpretation (sample mean as the green ceiling, +1 SD as the yellow ceiling), "
+            "not numbers drawn directly from the study -- same approach used for Total Arc Deficit above."
+        ),
+        "citation": "Wright RW, Steger-May K, Wasserlauf BL, O'Neal ME, Weinberg BW, Paletta GA. Elbow range of motion in professional baseball pitchers. Am J Sports Med. 2006;34(2):190-193.",
+        "evidence_strength": "Low -- the source study found NO correlation between this loss and age, innings pitched, or injury history. Treat as a monitoring reference against a real pitcher population, not a validated injury predictor.",
+        "notes": "A throwing-arm elbow extension loss (\"flexion contracture\") is a well-documented finding in pitchers, believed related to repetitive valgus loading -- but this specific metric is not itself shown to predict injury.",
+    },
+    "Flexion Loss": {
+        "variable": "Throwing Arm Elbow Flexion Loss vs. Non-Throwing Arm",
+        "population": "Professional baseball pitchers",
+        "position": "Pitcher",
+        "level_of_play": "Professional (Wright et al. 2006 sample) -- applied here to college per Ryker's call, same as every other metric in this file",
+        "direction": "ceiling",
+        "green_threshold": 6,    # <=6 deg loss -- at/below the study's own sample mean (5.5°)
+        "yellow_threshold": 14,  # <=14 deg loss (~mean + 1 SD); >14 deg = red
+        "unit": "°",
+        "measurement_protocol": "Elbow Flexion, dominant (throwing) arm minus non-dominant (non-throwing) arm, goniometer.",
+        "research_source": (
+            "Mean throwing-arm flexion loss in pro pitchers: 5.5° ± 7.8° (n=33). Cut points here are "
+            "GBO's own interpretation, same approach as Extension Loss above."
+        ),
+        "citation": "Wright RW, Steger-May K, Wasserlauf BL, O'Neal ME, Weinberg BW, Paletta GA. Elbow range of motion in professional baseball pitchers. Am J Sports Med. 2006;34(2):190-193.",
+        "evidence_strength": "Low -- same caveat as Extension Loss: no injury correlation found in the source study.",
+        "notes": "Reported in the same study as Extension Loss; less commonly emphasized clinically than extension loss.",
+    },
+}
+
+_ELBOW_ROM_STATUS_LABELS = {"green": "Typical", "yellow": "Monitor", "red": "Notable — Monitor Closely"}
+
+
+def _elbow_rom_explanation(metric_key, raw, status):
+    """Same tone/format as _shoulder_rom_explanation -- numbers first,
+    short causal sentence, no "will happen" language -- but softer
+    red-tier wording than Shoulder's, since Wright et al. 2006 found no
+    injury correlation for these two metrics (see ELBOW_ROM_STANDARDS'
+    evidence_strength note)."""
+    loss = max(0, -raw)
+    joint_action = "extension" if metric_key == "Extension Loss" else "flexion"
+    sample_mean = "8" if joint_action == "extension" else "6"
+    if status == "green":
+        return (
+            f"Throwing-arm elbow {joint_action} is well-preserved versus the non-throwing arm "
+            f"(difference: {raw:+.0f}°).",
+            None,
+        )
+    if status == "yellow":
+        return (
+            f"The throwing elbow has {loss:.0f}° less {joint_action} than the non-throwing elbow -- "
+            f"somewhat more than the average loss reported in pro pitchers (~{sample_mean}°). Worth "
+            f"monitoring as part of this player's development plan.",
+            "Consider re-checking at the next testing cycle.",
+        )
+    return (
+        f"The throwing elbow has {loss:.0f}° less {joint_action} than the non-throwing elbow -- "
+        f"notably more than typically seen in pro pitchers. Not itself shown to predict injury in the "
+        f"source research, but worth a closer look.",
+        "Consider evaluation by appropriate performance/sports medicine staff if this persists or trends worse over time.",
+    )
+
+
+def compute_elbow_rom_profile(session, player_id, _cache=None, _throws_map=None):
+    """Elbow ROM compound classification -- Extension Loss and Flexion
+    Loss (throwing arm vs. non-throwing arm), per Wright et al. 2006.
+    Same derived/bilateral shape and Player.throws-based resolution as
+    compute_shoulder_rom_profile; see ELBOW_ROM_STANDARDS for the
+    evidence-strength caveat that makes this deliberately less
+    strongly worded than the Shoulder metrics.
+
+    Only includes a row for players who have both Right and Left
+    values on file for that specific test AND a known Player.throws
+    (same resolution limitation as everywhere else in this file)."""
+    throwing_flex, non_throwing_flex = resolve_side_by_throws(
+        session, ELBOW_RIGHT_FLEXION_TEST, ELBOW_LEFT_FLEXION_TEST, _cache=_cache, _throws_map=_throws_map
+    )
+    throwing_ext, non_throwing_ext = resolve_side_by_throws(
+        session, ELBOW_RIGHT_EXTENSION_TEST, ELBOW_LEFT_EXTENSION_TEST, _cache=_cache, _throws_map=_throws_map
+    )
+
+    out = []
+    if player_id in throwing_ext and player_id in non_throwing_ext:
+        raw = throwing_ext[player_id] - non_throwing_ext[player_id]
+        standard = ELBOW_ROM_STANDARDS["Extension Loss"]
+        status = _shoulder_rom_classify(max(0, -raw), standard)
+        explanation, recommendation = _elbow_rom_explanation("Extension Loss", raw, status)
+        out.append({
+            "test_name": "Elbow: Extension Loss (Throwing vs. Non-Throwing)", "raw": raw, "unit": "°",
+            "threshold": None, "status": status,
+            "status_label": _ELBOW_ROM_STATUS_LABELS[status],
+            "explanation": explanation, "recommendation": recommendation,
+        })
+    if player_id in throwing_flex and player_id in non_throwing_flex:
+        raw = throwing_flex[player_id] - non_throwing_flex[player_id]
+        standard = ELBOW_ROM_STANDARDS["Flexion Loss"]
+        status = _shoulder_rom_classify(max(0, -raw), standard)
+        explanation, recommendation = _elbow_rom_explanation("Flexion Loss", raw, status)
+        out.append({
+            "test_name": "Elbow: Flexion Loss (Throwing vs. Non-Throwing)", "raw": raw, "unit": "°",
+            "threshold": None, "status": status,
+            "status_label": _ELBOW_ROM_STATUS_LABELS[status],
+            "explanation": explanation, "recommendation": recommendation,
+        })
+    return out
+
+
+# ---------------------------------------------------------------------
+# Hip ROM derived metrics (Aug 2026, Phase 2 of Ryker's ROM redesign
+# spec). Unlike Shoulder Phase 1, NONE of these get a red/yellow/green
+# status -- per Ryker's own explicit instruction: "For hip ROM, do NOT
+# invent injury-risk thresholds when strong baseball-specific evidence
+# does not exist. Instead distinguish between Normative comparison and
+# Evidence-supported red flag." The absolute-value Hip IR/ER floors
+# already in MOBILITY_ROM_THRESHOLDS (McCulloch et al. 2014) ARE kept
+# as-is -- that's a real (if purely descriptive, not injury-outcome)
+# baseball-pitcher normative dataset, unlike anything found for hip
+# TOTAL rotation or hip ASYMMETRY specifically. No baseball-specific
+# research was found correlating hip total rotation or side-to-side
+# hip differences with injury incidence, nor even a normative
+# mean/SD for those specific derived numbers (as opposed to the raw
+# per-leg IR/ER means McCulloch et al. does report) -- so per the
+# same "don't fabricate a flag" rule this file uses everywhere else,
+# these are shown as REFERENCE-ONLY values (status=None), not colored.
+# If/when real baseball hip-ROM norms exist (e.g. once Pitt State's
+# own multi-year data is usable, or new published research), these can
+# gain real thresholds the same way Shoulder's did -- see
+# SHOULDER_ROM_STANDARDS for that pattern.
+_HIP_REFERENCE_NOTE = (
+    "Reference value only -- no baseball-specific hip {label} threshold (injury-associated or "
+    "normative) has been established in the literature yet. Shown to track change over time and "
+    "support staff's own clinical judgment, not as a pass/fail flag."
+)
+
+
+def compute_hip_rom_profile(session, player_id, _cache=None, _throws_map=None):
+    """Hip ROM derived values, per Ryker's ROM redesign spec: Drive Leg
+    / Plant Leg Total Rotation (IR + ER per leg) and side-to-side
+    differences for IR, ER, Total Rotation, Abduction, and Adduction.
+    ALL reference-only (status=None, no color) -- see this section's
+    module comment for why (no baseball-specific injury OR normative
+    threshold exists for these specific derived numbers, unlike the
+    raw per-leg IR/ER absolute floors in MOBILITY_ROM_THRESHOLDS).
+
+    Differences are Drive Leg - Plant Leg throughout (positive = drive
+    leg has more of that quality), matching the Throwing - Non-Throwing
+    sign convention compute_shoulder_rom_profile uses above.
+
+    Only includes rows for players who have both raw values needed AND
+    a known Player.throws (can't resolve Drive/Plant without knowing
+    handedness -- same limitation the rest of this file's Hip/Shoulder
+    resolution already has). Returns a list of row dicts in the same
+    shape compute_shoulder_rom_profile's rows use (test_name/raw/unit/
+    threshold/status/status_label/explanation/recommendation) so
+    build_mobility_rom_report renders them identically."""
+    # Only resolves the 4 metrics this function actually uses (IR/ER/
+    # Abduction/Adduction) -- NOT all of HIP_ROM_BASE_METRICS, which
+    # also includes Flexion/Extension (used by the plain-threshold Hip
+    # rows elsewhere in compute_mobility_rom_report, not here -- no
+    # spec-requested derived Hip Flexion/Extension values exist).
+    resolved = {}
+    for base_metric in ("Internal Rotation", "External Rotation", "Abduction", "Adduction"):
+        resolved[base_metric] = resolve_side_by_throws(
+            session, f"Hip: Right {base_metric}", f"Hip: Left {base_metric}", _cache=_cache, _throws_map=_throws_map
+        )
+
+    out = []
+
+    def _ref_row(test_name, raw, label, signed=True):
+        # signed=False for the two Total Rotation rows -- those are
+        # plain magnitudes (never negative), not a difference, so a
+        # "+62°"-style leading plus sign would be visual noise; every
+        # other row here IS a Drive-vs-Plant difference where the sign
+        # is the whole point, so that's the default.
+        row = {
+            "test_name": test_name, "raw": raw, "unit": "°", "threshold": None, "status": None,
+            "status_label": None, "explanation": _HIP_REFERENCE_NOTE.format(label=label), "recommendation": None,
+        }
+        if not signed:
+            row["signed"] = False
+        out.append(row)
+
+    drive_ir, plant_ir = resolved["Internal Rotation"]
+    drive_er, plant_er = resolved["External Rotation"]
+    has_rotation = player_id in drive_ir and player_id in plant_ir and player_id in drive_er and player_id in plant_er
+    if has_rotation:
+        drive_total = drive_ir[player_id] + drive_er[player_id]
+        plant_total = plant_ir[player_id] + plant_er[player_id]
+        _ref_row("Hip: Drive Leg Total Rotation", drive_total, "Drive Leg Total Rotation", signed=False)
+        _ref_row("Hip: Plant Leg Total Rotation", plant_total, "Plant Leg Total Rotation", signed=False)
+        _ref_row("Hip: Internal Rotation Difference (Drive vs. Plant)", drive_ir[player_id] - plant_ir[player_id], "Internal Rotation asymmetry")
+        _ref_row("Hip: External Rotation Difference (Drive vs. Plant)", drive_er[player_id] - plant_er[player_id], "External Rotation asymmetry")
+        _ref_row("Hip: Total Rotation Difference (Drive vs. Plant)", drive_total - plant_total, "Total Rotation asymmetry")
+
+    drive_abd, plant_abd = resolved["Abduction"]
+    if player_id in drive_abd and player_id in plant_abd:
+        _ref_row("Hip: Abduction Difference (Drive vs. Plant)", drive_abd[player_id] - plant_abd[player_id], "Abduction asymmetry")
+
+    drive_add, plant_add = resolved["Adduction"]
+    if player_id in drive_add and player_id in plant_add:
+        _ref_row("Hip: Adduction Difference (Drive vs. Plant)", drive_add[player_id] - plant_add[player_id], "Adduction asymmetry")
+
+    return out
+
+
+# How far above a metric's MOBILITY_ROM_THRESHOLDS floor counts as
+# "yellow" (caution) rather than "green" (clear) -- a flat degree
+# buffer applied to every metric, per Ryker's call. Red is still
+# "below the configured threshold" exactly as before; this just splits
+# what used to be a single "met" (green) result into two tiers: yellow
+# for raw values that clear the floor but only just, green for
+# comfortably above it. A metric with no configured threshold (None in
+# MOBILITY_ROM_THRESHOLDS) has no red/yellow/green status at all --
+# same "don't fabricate a flag" rule as before. Bump this one number
+# to widen/narrow the caution band for every metric at once; if a
+# metric ever needs its own buffer instead of this shared one, give it
+# a per-metric override rather than making this a dict.
+MOBILITY_ROM_YELLOW_BUFFER = 10
+
+
+def _mobility_rom_status(raw, threshold):
+    """red/yellow/green/None for one raw value against its threshold
+    -- None (no status) if threshold is None (not configured yet), red
+    if below the threshold, yellow if within MOBILITY_ROM_YELLOW_BUFFER
+    degrees above it, green otherwise."""
+    if threshold is None:
+        return None
+    if raw < threshold:
+        return "red"
+    if raw < threshold + MOBILITY_ROM_YELLOW_BUFFER:
+        return "yellow"
+    return "green"
+
+
+def compute_mobility_rom_report(session, player_id, _cache=None, _throws_map=None):
+    """Red/yellow/green Mobility & ROM report -- replaces percentile
+    scoring for this section entirely, per Ryker's explicit call (see
+    MOBILITY_ROM_THRESHOLDS' docstring for the full rationale).
+
+    Shoulder/Elbow: for every non-hip test_name in MOBILITY_ROM_
+    THRESHOLDS, looks up this player's latest value (if any) directly
+    (entered anatomically, Right/Left, no resolution needed) and
+    statuses it via _mobility_rom_status.
+
+    Hip: entered as Right/Left (see HIP_ROM_BASE_METRICS' comment for
+    why), resolved per player to Drive Leg/Plant Leg via
+    resolve_side_by_throws (drive leg = throwing-side leg, plant leg =
+    glove-side leg) before the threshold lookup/status check -- same
+    Player.throws-based resolution GIRD/Total Arc already use. A player
+    with no Player.throws on file won't have hip ROM rows here at all
+    (can't resolve a side without knowing handedness).
+
+    Then appends Throwing Arm / Non-Throwing Arm Total Arc (External
+    Rotation + Internal Rotation for that arm -- the standard "Total
+    Arc of Motion" shoulder ROM measure, per Hurd et al. 2011 (J Athl
+    Train 46(3):282-288 -- see MOBILITY_ROM_THRESHOLDS' citation-fix
+    comment; this Total Arc figure was also previously mis-attributed
+    to Wilk et al. 2011, same error, now corrected): throwing-arm mean
+    ~190° ± 15°, expected to stay roughly symmetric with the
+    non-throwing arm) as two more raw reference rows (always
+    threshold=None/status=None).
+
+    Finally appends compute_shoulder_rom_profile's rows (Total Arc
+    Deficit, GIRD, External Rotation Gain, Flexion/Extension side-to-
+    side differences -- Aug 2026, Ryker's ROM redesign spec "Phase 1:
+    Shoulder logic") and compute_elbow_rom_profile's rows (Extension
+    Loss, Flexion Loss -- per Wright et al. 2006, see that function's
+    docstring for the weaker-evidence caveat). Both carry real
+    red/yellow/green statuses plus "explanation"/"recommendation"/
+    "status_label" keys the plain rows above don't have -- see each
+    function's docstring. build_mobility_rom_report in
+    bucket_display.py renders whichever keys are present per row, so
+    this doesn't break the plain rows' simpler shape.
+
+    Returns a list of dicts (only for metrics/sides with a raw value
+    on file for this player -- no blank rows), each shaped at minimum:
+      {"test_name": ..., "raw": ..., "unit": "°",
+       "threshold": <float or None>, "status": "red"/"yellow"/"green"/None}
+    (compute_shoulder_rom_profile's and compute_elbow_rom_profile's
+    rows add "status_label", "explanation", "recommendation" on top of
+    this). Ordered Shoulder, Elbow, Hip (Drive Leg then Plant Leg per
+    metric, in HIP_ROM_BASE_METRICS' order), Total Arc reference rows,
+    then the compound Shoulder rows, then the compound Elbow rows,
+    last."""
+    out = []
+    for test_name, threshold in MOBILITY_ROM_THRESHOLDS.items():
+        if test_name.startswith("Hip:"):
+            continue
+        by_player = get_latest_values_by_player(session, test_name, _cache=_cache)
+        if player_id not in by_player:
+            continue
+        raw = by_player[player_id]
+        status = _mobility_rom_status(raw, threshold)
+        out.append({"test_name": test_name, "raw": raw, "unit": "°", "threshold": threshold, "status": status})
+
+    for base_metric in HIP_ROM_BASE_METRICS:
+        right_test_name = f"Hip: Right {base_metric}"
+        left_test_name = f"Hip: Left {base_metric}"
+        drive_by_player, plant_by_player = resolve_side_by_throws(
+            session, right_test_name, left_test_name, _cache=_cache, _throws_map=_throws_map
+        )
+        if player_id in drive_by_player:
+            drive_name = f"Hip: Drive Leg {base_metric}"
+            raw = drive_by_player[player_id]
+            threshold = MOBILITY_ROM_THRESHOLDS.get(drive_name)
+            out.append({"test_name": drive_name, "raw": raw, "unit": "°", "threshold": threshold, "status": _mobility_rom_status(raw, threshold)})
+        if player_id in plant_by_player:
+            plant_name = f"Hip: Plant Leg {base_metric}"
+            raw = plant_by_player[player_id]
+            threshold = MOBILITY_ROM_THRESHOLDS.get(plant_name)
+            out.append({"test_name": plant_name, "raw": raw, "unit": "°", "threshold": threshold, "status": _mobility_rom_status(raw, threshold)})
+
+    throwing_er, non_throwing_er = resolve_side_by_throws(
+        session, SHOULDER_RIGHT_ER_TEST, SHOULDER_LEFT_ER_TEST, _cache=_cache, _throws_map=_throws_map
+    )
+    throwing_ir, non_throwing_ir = resolve_side_by_throws(
+        session, GIRD_RIGHT_IR_TEST, GIRD_LEFT_IR_TEST, _cache=_cache, _throws_map=_throws_map
+    )
+    throwing_arc = {pid: throwing_er[pid] + throwing_ir[pid] for pid in throwing_er if pid in throwing_ir}
+    non_throwing_arc = {pid: non_throwing_er[pid] + non_throwing_ir[pid] for pid in non_throwing_er if pid in non_throwing_ir}
+    if player_id in throwing_arc:
+        out.append({"test_name": "Throwing Arm Total Arc", "raw": throwing_arc[player_id], "unit": "°", "threshold": None, "status": None})
+    if player_id in non_throwing_arc:
+        out.append({"test_name": "Non-Throwing Arm Total Arc", "raw": non_throwing_arc[player_id], "unit": "°", "threshold": None, "status": None})
+
+    out.extend(compute_shoulder_rom_profile(session, player_id, _cache=_cache, _throws_map=_throws_map))
+    out.extend(compute_elbow_rom_profile(session, player_id, _cache=_cache, _throws_map=_throws_map))
+    out.extend(compute_hip_rom_profile(session, player_id, _cache=_cache, _throws_map=_throws_map))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Movement Flag -- Ryker's own deficit-count flag (Aug 2026), adapted from
+# an idea he'd previously used with an outside PT vendor (ADAPT) but
+# reworked to fit GBO rather than reusing their name/scale directly.
+#
+# A "deficit" = one red-status row in that player's own Mobility & ROM
+# report -- currently that means Shoulder/Elbow/Hip
+# only, since Cervical/Thoracic/Lumbar/Ankle aren't tracked as entry
+# fields in the app yet (Ryker's call: start with what's already tracked,
+# add the other regions as a later phase).
+#
+# Flag color is driven by deficit count, with one hard override:
+#   Red:    6+ deficits, OR a current injury/surgical recovery on file
+#   Orange: 4-5 deficits
+#   Yellow: 2-3 deficits
+#   Green:  0-1 deficits
+# Numeric score (1-5, matching Ryker's own scale) is fixed per color
+# EXCEPT Red, which splits in two: 1 if there's a current injury/surgical
+# recovery noted (worse -- an active medical issue, not just a mobility
+# gap), 2 otherwise (a red purely from deficit count -- "poor mover" is
+# the label for that case, not a separate trigger; it only affects the
+# score, never whether the flag itself is red). If a player hits the 6+
+# deficit bar but staff hasn't checked either box yet, this defaults to
+# the poor-mover score (2) rather than leaving it undefined -- staff
+# should still check the box for the record, but the flag shouldn't sit
+# unscored while that's pending.
+MOVEMENT_FLAG_RED_MIN = 6
+MOVEMENT_FLAG_ORANGE_MIN = 4
+MOVEMENT_FLAG_YELLOW_MIN = 2
+
+MOVEMENT_FLAG_SCORES = {"green": 5, "yellow": 4, "orange": 3}
+MOVEMENT_FLAG_RED_SCORE_INJURY = 1
+MOVEMENT_FLAG_RED_SCORE_POOR_MOVER = 2
+
+
+def compute_movement_flag(session, player_id, mobility_rom_report):
+    """Returns {"color", "score", "deficit_count", "reason", "poor_mover",
+    "current_injury"} or None if there's nothing to summarize yet (no
+    statused ROM rows at all AND no injury on file -- same "show
+    nothing" rule the rest of this module uses).
+
+    Deliberately reuses mobility_rom_report rather than re-querying --
+    this is meant to be called right after compute_mobility_rom_report
+    inside compute_bucket_system, on the same report that also feeds
+    build_movement_flag_ring's Caution-count caption, so the two always
+    agree."""
+    player = session.query(Player).filter(Player.player_id == player_id).first()
+    poor_mover = bool(player.poor_mover) if player else False
+    current_injury = bool(player.current_injury) if player else False
+    injury_note = (player.injury_note or "").strip() if player else ""
+
+    statused = [row for row in mobility_rom_report if row.get("status") in ("red", "yellow", "green")]
+    if not statused and not current_injury:
+        return None
+
+    deficit_count = sum(1 for row in statused if row["status"] == "red")
+
+    if current_injury:
+        color = "red"
+        score = MOVEMENT_FLAG_RED_SCORE_INJURY
+        reason = injury_note or "Current injury / surgical recovery on file"
+    elif deficit_count >= MOVEMENT_FLAG_RED_MIN:
+        color = "red"
+        score = MOVEMENT_FLAG_RED_SCORE_POOR_MOVER
+        reason = f"{deficit_count} ROM deficits" + (" — Poor Mover" if poor_mover else "")
+    elif deficit_count >= MOVEMENT_FLAG_ORANGE_MIN:
+        color = "orange"
+        score = MOVEMENT_FLAG_SCORES["orange"]
+        reason = f"{deficit_count} ROM deficits"
+    elif deficit_count >= MOVEMENT_FLAG_YELLOW_MIN:
+        color = "yellow"
+        score = MOVEMENT_FLAG_SCORES["yellow"]
+        reason = f"{deficit_count} ROM deficits"
+    else:
+        color = "green"
+        score = MOVEMENT_FLAG_SCORES["green"]
+        reason = f"{deficit_count} ROM deficit" + ("s" if deficit_count != 1 else "")
+
+    return {
+        "color": color,
+        "score": score,
+        "deficit_count": deficit_count,
+        "reason": reason,
+        "poor_mover": poor_mover,
+        "current_injury": current_injury,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Body Comp targets (Oct 2026, Ryker: "percentiles doesn't necessarily make
+# sense" for body comp -- the heaviest guy was always 100 and more always
+# scored better). PROPOSAL, shown to staff next to the official score
+# (which is unchanged): Body Weight and Skeletal Muscle Mass scored as
+# progress toward a team-wide target: min(100, value / target * 100).
+# Past the target adds nothing. Target = the staff-set value
+# (models.BodyCompTarget, edited on Assessments) or, with none set, the
+# comparison pool's median (the active roster for the current season).
+# Body Fat Mass / Percent Body Fat bars are unchanged (reference only).
+# ---------------------------------------------------------------------------
+
+BODY_COMP_TARGET_NAMES = ("Body Weight", "Skeletal Muscle Mass")   # staff targets stay on these two (Nov 2026)
+_TARGET_CACHE = {"at": 0.0, "data": None}
+TARGET_CACHE_SECONDS = 60
+
+
+def clear_body_comp_target_cache():
+    _TARGET_CACHE["at"], _TARGET_CACHE["data"] = 0.0, None
+
+
+def stored_body_comp_targets(session):
+    """{test_name: value} staff-set targets; {} when none or the table
+    hasn't been created yet (migrate_body_comp_targets not run)."""
+    import time
+    if _TARGET_CACHE["data"] is not None and time.time() - _TARGET_CACHE["at"] < TARGET_CACHE_SECONDS:
+        return _TARGET_CACHE["data"]
+    from sqlalchemy import inspect as sa_inspect
+    from models import BodyCompTarget
+    out = {}
+    try:
+        if sa_inspect(session.get_bind()).has_table("body_comp_targets"):
+            out = {t.test_name: float(t.target_value) for t in session.query(BodyCompTarget).all()
+                   if t.target_value is not None}
+    except Exception:
+        out = {}
+    _TARGET_CACHE["at"], _TARGET_CACHE["data"] = time.time(), out
+    return out
+
+
+def _median(vals):
+    s = sorted(vals)
+    n = len(s)
+    if not n:
+        return None
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def body_comp_targets(session, _cache=None):
+    """{test_name: {"target", "source": "set" | "median", "median"}}."""
+    stored = stored_body_comp_targets(session)
+    out = {}
+    for name in BODY_COMP_TARGET_NAMES:
+        med = _median(list(get_latest_values_by_player(session, name, _cache=_cache).values()))
+        if stored.get(name):
+            out[name] = {"target": stored[name], "source": "set", "median": med}
+        elif med:
+            out[name] = {"target": med, "source": "median", "median": med}
+    return out
+
+
+def target_score(value, target):
+    if value is None or not target or target <= 0:
+        return None
+    return min(100, round(float(value) / float(target) * 100))
+
+
+def apply_body_comp_targets(metrics, targets):
+    """Rescore Body Weight / SMM entries in a compute_metric_percentiles
+    dict in place: "percentile" becomes the target score, plus "target" /
+    "target_source" for the bar label."""
+    for name, m in metrics.items():
+        t = targets.get(name)
+        if t and m.get("raw") is not None:
+            m["percentile"] = target_score(m["raw"], t["target"])
+            m["target"], m["target_source"] = t["target"], t["source"]
+    return metrics
+
+
+# Nov 2026 (Ryker: "would like a few of them to headline" -- picked with
+# him): within each test group the headline metrics make up HEADLINE_WEIGHT
+# of the score and every other metric shares the rest, so one minor number
+# (eccentric duration, hop landing RFD...) can't swing a bucket. A group with
+# only headliners, or none, is a plain mean.
+HEADLINE_WEIGHT = 2 / 3
+HEADLINE_METRICS = {
+    # Power
+    "Countermovement Jump Height", "Countermovement Jump RSI-Modified", "CMJ Peak Power", "CMJ Concentric Impulse",
+    "Hop Test RSI (10/5)",
+    "Single-Leg Jump Height (Drive Leg)", "Single-Leg Jump Height (Plant Leg)",
+    "Single-Leg Jump Peak Power (Drive Leg)", "Single-Leg Jump Peak Power (Plant Leg)",
+    "Medicine Ball Shot Put Velocity", "Medicine Ball Shot Put Distance",
+    "Broad Jump Distance", "Lateral Jump Distance (Drive Leg)", "Lateral Jump Distance (Plant Leg)",
+    # Strength
+    "IMTP Peak Vertical Force / BM", "IMTP Net Peak Vertical Force", "Hex Bar Deadlift Max", "Front Squat Max",
+    "IMTP RFD 0-200 ms", "IMTP Net Force at 100 ms",
+    "Neutral Grip/DB Bench Press Max Load", "Bench Press Max", "Neutral Grip Chin Up Max External Load",
+    # Arm
+    "Shoulder Strength: Throwing Arm ER Peak Force", "Shoulder Strength: Throwing Arm IR Peak Force",
+    # Body comp
+    "Body Weight", "Skeletal Muscle Mass", "Fat-Free Mass",
+}
+
+
 def average_percentiles(metric_dict):
-    """Plain mean of whatever percentiles are present (no weighting),
-    rounded. None if nothing to average."""
-    values = [m["percentile"] for m in metric_dict.values() if m["percentile"] is not None]
+    """Mean of whatever percentiles are present, rounded; headline metrics
+    (HEADLINE_METRICS) carry HEADLINE_WEIGHT of it when the group has both
+    headline and supporting metrics. None if nothing to average."""
+    head = [m["percentile"] for n, m in metric_dict.items() if m["percentile"] is not None and n in HEADLINE_METRICS]
+    rest = [m["percentile"] for n, m in metric_dict.items() if m["percentile"] is not None and n not in HEADLINE_METRICS]
+    if head and rest:
+        return round(HEADLINE_WEIGHT * sum(head) / len(head) + (1 - HEADLINE_WEIGHT) * sum(rest) / len(rest))
+    values = head or rest
     if not values:
         return None
     return round(sum(values) / len(values))
@@ -604,11 +2132,64 @@ def classify_development_profile(output_score, capacity_score, balance_pct):
     return "Output-Dominant" if balance_pct > 0 else "Capacity-Dominant"
 
 
-def compute_bucket_system(session, player_id):
+def build_roster_batch_cache(session, season_label=None):
+    """One shared batch-fetch for computing compute_bucket_system() for
+    EVERY player on the team at once, instead of once per player (Aug
+    2026, Ryker: Roster page's Season picker -- "view guys' scores
+    from last year"). Without this, a caller needing every player's
+    rollup (roster.py) would call compute_bucket_system() once per
+    player, and each call independently re-ran the exact same whole-
+    roster batch fetch -- fine (if wasteful) for the CURRENT season's
+    tighter active-roster-only window, but genuinely slow -- slow
+    enough to look hung -- for a past/"Before" season's wide-open,
+    unbounded date range times ~60 players.
+
+    Returns (cache, units, throws_map, active_only). Pass cache/units/
+    throws_map straight into compute_bucket_system's own _cache/
+    _units/_throws_map params -- safe to reuse AS-IS for every player
+    EXCEPT one case: an INACTIVE player being scored for the CURRENT
+    season still needs their own individual, uncached
+    compute_bucket_system(session, player_id, season_label=season_
+    label) call (no _cache/_units/_throws_map passed) so it falls back
+    to its own include_player_id carve-out fetch -- see compute_
+    bucket_system's docstring. That's active_only True (the returned
+    flag) and the player himself inactive; every other combination
+    (active_only False, i.e. any past season already including
+    everyone -- or the player being active) is identical to this
+    shared cache already, so reusing it is correct, not an
+    approximation."""
+    season_label = season_label or current_season_label()
+    season_start, season_end = season_date_range(season_label)
+    active_only = season_label == current_season_label()
+    cache, units = _batch_fetch_latest_values(session, _all_bucket_test_names(), season_start=season_start, season_end=season_end, active_only=active_only)
+    throws_map = get_player_throws_map(session)
+    return cache, units, throws_map, active_only
+
+
+def compute_bucket_system(session, player_id, season_label=None, _cache=None, _units=None, _throws_map=None):
     """The full rollup for one player: raw values + percentiles per
     metric, sub-group percentiles (Breakdown 1), bucket percentiles
     (Breakdown 2: Body Comp/Power/Strength/Speed), and the final Total
     (Breakdown 3, Body Comp + Power + Strength only).
+
+    _cache/_units/_throws_map: optional pre-fetched batch data (see
+    _batch_fetch_latest_values/get_player_throws_map) -- when all
+    three are provided, this SKIPS its own internal batch-fetch and
+    reads straight from what the caller already built. Aug 2026,
+    Ryker: the Roster page ("view guys' scores from last year") calls
+    this once per player on the team -- without this, each of those
+    ~57 calls independently re-ran the SAME whole-roster batch fetch
+    (identical query, 57 times over), which is merely wasteful for the
+    current season's tighter active-roster-only window but genuinely
+    slow -- slow enough to look hung -- for a past/"Before" season's
+    wide-open, unbounded date range. Roster now builds ONE shared
+    cache/units/throws_map for the whole team + season upfront and
+    passes it to every player whose own carve-out (see
+    include_player_id below) doesn't actually differ from that shared
+    pool -- see roster.py's _players(). Every other existing caller
+    (Player Profile, My Assessments, Dashboard) still calls this with
+    none of these three set, so it's unaffected and keeps doing its
+    own single-player fetch exactly as before.
 
     Also returns the Physical Development extension: capacity_score
     (new), output_score (= power_score/strength_score averaged, not a
@@ -616,37 +2197,117 @@ def compute_bucket_system(session, player_id):
     NEW keys appended to this same dict rather than a second function
     with a second round of queries -- existing callers (Player
     Dashboard, My Assessments, Analytics) are unaffected since they
-    only read the keys they already know about."""
+    only read the keys they already know about.
+
+    season_label: which season (see SEASONS/list_seasons above) to
+    scope this whole rollup to -- None (the default, and what every
+    existing caller still gets without changes) resolves to the
+    CURRENT season. Pass a specific label from list_seasons() to look
+    back at a player's scores as of a past season instead -- e.g. the
+    Player Profile page's season picker. The resolved label is echoed
+    back as "season_label" in the returned dict, so a caller always
+    knows which season it actually got (useful when an unrecognized
+    label quietly falls back to current -- see season_date_range).
+    Every percentile/ROM/GIRD/movement-flag number below is scoped
+    together to that one season's date window -- nothing here mixes
+    seasons.
+
+    Comparison pool (Aug 2026, Ryker's follow-up call): the CURRENT
+    season stays active-roster-only (today's Player.active == True) --
+    "where do I stand against my current teammates." Any OTHER
+    (past) season includes inactive players too -- a guy who's since
+    graduated or left was still really on the roster during last
+    season, so the 2025-2026 standard he's being measured against
+    should include everyone who actually had 2025-2026 results, not
+    just whoever happens to still be active today. See active_only on
+    get_latest_values_by_player/_batch_fetch_latest_values."""
+    season_label = season_label or current_season_label()
+    season_start, season_end = season_date_range(season_label)
+    active_only = season_label == current_season_label()
+
+    # Force-plate reference standards (Aug 2026, AdaptPTPD sheet -- see
+    # force_plate_standards.py) need Pitcher vs Position Player. Cheap
+    # single-row PK lookup, unrelated to the batch-fetch optimization
+    # below (that one's amortizing O(1-per-metric) team-wide percentile
+    # queries, not a lookup this cheap).
+    player = session.query(Player).filter(Player.player_id == player_id).first()
+    is_pitcher = bool(player.is_pitcher) if player else False
+
+    # Batch-fetch every metric this whole rollup could possibly need in
+    # 2 queries total (plus 1 for player throwing hands), instead of
+    # each of the ~20 compute_metric_percentiles()/resolve_side_by_throws()
+    # calls below hitting the database on its own -- see
+    # _batch_fetch_latest_values's docstring. This is the fix for
+    # Assessments/Dashboard/My Assessments feeling slow (and sometimes
+    # disconnecting): a single player's rollup used to cost 100+
+    # sequential round trips to the hosted database; now it costs 3.
+    # season_start/season_end/active_only scope this same batch to one
+    # season's window (and the right comparison pool for that window)
+    # -- every downstream compute_metric_percentiles/resolve_side_by_
+    # throws/etc. call below reads only from this cache (see
+    # get_latest_values_by_player's docstring), so scoping it here is
+    # sufficient to scope the whole rollup. Skipped entirely when the
+    # caller already passed in a pre-built _cache/_units (see this
+    # function's docstring) -- e.g. roster.py sharing one fetch across
+    # every player on the team instead of paying for it 57 times.
+    if _cache is None or _units is None:
+        _cache, _units = _batch_fetch_latest_values(session, _all_bucket_test_names(), season_start=season_start, season_end=season_end, active_only=active_only, include_player_id=player_id)
+    # Player.throws lookup itself was never roster-scoped (see
+    # get_player_throws_map's own docstring) -- it's a handedness
+    # lookup, not a comparison pool, so it already covers inactive
+    # players with no change needed here. Also skippable via _throws_map.
+    if _throws_map is None:
+        _throws_map = get_player_throws_map(session)
+    # Pitchers are scored against pitchers, position players against
+    # position players (Nov 2026) -- every percentile, GIRD pool and
+    # body-comp median below reads this narrowed cache.
+    _cache = same_group_pool(_cache, session, player_id, is_pitcher)
+
     # Body Comp -- score is averaged from ONLY the 2 scoring metrics
     # (BODY_COMP_METRICS), but the metrics dict returned for display
     # (body_comp_metrics, rendered as percentile bars) uses all 4
     # entered fields (BODY_COMP_DISPLAY_METRICS), so players see Body
     # Fat Mass and Percent Body Fat too even though those 2 don't
     # affect body_comp_score.
-    body_comp_score_metrics = compute_metric_percentiles(session, player_id, BODY_COMP_METRICS)
+    body_comp_score_metrics = compute_metric_percentiles(session, player_id, BODY_COMP_METRICS, _cache=_cache, _units=_units)
     body_comp_score = average_percentiles(body_comp_score_metrics)
-    body_comp_metrics = compute_metric_percentiles(session, player_id, BODY_COMP_DISPLAY_METRICS)
+    body_comp_metrics = compute_metric_percentiles(session, player_id, BODY_COMP_DISPLAY_METRICS, _cache=_cache, _units=_units)
+    # Oct 2026, Ryker: target-based Body Comp is a PROPOSAL shown next to
+    # the official score (staff only) -- the official ring and Total above
+    # stay value / team max. See apply_body_comp_targets.
+    body_comp_target_metrics = apply_body_comp_targets(
+        {n: dict(m) for n, m in body_comp_score_metrics.items()}, body_comp_targets(session, _cache=_cache))
+    body_comp_target_score = average_percentiles(body_comp_target_metrics)
 
     # Power (5 sub-groups)
     power_subgroup_scores = {}
     power_subgroup_metrics = {}
     for sub_name, metrics in POWER_SUBGROUPS.items():
-        m = compute_metric_percentiles(session, player_id, metrics)
-        power_subgroup_metrics[sub_name] = m
+        m = compute_metric_percentiles(session, player_id, metrics, _cache=_cache, _units=_units)
+        # Score BEFORE merging in Med Ball Throw's reference-only
+        # Velocity (see MED_BALL_THROW_REFERENCE_METRICS above) --
+        # power_subgroup_scores must only ever average the real scored
+        # metrics in POWER_SUBGROUPS, never this reference addition.
         power_subgroup_scores[sub_name] = average_percentiles(m)
+        if sub_name == "Med Ball Throw":
+            m = {
+                **m,
+                **compute_metric_percentiles(session, player_id, MED_BALL_THROW_REFERENCE_METRICS, _cache=_cache, _units=_units),
+            }
+        power_subgroup_metrics[sub_name] = m
     power_score = round(sum(v for v in power_subgroup_scores.values() if v is not None) / len([v for v in power_subgroup_scores.values() if v is not None])) if any(v is not None for v in power_subgroup_scores.values()) else None
 
-    # Strength (3 sub-groups)
+    # Strength (sub-groups: lower body, rate of force development, upper body)
     strength_subgroup_scores = {}
     strength_subgroup_metrics = {}
     for sub_name, metrics in STRENGTH_SUBGROUPS.items():
-        m = compute_metric_percentiles(session, player_id, metrics)
+        m = compute_metric_percentiles(session, player_id, metrics, _cache=_cache, _units=_units)
         strength_subgroup_metrics[sub_name] = m
         strength_subgroup_scores[sub_name] = average_percentiles(m)
     strength_score = round(sum(v for v in strength_subgroup_scores.values() if v is not None) / len([v for v in strength_subgroup_scores.values() if v is not None])) if any(v is not None for v in strength_subgroup_scores.values()) else None
 
     # Speed (reference only, excluded from Total)
-    speed_metrics = compute_metric_percentiles(session, player_id, SPEED_METRICS)
+    speed_metrics = compute_metric_percentiles(session, player_id, SPEED_METRICS, _cache=_cache, _units=_units)
     speed_score = average_percentiles(speed_metrics)
 
     # Total: Body Comp + Power + Strength only
@@ -657,7 +2318,7 @@ def compute_bucket_system(session, player_id):
     capacity_subgroup_scores = {}
     capacity_subgroup_metrics = {}
     for sub_name, metrics in CAPACITY_SUBGROUPS.items():
-        m = compute_metric_percentiles(session, player_id, metrics)
+        m = compute_metric_percentiles(session, player_id, metrics, _cache=_cache, _units=_units)
         capacity_subgroup_metrics[sub_name] = m
         capacity_subgroup_scores[sub_name] = average_percentiles(m)
     capacity_score = round(sum(v for v in capacity_subgroup_scores.values() if v is not None) / len([v for v in capacity_subgroup_scores.values() if v is not None])) if any(v is not None for v in capacity_subgroup_scores.values()) else None
@@ -670,32 +2331,26 @@ def compute_bucket_system(session, player_id):
     balance_pct = compute_balance_pct(output_score, capacity_score)
     development_profile = classify_development_profile(output_score, capacity_score, balance_pct)
 
-    # Mobility (Shoulder + Hip sub-groups -- see MOBILITY_SUBGROUPS'/
-    # MOBILITY_SHOULDER_SIDED_FIELDS' notes on scope). Reference only,
-    # not in Total -- see module docstring. Shoulder is computed
-    # separately from Hip since it needs the Right/Left ->
-    # Throwing/Non-Throwing resolution (compute_mobility_shoulder_
-    # metrics) rather than the plain compute_metric_percentiles loop
-    # every other sub-group in this file uses.
-    mobility_subgroup_scores = {}
-    mobility_subgroup_metrics = {}
-    shoulder_m = compute_mobility_shoulder_metrics(session, player_id)
-    mobility_subgroup_metrics["Shoulder"] = shoulder_m
-    mobility_subgroup_scores["Shoulder"] = average_percentiles(shoulder_m)
-    for sub_name, metrics in MOBILITY_SUBGROUPS.items():
-        m = compute_metric_percentiles(session, player_id, metrics)
-        mobility_subgroup_metrics[sub_name] = m
-        mobility_subgroup_scores[sub_name] = average_percentiles(m)
-    mobility_score = round(sum(v for v in mobility_subgroup_scores.values() if v is not None) / len([v for v in mobility_subgroup_scores.values() if v is not None])) if any(v is not None for v in mobility_subgroup_scores.values()) else None
+    # Mobility & ROM -- pass/fail against MOBILITY_ROM_THRESHOLDS, not
+    # percentile-ranked against the team like every other bucket here.
+    # See MOBILITY_ROM_THRESHOLDS' and compute_mobility_rom_report's
+    # docstrings for the full rationale/sourcing.
+    mobility_rom_report = compute_mobility_rom_report(session, player_id, _cache=_cache, _throws_map=_throws_map)
+
+    # Movement Flag -- deficit-count flag derived from the same report
+    # above (see compute_movement_flag's docstring for the full rule).
+    movement_flag = compute_movement_flag(session, player_id, mobility_rom_report)
 
     # Shoulder Health (GIRD only for now, auto-computed -- see
     # compute_gird_percentiles' docstring). Reference only, not in
     # Total -- see module docstring.
-    shoulder_health_metrics = compute_gird_percentiles(session, player_id)
+    shoulder_health_metrics = compute_gird_percentiles(session, player_id, _cache=_cache, _throws_map=_throws_map)
     shoulder_health_score = average_percentiles(shoulder_health_metrics)
 
     return {
         "body_comp_score": body_comp_score,
+        "body_comp_target_score": body_comp_target_score,
+        "body_comp_target_metrics": body_comp_target_metrics,
         "body_comp_metrics": body_comp_metrics,
         "power_score": power_score,
         "power_subgroup_scores": power_subgroup_scores,
@@ -712,9 +2367,10 @@ def compute_bucket_system(session, player_id):
         "output_score": output_score,
         "balance_pct": balance_pct,
         "development_profile": development_profile,
-        "mobility_score": mobility_score,
-        "mobility_subgroup_scores": mobility_subgroup_scores,
-        "mobility_subgroup_metrics": mobility_subgroup_metrics,
+        "mobility_rom_report": mobility_rom_report,
+        "movement_flag": movement_flag,
         "shoulder_health_score": shoulder_health_score,
         "shoulder_health_metrics": shoulder_health_metrics,
+        "season_label": season_label,
+        "is_pitcher": is_pitcher,
     }

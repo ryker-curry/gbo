@@ -6,9 +6,11 @@ old SQLite file. Nothing about the ORM models needs to change to make
 this swap — only the connection string.
 
 Reads DATABASE_URL from a local .env file (via python-dotenv) when
-running on a laptop, or from Streamlit Cloud's secrets manager once
-deployed there -- .env files aren't used in that environment, so this
-falls back to st.secrets if the environment variable isn't set.
+running on a laptop, or from the deployment platform's own environment
+variables in production -- same os.environ path either way. (Previously
+also fell back to st.secrets for Streamlit Cloud; removed now that the
+UI layer is Shiny, not Streamlit -- this module has no UI-framework
+dependency at all anymore.)
 """
 
 import os
@@ -19,13 +21,6 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 load_dotenv()
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
-
-if not DATABASE_URL:
-    try:
-        import streamlit as st
-        DATABASE_URL = st.secrets.get("DATABASE_URL")
-    except Exception:
-        pass
 
 if not DATABASE_URL:
     raise RuntimeError(
@@ -54,6 +49,34 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
 
 
+def _guest_maker():
+    """Oct 2026 (guest demo): the private demo-database sessionmaker of the
+    Shiny session running right now, if that session is a guest (see
+    demo_db.py / app.py's Continue as Guest). None everywhere else --
+    outside Shiny, or for a real login -- so real users always get Supabase."""
+    try:
+        from shiny.session import get_current_session
+        s = get_current_session()
+    except Exception:
+        return None
+    if s is None:
+        return None
+    root = s.root_scope() if hasattr(s, "root_scope") else s
+    return getattr(root, "_gbo_demo_maker", None)
+
+
+def in_guest_demo():
+    """True while serving a guest (demo data). Uploads, email and anything
+    else that leaves the app check this and refuse."""
+    return _guest_maker() is not None
+
+
+def use_guest_db(shiny_session, maker):
+    """Point one Shiny session at a demo database (None = back to real)."""
+    root = shiny_session.root_scope() if hasattr(shiny_session, "root_scope") else shiny_session
+    root._gbo_demo_maker = maker
+
+
 def get_session():
     """Yield a database session; caller is responsible for closing it.
 
@@ -63,5 +86,11 @@ def get_session():
             ...
         finally:
             session.close()
+
+    A guest's session (Continue as Guest) gets that guest's private demo
+    database instead -- never Supabase.
     """
+    maker = _guest_maker()
+    if maker is not None:
+        return maker()
     return SessionLocal()

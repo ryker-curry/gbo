@@ -20,12 +20,12 @@ chart function -- call apply_gbo_theme() on the figure instead.
 # polar plot area) -- kept close to bullpen_dashboard_style.py's card
 # color (#161010) so it reads as part of the same card, not a mismatched
 # box.
-BG_DARK = "#161010"
-TEXT_CREAM = "#FFFDE5"
-GRID_GRAY = "#3A2E2E"
-GOLD = "#D4AF37"
-CRIMSON = "#BF1E2D"
-MUTED_GRAY = "#8A7A7A"
+BG_DARK = "#171B21"
+TEXT_CREAM = "#AEB6C2"
+GRID_GRAY = "#2A3039"
+GOLD = "#F2B529"
+CRIMSON = "#C8102E"
+MUTED_GRAY = "#7A8594"
 
 
 def apply_gbo_theme(fig, *, title=None, height=420, x_title=None, y_title=None, **layout_kwargs):
@@ -42,13 +42,13 @@ def apply_gbo_theme(fig, *, title=None, height=420, x_title=None, y_title=None, 
     override anything it genuinely needs to.
     """
     base_layout = dict(
-        title=title,
+        title=dict(text=title, x=0, xanchor="left", y=0.98, yanchor="top", font=dict(size=15, color="#E9ECF1")) if title else None,
         height=height,
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color=TEXT_CREAM),
+        font=dict(color=TEXT_CREAM, family="IBM Plex Sans, system-ui, sans-serif", size=12),
         margin=dict(t=50 if title else 20, b=40, l=50, r=30),
-        legend=dict(bgcolor="rgba(0,0,0,0)"),
+        legend=dict(bgcolor="rgba(0,0,0,0)", orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0),
     )
     if x_title is not None:
         base_layout["xaxis"] = dict(title=x_title, gridcolor=GRID_GRAY, zerolinecolor=GRID_GRAY)

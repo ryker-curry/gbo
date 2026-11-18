@@ -4,13 +4,14 @@ GBO — Strike zone coordinate system (Game Tracking).
 Replaces manual 1-9 zone-button entry with click-the-exact-spot
 location, per Ryker's architecture doc.
 
-Click capture uses Streamlit's own native st.plotly_chart(on_select=)
--- NOT the third-party streamlit-image-coordinates package, which
-failed against a recent Streamlit release (ImportError on an internal
-Streamlit class the package depended on, streamlit==1.61.1). Native
-Plotly selection is first-party, documented Streamlit behavior
-maintained by the Streamlit team itself, so it can't go stale against
-future Streamlit releases the same way.
+Click capture (in the Streamlit UI, via render_zone_selector below)
+uses Streamlit's own native st.plotly_chart(on_select=) -- NOT the
+third-party streamlit-image-coordinates package, which failed against
+a recent Streamlit release (ImportError on an internal Streamlit class
+the package depended on, streamlit==1.61.1). Native Plotly selection is
+first-party, documented Streamlit behavior maintained by the Streamlit
+team itself, so it can't go stale against future Streamlit releases the
+same way.
 
 Coordinate convention (matches Statcast/Trackman): plate_x in feet,
 0 = center of the plate; plate_z in feet, 0 = the ground.
@@ -18,11 +19,23 @@ Coordinate convention (matches Statcast/Trackman): plate_x in feet,
 The zone-derivation math (derive_old_zone, is_in_zone) is unchanged
 from the original version -- verified with round-trip and zone-center
 tests before this was wired into any page.
+
+Shiny for Python migration note: build_zone_selector_figure() below is
+the pure, framework-agnostic part (figure construction only, no
+Streamlit import) -- the Shiny UI layer calls it directly and captures
+clicks via shinywidgets' FigureWidget .on_click() instead of
+st.plotly_chart(on_select=). render_zone_selector() is kept as a thin
+Streamlit-only wrapper around it so existing Streamlit pages keep
+working unchanged until they're migrated.
 """
 
-import streamlit as st
+import math
+import re
+
 import numpy as np
 import plotly.graph_objects as go
+
+from visualizations.hitter_graphic import home_plate_shape
 
 X_MIN, X_MAX = -2.5, 2.5
 Z_MIN, Z_MAX = 0.0, 5.0
@@ -85,6 +98,89 @@ def is_in_zone(plate_x, plate_z):
     return (-ZONE_HALF_WIDTH <= plate_x <= ZONE_HALF_WIDTH) and (ZONE_BOTTOM <= plate_z <= ZONE_TOP)
 
 
+# ---------------------------------------------------------------------
+# Pitch code shorthand (Sep 2026, revised Sep 2026) -- Ryker's own
+# live-charting notation for INTENDED location: a 2-digit "Level-Zone"
+# code (e.g. "14"), typed once instead of clicking the zone graphic.
+# Location only -- pitch type is always picked from the pitch-type
+# dropdown by the coach, never guessed from the code. (An earlier
+# version tried a 3-digit "Level-Pitch-Zone" code that resolved its
+# middle digit against the pitcher's arsenal-list position -- dropped
+# because arsenal order isn't a stable, memorizable numbering across
+# pitchers, so e.g. "2" didn't reliably mean the same pitch type for
+# everyone; Ryker's own report, Sep 2026: typed "224" expecting
+# Curveball, got 2-Seam Fastball because that happened to be 2nd in
+# that pitcher's own arsenal list.)
+#
+# Level (vertical, 1-4), per Ryker: 1 = below the zone/dirt, 2 = bottom
+# of the zone/knees, 3 = middle zone, 4 = top of zone and above. Levels
+# 2/3/4 land at the center of the SAME three vertical rows
+# derive_old_zone already divides the zone into, so a decoded code
+# round-trips through derive_old_zone into the matching old-system
+# row; level 1 lands far enough below ZONE_BOTTOM to register as Bury
+# (0), same as any other pitch in the dirt.
+#
+# Zone (horizontal, 1-5), per Ryker: 1 = chalk/off the plate (in to a
+# righty, off to a lefty), 2 = inner part of the zone, 3 = middle zone,
+# 4 = away zone to a righty/in zone to a lefty, 5 = off the plate/
+# chalk (off to a righty, in to a lefty). Zones 2/3/4 are the same
+# three in-zone columns derive_old_zone already uses; 1 and 5 are one
+# column-width further out on each side, off the actual 17in plate --
+# solidly outside is_in_zone, clamped to the nearest column by
+# derive_old_zone like any other off-the-plate point. Physical side is
+# fixed regardless of batter handedness (this file's plate_x
+# convention never flips for handedness) -- for a RIGHT-handed pitcher,
+# 1 is the arm/3B side (negative x), 5 is the glove/1B side (positive
+# x) -- flipped for a lefty, same as everywhere else in GBO (see
+# analytics/command_metrics.py's classify_miss_direction/
+# normalize_horizontal_to_arm_side, and rapsodo_conventions.py's
+# strike_zone_inches_to_plate_feet, both of which agree: negative
+# plate_x = arm side for a RHP). Corrected 2026-09 -- this comment
+# previously had arm/glove backwards; which physical side reads as
+# "in" vs "away" depends on whether the BATTER at the plate is a
+# righty or a lefty, exactly as Ryker described it, and is unaffected
+# by this fix.
+_CODE_ROW_HEIGHT = (ZONE_TOP - ZONE_BOTTOM) / 3.0
+_CODE_COL_WIDTH = (2 * ZONE_HALF_WIDTH) / 3.0
+
+LEVEL_TO_PLATE_Z = {
+    1: ZONE_BOTTOM - _CODE_ROW_HEIGHT / 2.0,  # dirt/below
+    2: ZONE_BOTTOM + _CODE_ROW_HEIGHT / 2.0,  # bottom third / knees
+    3: ZONE_BOTTOM + _CODE_ROW_HEIGHT * 1.5,  # middle third
+    4: ZONE_BOTTOM + _CODE_ROW_HEIGHT * 2.5,  # top third (and above)
+}
+ZONE_TO_PLATE_X = {
+    1: -ZONE_HALF_WIDTH - _CODE_COL_WIDTH / 2.0,  # chalk/off plate, arm side (3B) for a RHP
+    2: -ZONE_HALF_WIDTH + _CODE_COL_WIDTH / 2.0,  # inner-zone column, arm side for a RHP
+    3: 0.0,                                        # middle
+    4: ZONE_HALF_WIDTH - _CODE_COL_WIDTH / 2.0,   # inner-zone column, glove side for a RHP
+    5: ZONE_HALF_WIDTH + _CODE_COL_WIDTH / 2.0,   # chalk/off plate, glove side (1B) for a RHP
+}
+
+
+def parse_pitch_code(code):
+    """Splits a 2-digit "Level-Zone" code (e.g. "14") into its two
+    integer digits (1, 4). Raises ValueError with a message suitable
+    for direct display (e.g. via ui.notification_show) if the code
+    isn't exactly 2 digits."""
+    code = (code or "").strip()
+    if not re.fullmatch(r"\d{2}", code):
+        raise ValueError(f'Pitch code must be exactly 2 digits (Level-Zone, e.g. "14") -- got "{code}".')
+    return int(code[0]), int(code[1])
+
+
+def decode_pitch_code(level, zone):
+    """Level (1-4) + Zone (1-5) -> (plate_x, plate_z) -- see the
+    module-level note above this section for what each value means.
+    Raises ValueError with a message suitable for direct display if
+    either is out of range."""
+    if level not in LEVEL_TO_PLATE_Z:
+        raise ValueError(f"Level must be 1-4 (1=dirt/below, 2=knees, 3=middle, 4=top & above) -- got {level}.")
+    if zone not in ZONE_TO_PLATE_X:
+        raise ValueError(f"Zone must be 1-5 -- got {zone}.")
+    return ZONE_TO_PLATE_X[zone], LEVEL_TO_PLATE_Z[level]
+
+
 # Attack zone tiers (Heart/Shadow/Chase/Waste) -- a GBO approximation of
 # Baseball Savant's own four-tier zone classification, built from the
 # publicly reported shadow-zone padding (roughly 3.3in horizontal / 4in
@@ -128,12 +224,218 @@ def classify_attack_zone(plate_x, plate_z):
     return "Waste"
 
 
-def render_zone_selector(key, marker_x=None, marker_z=None):
-    """Renders the clickable strike-zone graphic and returns whatever
-    was clicked THIS run as (plate_x, plate_z), or (None, None) if
-    nothing was clicked this run. marker_x/marker_z (a previously
-    recorded click) are drawn as a small circle so the coach can see
-    what's currently captured, not just a blank zone."""
+# ---------------------------------------------------------------------
+# Coach's call grid (Level-Pitch-Zone) -- Sept 2026, Ryker: the staff
+# calls pitches as a spoken 3-number sequence (level, pitch type, zone),
+# so a pitch's real "target" for grading execution is the whole called
+# CELL, not one exact coordinate -- landing anywhere in the called cell
+# should grade as perfectly executed, not just a pixel-perfect hit on
+# wherever a coordinate happened to get clicked. A 4 (vertical) x 5
+# (horizontal) grid, described to Ryker for a right-handed batter but,
+# per his own note, applied identically regardless of batter or pitcher
+# handedness -- every band below is built purely from plain x/z
+# distance to the existing zone box (ZONE_HALF_WIDTH/BOTTOM/TOP above),
+# the same fixed reference every other zone calculation in this module
+# already uses, so it never needs to know which physical side is which
+# to compute anything correctly, and levels/zones 2-4 line up exactly
+# with the 3x3 in-zone grid already drawn on pitch_locations_chart.
+#
+# Levels (vertical, bottom to top):
+#   1 = dirt / below the zone           (unbounded below)
+#   2 = bottom third of the zone
+#   3 = middle third of the zone
+#   4 = top third of the zone, and up   (unbounded above)
+# Zones (horizontal, one side to the other):
+#   1 = off the plate at the chalk      (unbounded outward)
+#   2 = the near third of the zone
+#   3 = the middle third
+#   4 = the far third
+#   5 = off the plate at the chalk, the other side (unbounded outward,
+#       mirrors 1)
+# ---------------------------------------------------------------------
+
+_LEVEL_THIRD_H = (ZONE_TOP - ZONE_BOTTOM) / 3
+_ZONE_THIRD_W = (2 * ZONE_HALF_WIDTH) / 3
+
+# level/zone -> (lo, hi) bounds in feet -- +/-inf marks the open outer
+# edge of the dirt/high/chalk cells (1 and 4, 1 and 5), which is exactly
+# right for distance_from_cell_in's max(lo - x, 0, x - hi) formula
+# below: an infinite bound can never be the largest term, so it simply
+# never constrains distance on that side, with no special-casing needed.
+_LEVEL_Z_BOUNDS = {
+    1: (float("-inf"), ZONE_BOTTOM),
+    2: (ZONE_BOTTOM, ZONE_BOTTOM + _LEVEL_THIRD_H),
+    3: (ZONE_BOTTOM + _LEVEL_THIRD_H, ZONE_TOP - _LEVEL_THIRD_H),
+    4: (ZONE_TOP - _LEVEL_THIRD_H, float("inf")),
+}
+_ZONE_X_BOUNDS = {
+    1: (float("-inf"), -ZONE_HALF_WIDTH),
+    2: (-ZONE_HALF_WIDTH, -ZONE_HALF_WIDTH + _ZONE_THIRD_W),
+    3: (-ZONE_HALF_WIDTH + _ZONE_THIRD_W, ZONE_HALF_WIDTH - _ZONE_THIRD_W),
+    4: (ZONE_HALF_WIDTH - _ZONE_THIRD_W, ZONE_HALF_WIDTH),
+    5: (ZONE_HALF_WIDTH, float("inf")),
+}
+
+# Zones 1 and 5 are both "off the plate, at the chalk" waste/chase
+# calls -- Ryker, Sept 2026: "for a zone 1 or zone 5 anything off the
+# plate is good ... if a 1 or 5 is called [landing in] the other
+# batter's box ... would not be a miss at all because it is supposed
+# to be outside of the strike zone ... as long as it is off the plate
+# they should not get a horizontal miss." So unlike zones 2-4 (each a
+# single one-sided column, per _ZONE_X_BOUNDS above), a called 1 or 5's
+# real horizontal target is BOTH tails outside the strike zone width --
+# landing off the plate on EITHER side is a 0, not just the one side
+# the zone's own number/name describes. _ZONE_X_BOUNDS itself is left
+# one-sided for zones 1/5 (used as-is by call_zone below, which decides
+# which zone an INTENDED click falls into -- that's always the
+# physically-correct side, so no ambiguity there); this widening only
+# applies to grading where an ACTUAL pitch landed relative to a called
+# 1 or 5, in distance_from_cell_in/zone_miss_components_in below.
+def _zone_horizontal_offset_ft(zone, actual_x):
+    """Signed horizontal offset (feet) of actual_x from zone's target
+    region -- 0 if actual_x is already within it. Zones 2-4 use their
+    normal single column from _ZONE_X_BOUNDS (positive = beyond the
+    high edge, negative = beyond the low edge, same convention
+    zone_miss_components_in has always used). Zones 1 and 5 share the
+    same two-tailed target region instead (anything at or beyond either
+    edge of the strike zone width): 0 if actual_x is off the plate on
+    either side; otherwise actual_x landed inside the strike zone width
+    (the pitcher failed to get it off the plate) and the offset is the
+    signed distance to whichever edge is nearer."""
+    if zone in (1, 5):
+        if actual_x <= -ZONE_HALF_WIDTH or actual_x >= ZONE_HALF_WIDTH:
+            return 0.0
+        dist_to_low = actual_x - (-ZONE_HALF_WIDTH)
+        dist_to_high = actual_x - ZONE_HALF_WIDTH
+        return dist_to_low if abs(dist_to_low) <= abs(dist_to_high) else dist_to_high
+    x_lo, x_hi = _ZONE_X_BOUNDS[zone]
+    if actual_x < x_lo:
+        return actual_x - x_lo
+    if actual_x > x_hi:
+        return actual_x - x_hi
+    return 0.0
+
+
+def call_level(plate_z):
+    """plate_z (feet) -> the 1-4 level band it falls in (see the block
+    comment above). None if plate_z is None -- every real number falls
+    in exactly one band since 1 and 4 are open-ended."""
+    if plate_z is None:
+        return None
+    for level, (lo, hi) in _LEVEL_Z_BOUNDS.items():
+        if lo <= plate_z <= hi:
+            return level
+    return None
+
+
+def call_zone(plate_x):
+    """plate_x (feet) -> the 1-5 zone band it falls in, same convention
+    as call_level."""
+    if plate_x is None:
+        return None
+    for zone, (lo, hi) in _ZONE_X_BOUNDS.items():
+        if lo <= plate_x <= hi:
+            return zone
+    return None
+
+
+def call_cell(plate_x, plate_z):
+    """(plate_x, plate_z) -> (level, zone), the called cell containing
+    that point -- e.g. the cell a pitch was aimed into, derived from its
+    own intended coordinates (wherever it was entered, that's where the
+    call was aimed -- no separate level/zone field needed). None if
+    either coordinate is missing."""
+    if plate_x is None or plate_z is None:
+        return None
+    return call_level(plate_z), call_zone(plate_x)
+
+
+def distance_from_cell_in(level, zone, plate_x, plate_z):
+    """Distance, in INCHES, from (plate_x, plate_z) to the given
+    (level, zone) cell's rectangle -- 0 if the point is inside the cell
+    (including its open/unbounded edges), otherwise the straight-line
+    distance to the nearest edge. Used to grade how far an ACTUAL pitch
+    landed from the cell it was CALLED into (see
+    analytics/command_metrics.pitch_execution_score) -- a more
+    forgiving, coach's-eye read than a raw point-to-point miss:
+    anywhere inside the called cell is a 0, same as a bullseye. None if
+    any input is missing or level/zone is out of range."""
+    if level is None or zone is None or plate_x is None or plate_z is None:
+        return None
+    z_bounds = _LEVEL_Z_BOUNDS.get(level)
+    x_bounds = _ZONE_X_BOUNDS.get(zone)
+    if z_bounds is None or x_bounds is None:
+        return None
+    z_lo, z_hi = z_bounds
+    dx = abs(_zone_horizontal_offset_ft(zone, plate_x))
+    dz = max(z_lo - plate_z, 0.0, plate_z - z_hi)
+    return math.hypot(dx, dz) * 12.0
+
+
+def zone_miss_components_in(level, zone, actual_x, actual_z):
+    """Signed horizontal/vertical miss components (inches), plus the
+    combined distance, of (actual_x, actual_z) relative to the
+    (level, zone) CALLED CELL's nearest edge on each axis -- the
+    axis-by-axis counterpart of distance_from_cell_in above (Ryker,
+    Sept 2026: miss distance should be measured "from that zone, not
+    necessarily the center of that zone, just that zone" -- e.g. a
+    called "212" that lands just off the black should barely miss, not
+    show a big number because it's far from the cell's center point).
+
+    0 on an axis where actual_x/z already falls within the cell's
+    bounds on that axis; otherwise the signed distance past the near
+    edge -- positive = beyond the high edge, negative = beyond the low
+    edge, same actual-minus-target sign convention
+    analytics/command_metrics.compute_miss used when it measured from a
+    single intended point. Combining both axes with math.hypot
+    reproduces distance_from_cell_in's own magnitude exactly; this just
+    also hands back the per-axis breakdown distance_from_cell_in
+    doesn't, since callers need that for miss-direction labeling and
+    directional bias, not just a magnitude.
+
+    Returns (horizontal_in, vertical_in, distance_in), or
+    (None, None, None) if level/zone/actual_x/actual_z is missing, or
+    level/zone is out of range (mirrors distance_from_cell_in's own
+    None handling)."""
+    if level is None or zone is None or actual_x is None or actual_z is None:
+        return None, None, None
+    z_bounds = _LEVEL_Z_BOUNDS.get(level)
+    x_bounds = _ZONE_X_BOUNDS.get(zone)
+    if z_bounds is None or x_bounds is None:
+        return None, None, None
+    z_lo, z_hi = z_bounds
+    dx = _zone_horizontal_offset_ft(zone, actual_x)
+    if actual_z < z_lo:
+        dz = actual_z - z_lo
+    elif actual_z > z_hi:
+        dz = actual_z - z_hi
+    else:
+        dz = 0.0
+    horizontal_in = round(dx * 12.0, 2)
+    vertical_in = round(dz * 12.0, 2)
+    distance_in = round(math.hypot(dx, dz) * 12.0, 2)
+    return horizontal_in, vertical_in, distance_in
+
+
+def build_zone_selector_figure(marker_x=None, marker_z=None, view="catcher"):
+    """Pure figure builder -- strike zone rectangle, thirds gridlines,
+    invisible dense click-grid, a home plate on the ground line, and
+    (if given) a marker at the currently-recorded click. No
+    Streamlit/UI-framework dependency: returns a plain plotly Figure
+    that any UI layer can render and attach click-capture to on its
+    own terms.
+
+    view (Sept 2026, Ryker: "add a home plate to everything that has
+    a strike zone... face the correct way based on the view") defaults
+    to "catcher" -- every current caller of this function is a
+    click-to-place widget where a coach charts a pitch's intended or
+    actual location as if standing behind the plate looking out at the
+    pitcher (Command Tracker, Live Pitch Entry, Video Review), the
+    same Statcast/broadcast-style viewpoint this module's plate_x/
+    plate_z convention already assumes (see module docstring). Pass
+    view="pitcher" if a future caller ever needs the mound's-eye
+    orientation instead -- see visualizations.hitter_graphic.
+    home_plate_shape for exactly what each does differently."""
     xs, zs = np.meshgrid(_GRID_X, _GRID_Z)
     xs, zs = xs.flatten(), zs.flatten()
 
@@ -145,6 +447,7 @@ def render_zone_selector(key, marker_x=None, marker_z=None):
     ))
 
     fig.add_shape(type="line", x0=X_MIN, x1=X_MAX, y0=0, y1=0, line=dict(color=GRID_GRAY, width=2))
+    fig.add_shape(**home_plate_shape(half_width_ft=ZONE_HALF_WIDTH, ground_y=0.0, view=view))
     fig.add_shape(type="rect", x0=-ZONE_HALF_WIDTH, x1=ZONE_HALF_WIDTH, y0=ZONE_BOTTOM, y1=ZONE_TOP, line=dict(color=GBO_CREAM, width=3))
     third_w = (2 * ZONE_HALF_WIDTH) / 3
     third_h = (ZONE_TOP - ZONE_BOTTOM) / 3
@@ -163,13 +466,37 @@ def render_zone_selector(key, marker_x=None, marker_z=None):
 
     fig.update_layout(
         xaxis=dict(range=[X_MIN, X_MAX], visible=False, fixedrange=True),
-        yaxis=dict(range=[Z_MIN, Z_MAX], visible=False, fixedrange=True, scaleanchor="x", scaleratio=1),
+        # Lower bound extended a touch past Z_MIN (0.0) so the home
+        # plate above -- which sits partly below the ground line -- isn't
+        # clipped; Z_MIN itself is unchanged everywhere else (click grid,
+        # zone math), this is purely this figure's own display window.
+        yaxis=dict(range=[Z_MIN - 0.4, Z_MAX], visible=False, fixedrange=True, scaleanchor="x", scaleratio=1),
         paper_bgcolor=BG_DARK, plot_bgcolor=BG_DARK,
         height=350, margin=dict(l=0, r=0, t=0, b=0),
-        clickmode="event+select",
+        # "event" only, not "event+select" -- the active Shiny click
+        # capture (click_widgets.py) only ever listens for the plain
+        # plotly_click event and writes coordinates manually; native
+        # Plotly "select" mode was only needed by the old Streamlit
+        # on_select="rerun" path below (frozen/reference-only), and its
+        # default click-dims-the-point selection styling was causing a
+        # dead-looking click in Command Tracker (Aug 2026, Ryker report:
+        # "click one and the dot goes dim and nothing happens").
+        clickmode="event",
         dragmode=False,
     )
+    return fig
 
+
+def render_zone_selector(key, marker_x=None, marker_z=None):
+    """Streamlit-only wrapper: renders the zone figure via
+    st.plotly_chart(on_select=) and returns whatever was clicked THIS
+    run as (plate_x, plate_z), or (None, None) if nothing was clicked
+    this run. Kept as-is for existing Streamlit pages -- the Shiny UI
+    layer should call build_zone_selector_figure() directly instead and
+    implement its own click capture (see module docstring)."""
+    import streamlit as st
+
+    fig = build_zone_selector_figure(marker_x=marker_x, marker_z=marker_z)
     result = st.plotly_chart(fig, on_select="rerun", key=key, config={"displayModeBar": False})
 
     # TEMPORARY DEBUG -- remove once click selection is confirmed working
@@ -190,3 +517,66 @@ def render_zone_selector(key, marker_x=None, marker_z=None):
             pt = points[0]
             return round(pt["x"], 3), round(pt["y"], 3)
     return None, None
+
+
+# ---------------------------------------------------------------------------
+# Zone Execution / Hit-the-spot -- Oct 2026 (Ryker approved). A pitch HIT
+# ITS SPOT if it landed in the called cell (call_cell of its intended
+# location) or within HIT_SPOT_CUSHION_IN inches (half a foot) of that cell's edge.
+# Same calling system as Command+ / Command Execution %, and off-plate calls
+# (zone 1 / 5) count anywhere off the plate (see _zone_horizontal_offset_ft).
+# Replaces the old 1-9 grid match, which clamped anything outside the zone
+# to the nearest edge box -- a third of its "hits" (54 of 171 on the fall
+# data) had really missed the spot by 6+ inches.
+# ---------------------------------------------------------------------------
+HIT_SPOT_CUSHION_IN = 6.0   # Oct 2026, Ryker: half a foot (was 3 in -- read too low; 6 in tested as consistent and best tied to fewer balls)
+
+
+def hit_spot(intended_x, intended_z, actual_x, actual_z, cushion_in=HIT_SPOT_CUSHION_IN):
+    """True / False, or None when the called spot or the actual location
+    isn't recorded."""
+    if None in (intended_x, intended_z, actual_x, actual_z):
+        return None
+    level, zone = call_cell(float(intended_x), float(intended_z))
+    d = distance_from_cell_in(level, zone, float(actual_x), float(actual_z))
+    if d is None:
+        return None
+    return d <= cushion_in
+
+
+def pitch_hit_spot(p):
+    """hit_spot() for a GamePitch (intended_plate_x/z vs actual_plate_x/z)."""
+    return hit_spot(p.intended_plate_x, p.intended_plate_z, p.actual_plate_x, p.actual_plate_z)
+
+
+def location_words(x, z, batter_hand=None):
+    """Plain description of where a pitch crossed, from the hitter's point
+    of view: "In zone -- up and in", "Ball -- down and away". Catcher's
+    view: a right-handed batter stands on the 3B (negative x) side, so
+    inside = negative x for him and positive x for a lefty. Unknown hand
+    (switch-hitter not resolved) says 3B side / 1B side instead."""
+    if x is None or z is None:
+        return "Not located"
+    x, z = float(x), float(z)
+    third = (ZONE_TOP - ZONE_BOTTOM) / 3
+    if z > ZONE_TOP - third:
+        height = "up"
+    elif z < ZONE_BOTTOM + third:
+        height = "down"
+    else:
+        height = "middle"
+    edge = ZONE_HALF_WIDTH / 3
+    if abs(x) <= edge:
+        side = None
+    elif batter_hand in ("R", "L"):
+        inside = (x < 0) if batter_hand == "R" else (x > 0)
+        side = "in" if inside else "away"
+    else:
+        side = "3B side" if x < 0 else "1B side"
+    if side is None:
+        where = "middle-middle" if height == "middle" else height
+    elif height == "middle":
+        where = side
+    else:
+        where = f"{height} and {side}"
+    return f"{'In zone' if is_in_zone(x, z) else 'Ball'} -- {where}"

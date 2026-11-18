@@ -1,0 +1,1246 @@
+"""
+GBO -- centralized design tokens + global CSS + shared plotly chart
+colors, for both dark and light mode.
+
+v2 (Aug 2026 redesign -- see GBO-DESIGN-SYSTEM.md at the repo root for
+the full spec this file implements). Single source of truth for
+styling: every --gbo-* token and every .gbo-* component class lives
+here and is injected ONCE in the outer page shell (shiny_app/app.py).
+
+What changed from v1 ("Bold Athletic") and why:
+  - Crimson is now the ACTION color only (primary buttons, active nav,
+    links). It no longer paints every KPI border, every progress bar,
+    the navbar, or the profile card. Gold is reserved for ratings and
+    the player card's tier system (Diamond/Gold/Silver/Bronze by
+    Overall score -- see --gbo-diamond/--gbo-bronze below, added Aug
+    2026 when the tiers were renamed from gold/crimson/silver/slate).
+    Everything else is a quiet neutral
+    so the green/amber/red status system is the thing a coach's eye
+    lands on first.
+  - Status tokens (--gbo-status-good / -watch / -flag) are the new
+    first-class citizens. The old --gbo-positive/--gbo-negative/
+    --gbo-caution names are kept as aliases so existing pages keep
+    working unchanged.
+  - Typography: Barlow Condensed for page titles / big numbers, IBM
+    Plex Sans for UI, IBM Plex Mono for tabular data. Loaded from
+    Google Fonts with a system fallback stack.
+  - Surfaces: page -> card -> raised. Borders, not shadows; no
+    gradients or glows on content.
+  - Layout: left sidebar shell (see app.py) replaces the top navbar.
+    All old class names (.gbo-kpi-card, .gbo-section-title, .gbo-
+    metric-bar-*, .gbo-ring*, .gbo-rom-*, ...) are retained and
+    restyled, so no page module had to change for the new look.
+
+Accessibility: every text/background pair below was chosen against
+the WCAG formula (4.5:1 body, 3:1 large/UI). Gold and amber are
+darkened for light mode (same approach v1 used). Status colors are
+never the only carrier of meaning -- every chip/pill has a text label.
+"""
+
+from pathlib import Path
+
+from shiny import ui
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+ASSETS_DIR = REPO_ROOT / "assets"
+LOGO_URL = "/assets/GBO_logo-06.png"
+
+FONT_STACK = "'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+DISPLAY_STACK = "'Barlow Condensed', 'Arial Narrow', 'Helvetica Neue', Arial, sans-serif"
+MONO_STACK = "'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+
+GOOGLE_FONTS_URL = (
+    "https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700"
+    "&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap"
+)
+
+# Kept for import-compatibility (app.py passes theme=GBO_THEME). Plain
+# CSS overrides below do the work; no Sass/libsass needed.
+GBO_THEME = None
+
+# --- Chart color sets (plotly). Figures render inside cards, so paper/
+# plot backgrounds are transparent and only ink colors differ by mode.
+_CHART_COLORS = {
+    "dark": dict(
+        crimson="#C8102E", track="#1F242C", text="#E9ECF1", muted="#7A8594",
+        surface="#171B21", grid="#2A3039", gold="#F2B529",
+        good="#2E9C62", watch="#B58A22", flag="#D94F3D",
+    ),
+    "light": dict(
+        crimson="#B3122B", track="#F8F9FB", text="#151A21", muted="#6B7280",
+        surface="#FFFFFF", grid="#E1E4E9", gold="#B07D10",
+        good="#1F7A4C", watch="#8A6514", flag="#B83C2C",
+    ),
+}
+
+# Fixed pitch-type palette (same pitch -> same color on every chart).
+# Validated for CVD separation against the dark surface.
+PITCH_TYPE_COLORS = {
+    "Fastball": "#3A8FE0", "4-Seam Fastball": "#3A8FE0", "2-Seam Fastball": "#7F7EDB",
+    "Sinker": "#7F7EDB", "Slider": "#B08618", "Curveball": "#2A9E7A",
+    "Changeup": "#B85FC4", "Cutter": "#E0713F", "Splitter": "#2A9E7A", "Other": "#7A8594",
+}
+
+
+def chart_colors(mode: str = "dark") -> dict:
+    return _CHART_COLORS.get(mode, _CHART_COLORS["dark"])
+
+
+GLOBAL_CSS = """
+/* =========================================================
+   1. TOKENS  (dark is the default; light is its own palette)
+   ========================================================= */
+:root[data-bs-theme="dark"] {
+  --gbo-bg-page: #0A0A0B;
+  --gbo-bg-card: #141415;
+  --gbo-bg-raised: #1D1D20;
+  --gbo-bg-card-grad: #141415;            /* alias, v1 gradient removed */
+  --gbo-border: #272729;
+  --gbo-border-strong: #3A3A3E;
+  --gbo-border-input: #3A3A3E;            /* alias */
+  --gbo-text: #F3F2EE;
+  --gbo-text-2: #BDBCB6;
+  --gbo-text-muted: #8A8A8E;
+  --gbo-crimson: #CE1126;
+  --gbo-crimson-hover: #E6223A;
+  --gbo-crimson-dark: #8F0B21;
+  --gbo-crimson-soft: rgba(200,16,46,.14);
+  --gbo-gold: #FFC72C;
+  --gbo-gold-text: #FFC72C;
+  --gbo-gold-soft: rgba(255,199,44,.14);
+  --gbo-accent-ink: var(--gbo-text);
+  --gbo-text-on-crimson: #FFFFFF;
+  --gbo-status-good: #2E9C62;
+  --gbo-series-1: #3E8EDE;   /* single-series charts (Oct 2026, validated vs dark surface) */
+  --gbo-status-watch: #B58A22;
+  --gbo-status-flag: #D94F3D;
+  --gbo-status-good-soft: rgba(46,156,98,.14);
+  --gbo-status-watch-soft: rgba(181,138,34,.14);
+  --gbo-status-flag-soft: rgba(217,79,61,.14);
+  --gbo-positive: var(--gbo-status-good);   /* v1 aliases */
+  --gbo-negative: var(--gbo-status-flag);
+  --gbo-caution: var(--gbo-status-watch);
+  --gbo-orange: #D9782A;
+  --gbo-silver: #BDBCB6;
+  --gbo-diamond: #5FD9F0;                 /* player card tier (Aug 2026, Ryker: Diamond/Gold/Silver/Bronze/Common) -- icy cyan, distinct from --gbo-gold so the top tier doesn't read as a duplicate of the gold tier below it */
+  --gbo-bronze: #C9793D;                  /* player card tier */
+  --gbo-common: #4A4239;                  /* player card tier -- bottom tier (added Aug 2026 when Ryker split the old bronze catch-all into Bronze 75-79 + Common <75). Sept 2026: was #6E6E72, a flat gray too close to --gbo-silver at a glance -- now a dark warm umber, clearly darker/warmer than Silver and clearly less saturated than Bronze's rust, so the two bottom tiers and Common don't get confused; deliberately NOT --gbo-status-flag red (Ryker considered it) since red already means "flagged/needs attention" everywhere else on this card (ROM, movement flag) and Common tier isn't that same signal */
+  --gbo-focus: #6FB1FF;
+  --gbo-shadow: 0 8px 24px rgba(0,0,0,.35);
+}
+:root[data-bs-theme="light"] {
+  --gbo-bg-page: #F3F4F6;
+  --gbo-bg-card: #FFFFFF;
+  --gbo-bg-raised: #F8F9FB;
+  --gbo-bg-card-grad: #FFFFFF;
+  --gbo-border: #E1E4E9;
+  --gbo-border-strong: #C9CED6;
+  --gbo-border-input: #C9CED6;
+  --gbo-text: #151A21;
+  --gbo-text-2: #4B5563;
+  --gbo-text-muted: #6B7280;
+  --gbo-crimson: #B3122B;
+  --gbo-crimson-hover: #9E0F26;
+  --gbo-crimson-dark: #7A1420;
+  --gbo-crimson-soft: rgba(179,18,43,.10);
+  --gbo-gold: #B07D10;
+  --gbo-gold-text: #8A6A1A;
+  --gbo-gold-soft: rgba(176,125,16,.12);
+  --gbo-accent-ink: var(--gbo-crimson);
+  --gbo-text-on-crimson: #FFFFFF;
+  --gbo-status-good: #1F7A4C;
+  --gbo-series-1: #2A6FBF;   /* single-series charts (Oct 2026, validated vs white) */
+  --gbo-status-watch: #8A6514;
+  --gbo-status-flag: #B83C2C;
+  --gbo-status-good-soft: rgba(31,122,76,.10);
+  --gbo-status-watch-soft: rgba(138,101,20,.10);
+  --gbo-status-flag-soft: rgba(184,60,44,.10);
+  --gbo-positive: var(--gbo-status-good);
+  --gbo-negative: var(--gbo-status-flag);
+  --gbo-caution: var(--gbo-status-watch);
+  --gbo-orange: #A3550F;
+  --gbo-silver: #6B7280;
+  --gbo-diamond: #0E7A96;                 /* player card tier -- see dark theme's --gbo-diamond comment */
+  --gbo-bronze: #935423;                  /* player card tier */
+  --gbo-common: #57504A;                  /* player card tier -- bottom tier, see dark theme's --gbo-common comment */
+  --gbo-focus: #2563EB;
+  --gbo-shadow: 0 8px 24px rgba(0,0,0,.12);
+}
+:root { --gbo-font: {FONT_STACK}; --gbo-display: {DISPLAY_STACK}; --gbo-mono: {MONO_STACK};
+        --bs-border-radius: 6px; --bs-border-radius-sm: 4px; --bs-border-radius-lg: 10px; }
+
+/* =========================================================
+   2. BASE
+   ========================================================= */
+html, body { background: var(--gbo-bg-page); }
+body { color: var(--gbo-text); font-family: var(--gbo-font); font-size: .875rem; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+a { color: var(--gbo-crimson); text-decoration: none; }
+a:hover { color: var(--gbo-crimson-hover); text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { color: var(--gbo-text); font-weight: 600; }
+hr { border-color: var(--gbo-border); opacity: 1; }
+.text-muted { color: var(--gbo-text-muted) !important; }
+:focus-visible { outline: 2px solid var(--gbo-focus); outline-offset: 2px; }
+.gbo-num, .gbo-mono { font-variant-numeric: tabular-nums; }
+.gbo-mono { font-family: var(--gbo-mono); }
+.gbo-cap { font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--gbo-text-muted); }
+
+/* =========================================================
+   3. NATIVE BOOTSTRAP OVERRIDES (buttons, inputs, cards, accordion, tables)
+   ========================================================= */
+.btn { font-weight: 600; border-radius: 6px; padding: .42rem .9rem; transition: background .15s, border-color .15s; }
+.btn-primary {
+  --bs-btn-bg: var(--gbo-crimson); --bs-btn-border-color: var(--gbo-crimson);
+  --bs-btn-hover-bg: var(--gbo-crimson-hover); --bs-btn-hover-border-color: var(--gbo-crimson-hover);
+  --bs-btn-active-bg: var(--gbo-crimson-dark); --bs-btn-active-border-color: var(--gbo-crimson-dark);
+  --bs-btn-disabled-bg: var(--gbo-crimson); --bs-btn-disabled-border-color: var(--gbo-crimson);
+  --bs-btn-color: #fff; --bs-btn-hover-color: #fff; --bs-btn-active-color: #fff;
+  --bs-btn-focus-shadow-rgb: 200, 16, 46;
+}
+.btn-secondary, .btn-outline-light, .btn-outline-secondary, .btn-light {
+  --bs-btn-bg: transparent; --bs-btn-color: var(--gbo-text); --bs-btn-border-color: var(--gbo-border-strong);
+  --bs-btn-hover-bg: var(--gbo-bg-raised); --bs-btn-hover-color: var(--gbo-text); --bs-btn-hover-border-color: var(--gbo-border-strong);
+  --bs-btn-active-bg: var(--gbo-bg-raised); --bs-btn-active-color: var(--gbo-text); --bs-btn-active-border-color: var(--gbo-border-strong);
+}
+.btn-danger, .btn-outline-danger {
+  --bs-btn-bg: transparent; --bs-btn-color: var(--gbo-status-flag); --bs-btn-border-color: var(--gbo-border-strong);
+  --bs-btn-hover-bg: var(--gbo-status-flag-soft); --bs-btn-hover-color: var(--gbo-status-flag); --bs-btn-hover-border-color: var(--gbo-status-flag);
+  --bs-btn-active-bg: var(--gbo-status-flag-soft); --bs-btn-active-color: var(--gbo-status-flag);
+}
+.btn-success { --bs-btn-bg: var(--gbo-status-good); --bs-btn-border-color: var(--gbo-status-good); --bs-btn-hover-bg: var(--gbo-status-good); --bs-btn-hover-border-color: var(--gbo-status-good); --bs-btn-color: #fff; --bs-btn-hover-color:#fff; }
+
+.form-label, label { color: var(--gbo-text-2); font-size: .8rem; font-weight: 500; margin-bottom: .25rem; }
+.form-control, .form-select { background-color: var(--gbo-bg-raised); border-color: var(--gbo-border-strong); color: var(--gbo-text); border-radius: 6px; font-size: .875rem; }
+.form-control::placeholder { color: var(--gbo-text-muted); }
+.form-control:focus, .form-select:focus { background-color: var(--gbo-bg-raised); color: var(--gbo-text); border-color: var(--gbo-focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--gbo-focus) 30%, transparent); }
+.form-select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%237A8594' stroke-width='1.5'/%3E%3C/svg%3E"); background-size: 10px; }
+.form-check-input { background-color: var(--gbo-bg-raised); border-color: var(--gbo-border-strong); }
+.form-check-input:checked { background-color: var(--gbo-crimson); border-color: var(--gbo-crimson); }
+.form-range::-webkit-slider-thumb { background: var(--gbo-crimson); }
+.form-range::-moz-range-thumb { background: var(--gbo-crimson); }
+.irs--shiny .irs-bar { background: var(--gbo-crimson); border-color: var(--gbo-crimson); }
+.irs--shiny .irs-from, .irs--shiny .irs-to, .irs--shiny .irs-single { background: var(--gbo-crimson); }
+.irs--shiny .irs-handle { border-color: var(--gbo-crimson); background: var(--gbo-bg-card); }
+.irs--shiny .irs-line { background: var(--gbo-bg-raised); border-color: var(--gbo-border); }
+.irs--shiny .irs-min, .irs--shiny .irs-max, .irs--shiny .irs-grid-text { color: var(--gbo-text-muted); background: transparent; }
+
+.card { background-color: var(--gbo-bg-card); border: 1px solid var(--gbo-border); border-radius: 10px; }
+.card-header { background: transparent; border-bottom-color: var(--gbo-border); font-weight: 600; }
+.bslib-card .card-header { font-size: 1.05rem; }
+.accordion { --bs-accordion-bg: var(--gbo-bg-card); --bs-accordion-border-color: var(--gbo-border); --bs-accordion-btn-color: var(--gbo-text); --bs-accordion-active-color: var(--gbo-text); --bs-accordion-active-bg: var(--gbo-bg-card); --bs-accordion-btn-focus-box-shadow: none; --bs-accordion-border-radius: 10px; }
+.accordion-item, .accordion-button { background-color: var(--gbo-bg-card); color: var(--gbo-text); }
+.accordion-button { font-weight: 600; font-size: .9rem; }
+.accordion-button:not(.collapsed) { background-color: var(--gbo-bg-card); color: var(--gbo-text); box-shadow: inset 0 -1px 0 var(--gbo-border); }
+.accordion-button::after { filter: grayscale(1) opacity(.6); }
+.modal-content { background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); box-shadow: var(--gbo-shadow); }
+.modal-header, .modal-footer { border-color: var(--gbo-border); }
+.modal-title { color: var(--gbo-text); }
+.btn-close { filter: invert(1) grayscale(1) brightness(1.8); }  /* Sept 2026: visible on the dark modal body -- default Bootstrap close button is a dark X, invisible-ish here */
+.dropdown-menu { background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); box-shadow: var(--gbo-shadow); }
+.dropdown-item { color: var(--gbo-text-2); } .dropdown-item:hover { background: var(--gbo-bg-raised); color: var(--gbo-text); }
+.alert { border-radius: 8px; }
+.nav-tabs { border-bottom: 1px solid var(--gbo-border); gap: 2px; }
+.nav-tabs .nav-link { color: var(--gbo-text-muted); font-weight: 600; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: .55rem .9rem; }
+.nav-tabs .nav-link:hover { color: var(--gbo-text); border-color: transparent; }
+.nav-tabs .nav-link.active { color: var(--gbo-text); background: transparent; border-bottom-color: var(--gbo-crimson); }
+.nav-pills .nav-link { color: var(--gbo-text-2); } .nav-pills .nav-link.active { background: var(--gbo-crimson-soft); color: var(--gbo-text); }
+
+/* Tables */
+.table { color: var(--gbo-text-2); --bs-table-bg: transparent; --bs-table-color: var(--gbo-text-2); --bs-table-striped-bg: transparent; --bs-table-hover-bg: var(--gbo-bg-raised); --bs-table-hover-color: var(--gbo-text); margin-bottom: 0; }
+.table > :not(caption) > * > * { border-bottom-color: var(--gbo-border); padding: .65rem .75rem; vertical-align: middle; }
+.table thead th { font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--gbo-text-muted); border-bottom: 1px solid var(--gbo-border); white-space: nowrap; }
+.table tbody tr:hover > * { background: var(--gbo-bg-raised); }
+.table tbody tr td:first-child { color: var(--gbo-text); font-weight: 600; }
+.table td { font-variant-numeric: tabular-nums; }
+.table-responsive { overflow-x: auto; }
+/* Baseball-Reference-style stat line (Season Stats, Oct 2026): compact, right-aligned numbers */
+.gbo-statline { margin-bottom: .75rem; }
+.gbo-cc-partial { font-size: .65rem; text-transform: uppercase; letter-spacing: .04em; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--gbo-border, currentColor); opacity: .75; }
+.gbo-statline table.table > :not(caption) > * > * { padding: .35rem .5rem; text-align: right; white-space: nowrap; }
+.gbo-statline table.table > :not(caption) > * > *:first-child { text-align: left; position: sticky; left: 0; background: var(--gbo-bg-page); z-index: 1; }
+.gbo-statline table.table thead th { font-size: .68rem; letter-spacing: .03em; cursor: help; }
+.gbo-statline tr.gbo-statline-selected > * { background: linear-gradient(var(--gbo-crimson-soft), var(--gbo-crimson-soft)), var(--gbo-bg-page) !important; color: var(--gbo-text); }
+.gbo-statline tfoot tr > * { font-weight: 700; color: var(--gbo-text); border-top: 2px solid var(--gbo-border-strong); border-bottom: 0; }
+.gbo-statline .gbo-statline-na { color: var(--gbo-text-muted); }
+.shiny-data-grid, .shiny-data-grid table { background: transparent; color: var(--gbo-text-2); }
+.shiny-data-grid thead th { background: var(--gbo-bg-card); color: var(--gbo-text-muted); font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--gbo-border); }
+.shiny-data-grid tbody tr:hover { background: var(--gbo-bg-raised); }
+.shiny-data-grid tbody td { border-bottom: 1px solid var(--gbo-border); font-variant-numeric: tabular-nums; }
+
+/* =========================================================
+   4. SHELL: sidebar + top bar + content
+   ========================================================= */
+.gbo-app { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+.gbo-side { background: var(--gbo-bg-card); border-right: 1px solid var(--gbo-border); padding: 14px 12px; position: sticky; top: 0; height: 100vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.gbo-brand { display: flex; align-items: center; gap: 10px; padding: 6px 8px 14px; border-bottom: 1px solid var(--gbo-border); margin-bottom: 8px; }
+.gbo-brand img { width: 30px; height: 36px; object-fit: contain; }
+.gbo-brand-title { font-family: var(--gbo-display); font-weight: 700; font-size: 1.25rem; line-height: 1; letter-spacing: .02em; color: var(--gbo-gold-text); }
+.gbo-brand-sub { font-size: .62rem; color: var(--gbo-text-muted); text-transform: uppercase; letter-spacing: .08em; margin-top: 2px; }
+.gbo-side-group { padding: 12px 8px 4px; font-size: .68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--gbo-gold-text); opacity: .85; }
+.gbo-side-link { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 6px; color: var(--gbo-text-2); font-weight: 500; width: 100%; text-align: left; background: none; border: 0; font-size: .85rem; cursor: pointer; }
+.gbo-side-link svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.gbo-side-link:hover { background: var(--gbo-bg-raised); color: var(--gbo-text); }
+.gbo-side-link.active { background: var(--gbo-crimson-soft); color: var(--gbo-gold-text); box-shadow: inset 3px 0 0 var(--gbo-crimson); }
+/* Oct 2026: simplified staff sidebar -- everything else in a collapsed group */
+.gbo-side-more { margin-top: 10px; border-top: 1px solid var(--gbo-border); padding-top: 6px; }
+.gbo-side-more > summary { list-style: none; color: var(--gbo-text-muted); }
+.gbo-side-more > summary::-webkit-details-marker { display: none; }
+.gbo-side-more > summary::after { content: ""; margin-left: auto; width: 6px; height: 6px; border-right: 1.6px solid currentColor; border-bottom: 1.6px solid currentColor; transform: rotate(-45deg); transition: transform .15s; }
+.gbo-side-more[open] > summary::after { transform: rotate(45deg); }
+.gbo-side-more[open] > .gbo-side-link:not(summary) { padding-left: 18px; }
+/* Oct 2026: Player Profile hub -- "Go to" buttons, recent games, back bar */
+.gbo-jump { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -4px 0 16px; }
+.gbo-jump-lbl { font-size: .68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--gbo-text-muted); margin-right: 4px; }
+.gbo-jump .gbo-jump-btn { border: 1px solid var(--gbo-border-strong); border-radius: 999px; padding: .25rem .8rem; font-size: .8rem; }
+.gbo-jump .gbo-jump-good { border-color: var(--gbo-status-good); color: var(--gbo-status-good); }
+.gbo-jump .gbo-jump-watch { border-color: var(--gbo-status-watch); color: var(--gbo-status-watch); }
+.gbo-jump .gbo-jump-flag { border-color: var(--gbo-status-flag); color: var(--gbo-status-flag); }
+.gbo-recent-row { display: grid; grid-template-columns: minmax(180px, 1.2fr) 2fr auto; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--gbo-border); }
+.gbo-recent-row:last-child { border-bottom: 0; }
+.gbo-recent-game { font-weight: 600; font-size: .85rem; }
+.gbo-recent-line { color: var(--gbo-text-2); font-size: .82rem; font-variant-numeric: tabular-nums; }
+.gbo-recent-acts { display: flex; gap: 12px; }
+.gbo-recent-link { font-size: .8rem; font-weight: 600; color: var(--gbo-gold-text); text-decoration: none; }
+.gbo-recent-link:hover { text-decoration: underline; }
+@media (max-width: 768px) { .gbo-recent-row { grid-template-columns: 1fr; gap: 4px; } }
+.gbo-back { padding: 10px 32px 0; }
+.gbo-back .gbo-back-btn { border: 1px solid var(--gbo-border-strong); border-radius: 999px; padding: .25rem .8rem; font-size: .8rem; }
+@media (max-width: 768px) { .gbo-back { padding: 10px 16px 0; } }
+/* Oct 2026: Game Tracking -- base toggles, shortcut flash, half-inning review */
+.gbo-base-toggle .shiny-options-group { display: flex; gap: 6px; flex-wrap: wrap; }
+.gbo-base-toggle .checkbox-inline { position: relative; margin: 0; padding: 0; }
+.gbo-base-toggle .checkbox-inline input { position: absolute; opacity: 0; pointer-events: none; }
+.gbo-base-toggle .checkbox-inline span { display: inline-block; min-width: 58px; text-align: center; padding: .45rem .8rem; border: 1px solid var(--gbo-border-strong); border-radius: 6px; cursor: pointer; font-weight: 600; user-select: none; }
+.gbo-base-toggle .checkbox-inline input:checked + span { background: var(--gbo-crimson); border-color: var(--gbo-crimson); color: #fff; }
+.gbo-base-toggle .checkbox-inline input:focus-visible + span { outline: 2px solid var(--gbo-gold-text); }
+/* Oct 2026: drag-and-drop bases (Game Tracking) */
+.gbo-dia-wrap { margin: 10px 0 6px; }
+.gbo-dia { position: relative; width: 320px; height: 280px; margin: 0 auto; touch-action: none; user-select: none; }
+.gbo-dia-field { position: absolute; left: 85px; top: 52px; width: 150px; height: 150px; transform: rotate(45deg); border: 2px solid var(--gbo-border-strong); background: linear-gradient(135deg, rgba(46,156,98,.10), rgba(46,156,98,.04)); border-radius: 4px; }
+.gbo-dia-base { position: absolute; width: 64px; height: 44px; margin-left: -32px; margin-top: -22px; display: flex; align-items: center; justify-content: center; border-radius: 8px; }
+.gbo-dia-base::before { content: ""; position: absolute; width: 18px; height: 18px; transform: rotate(45deg); background: var(--gbo-bg-raised); border: 2px solid var(--gbo-text-2); }
+.gbo-dia-b2 { left: 160px; top: 42px; }
+.gbo-dia-b1 { left: 266px; top: 127px; }
+.gbo-dia-b3 { left: 54px; top: 127px; }
+.gbo-dia-b4 { left: 160px; top: 222px; }
+.gbo-dia-b4 span { position: relative; top: 26px; font-size: .7rem; color: var(--gbo-text-muted); }
+.gbo-dia-out { position: absolute; right: 0; bottom: 0; width: 70px; height: 44px; border: 2px dashed var(--gbo-status-flag); color: var(--gbo-status-flag); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: .8rem; }
+.gbo-dia-over { outline: 3px solid var(--gbo-gold-text); outline-offset: 2px; }
+.gbo-dia-chip { position: relative; z-index: 2; flex: none; padding: 4px 9px; border-radius: 999px; background: var(--gbo-crimson); color: #fff; font-weight: 700; font-size: .75rem; cursor: grab; white-space: nowrap; max-width: 130px; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 2px 6px rgba(0,0,0,.35); }
+.gbo-dia-dragging { opacity: .35; }
+.gbo-dia-ghost { position: fixed; z-index: 9999; pointer-events: none; cursor: grabbing; }
+.gbo-dia-moves { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.gbo-dia-move { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.gbo-dia-move select { background: var(--gbo-bg-raised); color: var(--gbo-text); border: 1px solid var(--gbo-border-strong); border-radius: 6px; padding: .2rem .4rem; font-size: .85rem; }
+.gbo-dia-path { font-weight: 700; min-width: 96px; }
+.gbo-dia-bar { display: flex; gap: 8px; margin: 8px 0; }
+.gbo-key-flash { box-shadow: 0 0 0 3px var(--gbo-gold-text) !important; transition: box-shadow .1s; }
+.gbo-hi-review { border: 1px solid var(--gbo-status-watch); border-radius: 8px; padding: 10px 14px; margin: 12px 0; background: var(--gbo-bg-raised); }
+.gbo-hi-review ul { padding-left: 18px; margin-top: 6px; }
+/* Oct 2026: installable app -- install tip, and room for the notch / home bar when opened from the home screen */
+.gbo-install { position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 2000; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--gbo-bg-raised, #1D1D20); color: var(--gbo-text, #fff); border: 1px solid var(--gbo-border-strong, #3A3A3E); box-shadow: 0 6px 24px rgba(0,0,0,.45); font-size: .85rem; }
+.gbo-install img { width: 40px; height: 40px; border-radius: 9px; flex: none; }
+.gbo-install-text { flex: 1; line-height: 1.3; }
+.gbo-install-go { background: var(--gbo-crimson, #BF1E2D); color: #fff; border: 0; border-radius: 8px; padding: .4rem .8rem; font-weight: 700; }
+.gbo-install-x { background: none; border: 0; color: inherit; font-size: 1.4rem; line-height: 1; padding: 0 4px; opacity: .7; }
+.gbo-share-ic { display: inline-block; border: 1px solid currentColor; border-radius: 3px; padding: 0 3px; font-size: .75rem; }
+.gbo-standalone .gbo-top { padding-top: env(safe-area-inset-top); height: calc(56px + env(safe-area-inset-top)); }
+.gbo-standalone .gbo-side { padding-top: calc(14px + env(safe-area-inset-top)); }
+.gbo-standalone .gbo-content { padding-bottom: calc(48px + env(safe-area-inset-bottom)); }
+.gbo-side-me { margin-top: auto; border-top: 1px solid var(--gbo-border); padding: 12px 0 0 8px; display: flex; gap: 10px; align-items: center; }
+.gbo-avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--gbo-bg-raised); border: 1px solid var(--gbo-border-strong); display: grid; place-items: center; font-family: var(--gbo-display); font-weight: 700; color: var(--gbo-text-2); flex: none; object-fit: cover; }
+.gbo-side-me-name { font-weight: 600; font-size: .82rem; color: var(--gbo-text); line-height: 1.2; }
+.gbo-main { min-width: 0; display: flex; flex-direction: column; }
+.gbo-top { border-top: 2px solid var(--gbo-crimson); height: 56px; display: flex; align-items: center; gap: 12px; padding: 0 32px; border-bottom: 1px solid var(--gbo-border); background: var(--gbo-bg-card); position: sticky; top: 0; z-index: 5; }
+.gbo-crumb { color: var(--gbo-text-muted); font-weight: 500; }
+.gbo-crumb b { color: var(--gbo-text); font-weight: 600; }
+.gbo-top-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.gbo-top .btn { padding: .3rem .75rem; font-size: .8rem; }
+.gbo-content { padding: 24px 32px 48px; max-width: 1440px; width: 100%; }
+.gbo-mode-toggle { display: inline-flex; }
+.gbo-mode-toggle .bslib-input-dark-mode, .gbo-mode-toggle bslib-input-dark-mode { --text-1: var(--gbo-text-2); }
+.gbo-menu-btn { display: none; }
+.gbo-side-backdrop { display: none; }
+@media (max-width: 1200px) {
+  .gbo-app { grid-template-columns: 64px 1fr; }
+  .gbo-brand-title, .gbo-brand-sub, .gbo-side-group, .gbo-side-link span, .gbo-side-me > div { display: none; }
+  .gbo-side-link { justify-content: center; padding: 10px; }
+  .gbo-side-link.active { box-shadow: none; }
+}
+@media (max-width: 768px) {
+  .gbo-app { grid-template-columns: 1fr; }
+  /* Phone portrait: the sidebar is a slide-over menu. Pinned to the screen
+     edges (iOS Safari mis-places taps on a fixed panel left at its "auto"
+     spot), above everything, scrolls on its own, backdrop closes it. */
+  .gbo-side { display: none; position: fixed; top: 0; left: 0; bottom: 0; height: auto; width: min(280px, 85vw);
+              z-index: 1050; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+              padding-bottom: calc(14px + env(safe-area-inset-bottom)); box-shadow: 0 0 24px rgba(0,0,0,.45); }
+  .gbo-side.open { display: flex; }
+  .gbo-side-backdrop { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 1040; background: rgba(0,0,0,.45); }
+  body.gbo-menu-open .gbo-side-backdrop { display: block; }
+  body.gbo-menu-open { overflow: hidden; }
+  body.gbo-menu-open .gbo-install { display: none; }
+  .gbo-side-link, .gbo-menu-btn, .gbo-side-backdrop { touch-action: manipulation; -webkit-tap-highlight-color: transparent; cursor: pointer; }
+  .gbo-side.open .gbo-side-link { padding: 11px 12px; font-size: .95rem; }
+  .gbo-side.open .gbo-brand-title, .gbo-side.open .gbo-brand-sub, .gbo-side.open .gbo-side-group, .gbo-side.open .gbo-side-link span, .gbo-side.open .gbo-side-me > div { display: block; }
+  .gbo-side.open .gbo-side-link { justify-content: flex-start; }
+  .gbo-menu-btn { display: inline-flex; }
+  .gbo-content, .gbo-top { padding-left: 16px; padding-right: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Auth screens */
+.gbo-auth-wrap { display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
+.gbo-auth-card { background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); border-radius: 12px; padding: 36px 40px; width: 100%; max-width: 420px; }
+.gbo-auth-logo { height: 64px; width: auto; display: block; margin: 0 auto 14px; }
+.gbo-auth-underline { width: 36px; height: 3px; background: var(--gbo-crimson); border-radius: 2px; margin: 0 auto 18px; }
+.gbo-auth-card .gbo-page-header { text-align: center; font-size: 1.6rem; }
+
+/* =========================================================
+   5. PAGE STRUCTURE
+   ========================================================= */
+.gbo-page-header { font-family: var(--gbo-display); font-size: 2rem; font-weight: 700; text-transform: uppercase; letter-spacing: .02em; line-height: 1; color: var(--gbo-text); margin: 0 0 4px; }
+.gbo-page-header-underline { display: none; }
+.gbo-page-head > div:first-child { position: relative; padding-bottom: 8px; }
+.gbo-page-head > div:first-child::after { content: ""; position: absolute; left: 0; bottom: 0; width: 48px; height: 3px; border-radius: 2px; background: linear-gradient(90deg, var(--gbo-crimson) 0 60%, var(--gbo-gold) 60%); }
+.gbo-page-head { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+.gbo-page-sub { color: var(--gbo-text-muted); margin: 4px 0 0; }
+.gbo-page-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.gbo-footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--gbo-border); color: var(--gbo-text-muted); font-size: .75rem; text-align: center; }
+.gbo-empty-state { text-align: center; padding: 36px 20px; color: var(--gbo-text-muted); }
+.gbo-empty-state .icon { display: none; }
+.gbo-empty-state b { display: block; color: var(--gbo-text-2); font-weight: 600; margin-bottom: 4px; }
+
+/* Section title (inside a page) -- quiet: text-color, no underline */
+.gbo-section-title { color: var(--gbo-text); font-size: 1.05rem; font-weight: 600; text-transform: none; letter-spacing: 0; border: 0; display: block; padding: 0; margin: 0 0 12px; }
+.gbo-section-title-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.gbo-section-title-row .gbo-section-title { margin: 0; }
+.gbo-section-title-row .right { margin-left: auto; color: var(--gbo-text-muted); font-size: .8rem; }
+.gbo-category-title { color: var(--gbo-text); font-weight: 600; font-size: .95rem; border-left: 3px solid var(--gbo-border-strong); padding-left: 10px; margin: 18px 0 8px; }
+.gbo-subgroup-label { color: var(--gbo-text-muted); font-style: normal; font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; margin: 12px 0 4px; }
+
+/* Card (GBO component, distinct from Bootstrap .card) */
+.gbo-card { background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); border-radius: 10px; padding: 20px; min-width: 0; }
+.gbo-card.sm { padding: 16px 20px; }
+.gbo-card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.gbo-card-head h3 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+.gbo-card-head h3::before { content: ""; display: inline-block; width: 3px; height: .9em; background: var(--gbo-crimson); border-radius: 2px; margin-right: 10px; vertical-align: -2px; }
+.gbo-card-head .right { margin-left: auto; color: var(--gbo-text-muted); font-size: .8rem; }
+.gbo-grid { display: grid; gap: 20px; }
+.gbo-grid-2 { grid-template-columns: minmax(0,1fr) minmax(0,1fr); } .gbo-grid-3 { grid-template-columns: repeat(3, minmax(0,1fr)); } .gbo-grid-21 { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); align-items: start; }
+@media (max-width: 1000px) { .gbo-grid-2, .gbo-grid-3, .gbo-grid-21 { grid-template-columns: 1fr; } }
+
+/* KPI tiles */
+.gbo-kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; }
+/* Sept 2026, Ryker ("incorporate more red in these" on Tunneling+,
+   then "i want all kpi cards in the website to be this way") -- the
+   crimson-tinted card look that started as Tunneling+-only is now
+   every .gbo-kpi-card site-wide. Tints the card background/border and
+   the label, not the value text (.gbo-kpi-accent keeps its own
+   dark/light contrast handling -- see that class's own comment). */
+.gbo-kpi-card { background: linear-gradient(135deg, var(--gbo-crimson-soft) 0%, var(--gbo-bg-card) 65%); border: 1px solid var(--gbo-crimson-soft); border-radius: 10px; padding: 16px 20px; min-width: 0; }
+.gbo-kpi-label { color: var(--gbo-crimson); opacity: 1; font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
+.gbo-kpi-value { color: var(--gbo-text); font-family: var(--gbo-display); font-size: 2rem; font-weight: 700; line-height: 1; display: flex; align-items: baseline; gap: 6px; font-variant-numeric: tabular-nums; }
+.gbo-kpi-value .gbo-kpi-accent { color: var(--gbo-text); }
+.gbo-kpi-value small { font-family: var(--gbo-font); font-weight: 500; font-size: .8rem; color: var(--gbo-text-muted); }
+.gbo-kpi-delta { font-size: .78rem; font-weight: 600; margin-top: 6px; color: var(--gbo-text-muted); }
+.gbo-kpi-delta.positive { color: var(--gbo-status-good); }
+.gbo-kpi-delta.negative { color: var(--gbo-status-flag); }
+.gbo-kpi-sub { font-size: .8rem; color: var(--gbo-text-2); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.gbo-kpi-card.flag .gbo-kpi-value { color: var(--gbo-status-flag); }
+.gbo-kpi-card.watch .gbo-kpi-value { color: var(--gbo-status-watch); }
+
+/* Status chips */
+.gbo-chip { display: inline-flex; align-items: center; gap: 6px; font-size: .68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding: 3px 9px; border-radius: 999px; white-space: nowrap; line-height: 1.4; }
+.gbo-chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.gbo-chip-good { background: var(--gbo-status-good-soft); color: var(--gbo-status-good); }
+.gbo-chip-watch { background: var(--gbo-status-watch-soft); color: var(--gbo-status-watch); }
+.gbo-chip-flag { background: var(--gbo-status-flag-soft); color: var(--gbo-status-flag); }
+.gbo-chip-neutral { background: var(--gbo-bg-raised); color: var(--gbo-text-2); border: 1px solid var(--gbo-border); }
+.gbo-chip-gold { background: var(--gbo-gold-soft); color: var(--gbo-gold); }
+.gbo-chip-crimson { background: var(--gbo-crimson-soft); color: var(--gbo-crimson); }
+.gbo-pill { display: inline-block; font-size: .66rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; padding: 2px 8px; border-radius: 999px; background: var(--gbo-bg-raised); border: 1px solid var(--gbo-border); color: var(--gbo-text-2); }
+.gbo-role-badge { display: inline-block; background: var(--gbo-bg-raised); border: 1px solid var(--gbo-border); color: var(--gbo-text-2); font-size: .66rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; padding: 2px 8px; border-radius: 999px; }
+
+/* Profile header (legacy card used by dashboards) -- quiet surface now */
+.gbo-profile-card { position: relative; background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); border-radius: 10px; padding: 16px 20px; margin-bottom: 20px; display: flex; align-items: center; gap: 16px; overflow: hidden; }
+.gbo-profile-card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--gbo-crimson); }
+.gbo-profile-photo { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; border: 1px solid var(--gbo-border-strong); flex-shrink: 0; }
+.gbo-profile-name { color: var(--gbo-text); font-family: var(--gbo-display); font-size: 1.6rem; font-weight: 700; line-height: 1; margin: 0; text-transform: uppercase; letter-spacing: .02em; }
+.gbo-profile-subtitle { color: var(--gbo-text-muted); font-size: .78rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; margin-top: 4px; }
+.gbo-profile-logo { position: absolute; right: 18px; top: 50%; transform: translateY(-50%); width: 36px; height: 36px; opacity: .25; object-fit: contain; }
+.gbo-roster-thumb { width: 32px; height: 32px; border-radius: 6px; object-fit: cover; }
+
+/* Metric bars -- fill is colored by STATUS (class on the fill), default neutral */
+.gbo-metric-bar-group { display: flex; flex-direction: column; gap: 0; margin: 4px 0 10px; }
+.gbo-metric-bar-row { width: 100%; padding: 9px 0; border-bottom: 1px solid var(--gbo-border); }
+.gbo-metric-bar-row:last-child { border-bottom: 0; }
+.gbo-metric-bar-header { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.gbo-metric-bar-name { color: var(--gbo-text); font-size: .85rem; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gbo-metric-bar-raw { color: var(--gbo-text); font-family: var(--gbo-mono); font-size: .82rem; font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; flex: none; }
+.gbo-metric-bar-raw small, .gbo-metric-bar-raw .unit { color: var(--gbo-text-muted); font-family: var(--gbo-font); font-size: .74rem; margin-left: 3px; }
+.gbo-metric-bar-track { background: var(--gbo-bg-raised); border-radius: 3px; height: 6px; overflow: hidden; }
+/* Nov 2026 (bucket bars): lane holds the track plus the last-test ring and team-median tick */
+.gbo-metric-bar-lane { position: relative; height: 16px; display: flex; align-items: center; }
+.gbo-metric-bar-lane .gbo-metric-bar-track { flex: 1; height: 8px; border-radius: 4px; }
+.gbo-bar-median { position: absolute; top: 1px; width: 2px; height: 14px; margin-left: -1px; border-radius: 1px; background: var(--gbo-text); opacity: .65; }
+.gbo-bar-last { position: absolute; top: 2px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; box-sizing: border-box; border: 2px solid var(--gbo-text); background: var(--gbo-bg-card); }
+.gbo-change-summary { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 2px 0 10px; font-size: .82rem; }
+.gbo-change-summary > div { display: flex; gap: 8px; align-items: flex-start; flex: 1 1 240px; }
+.gbo-sum-text { display: flex; flex-direction: column; gap: 1px; }
+.gbo-sum-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex: none; }
+.gbo-sum-dot.better { background: var(--gbo-status-good); }
+.gbo-sum-dot.worse { background: var(--gbo-status-flag); }
+.gbo-metric-bar-fill { background: var(--gbo-status-good); height: 100%; border-radius: 3px; transition: width .6s ease; }
+.gbo-metric-bar-fill.good { background: var(--gbo-status-good); }
+.gbo-metric-bar-fill.watch { background: var(--gbo-status-watch); }
+.gbo-metric-bar-fill.flag { background: var(--gbo-status-flag); }
+.gbo-metric-bar-fill.gold { background: var(--gbo-gold); }
+.gbo-metric-bar-fill.neutral { background: var(--gbo-border-strong); }
+.gbo-metric-bar-percentile { color: var(--gbo-text-muted); font-size: .72rem; margin: 4px 0 0; font-variant-numeric: tabular-nums; }
+/* Oct 2026 (My Assessments): change since last test, next to the percentile */
+.gbo-metric-bar-foot { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.gbo-change { font-weight: 600; white-space: nowrap; }
+.gbo-change.better { color: var(--gbo-status-good); }
+.gbo-change.worse { color: var(--gbo-status-flag); }
+.gbo-change.neutral { color: var(--gbo-text-muted); }
+.gbo-details { border: 1px solid var(--gbo-border); border-radius: 8px; margin: 8px 0; background: var(--gbo-bg-card); }
+.gbo-details > summary { cursor: pointer; padding: 9px 14px; font-weight: 600; font-size: .85rem; color: var(--gbo-text); }
+.gbo-details[open] > summary { border-bottom: 1px solid var(--gbo-border); }
+.gbo-details-in { padding: 4px 14px 10px; }
+/* Progress chart (visualizations/progress_chart.py) */
+.gbo-progress-svg{width:100%;height:auto;display:block;overflow:visible}
+.gbo-progress-svg .grid{stroke:var(--gbo-border);stroke-width:1}
+.gbo-progress-svg .axis{fill:var(--gbo-text-muted);font-size:11px;font-variant-numeric:tabular-nums}
+.gbo-progress-svg .avg{stroke:var(--gbo-text-muted);stroke-width:1.5;stroke-dasharray:5 4}
+.gbo-progress-svg .avg-lbl{fill:var(--gbo-text-muted);font-size:11px}
+.gbo-progress-svg .line{fill:none;stroke:var(--gbo-series-1);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.gbo-progress-svg .dot{fill:var(--gbo-series-1);stroke:var(--gbo-bg-card);stroke-width:2}
+.gbo-progress-svg .hit{fill:transparent}
+.gbo-progress-svg .pt:hover .dot{r:6}
+.gbo-progress-svg .last{fill:var(--gbo-text);font-size:12px;font-weight:700}
+/* My Assessments strengths / work-on card */
+.gbo-sw { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 6px 0 14px; }
+.gbo-sw-col { border: 1px solid var(--gbo-border); border-radius: 10px; padding: 12px 14px; background: var(--gbo-bg-card); }
+.gbo-sw-col h6 { font-size: .74rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; margin: 0 0 6px; }
+.gbo-sw-col.good h6 { color: var(--gbo-status-good); } .gbo-sw-col.work h6 { color: var(--gbo-status-watch); }
+.gbo-sw-item { padding: 7px 0; border-bottom: 1px solid var(--gbo-border); }
+.gbo-sw-item:last-child { border-bottom: 0; }
+.gbo-sw-name { font-weight: 600; font-size: .86rem; color: var(--gbo-text); }
+.gbo-sw-sub { font-size: .76rem; color: var(--gbo-text-muted); }
+.gbo-progress-controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+.gbo-progress-note { font-size: .78rem; color: var(--gbo-text-muted); margin: 6px 0 0; }
+/* Guest demo banner (Oct 2026) */
+.gbo-guest-banner { display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap;
+  padding: 8px 20px; background: var(--gbo-gold-soft); border-bottom: 1px solid var(--gbo-border); font-size: .8rem; color: var(--gbo-text-2); }
+.gbo-guest-btns { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.gbo-guest-lbl { font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--gbo-text-muted); margin-right: 2px; }
+/* My Assessments tab row (Oct 2026): one row, scrolls sideways on a phone */
+.gbo-ma-tabs > .nav-tabs { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; margin-bottom: 16px; }
+.gbo-ma-tabs > .nav-tabs::-webkit-scrollbar { display: none; }
+.gbo-ma-tabs > .nav-tabs .nav-link { white-space: nowrap; }
+@media (max-width: 700px) { .gbo-sw { grid-template-columns: 1fr; } }
+/* External reference-standard tier badges (Aug 2026, AdaptPTPD force-plate
+   sheet -- see force_plate_standards.py). Appended next to a metric's raw
+   value in build_metric_bars for the handful of metrics that have an
+   MLB/reference tier; reuses the existing status-color vocabulary
+   (good/watch/flag) so it reads as one system with everything else here,
+   not a bolted-on second one. */
+.gbo-tier-badge { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 10px; font-size: .68rem; font-weight: 600; letter-spacing: .02em; vertical-align: middle; white-space: nowrap; }
+.gbo-tier-badge.good { background: var(--gbo-status-good-soft); color: var(--gbo-status-good); }
+.gbo-tier-badge.watch { background: var(--gbo-status-watch-soft); color: var(--gbo-status-watch); }
+.gbo-tier-badge.flag { background: var(--gbo-status-flag-soft); color: var(--gbo-status-flag); }
+
+/* ROM rows (threshold-based) */
+.gbo-rom-group { display: flex; flex-direction: column; gap: 0; margin: 4px 0 10px; }
+.gbo-rom-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 0; border-bottom: 1px solid var(--gbo-border); }
+.gbo-rom-name { color: var(--gbo-text); font-size: .85rem; font-weight: 500; flex: 1 1 auto; min-width: 160px; }
+.gbo-rom-raw { color: var(--gbo-text); font-family: var(--gbo-mono); font-size: .82rem; font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.gbo-rom-status { display: inline-flex; align-items: center; gap: 6px; font-size: .68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; padding: 3px 9px; border-radius: 999px; }
+.gbo-rom-status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.gbo-rom-status-green { color: var(--gbo-status-good); background: var(--gbo-status-good-soft); }
+.gbo-rom-status-yellow { color: var(--gbo-status-watch); background: var(--gbo-status-watch-soft); }
+.gbo-rom-status-red { color: var(--gbo-status-flag); background: var(--gbo-status-flag-soft); }
+.gbo-rom-status-none { color: var(--gbo-text-muted); background: var(--gbo-bg-raised); }
+.gbo-rom-compound-row { padding-bottom: 8px; border-bottom: 1px solid var(--gbo-border); }
+.gbo-rom-compound-row .gbo-rom-row { border-bottom: none; padding-bottom: 2px; }
+.gbo-rom-explanation { color: var(--gbo-text-muted); font-size: .78rem; margin: 2px 0 0; line-height: 1.45; }
+.gbo-rom-recommendation { color: var(--gbo-text-2); font-size: .78rem; margin: 4px 0 0; line-height: 1.45; }
+
+/* Score rings (conic) -- status-colored via --gbo-ring-color, default good */
+.gbo-ring-col { text-align: center; }
+.gbo-ring { --gbo-ring-color: var(--gbo-status-good); width: 96px; height: 96px; border-radius: 50%; margin: 0 auto; display: flex; align-items: center; justify-content: center; background: conic-gradient(var(--gbo-ring-color) calc(var(--gbo-ring-pct) * 1%), var(--gbo-bg-raised) 0); }
+.gbo-ring.good { --gbo-ring-color: var(--gbo-status-good); } .gbo-ring.watch { --gbo-ring-color: var(--gbo-status-watch); } .gbo-ring.flag { --gbo-ring-color: var(--gbo-status-flag); } .gbo-ring.gold { --gbo-ring-color: var(--gbo-gold); }
+.gbo-ring.diamond { --gbo-ring-color: var(--gbo-diamond); } .gbo-ring.silver { --gbo-ring-color: var(--gbo-silver); } .gbo-ring.bronze { --gbo-ring-color: var(--gbo-bronze); } .gbo-ring.common { --gbo-ring-color: var(--gbo-common); }  /* Total ring's tier coloring, Aug 2026 -- see build_score_rings/_tier_for_total in bucket_display.py */
+.gbo-ring-inner { width: 82%; height: 82%; border-radius: 50%; background: var(--gbo-bg-card); display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.gbo-ring-value { color: var(--gbo-text); font-family: var(--gbo-display); font-size: 1.75rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.gbo-ring-sublabel { color: var(--gbo-text-muted); font-size: .66rem; margin-top: 3px; text-align: center; padding: 0 8px; line-height: 1.2; }
+.gbo-ring-label { color: var(--gbo-text-2); font-weight: 500; font-size: .8rem; text-align: center; margin: 8px 0 0; }
+.gbo-ring--green { background: var(--gbo-status-good); } .gbo-ring--yellow { background: var(--gbo-status-watch); } .gbo-ring--orange { background: var(--gbo-orange); } .gbo-ring--red { background: var(--gbo-status-flag); }
+.gbo-ring--green .gbo-ring-inner, .gbo-ring--yellow .gbo-ring-inner, .gbo-ring--orange .gbo-ring-inner, .gbo-ring--red .gbo-ring-inner { width: 100%; height: 100%; background: transparent; }
+.gbo-ring--green .gbo-ring-value, .gbo-ring--yellow .gbo-ring-value, .gbo-ring--orange .gbo-ring-value, .gbo-ring--red .gbo-ring-value, .gbo-ring--green .gbo-ring-sublabel, .gbo-ring--yellow .gbo-ring-sublabel, .gbo-ring--orange .gbo-ring-sublabel, .gbo-ring--red .gbo-ring-sublabel { color: #fff; }
+
+/* Percentile bars (Aug 2026, recolored Sept 2026) -- Savant/
+   mlbpitchprofiler.com-style row (colored bar + a circular percentile
+   badge riding the fill edge + the raw "+" stat alongside) for the
+   mean-100/10-per-SD grade family -- Ryker's own reference site for
+   Pitcher/Hitter Profile's grade display, replacing the .gbo-ring
+   treatment for that family (Bucket System / Command+ elsewhere keep
+   their existing rings untouched). Sept 2026: Ryker asked for the fill/
+   badge color to match that site's own continuous blue-to-red
+   percentile scale instead of the original 3-tier good/neutral/flag
+   treatment, so the color itself is now set inline per row
+   (ui_helpers.percentile_color) rather than by a fixed CSS class --
+   .gbo-pctbar-fill/.gbo-pctbar-badge below are just the shape/layout,
+   the background color always comes from that inline style now. See
+   ui_helpers.render_percentile_bars. */
+.gbo-pctbar-group { display: flex; flex-direction: column; }
+.gbo-pctbar-row { display: flex; align-items: center; gap: 4px; padding: 14px 2px; border-bottom: 1px solid var(--gbo-border); }
+.gbo-pctbar-row:last-child { border-bottom: 0; }
+.gbo-pctbar-label { flex: 0 0 112px; font-weight: 600; font-size: .82rem; color: var(--gbo-text); }
+.gbo-pctbar-track { position: relative; flex: 1 1 auto; height: 8px; border-radius: 4px; background: var(--gbo-bg-raised); margin: 0 18px; }
+.gbo-pctbar-fill { position: absolute; top: 0; left: 0; height: 100%; border-radius: 4px; transition: width .6s ease, background .3s ease; }
+.gbo-pctbar-badge { position: absolute; top: 50%; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transform: translate(-50%, -50%); font-family: var(--gbo-display); font-weight: 700; font-size: .74rem; font-variant-numeric: tabular-nums; box-shadow: 0 0 0 3px var(--gbo-bg-card); transition: left .6s ease, background .3s ease; }
+.gbo-pctbar-raw { flex: 0 0 44px; text-align: right; font-family: var(--gbo-mono); font-size: .84rem; font-weight: 600; color: var(--gbo-text); font-variant-numeric: tabular-nums; }
+.gbo-pctbar-empty { flex: 1 1 auto; color: var(--gbo-text-muted); font-size: .78rem; }
+.gbo-pctbar-header { padding-top: 0; padding-bottom: 8px; }
+.gbo-pctbar-header-pct { flex: 1 1 auto; margin: 0 18px; text-align: center; font-size: .66rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--gbo-text-muted); }
+.gbo-pctbar-header-raw { flex: 0 0 44px; text-align: right; font-size: .66rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--gbo-text-muted); }
+
+/* Bucket summary card (collapsible) */
+.gbo-bucket { display: grid; grid-template-columns: 56px 1fr auto; gap: 16px; align-items: center; padding: 14px 20px; background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); border-radius: 10px; cursor: pointer; margin-bottom: 10px; }
+.gbo-bucket:hover { border-color: var(--gbo-border-strong); }
+.gbo-bucket-score { font-family: var(--gbo-display); font-weight: 700; font-size: 1.75rem; line-height: 1; text-align: center; font-variant-numeric: tabular-nums; }
+.gbo-bucket-score.good { color: var(--gbo-text); } .gbo-bucket-score.watch { color: var(--gbo-status-watch); } .gbo-bucket-score.flag { color: var(--gbo-status-flag); } .gbo-bucket-score.gold { color: var(--gbo-gold); }
+.gbo-bucket-title { font-weight: 600; color: var(--gbo-text); }
+.gbo-bucket-why { font-size: .78rem; color: var(--gbo-text-muted); margin-top: 2px; }
+.gbo-bucket-why b { color: var(--gbo-text-2); font-weight: 500; }
+
+/* Loading */
+@keyframes gbo-spin { to { transform: rotate(360deg); } }
+.gbo-loading-row { display: flex; align-items: center; gap: 10px; padding: 14px 0; color: var(--gbo-text-muted); font-size: .85rem; }
+.gbo-loading-spinner { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid var(--gbo-border); border-top-color: var(--gbo-crimson); animation: gbo-spin .7s linear infinite; flex-shrink: 0; }
+
+/* Balance bar */
+.gbo-balance-bar { position: relative; height: 4px; background: var(--gbo-bg-raised); border-radius: 2px; margin: 22px 10px 8px; }
+.gbo-balance-center { position: absolute; left: 50%; top: -8px; bottom: -8px; width: 2px; background: var(--gbo-border-strong); transform: translateX(-50%); }
+.gbo-balance-marker { position: absolute; top: 50%; left: 50%; width: 16px; height: 16px; border-radius: 50%; background: var(--gbo-crimson); border: 2px solid var(--gbo-bg-card); transform: translate(-50%, -50%); }
+.gbo-balance-labels { display: flex; justify-content: space-between; font-size: .72rem; color: var(--gbo-text-muted); margin: 0 10px 10px; }
+
+/* Legacy navbar classes kept harmless (if any page still references them) */
+.gbo-navbar-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--gbo-text); }
+.gbo-navbar-logo { height: 26px; width: auto; }
+
+/* Plotly figures sit on cards: make widget backgrounds transparent */
+.js-plotly-plot .plotly .main-svg { background: transparent !important; }
+.shiny-plot-output img, .gbo-chart-img { max-width: 100%; height: auto; }
+
+/* =========================================================
+   6. PLAYER PROFILE + SHOW CARD (modules/player_profile.py)
+   ========================================================= */
+.gbo-profile-hero { display: grid; grid-template-columns: 360px 1fr; gap: 20px; align-items: start; }
+@media (max-width: 1100px) { .gbo-profile-hero { grid-template-columns: 1fr; } .gbo-show { width: 100%; } }
+.gbo-show { width: 360px; background: linear-gradient(180deg, #1B1B1E, #121213); border: 1px solid var(--gbo-border-strong); border-radius: 12px; position: relative; overflow: hidden; padding: 20px 20px 16px 24px; display: flex; flex-direction: column; gap: 14px; }
+.gbo-show::before { content: ""; position: absolute; inset: 0; background: linear-gradient(135deg, var(--gbo-crimson-soft) 0%, transparent 40%), linear-gradient(315deg, var(--gbo-gold-soft) 0%, transparent 35%); pointer-events: none; }
+.gbo-show::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--tier); }
+.gbo-show > * { position: relative; }
+.gbo-show-hd { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: start; }
+.gbo-show-ovr { font-family: var(--gbo-display); font-weight: 700; font-size: 4.5rem; line-height: .85; color: var(--tier); font-variant-numeric: tabular-nums; }
+.gbo-show-ovr small { display: block; font-size: .62rem; letter-spacing: .12em; font-family: var(--gbo-font); font-weight: 600; color: var(--gbo-text-muted); margin-top: 6px; text-transform: uppercase; }
+.gbo-show-who { padding-top: 4px; min-width: 0; }
+.gbo-show-nm { font-family: var(--gbo-display); font-weight: 700; font-size: 1.75rem; line-height: 1; text-transform: uppercase; color: var(--gbo-text); }
+.gbo-show-ln { font-family: var(--gbo-display); font-weight: 500; font-size: 1.1rem; color: var(--gbo-text-2); line-height: 1.1; text-transform: uppercase; letter-spacing: .03em; }
+.gbo-show-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.gbo-show-photo { aspect-ratio: 4 / 3; border-radius: 8px; background: linear-gradient(180deg, var(--gbo-bg-card), var(--gbo-bg-page)); border: 1px solid var(--gbo-border); display: grid; place-items: center; color: var(--gbo-text-muted); position: relative; overflow: hidden; }
+.gbo-show-photo-img { width: 100%; height: 100%; object-fit: cover; }
+.gbo-show-silhouette { width: 90px; height: 90px; opacity: .35; }
+.gbo-show-num { position: absolute; right: 12px; bottom: 4px; font-family: var(--gbo-display); font-weight: 700; font-size: 3rem; color: var(--gbo-text); opacity: .18; line-height: 1; }
+.gbo-show-attrs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; }
+.gbo-at { display: grid; grid-template-columns: 40px 1fr 34px; gap: 8px; align-items: center; font-size: .72rem; }
+.gbo-at .l { font-weight: 600; letter-spacing: .04em; color: var(--gbo-text-muted); }
+.gbo-at .b { height: 5px; background: var(--gbo-bg-card); border-radius: 3px; overflow: hidden; }
+.gbo-at .b > div { height: 100%; border-radius: 3px; background: var(--gbo-status-good); }
+.gbo-at .b > .good { background: var(--gbo-status-good); } .gbo-at .b > .watch { background: var(--gbo-status-watch); } .gbo-at .b > .flag { background: var(--gbo-status-flag); } .gbo-at .b > .gold { background: var(--gbo-gold); } .gbo-at .b > .neutral { background: var(--gbo-border-strong); }
+.gbo-at .v { text-align: right; font-family: var(--gbo-mono); font-size: .78rem; color: var(--gbo-text); font-variant-numeric: tabular-nums; }
+.gbo-show-ft { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--gbo-border); padding-top: 10px; font-size: .64rem; letter-spacing: .08em; text-transform: uppercase; color: var(--gbo-text-muted); font-weight: 600; }
+.gbo-show-ft img { width: 16px; height: 20px; object-fit: contain; }
+.gbo-show-ft .rt { margin-left: auto; color: var(--tier); }
+.gbo-pri { display: grid; grid-template-columns: auto 1fr; gap: 10px 12px; align-items: start; padding: 6px 0; }
+.gbo-pri-i { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; font-family: var(--gbo-display); font-weight: 700; font-size: .9rem; }
+.gbo-pri-i.flag { background: var(--gbo-status-flag-soft); color: var(--gbo-status-flag); } .gbo-pri-i.watch { background: var(--gbo-status-watch-soft); color: var(--gbo-status-watch); } .gbo-pri-i.good { background: var(--gbo-status-good-soft); color: var(--gbo-status-good); }
+.gbo-pri b { display: block; color: var(--gbo-text); font-weight: 600; } .gbo-pri span { color: var(--gbo-text-muted); font-size: .8rem; }
+a.gbo-pri { text-decoration: none; color: inherit; cursor: pointer; border-radius: 8px; margin: 0 -8px; padding: 6px 8px; }
+a.gbo-pri:hover { background: var(--gbo-bg-raised); }
+.gbo-li { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--gbo-border); color: var(--gbo-text-2); }
+.gbo-li:last-child { border-bottom: 0; } .gbo-li b { color: var(--gbo-text); font-weight: 600; }
+.gbo-li-dt { font-family: var(--gbo-mono); font-size: .75rem; color: var(--gbo-text-muted); width: 96px; flex: none; padding-top: 2px; }
+.gbo-stack { display: flex; flex-direction: column; gap: 16px; }
+.gbo-tab-body { padding-top: 20px; }
+.gbo-rings-row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: space-around; }
+.gbo-bucket-accordion .accordion-item { border-radius: 10px !important; margin-bottom: 10px; border: 1px solid var(--gbo-border); overflow: hidden; }
+.gbo-bucket-accordion .accordion-button { padding: 12px 16px; }
+.gbo-bucket-accordion .accordion-button::after { margin-left: 12px; }
+.gbo-bucket-head { display: grid; grid-template-columns: 56px 1fr auto; gap: 16px; align-items: center; width: 100%; }
+.gbo-bucket-head .gbo-bucket-score { text-align: center; }
+.gbo-stack-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--gbo-bg-raised); gap: 2px; }
+.gbo-stack-bar > div { height: 100%; }
+.gbo-cols { display: flex; gap: 10px; align-items: stretch; height: 160px; padding-top: 6px; }
+.gbo-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+.gbo-col-track { flex: 1; width: 100%; max-width: 36px; display: flex; align-items: flex-end; background: var(--gbo-bg-raised); border-radius: 4px; overflow: hidden; }
+.gbo-col-track > div { width: 100%; border-radius: 4px 4px 0 0; transition: height .9s cubic-bezier(.2,.8,.2,1); }
+.gbo-col-track > .good { background: var(--gbo-status-good); } .gbo-col-track > .watch { background: var(--gbo-status-watch); } .gbo-col-track > .flag { background: var(--gbo-status-flag); }
+.gbo-col-val { font-family: var(--gbo-mono); font-size: .75rem; color: var(--gbo-text); }
+.gbo-col-lab { font-size: .7rem; color: var(--gbo-text-muted); text-transform: uppercase; letter-spacing: .04em; }
+.gbo-filter { min-width: 160px; }
+.gbo-player-link { color: var(--gbo-text); font-weight: 600; white-space: nowrap; }
+.gbo-player-link:hover { color: var(--gbo-crimson); text-decoration: none; }
+.table td.gbo-nowrap, .table td:has(> .gbo-player-link) { white-space: nowrap; }
+.gbo-filter .form-group, .gbo-filter .shiny-input-container { margin-bottom: 0; }
+
+/* =========================================================
+   7. MOTION (theme.MOTION_JS drives these; off under reduced-motion)
+   ========================================================= */
+.gbo-metric-bar-fill, .gbo-at .b > div { transition: width .9s cubic-bezier(.2,.8,.2,1); }
+.gbo-anim-in { opacity: 0; transform: translateY(8px); }
+.gbo-anim-in { transition: opacity .45s ease, transform .45s cubic-bezier(.2,.8,.2,1); }
+.gbo-anim-in.gbo-anim-go { opacity: 1; transform: none; }
+.gbo-side-link, .btn, .gbo-chip, .gbo-bucket, .gbo-card, .gbo-kpi-card { transition: background .15s, border-color .15s, color .15s, box-shadow .15s; }
+.gbo-card:hover, .gbo-kpi-card:hover { border-color: var(--gbo-border-strong); }
+.gbo-show { transition: transform .25s cubic-bezier(.2,.8,.2,1), box-shadow .25s; }
+.gbo-show:hover { transform: translateY(-2px); box-shadow: var(--gbo-shadow); }
+@media (prefers-reduced-motion: reduce) { .gbo-anim-in { opacity: 1; transform: none; } }
+
+/* =========================================================
+   8. ENTRY PAGES — data-entry forms styled as cards (round 2, Aug 30 2026)
+   (pure CSS: no module needs to change for a page to pick
+   this up; sections that render form controls become cards,
+   and fields flow in a responsive two-column grid)
+   ========================================================= */
+/* controls */
+.form-control, .form-select { padding: .5rem .75rem; border-radius: 8px; min-height: 40px; }
+.form-select { appearance: none; -webkit-appearance: none; padding-right: 2.1rem; background-position: right .8rem center; background-repeat: no-repeat; }
+.form-control:hover:not(:focus), .form-select:hover:not(:focus) { border-color: color-mix(in srgb, var(--gbo-border-strong) 55%, var(--gbo-text-muted)); }
+textarea.form-control { min-height: 84px; }
+input[type="date"].form-control::-webkit-calendar-picker-indicator { filter: invert(.65); }
+.input-group .btn { border-color: var(--gbo-border-strong); }
+.progress { background-color: var(--gbo-bg-raised); }
+.progress-bar { background-color: var(--gbo-crimson); }
+
+/* selectize matches the native controls */
+.selectize-control { min-height: 40px; }
+.selectize-control .selectize-input { background: var(--gbo-bg-raised); border: 1px solid var(--gbo-border-strong); border-radius: 8px; color: var(--gbo-text); min-height: 40px; padding: .5rem .75rem; box-shadow: none; }
+.selectize-control.single .selectize-input { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%237A8594' stroke-width='1.5'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .8rem center; background-size: 10px; padding-right: 2.1rem; }
+.selectize-control.single .selectize-input:after { display: none; }
+.selectize-input.focus { border-color: var(--gbo-focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--gbo-focus) 30%, transparent); }
+.selectize-input > input, .selectize-input .item { color: var(--gbo-text); }
+.selectize-dropdown { background: var(--gbo-bg-card); border: 1px solid var(--gbo-border-strong); border-radius: 8px; color: var(--gbo-text-2); box-shadow: var(--gbo-shadow); }
+.selectize-dropdown .option { padding: .45rem .75rem; }
+.selectize-dropdown .option.active { background: var(--gbo-bg-raised); color: var(--gbo-text); }
+.selectize-dropdown .option.selected { color: var(--gbo-gold-text); }
+
+/* datepicker dropdown */
+.datepicker-dropdown { background: var(--gbo-bg-card); border: 1px solid var(--gbo-border-strong); border-radius: 8px; color: var(--gbo-text-2); box-shadow: var(--gbo-shadow); }
+.datepicker table tr td, .datepicker table tr th { color: var(--gbo-text-2); }
+.datepicker table tr td.day:hover, .datepicker table tr td.focused { background: var(--gbo-bg-raised); }
+.datepicker table tr td.active.active, .datepicker table tr td.active:hover { background: var(--gbo-crimson); border-color: var(--gbo-crimson); }
+.datepicker table tr td.old, .datepicker table tr td.new { color: var(--gbo-text-muted); }
+.datepicker .datepicker-switch:hover, .datepicker .prev:hover, .datepicker .next:hover { background: var(--gbo-bg-raised); }
+
+/* labels: quiet uppercase eyebrows */
+.gbo-content .shiny-input-container > label, .gbo-content .form-label { font-size: .6875rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--gbo-text-muted); margin-bottom: .35rem; }
+.gbo-content .form-check label, .gbo-content .shiny-input-container .checkbox label { text-transform: none; letter-spacing: 0; font-size: .85rem; font-weight: 500; color: var(--gbo-text-2); }
+
+/* separators inside entry pages */
+.gbo-content .tab-pane hr { border: 0; height: 1px; background: linear-gradient(90deg, var(--gbo-border), transparent); opacity: 1; margin: 1.1rem 0; }
+/* a section's own leading separator is redundant once it's a card */
+.gbo-content .shiny-html-output:has(.shiny-input-container) > div > hr:first-child,
+.gbo-content .shiny-html-output:has(.shiny-input-container) > hr:first-child { display: none; }
+
+/* any output section that renders form controls becomes a card */
+.gbo-content .shiny-html-output:has(.shiny-input-container):not(:has(.shiny-html-output .shiny-input-container)),
+.gbo-content .shiny-html-output:has(> .accordion) {
+  display: block; background: var(--gbo-bg-card); border: 1px solid var(--gbo-border);
+  border-radius: 10px; padding: 18px 20px 20px; margin-bottom: 14px; max-width: 900px;
+}
+.gbo-content .shiny-html-output:has(.shiny-input-container) .accordion { margin: .25rem 0 .5rem; }
+.gbo-content .shiny-html-output:has(.shiny-input-container) .accordion-item { border-radius: 8px; }
+
+/* headings inside entry cards read as section eyebrows */
+.gbo-content .shiny-html-output:has(.shiny-input-container) h4,
+.gbo-content .shiny-html-output:has(.shiny-input-container) h5 {
+  font-size: .8rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--gbo-text); border-left: 3px solid var(--gbo-crimson);
+  padding-left: 10px; margin: .35rem 0 .9rem;
+}
+
+/* fields flow two-up wherever a block holds several inputs */
+.gbo-content div:not(.bslib-grid):not(.gbo-filter):has(> .shiny-input-container ~ .shiny-input-container) {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 4px 22px; align-items: end;
+}
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > h4,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > h5,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > hr,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > p,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .btn,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .accordion,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > table,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .table-responsive,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > svg,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > img,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-plot-output,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .bslib-grid,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-input-container:has(textarea),
+/* Shiny wraps every @render.ui/ui.output_ui() block in a
+   .shiny-html-output element that computes to display:contents -- a
+   real DOM node, so it breaks the ">" direct-child match above, and
+   grid-column has no effect on the wrapper itself (spec: a
+   display:contents box takes no part in grid placement, only its
+   children do). Reach through it explicitly so a chart/graphic
+   rendered via output_ui still gets rescued from the two-up grid. */
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > svg,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > img,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > .shiny-plot-output,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > .bslib-grid,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > table,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > .table-responsive,
+/* Sept 1 2026: several charts (bullpen_dashboard_display.py's Movement
+   and Spin Axis panels) build their output as ui.div(*children) --
+   the chart image PLUS a caption/legend div underneath -- so the real
+   child of .shiny-html-output is a plain <div>, not the img/bslib-grid
+   itself. None of the specific-tag selectors above match a bare div,
+   so this was still landing in a single ~240px auto-fit cell (visible
+   live as a tiny chart floating in a mostly-empty row -- Ryker: "pitch
+   movement chart and spin axis charts need to be bigger, take up same
+   amount of space that the pitch location chart takes up" -- Location
+   didn't have this bug because it returns its <img> directly, with no
+   wrapping div). */
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > div,
+/* Oct 2026 (Ryker's photo of Game Breakdown -> Results): an interactive
+   plotly chart (shinywidgets output_widget) sitting next to two filter
+   dropdowns landed in the third ~270px grid cell -- the Damage by Zone
+   chart drawn tiny on the right. Widget outputs always span the row. */
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-ipywidget-output,
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .shiny-html-output > .shiny-ipywidget-output {
+  grid-column: 1 / -1;
+}
+.gbo-content .shiny-html-output:has(.shiny-input-container) .btn-primary { margin-top: .55rem; }
+.gbo-content .shiny-input-container { margin-bottom: .85rem; max-width: none; width: auto; }
+
+/* Sept 1 2026: the generic "entry form" card treatment above
+   (.shiny-html-output:has(.shiny-input-container) -> max-width:900px)
+   is meant for actual data-entry forms, but a chart panel that also
+   has a filter slider/radio group (Bullpen Dashboard's Charts section,
+   reused on Pitcher/Hitter Profile) matches that same selector and was
+   getting capped to the same narrow 900px width as a login form --
+   directly working against "big and easy to read" charts. Any card
+   that also contains real chart/graphic content escapes the width cap
+   (form-only cards, with no image/svg/chart grid anywhere inside,
+   still get the narrow max-width as originally intended). */
+.gbo-content .shiny-html-output:has(.shiny-input-container):has(img),
+.gbo-content .shiny-html-output:has(.shiny-input-container):has(svg),
+.gbo-content .shiny-html-output:has(.shiny-input-container):has(.bslib-grid),
+.gbo-content .shiny-html-output:has(.shiny-input-container):has(.shiny-ipywidget-output) {
+  max-width: none;
+}
+
+/* buttons size to their label instead of stretching across the card */
+.gbo-content div:has(> .shiny-input-container ~ .shiny-input-container) > .btn { justify-self: start; width: auto; min-width: 240px; }
+
+/* the card you're typing in wakes up */
+.gbo-content .shiny-html-output:has(.shiny-input-container):focus-within { border-color: var(--gbo-border-strong); }
+
+/* hint / helper text under fields and section intros */
+.gbo-content .form-text, .gbo-content .help-block { color: var(--gbo-text-muted); font-size: .8rem; }
+.gbo-content .shiny-html-output:has(.shiny-input-container) p { color: var(--gbo-text-2); font-size: .85rem; }
+
+/* multi-select values read as chips */
+.selectize-control.multi .selectize-input { padding: .35rem .5rem; }
+.selectize-control.multi .selectize-input .item {
+  background: color-mix(in srgb, var(--gbo-crimson) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gbo-crimson) 45%, transparent);
+  color: var(--gbo-text); border-radius: 6px; padding: 2px 8px;
+  margin: 2px 6px 2px 0; font-size: .8rem;
+}
+.selectize-control.multi .selectize-input .item.active { background: var(--gbo-crimson); border-color: var(--gbo-crimson); color: #fff; }
+
+/* save / error toasts match the theme instead of stock Shiny white */
+#shiny-notification-panel { bottom: 18px; right: 18px; }
+.shiny-notification {
+  background: var(--gbo-bg-raised); color: var(--gbo-text);
+  border: 1px solid var(--gbo-border-strong); border-left: 3px solid var(--gbo-border-strong);
+  border-radius: 10px; box-shadow: var(--gbo-shadow);
+  padding: 12px 34px 12px 14px; font-size: .875rem;
+}
+.shiny-notification-message { border-left-color: var(--gbo-status-good); }
+.shiny-notification-warning { border-left-color: var(--gbo-status-watch); }
+.shiny-notification-error { border-left-color: var(--gbo-status-flag); }
+.shiny-notification-close { color: var(--gbo-text-muted); }
+.shiny-notification-close:hover { color: var(--gbo-text); }
+
+/* history / list tables: eyebrow headers, quiet row hover */
+.gbo-content .table thead th { font-size: .6875rem; text-transform: uppercase; letter-spacing: .08em; color: var(--gbo-text-muted); font-weight: 600; border-bottom: 1px solid var(--gbo-border-strong); }
+.gbo-content .table tbody tr:hover > td { background: var(--gbo-bg-raised); }
+
+/* dark scrollbars + crimson selection/accents everywhere */
+html { scrollbar-color: var(--gbo-border-strong) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--gbo-border-strong); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--gbo-text-muted); }
+::selection { background: color-mix(in srgb, var(--gbo-crimson) 45%, transparent); color: #fff; }
+input, textarea, select { accent-color: var(--gbo-crimson); }
+
+/* disabled states stay legible but clearly off */
+.btn:disabled { opacity: .45; }
+.form-control:disabled, .form-select:disabled { opacity: .55; background-color: var(--gbo-bg-card); }
+
+/* ---- Phones (Oct 2026, Part 2: phone-friendly player pages) ---------- */
+@media (max-width: 700px) {
+  .gbo-content { padding-top: 16px; }
+  .gbo-content h1, .gbo-page-title { font-size: 1.6rem; }
+  /* filter strips: two fields per row instead of one long column */
+  .gbo-content .bslib-grid:has(> div > .shiny-input-container):not(:has(.html-widget, .shiny-plot-output, img, svg, table, .gbo-card, .gbo-kpi-card)) {
+    grid-template-columns: 1fr 1fr !important; gap: 0 10px !important; }
+  .gbo-content .bslib-grid:has(> div > .shiny-input-container):not(:has(.html-widget, .shiny-plot-output, img, svg, table, .gbo-card, .gbo-kpi-card)) > * {
+    grid-column: auto !important; }
+  .gbo-content div:not(.bslib-grid):not(.gbo-filter):has(> .shiny-input-container ~ .shiny-input-container) {
+    grid-template-columns: 1fr 1fr; gap: 0 10px; }
+  .gbo-content .shiny-input-radiogroup, .gbo-content .shiny-input-checkboxgroup,
+  .gbo-content .shiny-input-container:has(textarea) { grid-column: 1 / -1 !important; }
+  .gbo-content .shiny-html-output:has(.shiny-input-container):not(:has(.shiny-html-output .shiny-input-container)) {
+    padding: 12px 12px 4px; }
+  .gbo-content .shiny-input-container { margin-bottom: .5rem; }
+  .gbo-content .shiny-input-container > label, .gbo-content .control-label { font-size: .66rem; }
+  /* 16px text stops iPhone Safari from zooming in when a field is tapped */
+  .gbo-content .form-control, .gbo-content .form-select, .gbo-content select, .gbo-content input { font-size: 16px; }
+  .gbo-content .form-control, .gbo-content .form-select { padding: .38rem .55rem; }
+  /* wide tables scroll sideways inside their card instead of squashing */
+  .gbo-content table.table { display: block; overflow-x: auto; white-space: nowrap; }
+  .gbo-content .table-responsive table.table { display: table; }
+  .gbo-content .shiny-input-radiogroup .shiny-options-group { display: flex; flex-wrap: wrap; gap: 2px 12px; }
+  .gbo-content .gbo-card { padding: 12px; }
+}
+
+/* =========================================================
+   Oct 2026: phones. Nothing may widen the page -- on iPhone one
+   too-wide element made Safari zoom the whole app out (~60%).
+   ========================================================= */
+html { overflow-x: hidden; }
+body { max-width: 100%; }
+.gbo-app { overflow-x: clip; }  /* clip, not hidden: hidden would break the sticky top bar */
+.gbo-main, .gbo-content { min-width: 0; }
+.gbo-content select, .gbo-content .form-select, .gbo-content .shiny-input-container { max-width: 100%; }
+
+/* =========================================================
+   Game Tracking: step-by-step mode (phones/tablets, Oct 2026)
+   ========================================================= */
+.gbo-mode-switch { display: inline-flex; border: 1px solid var(--gbo-border-strong, #3A3A3E); border-radius: 8px; overflow: hidden; margin: 4px 0 12px; }
+.gbo-mode-seg { background: none; border: 0; color: var(--gbo-text-muted); padding: 6px 14px; font-size: .8rem; font-weight: 600; touch-action: manipulation; }
+.gbo-mode-seg.sel { background: var(--gbo-crimson); color: #fff; }
+.gbo-ss { position: sticky; top: 56px; z-index: 4; display: flex; align-items: center; gap: 12px; padding: 8px 12px; margin: 0 -4px 10px;
+  background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); border-radius: 10px; }
+.gbo-standalone .gbo-ss { top: calc(56px + env(safe-area-inset-top)); }
+.gbo-ss-inn { font-weight: 700; font-size: .85rem; line-height: 1.15; max-width: 92px; }
+.gbo-ss-mid { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.gbo-ss-count { font-family: var(--gbo-mono); font-weight: 700; font-size: 1.25rem; line-height: 1; }
+.gbo-ss-outs { display: flex; gap: 4px; }
+.gbo-ss-outs i { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--gbo-text-muted); display: block; }
+.gbo-ss-outs i.on { background: var(--gbo-crimson); border-color: var(--gbo-crimson); }
+.gbo-ss-dia { width: 44px; height: 33px; flex: none; }
+.gbo-ss-dia rect { fill: none; stroke: var(--gbo-text-muted); stroke-width: 1.6; }
+.gbo-ss-dia rect.on { fill: var(--gbo-gold, #E8B923); stroke: var(--gbo-gold, #E8B923); }
+.gbo-ss-right { margin-left: auto; text-align: right; }
+.gbo-ss-score { font-family: var(--gbo-mono); font-weight: 700; font-size: 1.05rem; }
+.gbo-ss-pc { font-size: .72rem; color: var(--gbo-text-muted); white-space: nowrap; }
+.gbo-step-who { background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); border-radius: 10px; padding: 8px 12px 0; margin-bottom: 10px; }
+.gbo-step-who .form-label, .gbo-step-who label { font-size: .7rem; margin-bottom: 2px; }
+.gbo-step-who .shiny-input-container { margin-bottom: 8px; width: 100%; }
+.gbo-step { background: var(--gbo-bg-card); border: 1px solid var(--gbo-border); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+.gbo-step-q { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 12px 0 8px; font-size: .78rem;
+  text-transform: uppercase; letter-spacing: .06em; color: var(--gbo-gold-text); font-weight: 700; }
+.gbo-step-q:first-child { margin-top: 0; }
+.gbo-step-hint { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--gbo-text-muted); font-size: .72rem; }
+.gbo-step-sofar { font-size: .78rem; color: var(--gbo-text-muted); margin-bottom: 8px; }
+.gbo-step-grid { display: grid; gap: 8px; }
+.gbo-step-grid.g1 { grid-template-columns: 1fr; margin-top: 12px; }
+.gbo-step-grid.g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.gbo-step-grid.g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.gbo-sb { min-height: 48px; padding: 8px 6px; border-radius: 10px; border: 1px solid var(--gbo-border-strong, #3A3A3E);
+  background: var(--gbo-bg-raised, #1D1D20); color: var(--gbo-text); font-weight: 600; font-size: .9rem; line-height: 1.15;
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent; cursor: pointer; overflow-wrap: anywhere; }
+.gbo-sb:active { transform: scale(.97); }
+.gbo-sb.sel { background: var(--gbo-crimson); border-color: var(--gbo-crimson); color: #fff; }
+.gbo-step-grid.big .gbo-sb { min-height: 60px; font-size: 1rem; }
+.gbo-sb-primary { background: var(--gbo-crimson); border-color: var(--gbo-crimson); color: #fff; min-height: 54px; font-size: 1.05rem; }
+.gbo-sb-primary:disabled { opacity: .4; }
+.gbo-sb-ghost { background: none; min-height: 40px; color: var(--gbo-text-muted); font-weight: 500; padding: 6px 12px; }
+.gbo-sb-skip { margin-left: auto; color: var(--gbo-text); }
+.gbo-step-nav { display: flex; gap: 8px; margin-top: 12px; }
+.gbo-out-ball { border-color: #2E7D5B; }
+.gbo-out-strike { border-color: #B23A48; }
+.gbo-out-foul { border-color: #8A6D1F; }
+.gbo-out-inplay { border-color: #2F6FB0; background: rgba(47,111,176,.18); }
+.gbo-call-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; max-width: 420px; }
+.gbo-call { min-height: 42px; border-radius: 8px; border: 1px solid var(--gbo-border-strong, #3A3A3E); background: var(--gbo-bg-raised, #1D1D20);
+  color: var(--gbo-text-2); font-family: var(--gbo-mono); font-weight: 700; font-size: .95rem; touch-action: manipulation; }
+.gbo-call-grid .gbo-call:nth-child(5n+2), .gbo-call-grid .gbo-call:nth-child(5n+3), .gbo-call-grid .gbo-call:nth-child(5n+4) { background: rgba(255,255,255,.07); }
+.gbo-call-grid .gbo-call:nth-child(n+16) { opacity: .75; }
+.gbo-call.sel { background: var(--gbo-crimson) !important; border-color: var(--gbo-crimson); color: #fff; opacity: 1; }
+.gbo-step-more-pt { margin-top: 8px; }
+.gbo-step-more-pt > summary { color: var(--gbo-text-muted); font-size: .8rem; margin-bottom: 8px; }
+.gbo-field { width: 100%; max-width: 460px; display: block; margin: 0 auto; touch-action: manipulation; cursor: crosshair; }
+.gbo-field .grass { fill: #1E4D2B; }
+.gbo-field .dirt { fill: #6B4A2E; opacity: .55; }
+.gbo-field .infield { fill: #1E4D2B; }
+.gbo-field .foul, .gbo-field .fence { stroke: #FFFDE5; stroke-width: 3; fill: none; }
+.gbo-field .bases rect, .gbo-field .bases path { fill: #FFFDE5; }
+.gbo-field text { fill: rgba(255,253,229,.55); font-size: 22px; font-weight: 700; }
+.gbo-field .mark { fill: var(--gbo-crimson); stroke: #fff; stroke-width: 3; }
+.gbo-rs { display: flex; flex-direction: column; gap: 10px; }
+.gbo-rs.off { opacity: .35; pointer-events: none; }
+.gbo-rs-row { display: flex; align-items: center; gap: 10px; }
+.gbo-rs-lbl { width: 92px; flex: none; font-size: .8rem; color: var(--gbo-text-muted); }
+.gbo-rs-bases, .gbo-rs-outs { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; flex: 1; }
+.gbo-rs-step { display: flex; align-items: center; gap: 10px; }
+.gbo-num-btn { width: 48px; min-height: 44px; font-size: 1.3rem; padding: 0; }
+.gbo-num { min-width: 24px; text-align: center; font-family: var(--gbo-mono); font-weight: 700; font-size: 1.2rem; }
+.gbo-rs-notes { margin-top: 12px; }
+.gbo-drawer { border: 1px solid var(--gbo-border); border-radius: 10px; margin-bottom: 8px; background: var(--gbo-bg-card); }
+.gbo-drawer > summary { padding: 12px; font-weight: 600; font-size: .88rem; cursor: pointer; }
+.gbo-drawer-body { padding: 0 12px 12px; }
+.gbo-step-extras { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+.gbo-step-extras .btn { min-height: 40px; }
+.gbo-step-grid.g4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.gbo-trk { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.gbo-trk-name { font-weight: 700; }
+.gbo-trk-lbl { font-size: .72rem; color: var(--gbo-text-muted); margin-left: auto; }
+.gbo-trk-n { font-family: var(--gbo-mono); font-weight: 700; font-size: 1.4rem; color: var(--gbo-gold-text); }
+.gbo-code { display: flex; align-items: baseline; gap: 12px; padding: 8px 12px; border: 1px solid var(--gbo-border-strong, #3A3A3E);
+  border-radius: 10px; background: var(--gbo-bg, #0B0B0C); margin-bottom: 8px; min-height: 52px; }
+.gbo-code-val { font-family: var(--gbo-mono); font-size: 1.8rem; font-weight: 700; letter-spacing: .12em; min-width: 72px; }
+.gbo-code-means { font-size: .8rem; color: var(--gbo-text-muted); }
+.gbo-keypad { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+.gbo-key { min-height: 58px; font-family: var(--gbo-mono); font-size: 1.4rem; }
+.gbo-key-del { font-family: inherit; color: var(--gbo-text-muted); }
+.gbo-score-in { font-family: var(--gbo-mono); font-size: 1.4rem; font-weight: 700; text-transform: uppercase; margin-bottom: 8px; min-height: 52px; }
+.gbo-qr { min-height: 42px; font-family: var(--gbo-mono); }
+/* Pitcher Profile > Sequencing (Oct 2026 rebuild) */
+.gbo-seq-sec { border: 1px solid var(--gbo-border); border-radius: 10px; padding: 12px 14px; margin: 0 0 14px; background: var(--gbo-bg-card); }
+.gbo-seq-h { margin: 0 0 2px; font-weight: 700; color: var(--gbo-gold-text); }
+.gbo-seq-how { margin: 0 0 8px; }
+.gbo-seq-flag { display: inline-block; font-family: var(--gbo-mono); font-weight: 700; background: rgba(191,30,45,.2); color: var(--gbo-text); border-radius: 6px; padding: 0 6px; }
+.gbo-sg-wrap { overflow-x: auto; }
+.gbo-sg { border-collapse: separate; border-spacing: 4px; font-variant-numeric: tabular-nums; }
+.gbo-sg th { font-size: .72rem; color: var(--gbo-text-muted); font-weight: 600; text-align: center; padding: 2px 4px; }
+.gbo-sg th.gbo-sg-row { text-align: right; white-space: nowrap; color: var(--gbo-text); }
+.gbo-sg th.gbo-sg-row span { display: block; font-weight: 400; color: var(--gbo-text-muted); font-size: .65rem; }
+.gbo-sg td { min-width: 62px; height: 52px; text-align: center; border-radius: 8px; border: 1px solid var(--gbo-border); background: var(--gbo-bg-raised, #1D1D20); line-height: 1.1; }
+.gbo-sg td b { display: block; font-size: 1.05rem; }
+.gbo-sg td span { font-size: .65rem; color: var(--gbo-text-muted); }
+.gbo-sg td.gbo-sg-better { background: rgba(46,125,91,.32); border-color: rgba(46,125,91,.7); }
+.gbo-sg td.gbo-sg-worse { background: rgba(191,30,45,.28); border-color: rgba(191,30,45,.65); }
+.gbo-sg td.gbo-sg-thin { opacity: .45; }
+.gbo-sg td.gbo-sg-empty { background: none; border-color: transparent; color: var(--gbo-text-muted); }
+.gbo-seq-details > summary { cursor: pointer; color: var(--gbo-text-muted); font-size: .85rem; margin-bottom: 6px; }
+/* Pitcher Profile > Results (Oct 2026 rebuild) */
+.gbo-rc { border-collapse: separate; border-spacing: 0 4px; width: 100%; font-variant-numeric: tabular-nums; }
+.gbo-rc th { font-size: .64rem; text-transform: uppercase; letter-spacing: .04em; color: var(--gbo-text-muted); font-weight: 600; text-align: center; padding: 2px 4px; line-height: 1.15; }
+.gbo-rc td { text-align: center; padding: 8px 4px; background: var(--gbo-bg-raised, #1D1D20); font-weight: 600; font-size: .85rem; white-space: nowrap; }
+.gbo-rc th.gbo-rc-pt { text-align: left; text-transform: none; letter-spacing: 0; font-size: .85rem; color: var(--gbo-text); background: var(--gbo-bg-raised, #1D1D20); border-radius: 8px 0 0 8px; padding: 6px 10px; }
+.gbo-rc th.gbo-rc-pt span { display: block; font-size: .68rem; color: var(--gbo-text-muted); font-weight: 400; }
+.gbo-rc tr td:last-child { border-radius: 0 8px 8px 0; }
+.gbo-rc td.gbo-rc-better { background: rgba(46,125,91,.35); }
+.gbo-rc td.gbo-rc-worse { background: rgba(191,30,45,.32); }
+.gbo-rc tr.gbo-rc-thin { opacity: .5; }
+.gbo-rc tr.gbo-rc-total td, .gbo-rc tr.gbo-rc-total th { background: none; border-top: 1px solid var(--gbo-border); font-weight: 500; color: var(--gbo-text-muted); }
+.gbo-cq-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 10px; align-items: center; margin-bottom: 8px; }
+.gbo-cq-lbl { font-weight: 600; font-size: .85rem; }
+.gbo-cq-lbl span { display: block; font-size: .68rem; color: var(--gbo-text-muted); font-weight: 400; }
+.gbo-cq-bar { display: flex; height: 30px; border-radius: 6px; overflow: hidden; background: var(--gbo-bg-raised, #1D1D20); }
+.gbo-cq-bar span { display: flex; align-items: center; justify-content: center; font-size: .68rem; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; }
+.gbo-cq-weak { background: #2F6FB0; } .gbo-cq-jammed { background: #4A86C5; } .gbo-cq-off { background: #6E9FD3; }
+.gbo-cq-clipped { background: #8FA3B8; } .gbo-cq-solid { background: #D9822B; } .gbo-cq-barreled { background: #BF1E2D; }
+.gbo-cq-none { background: repeating-linear-gradient(45deg, #333 0 4px, #222 4px 8px); }
+.gbo-cq-legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: .72rem; color: var(--gbo-text-muted); margin-top: 4px; }
+.gbo-cq-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.gbo-dz-wrap { position: relative; display: flex; justify-content: center; padding: 6px 40px; }
+.gbo-dz { border-collapse: separate; border-spacing: 3px; }
+.gbo-dz td { width: 64px; height: 64px; text-align: center; vertical-align: middle; border-radius: 6px; line-height: 1.1; }
+.gbo-dz td b { display: block; font-size: 1.05rem; }
+.gbo-dz td span { font-size: .62rem; color: rgba(255,255,255,.8); }
+.gbo-dz td.gbo-dz-zone { border: 1.5px solid rgba(255,253,229,.55); }
+.gbo-dz td.gbo-dz-out { border: 1px dashed var(--gbo-border-strong, #3A3A3E); }
+.gbo-dz td.gbo-dz-thin { color: var(--gbo-text-muted); background: rgba(128,128,128,.12) !important; }
+.gbo-dz td.gbo-dz-none { background: none; }
+.gbo-dz-bat { position: absolute; top: 50%; transform: translateY(-50%); writing-mode: vertical-rl; font-size: .7rem; font-weight: 700; color: var(--gbo-text-muted); letter-spacing: .1em; }
+.gbo-dz-bat-l { left: 8px; } .gbo-dz-bat-r { right: 8px; }
+.gbo-dz-key { display: flex; justify-content: center; gap: 16px; font-size: .72rem; color: var(--gbo-text-muted); margin-top: 6px; }
+.gbo-dz-key i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+@media (max-width: 520px) { .gbo-dz td { width: 52px; height: 52px; } .gbo-dz-wrap { padding: 6px 22px; } .gbo-cq-row { grid-template-columns: 92px minmax(0, 1fr); } }
+.gbo-swm { display: grid; grid-template-columns: minmax(0, 1fr) 58px; gap: 6px; }
+.gbo-step-grid .gbo-sb.gbo-sword { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 4px; font-size: .7rem; white-space: nowrap; overflow-wrap: normal; }
+.gbo-sword svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; }
+""".replace("{FONT_STACK}", FONT_STACK).replace("{DISPLAY_STACK}", DISPLAY_STACK).replace("{MONO_STACK}", MONO_STACK)
+
+
+# Oct 2026, Ryker: installable web app (PWA) -- "Add to Home Screen" gives
+# GBO its own icon and opens it full-screen. Manifest + icons live in
+# assets/pwa/ (served at /assets/pwa/).
+PWA_INSTALL_JS = r"""
+(function(){
+  var standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
+  if (standalone) { document.documentElement.classList.add('gbo-standalone'); return; }
+  var ua = navigator.userAgent || '';
+  var ios = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  var mobile = ios || /Android/.test(ua);
+  function dismissed(){ try { return localStorage.getItem('gboInstallDismissed') === '1'; } catch (e) { return false; } }
+  function dismiss(){ try { localStorage.setItem('gboInstallDismissed', '1'); } catch (e) {} var b = document.getElementById('gbo-install'); if (b) b.remove(); }
+  function banner(html, onInstall){
+    if (dismissed() || document.getElementById('gbo-install')) return;
+    var d = document.createElement('div'); d.id = 'gbo-install'; d.className = 'gbo-install';
+    d.innerHTML = '<img src="/assets/pwa/icon-192.png" alt=""><div class="gbo-install-text">' + html + '</div>' +
+      (onInstall ? '<button type="button" class="gbo-install-go">Install</button>' : '') +
+      '<button type="button" class="gbo-install-x" aria-label="Dismiss">&times;</button>';
+    document.body.appendChild(d);
+    d.querySelector('.gbo-install-x').onclick = dismiss;
+    if (onInstall) d.querySelector('.gbo-install-go').onclick = onInstall;
+  }
+  window.addEventListener('beforeinstallprompt', function(e){
+    e.preventDefault();
+    var ev = e;
+    banner('<b>Get the GBO app</b><br>Install it on your home screen.', function(){
+      ev.prompt(); ev.userChoice.then(function(){ dismiss(); });
+    });
+  });
+  window.addEventListener('appinstalled', dismiss);
+  if (ios) {
+    var go = function(){ banner('<b>Get the GBO app</b><br>Tap <b>Share</b> <span class="gbo-share-ic">&#x2191;</span> then <b>Add to Home Screen</b>.'); };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go); else go();
+  }
+})();
+"""
+
+
+PWA_VERSION = "2"
+
+
+def pwa_head():
+    """<head> tags that make GBO installable on phones (Oct 2026)."""
+    return ui.TagList(
+        # ?v= forces phones to re-download after an icon change (they cache hard).
+        ui.tags.link(rel="manifest", href=f"/assets/pwa/manifest.json?v={PWA_VERSION}"),
+        ui.tags.link(rel="icon", type="image/png", sizes="32x32", href=f"/assets/pwa/favicon-32.png?v={PWA_VERSION}"),
+        ui.tags.link(rel="apple-touch-icon", sizes="180x180", href=f"/assets/pwa/apple-touch-icon.png?v={PWA_VERSION}"),
+        ui.tags.meta(name="theme-color", content="#0A0A0B"),
+        ui.tags.meta(name="mobile-web-app-capable", content="yes"),
+        ui.tags.meta(name="apple-mobile-web-app-capable", content="yes"),
+        ui.tags.meta(name="apple-mobile-web-app-title", content="GBO"),
+        ui.tags.meta(name="apple-mobile-web-app-status-bar-style", content="black-translucent"),
+        ui.tags.meta(name="viewport", content="width=device-width, initial-scale=1, viewport-fit=cover"),
+        ui.tags.script(PWA_INSTALL_JS),
+    )
+
+
+def fonts_link():
+    """<link> tag for the Google Fonts bundle. Include once in the page head."""
+    return ui.tags.link(rel="stylesheet", href=GOOGLE_FONTS_URL)
+
+
+def logo_img(css_class: str = "gbo-navbar-logo"):
+    return ui.tags.img(src=LOGO_URL, class_=css_class, alt="GBO")
+
+
+# Page-load motion: bars fill from 0, rings sweep to their value, KPI
+# numbers count up, cards stagger in. Runs on every DOM insertion
+# (Shiny re-renders outputs on navigation/tab change), so new content
+# animates without any page module knowing about it. Skipped entirely
+# when the OS asks for reduced motion.
+PHONE_JS = r"""
+// Oct 2026: tell the server when the screen is phone-width (< 700px) so a
+// few side-by-side charts can stack. Only sends when it changes.
+(function(){
+  var last = null;
+  function send(){ var p = window.innerWidth < 700; if (p !== last && window.Shiny && Shiny.setInputValue) { last = p; Shiny.setInputValue('gbo_phone', p); } }
+  if (window.jQuery) jQuery(document).on('shiny:connected', send); else document.addEventListener('DOMContentLoaded', function(){ setTimeout(send, 1500); });
+  window.addEventListener('resize', function(){ clearTimeout(window.__gboRs); window.__gboRs = setTimeout(send, 250); });
+})();
+"""
+
+MOTION_JS = r"""
+(function(){
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce) return;
+  var ease = function(t){ return 1 - Math.pow(1 - t, 3); };
+  // Everything animates when it SCROLLS INTO VIEW (IntersectionObserver),
+  // so bars far down a long page still fill in front of the user.
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(en){ if (en.isIntersecting) { io.unobserve(en.target); fire(en.target); } });
+  }, { rootMargin: '0px 0px -5% 0px', threshold: 0.05 });
+  function fire(el){
+    if (el.__gboKind === 'bar') { var w = el.__gboW; el.style.transition = 'none'; el.style.width = '0%';
+      requestAnimationFrame(function(){ requestAnimationFrame(function(){ el.style.transition = ''; el.style.width = w; }); }); }
+    else if (el.__gboKind === 'col') { var h = el.__gboH; el.style.transition = 'none'; el.style.height = '3%';
+      requestAnimationFrame(function(){ requestAnimationFrame(function(){ el.style.transition = ''; el.style.height = h; }); }); }
+    else if (el.__gboKind === 'ring') { var target = el.__gboPct, t0 = null, dur = 900;
+      function step(ts){ if (!t0) t0 = ts; var p = Math.min(1, (ts - t0) / dur); el.style.setProperty('--gbo-ring-pct', (target * ease(p)).toFixed(1)); if (p < 1) requestAnimationFrame(step); }
+      requestAnimationFrame(step); }
+    else if (el.__gboKind === 'num') { var node = el.__gboNode, txt = el.__gboTxt, m = el.__gboM, target = el.__gboTarget, t0n = null, durn = 800;
+      var dec = (m[2].split('.')[1] || '').length, useComma = m[2].indexOf(',') >= 0;
+      function fmt(v){ var s = v.toFixed(dec); if (useComma) s = s.replace(/\B(?=(\d{3})+(?!\d))/g, ','); return m[1] + s + m[3]; }
+      function stepn(ts){ if (!t0n) t0n = ts; var p = Math.min(1, (ts - t0n) / durn); node.textContent = fmt(target * ease(p)); if (p < 1) requestAnimationFrame(stepn); else node.textContent = txt; }
+      requestAnimationFrame(stepn); }
+    else if (el.__gboKind === 'card') { el.classList.add('gbo-anim-go'); }
+  }
+  function prepBars(root){
+    root.querySelectorAll('.gbo-metric-bar-fill:not([data-gbo-done]), .gbo-at .b > div:not([data-gbo-done]), .gbo-stack-bar > div:not([data-gbo-done])').forEach(function(el){
+      // Oct 2026 fix: remember the REAL width the first time. Re-running on a
+      // tab switch used to read the 0% this script itself had set (bars in a
+      // tab that wasn't visible yet never got to animate), so those bars
+      // stayed empty -- just the gray track -- forever.
+      el.setAttribute('data-gbo-done','1'); var w = el.getAttribute('data-gbo-w') || el.style.width; if (!w) return;
+      el.setAttribute('data-gbo-w', w);
+      el.__gboKind = 'bar'; el.__gboW = w; el.style.transition = 'none'; el.style.width = '0%'; io.observe(el);
+    });
+    root.querySelectorAll('.gbo-col-track > div:not([data-gbo-done])').forEach(function(el){
+      el.setAttribute('data-gbo-done','1'); var h = el.getAttribute('data-gbo-h') || el.style.height; if (!h) return;
+      el.setAttribute('data-gbo-h', h);
+      el.__gboKind = 'col'; el.__gboH = h; el.style.transition = 'none'; el.style.height = '3%'; io.observe(el);
+    });
+  }
+  function prepRings(root){
+    root.querySelectorAll('.gbo-ring:not([data-gbo-done])').forEach(function(el){
+      el.setAttribute('data-gbo-done','1');
+      var saved = el.getAttribute('data-gbo-pct');
+      var target = saved !== null ? parseFloat(saved) : parseFloat(getComputedStyle(el).getPropertyValue('--gbo-ring-pct')); if (isNaN(target)) return;
+      el.setAttribute('data-gbo-pct', String(target));
+      el.__gboKind = 'ring'; el.__gboPct = target; el.style.setProperty('--gbo-ring-pct', '0'); io.observe(el);
+    });
+  }
+  function prepNumbers(root){
+    root.querySelectorAll('.gbo-kpi-accent:not([data-gbo-done]), .gbo-ring-value:not([data-gbo-done]), .gbo-show-ovr:not([data-gbo-done]), .gbo-bucket-score:not([data-gbo-done])').forEach(function(el){
+      el.setAttribute('data-gbo-done','1');
+      var node = null; for (var i = 0; i < el.childNodes.length; i++) { if (el.childNodes[i].nodeType === 3 && el.childNodes[i].textContent.trim()) { node = el.childNodes[i]; break; } }
+      if (!node) return; var txt = el.getAttribute('data-gbo-txt') || node.textContent.trim(); el.setAttribute('data-gbo-txt', txt); var m = txt.match(/^([^0-9]*)([0-9][0-9,]*\.?[0-9]*)(.*)$/); if (!m) return;
+      if (/[A-Za-z]{4,}/.test(m[1] + m[3]) || /^-[0-9]/.test(m[3])) return;  // Oct 2026: words ("4-Seam Fastball") and counts ("1-1") aren't numbers to count up
+      var target = parseFloat(m[2].replace(/,/g,'')); if (isNaN(target) || target === 0) return;
+      el.__gboKind = 'num'; el.__gboNode = node; el.__gboTxt = txt; el.__gboM = m; el.__gboTarget = target;
+      var dec = (m[2].split('.')[1] || '').length; node.textContent = m[1] + (0).toFixed(dec) + m[3]; io.observe(el);
+    });
+  }
+  function prepCards(root){
+    var cards = root.querySelectorAll('.gbo-card:not([data-gbo-done]), .gbo-kpi-card:not([data-gbo-done]), .gbo-show:not([data-gbo-done]), .gbo-bucket:not([data-gbo-done]), .accordion-item:not([data-gbo-done]), .gbo-profile-card:not([data-gbo-done])');
+    cards.forEach(function(el, i){
+      el.setAttribute('data-gbo-done','1'); el.classList.add('gbo-anim-in'); el.__gboKind = 'card';
+      el.style.transitionDelay = (Math.min(i, 12) * 45) + 'ms'; io.observe(el);
+    });
+  }
+  function run(root){ root = root || document; prepCards(root); prepBars(root); prepRings(root); prepNumbers(root); }
+  window.__gboRun = run;
+  var pending = null;
+  var mo = new MutationObserver(function(){ if (pending) return; pending = setTimeout(function(){ pending = null; run(document); }, 30); });
+  function start(){ run(document); mo.observe(document.body, {childList: true, subtree: true}); }
+  if (document.readyState !== 'loading') start(); else document.addEventListener('DOMContentLoaded', start);
+  document.addEventListener('shown.bs.tab', function(e){ var pane = document.querySelector(e.target.getAttribute('data-bs-target') || e.target.getAttribute('href') || ''); if (pane) { pane.querySelectorAll('[data-gbo-done]').forEach(function(x){ x.removeAttribute('data-gbo-done'); x.classList.remove('gbo-anim-in','gbo-anim-go'); x.style.transitionDelay=''; }); run(pane); } });
+})();
+"""

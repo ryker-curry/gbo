@@ -3,7 +3,7 @@ GBO — Location-based pitcher command analytics, built from the precise
 plate_x/plate_z coordinates Game Tracking captures (see strike_zone.py)
 rather than just the binary in-zone/out-of-zone check plate_discipline.py
 already uses, or the single intended-vs-actual zone MATCH game_stats.py's
-Execution % already uses. Requested directly by Ryker once real
+Zone Execution % already uses. Requested directly by Ryker once real
 coordinates were available instead of the old 9-zone buttons.
 
 Two additions:
@@ -12,7 +12,7 @@ Two additions:
      intended and actual location, per pitch and averaged per pitch
      type) plus Directional Miss Bias (average horizontal/vertical
      miss, labeled Arm-side/Glove-side and High/Low). A continuous
-     command-precision number, unlike Execution %'s binary hit/miss (a
+     command-precision number, unlike Zone Execution %'s binary hit/miss (a
      1-inch miss and a 12-inch miss currently score identically there).
 
   2. compute_attack_zones() -- Heart/Shadow/Chase/Waste rates per pitch
@@ -51,6 +51,7 @@ IMPORTANT caveats, not silently glossed over:
 """
 
 from strike_zone import classify_attack_zone
+from analytics.command_metrics import compute_miss
 
 
 def _pct(numerator, denominator):
@@ -90,9 +91,14 @@ def _command_row(label, plist, throws):
         }
     dists, horiz, vert = [], [], []
     for p in plist:
-        dx = (float(p.actual_plate_x) - float(p.intended_plate_x)) * 12  # feet -> inches
-        dz = (float(p.actual_plate_z) - float(p.intended_plate_z)) * 12
-        dists.append((dx ** 2 + dz ** 2) ** 0.5)
+        # Zone-based miss (Ryker, Sept 2026): measured from the called
+        # Level-Zone cell's nearest edge, not the exact intended point --
+        # see analytics/command_metrics.compute_miss for the full
+        # reasoning. Single source of truth with every other "Miss
+        # Distance" on this page, instead of a second inline point-to-
+        # point calc.
+        dx, dz, dist = compute_miss(p.intended_plate_x, p.intended_plate_z, p.actual_plate_x, p.actual_plate_z)
+        dists.append(dist)
         horiz.append(dx)
         vert.append(dz)
     avg_dist = sum(dists) / n

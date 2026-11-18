@@ -4,29 +4,43 @@ GBO — Plate discipline & pitch command/usage analytics.
 Derived from raw GamePitch coordinate data (actual_plate_x/z, captured
 in Phase 2) and pitch_outcome, per Ryker's architecture doc Section 14
 ("Hitting Analytics") and the pitcher-side equivalent. Doesn't
-duplicate game_stats.py's Execution % (intended vs actual zone match)
+duplicate game_stats.py's Zone Execution % (intended vs actual zone match)
 -- that already exists there and uses the same underlying coordinates.
 
 Swing/contact/whiff are all DERIVED from pitch_outcome, never entered
 as separate fields (see strike_zone.py's docstring for why):
-  - Swing = pitch_outcome in (Swinging Strike, Foul, In Play)
-  - Whiff (swing and miss) = pitch_outcome == Swinging Strike
+  - Swing = pitch_outcome in (Swing and Miss, Foul, In Play)
+  - Whiff (swing and miss) = pitch_outcome == Swing and Miss
   - Contact (on a swing) = pitch_outcome in (Foul, In Play)
+
+Whiff % vs. SwStr % -- two different denominators, per Ryker, not the
+same stat under two names: Whiff % = whiffs / SWINGS (how often a
+swing misses); SwStr % = whiffs / ALL PITCHES seen or thrown (how
+often any given pitch results in a swinging strike, unconditional on
+whether it was swung at). Both are reported everywhere this module
+tracks whiffs.
 
 Zone-based metrics (Zone%, Chase%, etc.) only count pitches that
 actually have a recorded location (actual_plate_x/z not null) --
 pitches logged without a location click are excluded from those
 specific metrics, shown separately as "located_pitches" vs the full
 pitch count, rather than silently treated as in-zone or out.
+
+Shiny for Python migration note: build_zone_performance_heatmap_figure()
+below is the pure, framework-agnostic part (figure construction only,
+no Streamlit import) -- the Shiny UI layer calls it directly and
+renders it with shinywidgets instead of st.plotly_chart().
+render_zone_performance_heatmap() is kept as a thin Streamlit-only
+wrapper around it so existing Streamlit pages keep working unchanged
+until they're migrated.
 """
 
-import streamlit as st
 import plotly.graph_objects as go
 
 from strike_zone import is_in_zone, derive_old_zone, classify_attack_zone
 
-SWING_OUTCOMES = {"Swinging Strike", "Foul", "In Play"}
-WHIFF_OUTCOMES = {"Swinging Strike"}
+SWING_OUTCOMES = {"Swing and Miss", "Foul", "In Play"}
+WHIFF_OUTCOMES = {"Swing and Miss"}
 CONTACT_OUTCOMES = {"Foul", "In Play"}
 
 
@@ -57,6 +71,7 @@ def compute_hitter_discipline(pitches):
         "Located Pitches": len(located),
         "Swing %": _pct(len(swings), total),
         "Whiff %": _pct(len(whiffs), len(swings)),
+        "SwStr %": _pct(len(whiffs), total),
         "Zone %": _pct(len(in_zone_located), len(located)),
         "Zone Swing %": _pct(len(zone_swings), len(in_zone_located)),
         "Chase %": _pct(len(chase_swings), len(out_zone_located)),
@@ -94,6 +109,7 @@ def compute_zone_tier_discipline(pitches):
             "Zone Tier": tier, "Pitches Seen": n,
             "Swing %": _pct(len(swings), n), "Swings": len(swings),
             "Whiff %": _pct(len(whiffs), len(swings)),
+            "SwStr %": _pct(len(whiffs), n),
             "Contact %": _pct(len(contacts), len(swings)),
         })
     return rows
@@ -102,7 +118,7 @@ def compute_zone_tier_discipline(pitches):
 def compute_pitcher_command(pitches):
     """Command/usage metrics for a pitcher, from their own
     get_pitching_pitches() list (game_stats.py). Doesn't duplicate
-    Execution % -- that's already in game_stats.py's
+    Zone Execution % -- that's already in game_stats.py's
     compute_pitching_line, using the same intended/actual data."""
     total = len(pitches)
     located = [p for p in pitches if p.actual_plate_x is not None and p.actual_plate_z is not None]
@@ -125,6 +141,7 @@ def compute_pitcher_command(pitches):
         "Located Pitches": len(located),
         "Zone %": _pct(len(in_zone_located), len(located)),
         "Whiff % Induced": _pct(len(whiffs), len(swings)),
+        "SwStr % Induced": _pct(len(whiffs), total),
         "Chase % Induced": _pct(len(chase_swings_induced), len(out_zone_located)),
         "Usage %": usage_pct,
     }
@@ -149,10 +166,12 @@ def compute_zone_performance(pitches):
     return avg_rv, counts
 
 
-def render_zone_performance_heatmap(avg_rv, counts, title="Performance by zone"):
-    """3x3 heatmap of average Run Value per zone. Green = good for the
-    pitcher (low/negative RV), red = poor (high/positive RV) -- an
-    inverted colorscale, since low RV is the good outcome here."""
+def build_zone_performance_heatmap_figure(avg_rv, counts, title="Performance by zone"):
+    """Pure figure builder: 3x3 heatmap of average Run Value per zone.
+    Green = good for the pitcher (low/negative RV), red = poor
+    (high/positive RV) -- an inverted colorscale, since low RV is the
+    good outcome here. No Streamlit/UI-framework dependency: returns a
+    plain plotly Figure that any UI layer can render."""
     zone_grid = [[7, 8, 9], [4, 5, 6], [1, 2, 3]]
     z = [[avg_rv.get(zid) for zid in row] for row in zone_grid]
     text = [[f"{avg_rv[zid]:+.2f}<br>({counts[zid]})" if zid in avg_rv else "—" for zid in row] for row in zone_grid]
@@ -172,5 +191,17 @@ def render_zone_performance_heatmap(avg_rv, counts, title="Performance by zone")
         yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
         margin=dict(t=40, b=20, l=20, r=20),
     )
+    return fig
+
+
+def render_zone_performance_heatmap(avg_rv, counts, title="Performance by zone"):
+    """Streamlit-only wrapper: builds the heatmap figure and renders it
+    via st.plotly_chart(). Kept as-is for existing Streamlit pages --
+    the Shiny UI layer should call
+    build_zone_performance_heatmap_figure() directly instead (see
+    module docstring)."""
+    import streamlit as st
+
+    fig = build_zone_performance_heatmap_figure(avg_rv, counts, title=title)
     st.plotly_chart(fig, use_container_width=True)
     st.caption("Green = good for him (low/negative Run Value), red = poor (high/positive). Number in parentheses is pitch count. Zone 0/Bury not shown on this grid.")

@@ -1,0 +1,318 @@
+"""
+GBO -- role-based navigation shell for the Shiny app.
+
+Direct port of the `pages` dict construction in the original Streamlit
+app.py (the role_name in (...) blocks after the sidebar, lines ~192-325)
+-- same role -> section -> page rules, same page ordering, same
+specialty-based inclusion/exclusion logic (Hitting/Pitching coach
+specialty, Sports Scientist/Data Analyst read-only visibility, the
+pitcher-vs-hitter split for Player nav, etc.). Ported here as *data*
+(build_nav_sections() below) instead of imperative st.Page() calls, so
+the role-gating logic is reviewable on its own, independent of which
+individual pages have a working Shiny module behind them yet.
+
+`key` on each NavPage matches a page module's name once it's migrated
+(see modules/ and MODULE_UI in shiny_app/app.py). Until a page is
+migrated, app.py renders a "not yet migrated" placeholder for it instead
+of failing -- that's what lets the full nav shape be wired up and
+reviewed now, with real modules swapped in one at a time.
+"""
+
+from dataclasses import dataclass
+from typing import Optional
+
+
+@dataclass
+class NavPage:
+    key: str
+    title: str
+    icon: Optional[str] = None  # bootstrap-icons name, optional
+
+
+@dataclass
+class NavSection:
+    title: str
+    pages: list
+
+
+def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitcher_player: bool) -> list:
+    """Same role -> nav mapping as the original app.py. role_name is
+    required (callers should only reach this once AppState.is_authenticated()
+    is True); coach_specialty/is_pitcher_player mirror the same two
+    fields the original read off current_user."""
+    sections = [NavSection("Dashboard", [NavPage("dashboard", "Dashboard", "house"),
+                                         # Oct 2026 (Part 2): plain-English guide to every page.
+                                         NavPage("how_to_read", "How to Read GBO", "book")])]
+
+    if role_name in ("Administrator", "Head Coach", "Coach", "Strength Coach", "Athletic Trainer", "Sports Scientist", "Data Analyst"):
+        pd_pages = [
+            NavPage("roster", "Roster", "people"),
+            NavPage("player_profile", "Player Profile", "person-badge"),
+            NavPage("players", "Player setup", "person"),
+            NavPage("assessments", "Assessments", "clipboard-check"),
+            NavPage("assessment_import", "Import Assessments", "upload"),
+            # Nov 2026, Ryker: VALD ForceDecks / ForceFrame exports -- display only.
+            NavPage("vald_import", "Import VALD", "upload"),
+            # Nov 2026, Ryker: physical test changes vs fastball changes
+            # (change-vs-change scatter + decline watch) -- S&C staff too.
+            NavPage("athlete_performance", "Athlete vs Performance", "graph-up"),
+            NavPage("video_import", "Video Import", "camera-video"),
+            NavPage("idp", "IDP", "bullseye"),
+            NavPage("team_schedule", "Team Schedule", "calendar3"),
+            NavPage("player_assignments", "Player Assignments", "check2-square"),
+            NavPage("training_routines", "Training Routines", "activity"),
+        ]
+
+        # AT Appointments: kept in the codebase (Ryker doesn't expect it
+        # to see real use yet), deliberately left out of the sidebar
+        # -- Aug 31 2026 call, same treatment as Bullpen Scripts below.
+
+        # Import Rapsodo Data / Bullpen Tracking / Bullpen Scripts /
+        # Bullpen Dashboard are pitching-side tools -- hidden from
+        # Strength Coach, Athletic Trainer, and a Coach specifically
+        # tagged Hitting (a Coach tagged Pitching/Both/unset still sees
+        # them, same as Administrator/Head Coach). Sports Scientist and
+        # Data Analyst get read-only visibility -- their
+        # can_edit_sessions permission is already False at the role
+        # level, so the migrated pages themselves render read-only.
+        show_bullpen_pages = role_name in ("Administrator", "Head Coach") or (
+            role_name == "Coach" and coach_specialty != "Hitting"
+        )
+        if show_bullpen_pages:
+            pd_pages.insert(2, NavPage("rapsodo_import", "Import Rapsodo Data", "upload"))
+        if show_bullpen_pages or role_name in ("Sports Scientist", "Data Analyst", "Athletic Trainer", "Strength Coach"):
+            # Oct 2026: who can throw today (staff only).
+            pd_pages.append(NavPage("arm_care", "Arm Care & Availability", "heart"))
+            # Nov 2026, Ryker: every throw (catch play, warm-ups, sensors), 9 vs 28-day ratio.
+            pd_pages.append(NavPage("throwing_workload", "Throwing Workload", "activity"))
+        # Oct 2026, Ryker: WHOOP pilot -- every staff role (and players, below).
+        pd_pages.append(NavPage("recovery_board", "Recovery Board", "moon"))
+        if show_bullpen_pages or role_name in ("Sports Scientist", "Data Analyst"):
+            pd_pages.extend([
+                NavPage("bullpen_tracking", "Bullpen Tracking", "trophy"),
+                # Bullpen Scripts: kept in the codebase, deliberately left
+                # out of the sidebar (Aug 31 2026 call -- Ryker doesn't
+                # expect it to see real use yet).
+                NavPage("bullpen_dashboard", "Bullpen Dashboard", "bar-chart"),
+                # Command Tracker: kept in the codebase, removed from the
+                # sidebar (Oct 2026, Ryker).
+            ])
+
+        # Hitter Tracking: kept in the codebase (MODULE_UI), removed from the
+        # sidebar for every role (Oct 2026, Ryker).
+
+        sections.append(NavSection("Player Development", pd_pages))
+
+    # Game Operations, Scouting, Analytics -- not specialty-restricted
+    # (a game always involves both pitching and hitting). Data Analyst
+    # gets real edit rights on Game Tracking/Opponent Teams specifically
+    # (a page-level override inside those two pages once migrated, not
+    # a nav-level concern). Sports Scientist stays read-only.
+    if role_name in ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator"):
+        sections.append(NavSection("Game Operations", [
+            NavPage("game_tracking", "Game Tracking", "clipboard-data"),
+            # Oct 2026, Ryker: SmartPark (WIN Reality / Yakkertech) game files
+            # build a game's whole chart -- replaces manual charting once installed.
+            NavPage("smartpark_import", "Import SmartPark Game", "upload"),
+            # Oct 2026: charting completeness checks per game.
+            NavPage("data_health", "Data Health", "activity"),
+            # Oct 2026: arsenal cheat sheets + pitch-ID quiz for charters.
+            NavPage("charter_training", "Charter Training", "mortarboard"),
+        ]))
+        sections.append(NavSection("Scouting", [
+            # Oct 2026: series advance reports from our own charting.
+            NavPage("advance_scouting", "Advance Scouting", "binoculars"),
+            # Oct 2026, Ryker: pre-game pocket cards for the pitching coach.
+            NavPage("pitch_cards", "Pitch Calling Cards", "card-list"),
+            NavPage("opponent_teams", "Opponent Teams", "people"),
+        ]))
+        sections.append(NavSection("Analytics", [
+            NavPage("analytics", "Season Stats", "graph-up"),
+            # Oct 2026, Ryker: whole-team report (pitching + hitting) for a
+            # game, series, season or any dates, with every player's own
+            # report one click away. Also emailed to coaches after each game.
+            NavPage("team_game_report", "Team Game Report", "people"),
+            NavPage("pitcher_game_report", "Pitcher Game Breakdown", "file-text"),
+            # Oct 2026, Ryker: one-page, printable report to go through
+            # with a pitcher in a meeting (game or season).
+            NavPage("pitcher_meeting_report", "Pitcher Report", "printer"),
+            NavPage("hitter_game_report", "Hitter Game Breakdown", "trophy"),
+            # Oct 2026: one-page printable report for hitters (game or season).
+            NavPage("hitter_meeting_report", "Hitter Report", "printer"),
+            # Oct 2026, Ryker: fall exit meetings -- deep dive + offseason plan.
+            NavPage("exit_report", "Exit Reports", "clipboard-check"),
+            # Filterable per-player deep dive (Aug 2026, Stat Lab plan) --
+            # Stuff+/Location+/Pitching+ grading, physical charts, Command
+            # Target Zones, all filterable by date range/pitch type/
+            # opponent scope, vs. Pitcher Game Breakdown's single-outing
+            # snapshot above. Same key reused for the Player-facing 'My
+            # Pitcher/Hitter Profile' entries below -- one module,
+            # self-scoped by role, same pattern as player_profile.py.
+            NavPage("pitcher_profile", "Pitcher Deep Dive", "graph-up-arrow"),
+            # Nov 2026, Ryker: compare two PSU pitchers (release card +
+            # similarity by category) and find a pitcher's closest teammates.
+            NavPage("arsenal_comparison", "Arsenal Comparison", "people"),
+            # Oct 2026, Ryker: compensation profiles across the staff.
+            NavPage("staff_compensation", "Staff Compensation", "diagram-3"),
+            # Oct 2026, Ryker: athlete types (Muscular/Hybrid/Elastic) and pitcher types.
+            NavPage("player_types", "Player Types", "people"),
+            NavPage("hitter_profile", "Hitter Profile", "graph-up-arrow"),
+            # Oct 2026: automated weekly progress report (pitchers for now).
+            NavPage("weekly_report", "Weekly Reports", "calendar-week"),
+            # Sept 2026, Ryker: "create a pitching staff leaderboard with
+            # both coaches and players can see" -- roster-wide, sortable
+            # by any stat, coach/player-configurable columns. Also added
+            # to My Development below (unconditionally, not just for
+            # pitcher-flagged players) so a Player role sees it too.
+            NavPage("pitching_leaderboard", "Pitching Leaderboard", "trophy"),
+            # Oct 2026, Ryker: same board for hitters.
+            NavPage("hitting_leaderboard", "Hitting Leaderboard", "trophy"),
+            # Oct 2026: research project (S&C tests vs fastball velo/spin) --
+            # data checklist + analysis for staff.
+            NavPage("research_project", "Research Project", "flask"),
+        ]))
+
+    # Video Coordinator -- deliberately its own small section rather than
+    # folding into the big Player Development tuple above: Ryker asked
+    # for video + analytics + full Game Tracking access specifically,
+    # not Assessments/IDP/Training Routines/Roster management, so this
+    # role gets exactly Video Import here plus Game Ops/Scouting/
+    # Analytics from the block just above (Opponent Teams is bundled in
+    # only because that's how the existing tuple groups those three --
+    # flagged for Ryker to correct if he'd rather it be excluded).
+    if role_name == "Video Coordinator":
+        sections.append(NavSection("Video", [NavPage("video_import", "Video Import", "camera-video")]))
+
+    if role_name == "Administrator":
+        sections.append(NavSection("Administration", [
+            NavPage("user_management", "User Management", "gear"),
+            NavPage("staff_assignments", "Staff Assignments", "link-45deg"),
+        ]))
+    elif role_name == "Head Coach":
+        sections.append(NavSection("Administration", [NavPage("staff_assignments", "Staff Assignments", "link-45deg")]))
+
+    if role_name == "Player":
+        my_dev_pages = [
+            NavPage("player_profile", "My Profile", "person-badge"),
+            NavPage("player_schedule", "My Schedule", "calendar3"),
+            NavPage("player_development", "My Development", "bullseye"),
+            NavPage("player_stats", "My Assessments", "graph-up"),
+            NavPage("player_game_stats", "My Stats", "bar-chart"),
+            NavPage("player_video", "My Video", "camera-video"),
+            # Same page coaches use to build/edit routines -- already
+            # correctly read-only for non-edit-capable roles once
+            # migrated, so this stays a single shared page, not a
+            # separate player-facing copy.
+            NavPage("training_routines", "Training Routines", "activity"),
+            # Nov 2026, Ryker: Recovery Board is staff-only now. A player
+            # with a WHOOP sees his own data on My Profile's Recovery tab.
+        ]
+        # My Bullpens is pitcher-specific; hitters get the hitter pages
+        # below instead -- based on the player's own is_pitcher flag.
+        # (Oct 2026, Ryker: My Hitting taken off the hitter sidebar --
+        # won't be used.)
+        if is_pitcher_player:
+            my_dev_pages.append(NavPage("player_bullpens", "My Bullpens", "trophy"))
+            my_dev_pages.append(NavPage("pitcher_profile", "My Pitcher Deep Dive", "graph-up-arrow"))
+            # My Game Breakdown (Sept 2026, Ryker: players should be able to
+            # see game reports for themselves) -- same shared-module,
+            # self-scoped pattern as My Pitcher/Hitter Profile just above:
+            # pitcher_game_report.py/hitter_game_report.py each detect
+            # role_name() == "Player" and restrict the game/pitcher(batter)
+            # pickers to this player's own outings instead of showing a
+            # roster-wide picker.
+            my_dev_pages.append(NavPage("pitcher_game_report", "My Game Breakdown", "file-text"))
+            my_dev_pages.append(NavPage("pitcher_meeting_report", "Pitcher Report", "printer"))  # Oct 2026, Ryker: renamed from Meeting Report, no "My"
+            my_dev_pages.append(NavPage("exit_report", "My Exit Report", "clipboard-check"))
+            my_dev_pages.append(NavPage("weekly_report", "My Weekly Report", "calendar-week"))
+        else:
+            my_dev_pages.append(NavPage("hitter_profile", "My Hitter Profile", "graph-up-arrow"))
+            my_dev_pages.append(NavPage("hitter_game_report", "My Game Breakdown", "file-text"))
+            my_dev_pages.append(NavPage("hitter_meeting_report", "Hitter Report", "printer"))
+            my_dev_pages.append(NavPage("exit_report", "My Exit Report", "clipboard-check"))
+            my_dev_pages.append(NavPage("weekly_report", "My Weekly Report", "calendar-week"))
+            # Oct 2026: published advance scouting reports, read-only.
+            my_dev_pages.append(NavPage("advance_scouting", "Scouting Reports", "binoculars"))
+        # Leaderboards (Oct 2026, Ryker: "hitting leaderboards only
+        # viewable for hitters login and all coaches ... pitching
+        # leaderboard only accessible for pitcher and all coaches") --
+        # a player sees only the board for his own side. Staff roles keep
+        # both (Analytics section above). Pages not in the nav aren't
+        # rendered at all, so this is the access gate too.
+        if is_pitcher_player:
+            my_dev_pages.append(NavPage("pitching_leaderboard", "Pitching Leaderboard", "trophy"))
+        else:
+            my_dev_pages.append(NavPage("hitting_leaderboard", "Hitting Leaderboard", "trophy"))
+        sections.append(NavSection("My Development", my_dev_pages))
+
+    # Oct 2026: the shared Scout login only sees scout_mode.SCOUT_PAGES.
+    try:
+        import scout_mode
+        scout = scout_mode.is_scout()
+    except ImportError:
+        scout = False
+    if scout:
+        keep = set(scout_mode.SCOUT_PAGES)
+        sections = [NavSection(s.title, [p for p in s.pages if p.key in keep]) for s in sections]
+        sections = [s for s in sections if s.pages]
+
+    return sections
+
+
+# ---------------------------------------------------------------------------
+# Simplified staff sidebar (Oct 2026, Ryker: "simplify the sidebar for coach
+# view to only see what matters to them"). Every staff role except
+# Administrator sees only its everyday pages up top; the rest of what
+# build_nav_sections() allows goes into one collapsed "More tools" group.
+# This only regroups -- it never adds a page the role can't already open
+# (a key missing from build_nav_sections() is simply skipped).
+# ---------------------------------------------------------------------------
+_COACH_CORE = [
+    ("Home", ["dashboard", "how_to_read"]),
+    ("Players", ["roster", "player_profile", "exit_report", "player_types", "arm_care"]),  # Recovery Board sits under More tools for coaches (13-page cap)
+    ("Games", ["team_game_report", "pitch_cards", "advance_scouting"]),
+    ("Leaderboards", ["pitching_leaderboard", "hitting_leaderboard", "analytics"]),
+]
+SIMPLE_SIDEBAR = {
+    "Head Coach": _COACH_CORE,
+    "Coach": _COACH_CORE,
+    "Strength Coach": [
+        ("Home", ["dashboard", "how_to_read"]),
+        ("Players", ["roster", "player_profile", "arm_care", "recovery_board"]),
+        ("Training", ["assessments", "athlete_performance", "training_routines", "player_assignments", "team_schedule"]),
+    ],
+    "Athletic Trainer": [
+        ("Home", ["dashboard", "how_to_read"]),
+        ("Players", ["roster", "player_profile", "arm_care", "recovery_board"]),
+        ("Care", ["assessments", "team_schedule"]),
+    ],
+    "Sports Scientist": [
+        ("Home", ["dashboard", "how_to_read"]),
+        ("Players", ["roster", "player_profile", "recovery_board"]),
+        ("Analysis", ["assessments", "athlete_performance", "staff_compensation", "research_project", "analytics"]),
+    ],
+    "Data Analyst": [
+        ("Home", ["dashboard", "how_to_read"]),
+        ("Players", ["roster", "player_profile"]),
+        ("Games", ["game_tracking", "data_health", "team_game_report"]),
+        ("Leaderboards", ["pitching_leaderboard", "hitting_leaderboard", "analytics"]),
+    ],
+    "Video Coordinator": [
+        ("Home", ["dashboard", "how_to_read"]),
+        ("Video", ["video_import"]),
+        ("Games", ["game_tracking", "team_game_report"]),
+    ],
+}
+MORE_TOOLS = "More tools"
+
+
+def simple_sidebar_groups(role_name):
+    """Core (group, keys) list for a role, or None = full sidebar
+    (Administrator, Player, unknown roles)."""
+    try:
+        import scout_mode
+        if scout_mode.is_scout():
+            return None   # Scouts get their short list in full, no 'More tools'
+    except ImportError:
+        pass
+    return SIMPLE_SIDEBAR.get(role_name)

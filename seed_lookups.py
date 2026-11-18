@@ -18,10 +18,21 @@ def seed_roles(session):
     roles = [
         Role(role_name="Administrator", description="Full access to users, roles, teams, players, all data and settings.",
              can_edit_assessments=True, can_edit_idp=True, can_edit_sessions=True, can_view_all_players=True, is_admin=True),
-        Role(role_name="Head Coach", description="All players, all assessments, IDPs, reports, and the team dashboard.",
-             can_edit_assessments=True, can_edit_idp=True, can_edit_sessions=True, can_view_all_players=True),
-        Role(role_name="Coach", description="Assigned players only -- assessments, IDPs, sessions, reports.",
-             can_edit_assessments=True, can_edit_idp=True, can_edit_sessions=True, can_view_all_players=False),
+        # Head Coach and Coach are view-only for Assessments, Video Import,
+        # and Rapsodo/Bullpen/Hitter Tracking (can_edit_assessments/
+        # can_edit_sessions both False) -- Ryker's explicit call: the
+        # Administrator is the only one who enters that data, coaching
+        # staff just view results. IDP editing (can_edit_idp) is
+        # unaffected -- coaches still manage IDP goals/action steps, only
+        # the raw assessment/session/video DATA ENTRY is Administrator-only.
+        Role(role_name="Head Coach", description="All players, all assessments/IDPs/reports/team dashboard -- view-only on assessments, sessions (Rapsodo/Bullpen/Hitter Tracking), and video; can still manage IDP goals.",
+             can_edit_assessments=False, can_edit_idp=True, can_edit_sessions=False, can_view_all_players=True),
+        Role(role_name="Coach", description="Assigned players only -- view-only on assessments, sessions (Rapsodo/Bullpen/Hitter Tracking), and video; can still manage IDP goals/reports.",
+             can_edit_assessments=False, can_edit_idp=True, can_edit_sessions=False, can_view_all_players=False),
+        # Oct 2026 (Ryker): same access as a pitching coach -- auth.ROLE_ALIASES
+        # runs it as Coach + Pitching specialty; only the title differs.
+        Role(role_name="Pitching Strategist", description="Pitching coach access (assigned players): game planning, pitch design, bullpen usage, in-game decisions and pitch calling.",
+             can_edit_assessments=False, can_edit_idp=True, can_edit_sessions=False, can_view_all_players=False),
         Role(role_name="Strength Coach", description="Assessments, sessions, and IDP -- edit rights.",
              can_edit_assessments=True, can_edit_idp=True, can_edit_sessions=True, can_view_all_players=True),
         Role(role_name="Athletic Trainer", description="Assessments, sessions, and IDP progress notes -- edit rights.",
@@ -49,11 +60,15 @@ ASSESSMENT_CATEGORIES = [
     ("Arm Health", True, 4),
     ("Upper Body Strength", True, 5),
     ("Lower Body Strength", True, 6),
-    ("Explosive Power", True, 7),
+    ("Jump Power", True, 7),
     ("Rotational Power", True, 8),
     ("Speed", True, 9),
     ("Baseball Performance", True, 10),
     ("Pitcher-Specific", False, 11),
+    # Oct 2026: the testing workbook's extra dynamometer / force-plate
+    # metrics (study_workbook_spec.new_test_types()).
+    ("ForceFrame", True, 12),
+    ("Force Plate Detail", True, 13),
 ]
 
 # (test_name, unit) -- from Ryker's fully-populated Anthropometrics sheet
@@ -73,33 +88,64 @@ BODY_COMPOSITION_TESTS = [
     ("Body Weight", "lb"), ("Body Fat Mass", "lb"), ("Skeletal Muscle Mass", "lb"),
     ("Percent Body Fat", "%"), ("Skeletal Muscle Mass %", "%"), ("Fat-Free Mass", "lb"),
     ("Fat Mass Index (FMI)", "kg/m2"), ("Skeletal Muscle Index (SMI)", "kg/m2"),
-    ("ECW/TBW Ratio", "ratio"), ("Throwing Arm Lean Mass", "lb"),
-    ("Non-Throwing Arm Lean Mass", "lb"), ("Trunk Lean Mass", "lb"),
-    ("Right Leg Lean Mass", "lb"), ("Left Leg Lean Mass", "lb"),
+    ("ECW/TBW Ratio", "ratio"), ("Fat-Free Mass (Throwing Arm)", "lb"),
+    ("Fat-Free Mass (Glove/Non-Throwing Arm)", "lb"), ("Trunk Lean Mass", "lb"),
+    ("Lean Mass (Drive Leg)", "lb"), ("Lean Mass (Plant Leg)", "lb"),
     ("Throwing Arm Fat Mass", "lb"), ("Non-Throwing Arm Fat Mass", "lb"),
-    ("Trunk Fat Mass", "lb"), ("Right Leg Fat Mass", "lb"), ("Left Leg Fat Mass", "lb"),
+    ("Trunk Fat Mass", "lb"), ("Fat Mass (Drive Leg)", "lb"), ("Fat Mass (Plant Leg)", "lb"),
+    # Sept 1 2026 addition (Ryker: "our machine gives bmr and recommended
+    # caloric intake") -- the InBody770 printout's two metabolic-guidance
+    # fields. Same "enterable, reference-only, not scored" treatment as
+    # Body Fat Mass/Percent Body Fat below -- see BODY_COMP_ENTRY_FIELDS/
+    # BODY_COMP_DISPLAY_METRICS in bucket_system.py.
+    ("Basal Metabolic Rate (BMR)", "kcal"), ("Recommended Caloric Intake", "kcal"),
+    # Sept 2026 addition -- closing the Assessment Importer's Body
+    # Composition schema gap (assessment_import_spec.py's BODY_COMPOSITION
+    # list already expected these 7, flagged "unmapped_new" until now).
+    # Same InBody770-export, reference-only treatment as BMR/Recommended
+    # Caloric Intake above -- not part of the Body Comp composite score.
+    ("Age", "yrs"), ("Body Mass Index (BMI)", "kg/m2"), ("Fat-Free Mass Index (FFMI)", "kg/m2"),
+    ("Total Body Water", "lb"), ("Total Body Water %", "%"),
+    ("Intracellular Water", "lb"), ("Extracellular Water", "lb"),
 ]
 
-# (test_name, unit) -- from Ryker's fully-populated Mobility sheet.
-# Test names prefixed with their sub-category (Cervical Spine, Shoulder,
-# Elbow, T-Spine, Lumbar Spine, Hip, Ankle) from the sheet's own grouping.
+# (test_name, unit) -- pruned down to exactly what's actually measured
+# (Aug 2026, per Ryker's explicit correction): Shoulder ER/IR/Flexion/
+# Extension, Elbow Flexion/Extension, and the full Hip block -- ALL
+# entered as Right/Left pairs, including Hip (a follow-up correction:
+# Hip was originally entered as Drive Leg/Plant Leg, matching how it's
+# actually interpreted, but that turned out to be confusing to type in
+# at assessment time -- a coach has to stop and work out which leg is
+# "drive" for this particular player. Entry stays Right/Left; Drive
+# Leg/Plant Leg is resolved per player from that in bucket_system.py's
+# compute_mobility_rom_report, the same way GIRD/Total Arc resolve
+# Throwing Arm/Non-Throwing Arm -- see HIP_ROM_BASE_METRICS there).
+# The original draft of this sheet also had Cervical Spine,
+# Elbow Pronation/Supination, T-Spine, Lumbar Spine, and Ankle -- those
+# were things Ryker intended to measure but never actually collected,
+# so they're removed here rather than sitting on the entry form as
+# permanently-empty fields. Shoulder Total Arc and GIRD were also on
+# the original sheet as manual-entry fields, but per Ryker's call
+# neither should ever be typed in at all -- both are auto-calculated
+# live from the ER/IR values below instead (both computed inside
+# compute_mobility_rom_report in bucket_system.py), so they're removed
+# from this manual-entry list entirely, not just left empty. Note:
+# Mobility & ROM is checked pass/fail against a fixed threshold now,
+# not percentile-ranked against the team -- see MOBILITY_ROM_
+# THRESHOLDS in bucket_system.py for the current design.
 MOBILITY_ROM_TESTS = [
-    ("Cervical Spine: Forward Bend", "°"), ("Cervical Spine: Backward Bend", "°"),
-    ("Cervical Spine: Rotation", "°"), ("Cervical Spine: Left Rotation", "°"),
     ("Shoulder: Right External Rotation", "°"), ("Shoulder: Left External Rotation", "°"),
     ("Shoulder: Right Internal Rotation", "°"), ("Shoulder: Left Internal Rotation", "°"),
-    ("Shoulder: Throwing Arm Total Arc", "°"), ("Shoulder: Non-Throwing Arm Total Arc", "°"),
-    ("Shoulder: GIRD", "°"), ("Shoulder: Right Flexion", "°"), ("Shoulder: Left Flexion", "°"),
+    ("Shoulder: Right Flexion", "°"), ("Shoulder: Left Flexion", "°"),
     ("Shoulder: Right Extension", "°"), ("Shoulder: Left Extension", "°"),
-    ("Elbow: Flexion", "°"), ("Elbow: Extension", "°"), ("Elbow: Pronation", "°"), ("Elbow: Supination", "°"),
-    ("T-Spine: Right Rotation", "°"), ("T-Spine: Left Rotation", "°"),
-    ("Lumbar Spine: Forward Bend", "°"), ("Lumbar Spine: Backward Bend", "°"),
-    ("Hip: Drive Leg Internal Rotation", "°"), ("Hip: Drive Leg External Rotation", "°"),
-    ("Hip: Plant Leg Internal Rotation", "°"), ("Hip: Plant Leg External Rotation", "°"),
-    ("Hip: Drive Leg Abduction", "°"), ("Hip: Plant Leg Abduction", "°"),
-    ("Hip: Drive Leg Adduction", "°"), ("Hip: Plant Leg Adduction", "°"),
-    ("Hip: Flexion", "°"), ("Hip: Extension", "°"),
-    ("Ankle: Drive Leg Dorsiflexion", "°"), ("Ankle: Stride Leg Dorsiflexion", "°"),
+    ("Elbow: Right Flexion", "°"), ("Elbow: Left Flexion", "°"),
+    ("Elbow: Right Extension", "°"), ("Elbow: Left Extension", "°"),
+    ("Hip: Right Internal Rotation", "°"), ("Hip: Left Internal Rotation", "°"),
+    ("Hip: Right External Rotation", "°"), ("Hip: Left External Rotation", "°"),
+    ("Hip: Right Abduction", "°"), ("Hip: Left Abduction", "°"),
+    ("Hip: Right Adduction", "°"), ("Hip: Left Adduction", "°"),
+    ("Hip: Right Flexion", "°"), ("Hip: Left Flexion", "°"),
+    ("Hip: Right Extension", "°"), ("Hip: Left Extension", "°"),
 ]
 
 # (test_name, unit) -- from Ryker's fully-populated Arm Health sheet.
@@ -144,6 +190,10 @@ UPPER_BODY_STRENGTH_TESTS = [
     ("Neutral Grip Chin Up Max External Load", "lbs"),
     ("Neutral Grip/DB Bench Press Max Load", "lbs"),
     ("Grip Strength (Seated, Throwing Hand)", "lbs"),
+    # Sept 2026 addition -- Glove Hand counterpart, closing the Assessment
+    # Importer's schema gap (assessment_import_spec.py's template already
+    # had this column, flagged "unmapped_new" until now).
+    ("Grip Strength (Seated, Glove Hand)", "lbs"),
 ]
 
 # (test_name, unit) -- matches Ryker's bucket-system spreadsheet exactly
@@ -157,11 +207,18 @@ LOWER_BODY_STRENGTH_TESTS = [
     ("Isometric Mid-Thigh Pull Peak Vertical Force (Plant Leg)", "N"),
 ]
 
-# (test_name, unit) -- matches Ryker's bucket-system spreadsheet exactly
-EXPLOSIVE_POWER_TESTS = [
+# (test_name, unit) -- matches Ryker's bucket-system spreadsheet exactly,
+# except Broad Jump/Lateral Jump Distance were switched ft -> in Sept 1
+# 2026 (Ryker's call, for consistency with every other jump metric here
+# already being in inches). Only affects fresh seeds -- the live DB's
+# existing test types + the 68 already-recorded values were converted
+# directly (unit relabeled, values x12) rather than through this file,
+# since seed_tests() only adds missing test types and never touches
+# ones that already exist.
+JUMP_POWER_TESTS = [
     ("Vertical Jump (Jump Mat)", "in"),
-    ("Broad Jump Distance", "ft"),
-    ("Lateral Jump Distance (Drive Leg)", "ft"), ("Lateral Jump Distance (Plant Leg)", "ft"),
+    ("Broad Jump Distance", "in"),
+    ("Lateral Jump Distance (Drive Leg)", "in"), ("Lateral Jump Distance (Plant Leg)", "in"),
     ("Countermovement Jump Height", "in"),
     ("Countermovement Jump RSI-Modified", "ratio"),
     ("Countermovement Jump Concentric Duration", "ms"),
@@ -171,20 +228,49 @@ EXPLOSIVE_POWER_TESTS = [
     ("Hop Test Mean Contact Time", "ms"),
     ("Single-Leg Jump Height (Drive Leg)", "in"), ("Single-Leg Jump Concentric Impulse (Drive Leg)", "Ns"),
     ("Single-Leg Jump Height (Plant Leg)", "in"), ("Single-Leg Jump Concentric Impulse (Plant Leg)", "Ns"),
+    # Sept 2026 addition -- the 9 CMJ force-plate variables Ryker sent
+    # verbatim, closing the Assessment Importer's remaining Jump
+    # Power schema gap (assessment_import_spec.py's JUMP_POWER list
+    # already expected these 9, flagged "unmapped_new"/"*NEW*" until now).
+    # Named "CMJ ..." (not spelled out "Countermovement Jump ...", unlike
+    # the CMJ tests above) to match the import template's header text
+    # exactly -- these were already sent to Ryker as "*NEW* CMJ ..."
+    # columns, so keeping the name/header in lockstep avoids making him
+    # re-type headers on a sheet he may have already started filling in.
+    ("CMJ Bodyweight", "kg"), ("CMJ Concentric Impulse", "N s"), ("CMJ Peak Power", "W"),
+    ("CMJ Concentric Peak Force", "N"), ("CMJ Concentric Peak Velocity", "m/s"),
+    ("CMJ Eccentric Duration", "ms"), ("CMJ Eccentric Peak Force", "N"),
+    ("CMJ Eccentric Peak Power", "W"), ("CMJ Eccentric Peak Velocity", "m/s"),
 ]
 
-# (test_name, unit) -- matches Ryker's bucket-system spreadsheet exactly
+# (test_name, unit) -- Distance matches Ryker's bucket-system spreadsheet
+# exactly and stays the sole SCORED Rotational Power metric (see
+# bucket_system.MED_BALL_THROW_REFERENCE_METRICS). Velocity (Sept 2026
+# addition, Ryker: "add med ball shotput velocity to the rotational
+# power assessment") is entered/shown as reference-only data, same
+# unranked-KPI-tile treatment as Body Composition's BMR/Recommended
+# Caloric Intake -- it's not in the professor's spreadsheet, so it
+# deliberately never touches power_score/Total.
 ROTATIONAL_POWER_TESTS = [
     ("Medicine Ball Shot Put Distance", "ft"),
+    ("Medicine Ball Shot Put Velocity", "mph"),
 ]
 
-# (test_name, unit) -- from Ryker's fully-populated Speed sheet, already
-# matches the bucket-system spreadsheet exactly (10y accel / 10y fly).
-# 20-Yard Sprint Time and Maximum Sprint Velocity aren't in the bucket
+# (test_name, unit) -- Top Speed: Flying 10 Sprint Time and Acceleration:
+# 10-Yard Sprint Time match Ryker's fully-populated Speed sheet exactly
+# (10y accel / 10y fly, from the bucket-system spreadsheet). 20-Yard
+# Sprint Time and Maximum Sprint Velocity aren't in the bucket
 # spreadsheet, so per Ryker's rule they're excluded here too.
+# 30-Yard Sprint Time (Sept 2026 addition) also isn't in that
+# spreadsheet -- added anyway per Ryker's explicit request, with the
+# same "reference only, ranked, excluded from Total" treatment the
+# other two Speed tests already get (bucket_system.SPEED_METRICS),
+# since Speed as a whole was already outside the professor's verified
+# Total composite.
 SPEED_TESTS = [
     ("Top Speed: Flying 10 Sprint Time", "s"),
     ("Acceleration: 10-Yard Sprint Time", "s"),
+    ("30-Yard Sprint Time", "s"),
 ]
 
 # (test_name, unit) -- from Ryker's fully-populated Pitch Characteristics
@@ -232,10 +318,14 @@ def seed_assessment_categories_and_tests(session):
     seed_tests("Arm Health", ARM_HEALTH_TESTS)
     seed_tests("Upper Body Strength", UPPER_BODY_STRENGTH_TESTS)
     seed_tests("Lower Body Strength", LOWER_BODY_STRENGTH_TESTS)
-    seed_tests("Explosive Power", EXPLOSIVE_POWER_TESTS)
+    seed_tests("Jump Power", JUMP_POWER_TESTS)
     seed_tests("Rotational Power", ROTATIONAL_POWER_TESTS)
     seed_tests("Speed", SPEED_TESTS)
     seed_tests("Pitcher-Specific", PITCHER_SPECIFIC_TESTS)
+    # Oct 2026: testing-workbook metrics GBO didn't have yet.
+    from study_workbook_spec import new_test_types
+    for cat_name in ("ForceFrame", "Force Plate Detail"):
+        seed_tests(cat_name, [(n, u) for c, n, u in new_test_types() if c == cat_name])
     print(
         "NOTE: Baseball Performance has no data in the spreadsheet -- "
         "confirm whether to drop it or keep as a placeholder."
@@ -386,7 +476,7 @@ def seed_bullpen_types(session):
         BullpenType(type_name="Command", display_order=3),
         BullpenType(type_name="Velocity", display_order=4),
         BullpenType(type_name="Recovery", display_order=5),
-        BullpenType(type_name="Live BP", display_order=6),
+        BullpenType(type_name="Live AB", display_order=6),
         BullpenType(type_name="Assessment", display_order=7),
         BullpenType(type_name="Other", display_order=8),
     ]

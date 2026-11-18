@@ -1,0 +1,770 @@
+"""
+GBO -- Shared UI components for consistent visual style across all
+pages (KPI cards, profile headers, page header/footer, empty state).
+
+Shiny port of the repo root's ui_components.py (the Streamlit version).
+Unlike that version, this file does NOT inject a <style> block per
+component call -- every class referenced here (.gbo-kpi-card,
+.gbo-profile-card, etc.) is defined exactly once in theme.py's
+GLOBAL_CSS, included a single time in the outer page shell
+(shiny_app/app.py). See theme.py's module docstring for the full
+styling rationale (the "Bold Athletic" direction, and why crimson is
+never used as small body text in dark mode -- .gbo-kpi-accent below
+gets a cream-plus-glow treatment there instead, and literal crimson in
+light mode, via the --gbo-accent-ink token).
+"""
+
+from statistics import NormalDist
+
+from shiny import ui
+
+import theme
+
+
+def page_header(title: str, subtitle: str = None, actions=None):
+    """Page title block (display face, uppercase). Optional subtitle
+    line and a right-aligned actions slot (buttons) -- see
+    GBO-DESIGN-SYSTEM.md section 5. Old one-arg calls keep working."""
+    left = [ui.div(title, class_="gbo-page-header")]
+    if subtitle:
+        left.append(ui.div(subtitle, class_="gbo-page-sub"))
+    children = [ui.div(*left)]
+    if actions:
+        children.append(ui.div(*(actions if isinstance(actions, (list, tuple)) else [actions]), class_="gbo-page-actions"))
+    return ui.div(*children, class_="gbo-page-head")
+
+
+def page_footer():
+    """Small consistent wordmark at the bottom of every page."""
+    return ui.div("Gorilla Baseball Operations", class_="gbo-footer")
+
+
+def empty_state(message: str, icon: str = ""):
+    """Friendlier empty-state message, used in place of a plain info box
+    when a list/table has nothing to show yet. No emoji/icon by
+    default, per the no-emojis rule -- pass icon= only with a plain
+    text/symbol if a specific caller genuinely needs one."""
+    children = []
+    if icon:
+        children.append(ui.div(icon, class_="icon"))
+    children.append(message)
+    return ui.div(*children, class_="gbo-empty-state")
+
+
+# ---------------------------------------------------------------------
+# v2 design-system components (GBO-DESIGN-SYSTEM.md section 6)
+# ---------------------------------------------------------------------
+
+STATUS_GOOD, STATUS_WATCH, STATUS_FLAG, STATUS_NEUTRAL = "good", "watch", "flag", "neutral"
+_STATUS_LABEL = {"good": "Good", "watch": "Attention", "flag": "Priority", "neutral": "—", "gold": "Elite"}
+
+
+def status_from_percentile(pct):
+    """Default status rule (design doc section 7): >=60 good, 35-59
+    attention, <35 priority, None -> neutral. Callers with a
+    threshold-based rule (ROM) map their own red/yellow/green instead."""
+    if pct is None:
+        return STATUS_NEUTRAL
+    if pct >= 60:
+        return STATUS_GOOD
+    if pct >= 35:
+        return STATUS_WATCH
+    return STATUS_FLAG
+
+
+def status_from_color_word(word):
+    """Maps the bucket system's 'green'/'yellow'/'orange'/'red' words
+    onto the three design-system statuses."""
+    return {"green": STATUS_GOOD, "yellow": STATUS_WATCH, "orange": STATUS_FLAG, "red": STATUS_FLAG}.get((word or "").lower(), STATUS_NEUTRAL)
+
+
+def status_chip(status: str, label: str = None):
+    """Pill with a dot + text label. status: good|watch|flag|neutral|gold|crimson."""
+    return ui.span(label or _STATUS_LABEL.get(status, status), class_=f"gbo-chip gbo-chip-{status}")
+
+
+def pill(text: str):
+    return ui.span(text, class_="gbo-pill")
+
+
+def card(*children, title: str = None, right=None, small: bool = False, class_: str = ""):
+    """Quiet surface card with an optional header row (title left,
+    anything -- text or a link -- right)."""
+    head = None
+    if title is not None or right is not None:
+        head = ui.div(ui.h3(title or ""), ui.div(right, class_="right") if right is not None else None, class_="gbo-card-head")
+    return ui.div(head, *children, class_=f"gbo-card {'sm' if small else ''} {class_}".strip())
+
+
+def section_title(title: str, right=None):
+    """In-page section heading with an optional right-aligned caption."""
+    return ui.div(ui.div(title, class_="gbo-section-title"), ui.div(right, class_="right") if right is not None else None, class_="gbo-section-title-row")
+
+
+def glossary_link(link_id: str, label: str = "Glossary"):
+    """Sept 2026, Pitcher Profile's per-tab "Glossary" links (Ryker's
+    reference: mlbpitchprofiler.com's own per-page "Zone Glossary"/
+    "Results Glossary" links). A plain input_action_link -- the caller
+    wires a matching @reactive.effect + @reactive.event(input[link_id])
+    that calls ui.modal_show(glossary_modal(...)) below. Kept as its
+    own tiny helper (rather than every caller writing
+    ui.input_action_link(...) inline) so every glossary trigger looks
+    identical app-wide."""
+    return ui.input_action_link(link_id, f"\U0001F4D6 {label}", class_="small text-muted")
+
+
+def how_to_link(key: str, label: str = "How to read this"):
+    """Oct 2026 (Part 2): small link that opens the matching "How to Read
+    GBO" section (guide_content.py) in a pop-up. Handled globally in
+    app.py (_show_how_to) -- no per-page wiring needed."""
+    import json
+    js = f"Shiny.setInputValue('gbo_howto', {json.dumps(key)}, {{priority: 'event'}})"
+    return ui.tags.a(f"\u2753 {label}", class_="small text-muted gbo-howto-link", onclick=js, role="button",
+                     tabindex="0", style="cursor:pointer;text-decoration:none;")
+
+
+def glossary_modal(title: str, terms):
+    """terms: list of (term, definition) string tuples -- see
+    glossary_content.py for GBO's own per-tab term lists. Returns a
+    ui.modal(...) ready for ui.modal_show(); one shared layout so every
+    page's glossary looks the same, not a bespoke modal per caller."""
+    return ui.modal(
+        ui.div(
+            *[
+                ui.div(
+                    ui.p(term, style="font-weight:700; margin-bottom:2px;"),
+                    ui.p(definition, class_="text-muted small", style="margin-bottom:16px;"),
+                )
+                for term, definition in terms
+            ],
+        ),
+        title=title,
+        easy_close=True,
+        size="l",
+        footer=ui.modal_button("Close"),
+    )
+
+
+def metric_bar(name: str, value_text: str, pct, status: str = None, percentile_text: str = None, unit: str = None):
+    """One metric row: name left, value right, status-colored 6px
+    track, optional caption. pct is the fill 0-100 (None -> 0)."""
+    st = status or status_from_percentile(pct)
+    width = max(0, min(100, float(pct or 0)))
+    if pct is not None:
+        width = max(width, 4)  # Oct 2026: never an empty gray track for a real result
+    raw = [value_text]
+    if unit:
+        raw.append(ui.span(unit, class_="unit"))
+    return ui.div(
+        ui.div(ui.span(name, class_="gbo-metric-bar-name"), ui.span(*raw, class_="gbo-metric-bar-raw"), class_="gbo-metric-bar-header"),
+        ui.div(ui.div(class_=f"gbo-metric-bar-fill {st}", style=f"width:{width:.0f}%"), class_="gbo-metric-bar-track"),
+        ui.div(percentile_text, class_="gbo-metric-bar-percentile") if percentile_text else None,
+        class_="gbo-metric-bar-row",
+    )
+
+
+def score_ring(value, label: str, status: str = None, sublabel: str = None, size_px: int = 96):
+    """Conic-gradient score ring, 0-100, colored by status (gold at
+    >=90 by default)."""
+    pct = max(0, min(100, float(value or 0)))
+    st = status or ("gold" if pct >= 90 else status_from_percentile(pct))
+    return ui.div(
+        ui.div(
+            ui.div(ui.div(f"{pct:.0f}", class_="gbo-ring-value"), ui.div(sublabel, class_="gbo-ring-sublabel") if sublabel else None, class_="gbo-ring-inner"),
+            class_=f"gbo-ring {st}", style=f"--gbo-ring-pct:{pct:.0f}; width:{size_px}px; height:{size_px}px;",
+        ),
+        ui.div(label, class_="gbo-ring-label"),
+        class_="gbo-ring-col",
+    )
+
+
+def percentile_color(pct):
+    """pct: 0-100 (mean100_to_percentile's output). Sept 2026, Ryker:
+    "i want the colors for percentiles to match what the percentile
+    rankings on the pitcherprofiler.com does" -- a continuous
+    blue-to-red diverging scale: blue below the 50th percentile, red
+    above it, neutral right at 50, saturation increasing with distance
+    from the middle.
+
+    Ryker's immediate follow-up ("make it be more red, right now it is
+    to light"): a plain linear ramp from a pale neutral out to red
+    meant most real grades -- which cluster in the 70-95th percentile
+    band, not right at 100 -- landed on a washed-out pastel salmon
+    instead of reading as red. Fixed by curving the ramp (an exponent
+    < 1 on the normalized distance from 50) so it saturates much
+    earlier: a 70th-percentile stat is already a clear, solid red
+    instead of pale pink, and only percentiles genuinely close to 50
+    stay near-neutral. The red/blue endpoints themselves are GBO's own
+    crimson (chart_theme.CRIMSON) and a matching saturated blue, not
+    colorbrewer's softer RdBu endpoints, so a maxed-out grade reads as
+    the same red already used everywhere else in the app.
+
+    Returns (fill_hex, text_hex) -- text_hex is dark or light depending
+    on the fill color's own brightness (near 50 needs dark text against
+    the pale neutral; away from it needs white against the saturated
+    fill), so the percentile badge number stays readable throughout."""
+    NEUTRAL = (232, 232, 232)
+    RED = (200, 16, 46)  # GBO crimson (chart_theme.CRIMSON, #C8102E)
+    BLUE = (30, 100, 175)
+    SATURATION_CURVE = 0.55  # <1 = saturates well before the extremes
+
+    p = max(0, min(100, float(pct)))
+    d = (p - 50) / 50  # -1 (0th percentile) .. +1 (100th percentile)
+    t = (abs(d) ** SATURATION_CURVE) if d else 0.0
+    end = RED if d >= 0 else BLUE
+
+    r = round(NEUTRAL[0] + (end[0] - NEUTRAL[0]) * t)
+    g = round(NEUTRAL[1] + (end[1] - NEUTRAL[1]) * t)
+    b = round(NEUTRAL[2] + (end[2] - NEUTRAL[2]) * t)
+    fill_hex = f"#{r:02x}{g:02x}{b:02x}"
+    luminance = 0.299 * r + 0.587 * g + 0.114 * b
+    text_hex = "#1E1E1E" if luminance > 150 else "#FFFFFF"
+    return fill_hex, text_hex
+
+
+def mean100_to_percentile(value):
+    """Approximate 0-100 percentile for a mean-100/10-per-SD grade
+    (Stuff+/Location+/Command+/Pitching+/Performance -- analytics/
+    command_metrics.py, pitch_grading.py, performance_score.py), via
+    the standard normal CDF on z = (value-100)/10. This assumes the
+    underlying population is roughly normal around the team mean --
+    the same unvalidated V1 assumption every other cut point in this
+    build makes -- and is NOT a true rank-based percentile against the
+    live roster (that would need the caller to pass the whole
+    population, not one player's value). Revisit once real
+    distributions exist to check against normality. None in, None out."""
+    if value is None:
+        return None
+    z = (float(value) - 100) / 10
+    return round(NormalDist().cdf(z) * 100)
+
+
+def render_percentile_bars(specs):
+    """Horizontal percentile bar per (label, value) -- Ryker's Aug 31
+    2026 reference is mlbpitchprofiler.com's pitcher-page rows (a
+    colored bar + a circular percentile badge riding the fill edge +
+    the raw stat printed alongside). value is a mean-100/10-per-SD
+    grade, same input shape render_mean100_rings used to take: the
+    badge shows mean100_to_percentile(value), the bar fills to that
+    same position, and the raw grade itself -- not the percentile --
+    prints in the right-hand column, mirroring that site's own layout
+    (its percentile badge sits beside the player's actual "+" stat,
+    not a second percentile). Sept 2026: colored via that site's own
+    continuous blue-to-red percentile scale (percentile_color above),
+    not the earlier 3-tier good/neutral/flag treatment -- Ryker asked
+    for the bar/badge color itself to move smoothly with the
+    percentile instead of only flagging the two extremes. specs: list
+    of (label, value) tuples, value may be None ('not enough baseline
+    yet').
+
+    Sept 2026 (Ryker, looking at his own live Pitcher Profile as a
+    Player login): the badge number and the raw-grade number look like
+    two unexplained mystery numbers side by side with nothing on the
+    row itself saying which is which -- mlbpitchprofiler.com's own
+    page has the same two numbers but this build never carried over
+    its column framing. Fixed with a one-time header row ("Team
+    Percentile" / "Grade") above the whole group, reusing the exact
+    same flex geometry as the data rows so the columns actually line
+    up, rather than repeating a caption on every single row."""
+    if not any(v is not None for _, v in specs):
+        return None
+    rows = [ui.div(
+        ui.div("", class_="gbo-pctbar-label"),
+        ui.div("Team Percentile", class_="gbo-pctbar-header-pct"),
+        ui.div("Grade", class_="gbo-pctbar-header-raw"),
+        class_="gbo-pctbar-row gbo-pctbar-header",
+    )]
+    for label, value in specs:
+        if value is None:
+            rows.append(ui.div(
+                ui.div(label, class_="gbo-pctbar-label"),
+                ui.div("Not enough data yet", class_="gbo-pctbar-empty"),
+                class_="gbo-pctbar-row",
+            ))
+            continue
+        pct = mean100_to_percentile(value)
+        fill_hex, text_hex = percentile_color(pct)
+        rows.append(ui.div(
+            ui.div(label, class_="gbo-pctbar-label"),
+            ui.div(
+                ui.div(class_="gbo-pctbar-fill", style=f"width:{pct}%; background:{fill_hex};"),
+                ui.div(str(pct), class_="gbo-pctbar-badge", style=f"left:{pct}%; background:{fill_hex}; color:{text_hex};"),
+                class_="gbo-pctbar-track",
+            ),
+            ui.div(f"{value:.0f}", class_="gbo-pctbar-raw"),
+            class_="gbo-pctbar-row",
+        ))
+    return ui.div(*rows, class_="gbo-pctbar-group")
+
+
+def kpi_tile(label: str, value, unit: str = None, delta: str = None, delta_positive=None, status: str = None):
+    """Single KPI tile. delta_positive: True (green), False (red), None (muted)."""
+    val = [ui.span(value if not isinstance(value, (int, float, str)) else str(value), class_="gbo-kpi-accent")]
+    if unit:
+        val.append(ui.tags.small(unit))
+    parts = [ui.div(label, class_="gbo-kpi-label"), ui.div(*val, class_="gbo-kpi-value")]
+    if delta:
+        arrow = "▲ " if delta_positive is True else "▼ " if delta_positive is False else "— "
+        cls = "positive" if delta_positive is True else "negative" if delta_positive is False else ""
+        parts.append(ui.div(arrow + delta, class_=f"gbo-kpi-delta {cls}"))
+    return ui.div(*parts, class_=f"gbo-kpi-card {status or ''}".strip())
+
+
+def bucket_card(title: str, score, status: str, why, right=None):
+    """Collapsed bucket summary row: score, title + one-line why, chip."""
+    sc = "gold" if (score is not None and float(score) >= 90) else status
+    return ui.div(
+        ui.div(f"{float(score):.0f}" if score is not None else "—", class_=f"gbo-bucket-score {sc}"),
+        ui.div(ui.div(title, class_="gbo-bucket-title"), ui.div(why, class_="gbo-bucket-why") if why else None),
+        right if right is not None else status_chip(status),
+        class_="gbo-bucket",
+    )
+
+
+def render_staff_profile_header(first_name: str, last_name: str, role_name: str, show_logo: bool = True, photo_url: str = None):
+    """Same profile-card style as render_player_profile_header, for
+    staff dashboards -- role name in place of jersey/position/class.
+
+    The original Streamlit version base64-encoded the logo file on every
+    call (st.markdown(unsafe_allow_html) needs a data URI, no static
+    file serving). Shiny doesn't have that constraint -- app.py mounts
+    assets/ as a real static route (theme.ASSETS_DIR), so this just
+    points an <img> at theme.LOGO_URL instead."""
+    children = []
+    if photo_url:
+        children.append(ui.tags.img(src=photo_url, class_="gbo-profile-photo"))
+    children.append(
+        ui.div(
+            ui.p(f"{first_name} {last_name}", class_="gbo-profile-name"),
+            ui.div(role_name, class_="gbo-profile-subtitle"),
+        )
+    )
+    if show_logo:
+        children.append(ui.tags.img(src=theme.LOGO_URL, class_="gbo-profile-logo", alt="GBO"))
+    return ui.div(*children, class_="gbo-profile-card")
+
+
+def render_player_profile_header(player, show_logo: bool = True):
+    """A card-style player profile header for the Player dashboard --
+    name, crimson accent stripe, jersey/position/class, optional photo
+    and GBO logo watermark (see render_staff_profile_header's docstring
+    for why this is a static asset src now instead of base64)."""
+    position_label = player.player_position.position_name if player.player_position else ""
+    class_label = player.player_class.class_name if player.player_class else ""
+    jersey_label = f"#{player.jersey_number}" if player.jersey_number else ""
+    subtitle_parts = [p for p in [jersey_label, position_label, class_label] if p]
+    subtitle = " · ".join(subtitle_parts)
+
+    children = []
+    if player.photo_url:
+        children.append(ui.tags.img(src=player.photo_url, class_="gbo-profile-photo"))
+    children.append(
+        ui.div(
+            ui.p(f"{player.first_name} {player.last_name}", class_="gbo-profile-name"),
+            ui.div(subtitle, class_="gbo-profile-subtitle"),
+        )
+    )
+    if show_logo:
+        children.append(ui.tags.img(src=theme.LOGO_URL, class_="gbo-profile-logo", alt="GBO"))
+    return ui.div(*children, class_="gbo-profile-card")
+
+
+def render_dict_table(rows: list, empty_message: str = None):
+    """Shiny equivalent of the original's very common
+    st.dataframe(list_of_dicts, use_container_width=True, hide_index=True)
+    pattern (dozens of call sites across the app -- dashboard, players,
+    assessments, idp, and nearly every other page). Columns are the
+    union of every row's keys, in first-seen order, same as
+    player_stats.py's/player_schedule.py's hand-built table helpers
+    (pandas' auto-union behavior, made explicit since a plain HTML
+    table has no equivalent auto-fill).
+
+    Returns empty_state(empty_message) if rows is empty and a message
+    was given, otherwise a styled <table> wrapped in a .table-responsive
+    scroll container (so wide tables scroll horizontally within
+    themselves rather than the whole page). Every cell value is passed
+    through ui.tags.td() as plain text, so it's auto-escaped the same
+    way every other value in this app is -- callers should pre-format
+    (dates, rounding, "—" for None) before building the row dicts, same
+    as every other table-building call site in this codebase.
+    """
+    if not rows:
+        if empty_message:
+            return empty_state(empty_message)
+        return None
+
+    columns = []
+    for row in rows:
+        for key in row:
+            if key not in columns:
+                columns.append(key)
+
+    header = ui.tags.tr(*[ui.tags.th(c) for c in columns])
+    body_rows = [ui.tags.tr(*[ui.tags.td(row.get(c, "—")) for c in columns]) for row in rows]
+    table = ui.tags.table(ui.tags.thead(header), ui.tags.tbody(*body_rows), class_="table table-sm")
+    # Wrap in a scroll container so wide tables (many columns) scroll
+    # horizontally within themselves instead of forcing the whole page
+    # (sidebar and header included) to scroll sideways.
+    return ui.div(table, class_="table-responsive")
+
+
+def render_kpi_cards(cards: list, accent: bool = True):
+    """Render a row of bordered, gradient-backed KPI cards. The value is
+    wrapped in a .gbo-kpi-accent span -- theme.py gives it a
+    cream-plus-crimson-glow look in dark mode and literal crimson in
+    light mode (crimson text alone fails contrast on the dark card
+    surface -- see theme.py's module docstring), so it reads as the
+    "bold" accent color in both modes without ever failing contrast.
+    Optional trend delta with an up/down arrow (green = positive,
+    red = negative).
+
+    Each card dict: {"label": str, "value": str, "delta": str | None,
+    "delta_positive": bool} -- delta and delta_positive are optional.
+
+    Sept 2026, Ryker: "incorporate more red in these" (Tunneling+
+    specifically), then "i want all kpi cards in the website to be
+    this way" -- the crimson-tinted background/label look is now
+    .gbo-kpi-card's own default styling (theme.py), so every KPI row
+    app-wide has it without any caller needing to opt in. The `accent`
+    param is kept (default True, harmless if ever passed False -- there
+    is currently no separate "plain" card style to fall back to) purely
+    so existing call sites that pass accent=True explicitly don't need
+    editing. The value text itself stays on .gbo-kpi-accent's existing
+    cream/crimson-glow styling either way -- not overridden here, same
+    contrast reasoning as above.
+    """
+    card_divs = []
+    for c in cards:
+        value_children = [ui.span(c["value"], class_="gbo-kpi-accent")]
+        parts = [
+            ui.div(c["label"], class_="gbo-kpi-label"),
+            ui.div(*value_children, class_="gbo-kpi-value"),
+        ]
+        if c.get("sub"):
+            parts.append(ui.div(c["sub"], class_="gbo-kpi-sub"))
+        if c.get("delta"):
+            pos = c.get("delta_positive", True)
+            # None = neutral (e.g. "D2 average") -- a dot, not a red down arrow
+            arrow = "●" if pos is None else ("▲" if pos else "▼")
+            css_class = "neutral" if pos is None else ("positive" if pos else "negative")
+            parts.append(ui.div(f"{arrow} {c['delta']}", class_=f"gbo-kpi-delta {css_class}"))
+        card_divs.append(ui.div(*parts, class_="gbo-kpi-card"))
+
+    return ui.div(*card_divs, class_="gbo-kpi-row")
+
+
+def remove_selected_grid_rows(rows: list, selected_records: list) -> list:
+    """Removes rows matching selected_records (by exact dict equality)
+    from `rows`, consuming one match per selected record so duplicate
+    rows are handled correctly -- removes exactly as many rows as were
+    selected, not every row that happens to match a selected row's
+    content (which matters here since several blank/identical scratch
+    rows are common in these grids).
+
+    Part of the Task #11 "editable grid" pattern used by
+    opponent_teams.py, bullpen_scripts.py, and training_routines.py:
+    Shiny's render.data_frame widget (as of shiny 1.7) has no built-in
+    per-row delete affordance or "add a blank row" button the way
+    Streamlit's st.data_editor(num_rows="dynamic") does, so those pages
+    hold their working rows in a plain Python list (a module-local
+    reactive.Value), rebuild a pandas DataFrame from it on every
+    render, and implement "+Add row(s)"/"Remove selected"/"Save" as
+    ordinary buttons: Add appends blank dict(s) to the list; Remove
+    reads <grid>.data_view(selected=True) and calls this function;
+    Save reads <grid>.data_view() (the full current data, patches
+    included) and persists it. Row selection (and therefore "remove")
+    is enabled via DataGrid(..., selection_mode="rows")."""
+    remaining = list(rows)
+    for rec in selected_records:
+        for i, row in enumerate(remaining):
+            if row == rec:
+                del remaining[i]
+                break
+    return remaining
+
+
+def show_card(player, bucket_data, pitch_summary=None, flag="neutral", fastball_summary=None):
+    """MLB-The-Show-style player card (design doc section 8). Reads
+    only what the bucket system already computes:
+      BODY/PWR/STR/SPD/ARM = bucket scores (percentile-based, 0-100)
+      ROM      = movement_flag's deficit-count-based color (red/orange/
+      yellow/green), NOT a percentile -- see flag_bar() below.
+      Body Fat Mass / Percent Body Fat do NOT appear on the card at all
+      (Aug 2026, Ryker: reversing an earlier "show them as raw
+      reference numbers" request -- he doesn't want them on the card
+      in any form now). They're still visible elsewhere (Overview tab,
+      Development priorities) just never percentile-scored there --
+      see BODY_COMP_BAR_NAMES in bucket_display.py.
+      Pitchers also get VELO and SPIN -- both average FASTBALL-only
+      (from fastball_summary, Sept 2026: SPIN used to average every
+      pitch type together, which is misleading since curveballs/
+      sliders spin faster than fastballs by design -- same fix VELO
+      already had), shown as the raw mph/rpm with max fastball
+      velo/spin alongside the average, bar scaled 70-100 mph /
+      1500-2800 rpm.
+    Tier by overall: 90+ diamond, 85-89 gold, 80-84 silver, 75-79
+    bronze, else common (Aug 2026, Ryker: renamed from gold/crimson/
+    silver/slate to the more trading-card-standard Diamond/Gold/
+    Silver/Bronze/Common -- see --gbo-diamond/--gbo-bronze/--gbo-common
+    in theme.py; --gbo-gold/--gbo-silver are reused as-is since those
+    names already lined up. Thresholds tightened from the original
+    4-tier 90/80/70 split to 5 tiers on request, Aug 2026).
+    Positions never get pitching rows; nothing is invented when data is
+    missing -- the row shows a dash.
+
+    Nov 2026 (Ryker: "get rid of the overall grades at this time. keep
+    the idea but remove it from gbo"): the card no longer shows the
+    Overall number or a Diamond/Gold/Silver/Bronze/Common tier -- the
+    accent is the team crimson for everyone and the attribute bars stay.
+    To bring tiers back: tier = _tier_for_total(bd["total_score"]) in
+    bucket_display.py, --tier from the tier color, and restore the
+    gbo-show-ovr block + "{tier} tier" footer span (see git history)."""
+    bd = bucket_data or {}
+    tier_color = "var(--gbo-crimson)"
+    mf = bd.get("movement_flag") or {}
+    rom_color = mf.get("color")
+    rom_deficits = mf.get("deficit_count")
+
+    # Local import (not at module top) to dodge a circular import --
+    # bucket_display.py already does `import ui_helpers` at ITS top
+    # level, so ui_helpers importing bucket_display back at ITS top
+    # level would deadlock the two modules' load order; deferring it to
+    # here (only runs once show_card() is actually called, long after
+    # both modules have finished loading) sidesteps that entirely.
+    from bucket_display import composite_score_status
+
+    def bar(label, value, display=None, lo=0, hi=100, status=None):
+        if value is None:
+            return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_="neutral", style="width:0"), class_="b"), ui.span("—", class_="v"), class_="gbo-at")
+        pct = max(0, min(100, (float(value) - lo) / (hi - lo) * 100))
+        # Ryker's ask (Sept 2026): BODY/PWR/STR/SPD/ARM are the same
+        # 0-100 bucket composite scores build_score_rings' Body Comp/
+        # Power/Strength rings already color via composite_score_status
+        # (80/85 cut points, tuned to this roster's real spread -- see
+        # that function's docstring) instead of the app-wide 35/60
+        # status_from_percentile default, which reads as "everyone
+        # green" here since composite scores cluster well above 60.
+        # Same fix as the Sept 1 2026 Overview-tab one referenced above
+        # composite_score_status's definition, just for the hero card's
+        # bars too, so the card never disagrees with the rings about
+        # the same score. VELO/SPIN (lo/hi outside the default 0-100 --
+        # raw mph/rpm, not a bucket score) keep the old scale, unless a
+        # caller explicitly passes status=.
+        is_bucket_score = lo == 0 and hi == 100
+        st = status or (composite_score_status(value) if is_bucket_score else ("gold" if pct >= 90 else status_from_percentile(pct)))
+        return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_=st, style=f"width:{pct:.0f}%"), class_="b"), ui.span(display if display is not None else f"{float(value):.0f}", class_="v"), class_="gbo-at")
+
+    def flag_bar(label, color, count):
+        """Solid-color status bar, NOT a percentile fill (Aug 2026,
+        Ryker: ROM shouldn't be a 0-100 "% of rows green" number on the
+        card -- he just wants the red/yellow/green flag). Reuses
+        bd["movement_flag"] (compute_movement_flag in bucket_system.py)
+        -- the SAME deficit-count-based flag already shown on the
+        Dashboard/Roster/Player Profile's Movement Flag ring, so the
+        card never disagrees with the rest of the app about a player's
+        ROM status. Bar is always full width, colored by status
+        (orange folds into the same "flag"/red color as true red here,
+        same as everywhere else status_from_color_word is used --
+        the card only has 3 status colors to work with); the value
+        column shows the raw deficit count rather than a percentile."""
+        if color is None:
+            return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_="neutral", style="width:0"), class_="b"), ui.span("—", class_="v"), class_="gbo-at")
+        st = status_from_color_word(color)
+        return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_=st, style="width:100%"), class_="b"), ui.span(str(count) if count is not None else "—", class_="v"), class_="gbo-at")
+
+    from bucket_display import category_status
+
+    def count_bar(label, key):
+        """Nov 2026 (Ryker: no category scores on the card): a solid
+        status bar per category -- red if any test in it is a priority,
+        yellow if any needs attention, green otherwise -- with the counts
+        as the value ("2P 1A", or "OK"). Same bucket_display.category_
+        status the roster and profile use, so they always agree.
+        Nov 2026 (Ryker: "i don't want the priority and attention thing"):
+        color only -- no counts beside the bar."""
+        st, nf, nw, n = category_status(bd, key)
+        if st is None:
+            return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_="neutral", style="width:0"), class_="b"), ui.span("—", class_="v"), class_="gbo-at")
+        return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_=st, style="width:100%"), class_="b"), ui.span("", class_="v"), class_="gbo-at")
+
+    attrs = [
+        count_bar("BODY", "body_comp_score"), count_bar("PWR", "power_score"),
+        count_bar("STR", "strength_score"), count_bar("SPD", "speed_score"),
+        count_bar("ARM", "capacity_score"), flag_bar("ROM", rom_color, rom_deficits),
+    ]
+    if getattr(player, "is_pitcher", False):
+        # VELO and SPIN are both fastball-only averages (Aug/Sept 2026,
+        # Ryker) -- SPIN used to average across every pitch type in the
+        # session, which mixed in curveballs/sliders that spin faster
+        # than a fastball by design, the same "mixed pitch types"
+        # problem VELO was fixed for first. Both bars show max
+        # alongside the average now too: the bar position/status still
+        # reflects the average (more representative of what a guy sits
+        # at than one outlier pitch), max is just extra context in the
+        # value text.
+        fb = fastball_summary or {}
+        v, mv = fb.get("avg_velocity"), fb.get("max_velocity")
+        sp, msp = fb.get("avg_spin_rate"), fb.get("max_spin_rate")
+
+        def _avg_max_display(avg, mx, fmt):
+            """Formats "88.4 / 96.2 max", collapsing to just the average
+            when there's nothing more to say -- a single-fastball session
+            has avg == max, and showing "93.5 / 93.5 max" is just noise."""
+            if avg is None:
+                return None
+            avg_s = fmt(avg)
+            if mx is None or fmt(mx) == avg_s:
+                return avg_s
+            return f"{avg_s} / {fmt(mx)} max"
+
+        velo_display = _avg_max_display(v, mv, lambda x: f"{x:.1f}")
+        spin_display = _avg_max_display(sp, msp, lambda x: f"{x:,.0f}")
+        attrs += [bar("VELO", v, velo_display, 70, 100), bar("SPIN", sp, spin_display, 1500, 2800)]
+
+    pos = player.player_position.position_name if getattr(player, "player_position", None) else None
+    cls = player.player_class.class_name if getattr(player, "player_class", None) else None
+    cls_short = (cls or "").replace("Redshirt ", "RS ").replace("Freshman", "FR").replace("Sophomore", "SO").replace("Junior", "JR").replace("Senior", "SR").replace("Graduate", "GR")
+    meta = [pill(x) for x in [pos, f"{player.bats or '-'} / {player.throws or '-'}", cls_short] if x]
+    if flag and flag != "neutral":
+        meta.append(status_chip(flag))
+    photo = ui.tags.img(src=player.photo_url, class_="gbo-show-photo-img", alt="") if getattr(player, "photo_url", None) else ui.HTML('<svg viewBox="0 0 24 24" fill="currentColor" class="gbo-show-silhouette"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0z"/></svg>')
+    return ui.div(
+        ui.div(
+            ui.div(ui.div(player.first_name, class_="gbo-show-nm"), ui.div(player.last_name, class_="gbo-show-ln"), ui.div(*meta, class_="gbo-show-meta"), class_="gbo-show-who"),
+            class_="gbo-show-hd", style="grid-template-columns:1fr",
+        ),
+        ui.div(photo, ui.div(str(player.jersey_number) if player.jersey_number else "", class_="gbo-show-num"), class_="gbo-show-photo"),
+        ui.div(*attrs, class_="gbo-show-attrs"),
+        ui.div(ui.tags.img(src=theme.LOGO_URL, alt=""), ui.span("Pitt State"), class_="gbo-show-ft"),
+        class_="gbo-show", style=f"--tier:{tier_color}",
+    )
+
+
+def rating_card(player, card):
+    """MLB-The-Show-style Overall card (Oct 2026) -- the new top-of-
+    Player-Profile card built from analytics/player_ratings.build_card.
+    Same .gbo-show look as show_card (which it replaces on Player
+    Profile), but every number is a 0-99 rating: the big number is the
+    Overall (85% baseball / 15% athleticism), the bars are the primary
+    role's baseball attributes plus ATH, and the footer splits out the
+    Baseball and Athlete ratings. A provisional (small-sample) card
+    says so instead of hiding the number."""
+    card = card or {}
+    overall = card.get("overall")
+    tier = card.get("tier") or "common"
+    tier_color = {"diamond": "var(--gbo-diamond)", "gold": "var(--gbo-gold)", "silver": "var(--gbo-silver)",
+                  "bronze": "var(--gbo-bronze)", "common": "var(--gbo-common)"}[tier]
+    role = card.get("primary_role")
+    role_data = (card.get("roles") or {}).get(role) or {}
+    attrs = role_data.get("attributes") or {}
+
+    def bar(label, rating):
+        if rating is None:
+            return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_="neutral", style="width:0"), class_="b"), ui.span("—", class_="v"), class_="gbo-at")
+        pct = max(0, min(100, (rating - 40) / (99 - 40) * 100))
+        st = "gold" if rating >= 85 else "good" if rating >= 70 else "watch" if rating >= 55 else "flag"
+        return ui.div(ui.span(label, class_="l"), ui.div(ui.div(class_=st, style=f"width:{pct:.0f}%"), class_="b"), ui.span(str(rating), class_="v"), class_="gbo-at")
+
+    bars = [bar(key, (attrs.get(key) or (None, None))[0]) for key in (role_data.get("weights") or {})]
+    bars.append(bar("ATH", card.get("athlete")))
+
+    pos = player.player_position.position_name if getattr(player, "player_position", None) else None
+    cls = player.player_class.class_name if getattr(player, "player_class", None) else None
+    cls_short = (cls or "").replace("Redshirt ", "RS ").replace("Freshman", "FR").replace("Sophomore", "SO").replace("Junior", "JR").replace("Senior", "SR").replace("Graduate", "GR")
+    meta = [pill(x) for x in [pos, f"{player.bats or '-'} / {player.throws or '-'}", cls_short] if x]
+    if card.get("provisional"):
+        meta.append(pill("Provisional"))
+    photo = ui.tags.img(src=player.photo_url, class_="gbo-show-photo-img", alt="") if getattr(player, "photo_url", None) else ui.HTML('<svg viewBox="0 0 24 24" fill="currentColor" class="gbo-show-silhouette"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0z"/></svg>')
+    split = " · ".join(x for x in [
+        f"BSB {card['baseball']}" if card.get("baseball") is not None else None,
+        f"ATH {card['athlete']}" if card.get("athlete") is not None else None,
+    ] if x)
+    return ui.div(
+        ui.div(
+            ui.div(str(overall) if overall is not None else "—", ui.tags.small("Overall"), class_="gbo-show-ovr"),
+            ui.div(ui.div(player.first_name, class_="gbo-show-nm"), ui.div(player.last_name, class_="gbo-show-ln"), ui.div(*meta, class_="gbo-show-meta"), class_="gbo-show-who"),
+            class_="gbo-show-hd",
+        ),
+        ui.div(photo, ui.div(str(player.jersey_number) if player.jersey_number else "", class_="gbo-show-num"), class_="gbo-show-photo"),
+        ui.div(*bars, class_="gbo-show-attrs"),
+        ui.div(ui.tags.img(src=theme.LOGO_URL, alt=""), ui.span(split or "Pitt State"), ui.span(f"{tier} tier", class_="rt"), class_="gbo-show-ft"),
+        class_="gbo-show", style=f"--tier:{tier_color}",
+    )
+
+
+def rating_breakdown(rc):
+    """The "how this number was built" panel next to the rating card:
+    the Overall/Baseball/Athlete percentile placement on top, then every
+    attribute's rating, its weight, and the raw stat behind it, for each
+    role the player has data in."""
+    from analytics.player_ratings import ATTRIBUTE_LABELS, ATHLETE_WEIGHT
+    rc = rc or {}
+    role = rc.get("primary_role")
+    group = "pitchers" if role == "pitching" else "hitters" if role == "hitting" else "players"
+
+    def ordinal(n):
+        n = int(round(n))
+        return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+    def placement(pct, pool, who):
+        if pct is None:
+            return f"Not enough qualified {who} to rank yet ({pool or 0})" if pool is not None else "—"
+        return f"{ordinal(pct)} percentile of {pool} {who}"
+
+    summary_rows = [
+        {"": "Overall", "Rating": rc.get("overall") if rc.get("overall") is not None else "—",
+         "Placement": placement(rc.get("overall_pct"), rc.get("overall_pool"), f"qualified {group}")},
+        {"": "Baseball", "Rating": rc.get("baseball") if rc.get("baseball") is not None else "—",
+         "Placement": placement(rc.get("baseball_pct"), rc.get("baseball_pool"), f"qualified {group}")},
+        {"": "Athlete", "Rating": rc.get("athlete") if rc.get("athlete") is not None else "—",
+         "Placement": placement(rc.get("athlete_pct"), rc.get("athlete_pool"), "tested players")},
+    ]
+    blocks = [card(render_dict_table(summary_rows), title="Where he ranks", right="provisional -- not in the ranking pool" if rc.get("provisional") else None)]
+    for r in ("pitching", "hitting"):
+        data = (rc.get("roles") or {}).get(r)
+        if not data:
+            continue
+        rows = []
+        for key, weight in data["weights"].items():
+            rating, raw = data["attributes"].get(key, (None, None))
+            rows.append({
+                "Attribute": ATTRIBUTE_LABELS.get(key, key),
+                "Rating": rating if rating is not None else "—",
+                "Weight": f"{weight * 100:.0f}%",
+                "Based on": raw or "Not enough data yet",
+            })
+        title = "Pitching attributes" if r == "pitching" else "Hitting attributes"
+        right = " · ".join(x for x in [data.get("sample"), "provisional" if data.get("provisional") else None] if x)
+        blocks.append(card(render_dict_table(rows), title=title, right=right or None))
+    blocks.append(ui.p(
+        "Overall, Baseball and Athlete are roster percentiles: top 10% of qualified players = Diamond (85-99), "
+        "next 15% Gold, next 25% Silver, next 30% Bronze, bottom 20% Common. Overall ranks the combined "
+        f"{100 - ATHLETE_WEIGHT * 100:.0f}% Baseball + {ATHLETE_WEIGHT * 100:.0f}% Athlete score. Attribute bars use a fixed scale: "
+        "70 = PSU average, ~15 points per standard deviation, all graded against the PSU roster for the selected season. "
+        "Provisional players (under 50 BF / 30 PA) are placed on the same curve but don't count toward it."
+        + (f" Athlete is based on: {rc['athlete_raw']}." if rc.get("athlete_raw") else ""),
+        class_="text-muted small",
+    ))
+    return ui.div(*blocks)
+
+
+
+def plus_stat_cards(values, order, actuals=None):
+    """Oct 2026: one KPI card per "+" stat (100 = 2026 D2 average, higher is
+    always better -- analytics/league_baselines.py). values: {name: int|None}.
+    actuals: league_baselines.hitting_actuals(line) / pitching_actuals(line)
+    -> the real stat under each card, e.g. "OPS .828 · D2 .863" (Ryker)."""
+    actuals = actuals or {}
+    cards = []
+    for name in order:
+        v = values.get(name)
+        a = actuals.get(name)
+        sub = f"{a[0]} {a[1]}  ·  D2 {a[2]}" if a else None
+        if v is None:
+            cards.append({"label": name, "value": "—", "sub": sub})
+            continue
+        diff = v - 100
+        cards.append({"label": name, "value": str(v), "sub": sub,
+                      "delta": ("D2 average" if abs(diff) < 3 else f"{abs(diff)}% {'above' if diff > 0 else 'below'} D2"),
+                      "delta_positive": None if abs(diff) < 3 else diff > 0})
+    return render_kpi_cards(cards)

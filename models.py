@@ -23,9 +23,9 @@ from datetime import datetime, date
 
 from sqlalchemy import (
     Column, Integer, String, Text, Boolean, Date, DateTime,
-    ForeignKey, Numeric, UniqueConstraint, JSON
+    ForeignKey, Numeric, UniqueConstraint, JSON, Float
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, deferred
 
 from database import Base
 
@@ -35,7 +35,11 @@ from database import Base
 # ---------------------------------------------------------------------------
 
 class Role(Base):
-    """The 8 finalized MVP roles and what each is allowed to touch.
+    """The finalized MVP roles and what each is allowed to touch (8
+    originally; "Video Coordinator" added 2026-08-26 -- see game_tracking.py,
+    analytics.py, pitcher_game_report.py, hitter_game_report.py,
+    opponent_teams.py, video_import.py, and nav.py for where it's
+    special-cased).
 
     permission_scope is a short machine-readable tag the app layer uses to
     decide read/edit access per module. It is enforced in application code
@@ -59,7 +63,7 @@ class Role(Base):
 class AssessmentCategory(Base):
     """The 11 real assessment buckets, per Ryker's Master Player Profile
     Data Dictionary: Anthropometrics, Body Composition, Mobility & ROM,
-    Arm Health, Upper Body Strength, Lower Body Strength, Explosive
+    Arm Health, Upper Body Strength, Lower Body Strength, Jump
     Power, Rotational Power, Speed, Baseball Performance (all universal),
     plus Pitcher-Specific (position-specific).
 
@@ -202,6 +206,15 @@ class Team(Base):
 class Player(Base):
     __tablename__ = "players"
 
+    @property
+    def name_last_first(self):
+        """'Last, First' for pickers and tables -- except the anonymized guest
+        demo (demo_real.py), whose players are first_name='Player',
+        last_name='7', which reads as 'Player 7' instead of '7, Player'."""
+        if self.first_name == "Player" and str(self.last_name or "").isdigit():
+            return f"Player {self.last_name}"
+        return f"{self.last_name}, {self.first_name}"
+
     player_id = Column(Integer, primary_key=True)
     team_id = Column(Integer, ForeignKey("teams.team_id"), nullable=False)
     first_name = Column(String(80), nullable=False)
@@ -224,6 +237,15 @@ class Player(Base):
     photo_url = Column(String(500), nullable=True)
     date_of_birth = Column(Date, nullable=True)
     email = Column(String(150), nullable=True)
+    # Movement Flag inputs (bucket_system.compute_movement_flag) -- staff-set
+    # on the player profile, not derived from any test data. poor_mover is
+    # just the label used to number an already-Red flag (6+ ROM deficits);
+    # current_injury is a hard override that forces Red regardless of
+    # deficit count, since an active injury/surgical recovery matters more
+    # than any ROM number. See compute_movement_flag's docstring.
+    poor_mover = Column(Boolean, default=False, nullable=False)
+    current_injury = Column(Boolean, default=False, nullable=False)
+    injury_note = Column(Text, nullable=True)
     active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -383,6 +405,15 @@ class IDPGoal(Base):
     target_date = Column(Date, nullable=True)
     description = Column(Text, nullable=False)
     status_id = Column(Integer, ForeignKey("idp_statuses.status_id"), nullable=False)
+    # Oct 2026: game-stat goals (analytics/game_goals.py) -- game_metric is a
+    # GAME_METRICS key (e.g. "h_chase"), metric_window "last5"/"last10"/
+    # "season". NULL = a classic assessment/Rapsodo goal.
+    # (python3 -m migrations.migrate_idp_game_goals)
+    # deferred() so every existing IDPGoal query keeps working even before
+    # the migration runs -- the columns are only read when game-goal code
+    # touches them (and that code catches the error and says to migrate).
+    game_metric = deferred(Column(String(40), nullable=True))
+    metric_window = deferred(Column(String(12), nullable=True))
     created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -666,7 +697,7 @@ class BullpenType(Base):
     from the original 5 values (High Intent Velo, Pitch Design, Execution
     Focused, Touch and Feel, Short Box) with the Rapsodo Bullpen Analytics
     spec's 8-value list: Standard Bullpen, Pitch Design, Command, Velocity,
-    Recovery, Live BP, Assessment, Other. Existing BullpenSession rows are
+    Recovery, Live AB, Assessment, Other. Existing BullpenSession rows are
     remapped onto the closest new name by the same migration -- see that
     file for the exact old->new mapping and rationale."""
     __tablename__ = "bullpen_types"
@@ -713,6 +744,7 @@ class BullpenSession(Base):
     rapsodo_imports = relationship("RapsodoImport", back_populates="bullpen")
     rapsodo_pitches = relationship("RapsodoPitch", back_populates="bullpen", cascade="all, delete-orphan", order_by="RapsodoPitch.pitch_number")
     idp_goals = relationship("IDPGoal", back_populates="source_bullpen")
+    command_pitches = relationship("CommandPitch", back_populates="bullpen", cascade="all, delete-orphan", order_by="CommandPitch.pitch_number")
 
 
 class BullpenPitch(Base):
@@ -809,6 +841,7 @@ class RapsodoImport(Base):
     import_id = Column(Integer, primary_key=True)
     player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)
     bullpen_id = Column(Integer, ForeignKey("bullpen_sessions.bullpen_id"), nullable=True)
+    game_id = Column(Integer, ForeignKey("games.game_id"), nullable=True)  # set instead of bullpen_id when this file was imported against an intrasquad game outing rather than a bullpen session -- mutually exclusive with bullpen_id, never both set
     original_filename = Column(String(255), nullable=False)
     file_hash = Column(String(64), nullable=False)  # sha256 hex digest of the raw uploaded bytes
     uploaded_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
@@ -821,6 +854,7 @@ class RapsodoImport(Base):
 
     player = relationship("Player")
     bullpen = relationship("BullpenSession", back_populates="rapsodo_imports")
+    game = relationship("Game")
     uploaded_by = relationship("User")
     pitches = relationship("RapsodoPitch", back_populates="import_record")
 
@@ -844,10 +878,11 @@ class RapsodoPitch(Base):
     __table_args__ = (UniqueConstraint("player_id", "rapsodo_unique_id", name="uq_rapsodo_pitch_player_unique_id"),)
 
     rapsodo_pitch_id = Column(Integer, primary_key=True)
-    bullpen_id = Column(Integer, ForeignKey("bullpen_sessions.bullpen_id"), nullable=False)
+    bullpen_id = Column(Integer, ForeignKey("bullpen_sessions.bullpen_id"), nullable=True)  # nullable Aug 2026: an intrasquad-game import (see RapsodoImport.game_id) has no bullpen session at all -- one or the other is set, matching the import it came from
     player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)
     import_id = Column(Integer, ForeignKey("rapsodo_imports.import_id"), nullable=False)
     pitch_number = Column(Integer, nullable=False)  # chronological within the session -- see docstring above
+    game_pitch_id = Column(Integer, ForeignKey("game_pitches.game_pitch_id"), nullable=True)  # set once this reading has been matched to the specific live-charted pitch it came from (intrasquad-game imports only) -- see services/rapsodo_import.py's matching logic
 
     # --- Raw layer: exactly as imported, never overwritten by recalculation ---
     rapsodo_pitch_id_raw = Column(String(50), nullable=True)  # CSV "Pitch ID"
@@ -888,7 +923,10 @@ class RapsodoPitch(Base):
     plate_x_ft = Column(Numeric(6, 3), nullable=True)  # converted from strike_zone_side (GBO plate-center-at-0 convention, matches strike_zone.py)
     plate_z_ft = Column(Numeric(6, 3), nullable=True)  # converted from strike_zone_height (0 = ground)
     perceived_velocity = Column(Numeric(6, 2), nullable=True)  # extension-adjusted formula -- deferred indefinitely per Ryker's Phase 4 call (no agreed-on reference baseline), still NULL
-    trajectory_json = Column(JSON, nullable=True)  # a Phase 4 flight-path model (pitch_trajectory.py) briefly computed and stored this at import time, then was removed per Ryker's call after reviewing the chart live -- nothing computes or reads this anymore. Left in place rather than dropped, since some rows still hold values from that brief window and dropping the column would just discard them for no benefit; safe to ignore, and safe to drop later in a real migration if this is ever cleaned up
+    # deferred() Oct 2026 (Supabase egress fix): ~1.5 KB of JSON per pitch that every
+    # RapsodoPitch query was shipping. Nothing reads it anymore -- Tunneling+, its
+    # only consumer, was removed (Oct 2026) and new imports no longer fill it.
+    trajectory_json = deferred(Column(JSON, nullable=True))  # gravity+drag flight-path model (pitch_trajectory.py), computed at import time. Originally shipped as a Phase 4 rendered chart, then removed per Ryker's call after reviewing it live -- "didn't read as useful" -- leaving this column briefly dormant (rows dated before the Sept 2026 restore may be NULL or hold values from that brief earlier window). RESTORED Sept 2026 as backend-only data for pitch-tunneling analytics (analytics/pitch_grading.py) -- see pitch_trajectory.py's docstring for the full history. No chart reads this; it's an analytics input only.
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -897,6 +935,7 @@ class RapsodoPitch(Base):
     import_record = relationship("RapsodoImport", back_populates="pitches")
     pitch_type = relationship("PitchType")
     pitch_videos = relationship("BullpenPitchVideo", back_populates="pitch", cascade="all, delete-orphan")
+    game_pitch = relationship("GamePitch")
 
 
 class BullpenPitchVideo(Base):
@@ -971,7 +1010,7 @@ class HitterSwing(Base):
     pitch_zone = Column(Integer, nullable=True)  # 0 = Bury, 1-9 = in-zone grid -- where it ACTUALLY ended up, same convention as BullpenPitch
     pitcher_hand = Column(String(1), nullable=True)  # 'R' or 'L' -- always capturable even if the pitcher isn't a roster player (BP arm, machine, opponent)
     pitcher_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)  # optional: only set if it's one of our own roster pitchers
-    contact_quality = Column(String(20), nullable=True)  # "Barrel" / "Solid" / "Weak" / "Miss"
+    contact_quality = Column(String(20), nullable=True)  # "Barreled/Squared Up" / "Solid" / "Weak" / "Jammed" / "Off the End" / "Clipped" / "Miss"
     hit_location = Column(String(20), nullable=True)  # field spray direction -- not applicable for Miss
     notes = Column(Text, nullable=True)
     video_url = Column(String(500), nullable=True)  # optional clip for this specific swing -- one per swing, no multi-angle, same as BullpenPitch
@@ -1039,6 +1078,21 @@ class Season(Base):
     games = relationship("Game", back_populates="season")
 
 
+class Umpire(Base):
+    """Home plate umpires (lookup table). SmartPark doesn't record who the
+    plate umpire is, so it's picked per game -- feeds umpire scorecards
+    and umpire-adjusted catcher framing (analytics/umpire_scorecard.py,
+    analytics/catcher_framing.py). Table created by
+    migrations/migrate_umpires.py."""
+    __tablename__ = "umpires"
+
+    umpire_id = Column(Integer, primary_key=True)
+    full_name = Column(String(120), nullable=False, unique=True)
+    active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class Game(Base):
     """A tracked game -- opponent, date, home/away. Both our hitting
     (our batters facing the opposing pitcher) and our pitching (our
@@ -1080,33 +1134,103 @@ class Game(Base):
     is_intrasquad = Column(Boolean, default=False, nullable=False)
     game_date = Column(Date, default=date.today, nullable=False)
     is_home = Column(Boolean, nullable=True)  # True=home, False=away, None=unspecified (e.g. neutral site)
+    # Two-squad intrasquad games only ('A' or 'B'): which squad is Away
+    # (bats first, top of the inning -- matching real baseball; the
+    # other squad is Home). NULL for every other game (external,
+    # three-squad, or a two-squad intrasquad game created before this
+    # column existed) -- game_tracking.py's _squad_display/
+    # compute_current_state both treat NULL the same as 'A', matching
+    # the fixed default this column replaces (Ryker, Sep 2026: first
+    # asked for Home/Away labels, then caught that Home was batting
+    # first when it should be Away, then asked to be able to pick which
+    # squad is which instead of a fixed mapping). Settable when
+    # creating the game, or later on Manage Game while status is still
+    # "Scheduled" -- locked once the game starts, since pitches already
+    # recorded encode the batting order this column would otherwise
+    # silently contradict.
+    intrasquad_away_squad = Column(String(1), nullable=True)
     our_score = Column(Integer, default=0, nullable=False)
     opponent_score = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="Scheduled", nullable=False)  # "Scheduled" / "In Progress" / "Paused" / "Final" / "Cancelled"
     starting_pitcher_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)
+    # Squad A's starting pitcher (starting_pitcher_id above) has always
+    # been formally tracked -- Squad A's ongoing "who's pitching" is
+    # derived from PitchingChange, falling back to this field (see
+    # get_current_pitcher_id() in modules/game_tracking.py). Squad B
+    # never had an equivalent: its pitcher was picked live, every
+    # single plate appearance, with nothing saved. This column adds
+    # just the STARTING pick for Squad B (mirroring starting_pitcher_id)
+    # -- added via migrations/migrate_squad_b_starting_pitcher.py, not
+    # backed by a parallel PitchingChange-style table, so Squad B still
+    # has no formal "pitching change" history the way Squad A does.
+    # Live tracking uses this as a smarter DEFAULT for the per-PA
+    # opposing-pitcher picker (falling back further to whichever Squad B
+    # pitcher most recently appeared in this game's pitches once any
+    # have been recorded) -- always overridable, same as every other
+    # auto-suggested default on this page.
+    squad_b_starting_pitcher_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)
     opponent_starting_pitcher_id = Column(Integer, ForeignKey("opponent_players.opponent_player_id"), nullable=True)
+    # Three-team intrasquad mode (Sep 2026, Ryker: squads of 7-8 with a
+    # lot of position players, three lineups rotating -- one team bats
+    # while the other two share the field, then rotates). Deliberately
+    # ADDITIVE, not a replacement for the existing Squad A vs Squad B
+    # two-sided flow: every existing intrasquad game keeps using
+    # is_our_team_batting's plain True/False alternation untouched
+    # (see compute_current_state() in game_tracking.py), because at
+    # any single pitch there is still only ever exactly one batting
+    # team and one pitching team on record -- the third, waiting team
+    # has zero footprint on a pitch row, especially since this app
+    # doesn't track fielding stats at all. uses_three_squad_intrasquad
+    # just unlocks a THIRD roster (Squad C, via GameLineupSlot's
+    # already-arbitrary squad column) and a live "which team is up"
+    # picker in place of the automatic two-way flip; GamePitch/
+    # GameRunnerEvent.batting_squad ('A'/'B'/'C') records which of the
+    # three that was, so the right one of three score totals gets
+    # credited. False (the default) for every other game, including
+    # ordinary two-squad intrasquad games, which are entirely
+    # unaffected by this column's existence.
+    uses_three_squad_intrasquad = Column(Boolean, default=False, nullable=False)
+    # Squad C's running total, mirroring our_score/opponent_score --
+    # only meaningful when uses_three_squad_intrasquad is True. Squad
+    # A's total stays in our_score, Squad B's in opponent_score (same
+    # columns two-squad games already use), so this is purely additive.
+    squad_c_score = Column(Integer, default=0, nullable=False)
+    # Squad C's starting pitcher pick, mirroring squad_b_starting_pitcher_id
+    # -- same "smarter default, always overridable" role, no formal
+    # PitchingChange-style history for Squad C either.
+    squad_c_starting_pitcher_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)
     notes = Column(Text, nullable=True)
+    # Home plate umpire (nullable -- entered per game; added via
+    # migrations/migrate_umpires.py).
+    home_plate_umpire_id = Column(Integer, ForeignKey("umpires.umpire_id"), nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     created_by = relationship("User")
+    home_plate_umpire = relationship("Umpire")
     season = relationship("Season", back_populates="games")
     opponent_team = relationship("OpponentTeam")
     lineup_slots = relationship("GameLineupSlot", back_populates="game", cascade="all, delete-orphan", order_by="GameLineupSlot.batting_order")
     starting_pitcher = relationship("Player", foreign_keys=[starting_pitcher_id])
+    squad_b_starting_pitcher = relationship("Player", foreign_keys=[squad_b_starting_pitcher_id])
+    squad_c_starting_pitcher = relationship("Player", foreign_keys=[squad_c_starting_pitcher_id])
     opponent_lineup_slots = relationship("OpponentLineupSlot", back_populates="game", cascade="all, delete-orphan", order_by="OpponentLineupSlot.batting_order")
+    opponent_lineup_restarts = relationship("OpponentLineupRestart", back_populates="game", cascade="all, delete-orphan", order_by="OpponentLineupRestart.pitch_sequence_at_entry")
     opponent_starting_pitcher = relationship("OpponentPlayer", foreign_keys=[opponent_starting_pitcher_id])
     pitches = relationship("GamePitch", back_populates="game", cascade="all, delete-orphan", order_by="GamePitch.pitch_sequence")
     pitching_changes = relationship("PitchingChange", back_populates="game", cascade="all, delete-orphan", order_by="PitchingChange.pitch_sequence_at_entry")
+    lineup_substitutions = relationship("LineupSubstitution", back_populates="game", cascade="all, delete-orphan", order_by="LineupSubstitution.pitch_sequence_at_entry")
     video_clips = relationship("GameVideoClip", back_populates="game", cascade="all, delete-orphan", order_by="GameVideoClip.uploaded_at")
+    runner_events = relationship("GameRunnerEvent", back_populates="game", cascade="all, delete-orphan", order_by="GameRunnerEvent.pitch_sequence_after")
+    forced_half_inning_ends = relationship("GameForcedHalfInningEnd", back_populates="game", cascade="all, delete-orphan", order_by="GameForcedHalfInningEnd.pitch_sequence_after")
 
 
 class GameLineupSlot(Base):
-    """One batting-order slot for a lineup in a given game -- who's
-    hitting where, and their starting defensive position. Pitching
-    changes aren't tracked as a separate list in this first version --
-    who pitched is simply whatever's on the GamePitch records
-    (pitcher_player_id), derived rather than pre-declared.
+    """One batting-order slot for a lineup in a given game -- who
+    STARTED hitting where, and their starting defensive position.
+    Pitching changes aren't tracked as a separate list in this first
+    version -- who pitched is simply whatever's on the GamePitch
+    records (pitcher_player_id), derived rather than pre-declared.
 
     squad: 'A' (default) or 'B'. For every external game this is always
     'A' -- the "OUR lineup" this table was originally built for. For
@@ -1116,19 +1240,38 @@ class GameLineupSlot(Base):
     lineup instead of only Squad A having one and Squad B being picked
     ad hoc every at-bat. Squad B's PITCHING staff (starting
     pitcher/pitching changes) is intentionally NOT covered by this --
-    that stays a per-at-bat pick, same as before this column existed."""
+    that stays a per-at-bat pick, same as before this column existed.
+
+    player_id/starting_position_id are this slot's ORIGINAL occupant --
+    kept immutable once saved, same as PitchingChange never rewrites
+    Game.starting_pitcher_id. Who's CURRENTLY in this slot (after any
+    in-game substitutions) is derived, not stored here -- see
+    LineupSubstitution below and game_tracking.py's
+    get_current_slot_occupant_id()/get_current_slot_position_id(), the
+    batting-side equivalent of get_current_pitcher_id() for pitching.
+
+    batting_order can be renumbered in place when a new slot is
+    inserted mid-order (game_tracking.py's _insert_lineup_slot_at --
+    every existing slot at or after the insertion point shifts +1).
+    This is safe: every foreign key that references a slot
+    (LineupSubstitution.lineup_slot_id, GamePitch.batting_slot_id)
+    points at lineup_slot_id, this row's stable primary key, never at
+    the batting_order value -- so renumbering never invalidates a past
+    pitch's or substitution's slot reference, it only changes what
+    order number that slot currently displays as."""
     __tablename__ = "game_lineup_slots"
 
     lineup_slot_id = Column(Integer, primary_key=True)
     game_id = Column(Integer, ForeignKey("games.game_id"), nullable=False)
     squad = Column(String(1), nullable=False, default="A")  # 'A' or 'B' -- see class docstring
-    batting_order = Column(Integer, nullable=False)  # 1-9 (or more, extra hitters/re-entry not handled in v1)
+    batting_order = Column(Integer, nullable=False)  # 1-9 (or more -- extra slots can be inserted anywhere mid-game, see class docstring)
     player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)
     starting_position_id = Column(Integer, ForeignKey("positions.position_id"), nullable=True)
 
     game = relationship("Game", back_populates="lineup_slots")
     player = relationship("Player")
     starting_position = relationship("Position")
+    substitutions = relationship("LineupSubstitution", back_populates="lineup_slot", cascade="all, delete-orphan", order_by="LineupSubstitution.pitch_sequence_at_entry")
 
 
 class OpponentLineupSlot(Base):
@@ -1149,6 +1292,49 @@ class OpponentLineupSlot(Base):
 
     game = relationship("Game", back_populates="opponent_lineup_slots")
     opponent_player = relationship("OpponentPlayer")
+    # Oct 31 2026: mid-game substitutions into this spot (see OpponentLineupSubstitution).
+    substitutions = relationship("OpponentLineupSubstitution", back_populates="slot", cascade="all, delete-orphan",
+                                 order_by="OpponentLineupSubstitution.pitch_sequence_at_entry")
+
+
+class OpponentLineupSubstitution(Base):
+    """Oct 31 2026 (Ryker, Crowder 18-inning day): the OPPONENT's version of
+    LineupSubstitution -- a player entering one of their batting-order spots
+    (OpponentLineupSlot) mid-game. Current occupant of a spot = the most
+    recent row here for that spot (by pitch_sequence_at_entry, then
+    created_at), else the spot's original OpponentLineupSlot.opponent_player_id.
+    See game_tracking.get_current_opp_slot_occupant_id()."""
+    __tablename__ = "opponent_lineup_substitutions"
+
+    opponent_sub_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id", ondelete="CASCADE"), nullable=False, index=True)
+    opponent_lineup_slot_id = Column(Integer, ForeignKey("opponent_lineup_slots.opponent_lineup_slot_id", ondelete="CASCADE"), nullable=False)
+    opponent_player_id = Column(Integer, ForeignKey("opponent_players.opponent_player_id"), nullable=False)
+    inning = Column(Integer, nullable=False)
+    outs_at_entry = Column(Integer, nullable=False)
+    pitch_sequence_at_entry = Column(Integer, nullable=False)  # same convention as LineupSubstitution
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    slot = relationship("OpponentLineupSlot", back_populates="substitutions")
+    opponent_player = relationship("OpponentPlayer")
+
+
+class OpponentLineupRestart(Base):
+    """Oct 31 2026: the opponent went back to the TOP of their order (a new
+    lineup mid-game) -- the next opponent batter after this anchor is their
+    #1 spot, no matter who batted last. Anchored like every other in-game
+    event (pitch_sequence_at_entry = last pitch recorded when it happened)."""
+    __tablename__ = "opponent_lineup_restarts"
+
+    restart_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id", ondelete="CASCADE"), nullable=False, index=True)
+    pitch_sequence_at_entry = Column(Integer, nullable=False)
+    inning = Column(Integer, nullable=False)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    game = relationship("Game", back_populates="opponent_lineup_restarts")
 
 
 class RunExpectancy(Base):
@@ -1184,6 +1370,53 @@ class PitchingChange(Base):
 
     game = relationship("Game", back_populates="pitching_changes")
     player = relationship("Player")
+
+
+class LineupSubstitution(Base):
+    """A formal record of a player entering an EXISTING batting-order
+    slot (GameLineupSlot), replacing whoever currently occupies it --
+    who, and when (inning/outs/pitch sequence at entry). Analogous to
+    PitchingChange above, but scoped to ONE lineup slot rather than the
+    whole team, since batting has many simultaneous "current occupants"
+    (one per batting-order slot) instead of a single pitcher role.
+
+    The "current occupant" of a given slot is derived from the MOST
+    RECENT LineupSubstitution for that slot (falling back to
+    GameLineupSlot.player_id -- the slot's original starter -- if none
+    exist yet), the exact same "most-recent-wins, fall back to the
+    starting field" idea PitchingChange already uses -- see
+    game_tracking.py's get_current_slot_occupant_id(), the batting-side
+    equivalent of get_current_pitcher_id().
+
+    Adding a brand-new slot that wasn't part of the original lineup
+    (an "extra hitter" cycling into a scrimmage) is a DIFFERENT
+    operation from this table -- see GameLineupSlot's docstring and
+    game_tracking.py's _insert_lineup_slot_at(); this table only covers
+    swapping who's IN an existing slot.
+
+    new_position_id optionally records that the incoming player takes
+    over a different defensive position than the slot's previous
+    occupant, going forward. This is informational only -- who's
+    nominally playing where -- and is NOT used for any fielding-stat
+    attribution (putouts/assists/errors by fielder remain a separate,
+    out-of-scope future phase; this app doesn't track those at all
+    yet)."""
+    __tablename__ = "lineup_substitutions"
+
+    lineup_substitution_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id"), nullable=False)
+    lineup_slot_id = Column(Integer, ForeignKey("game_lineup_slots.lineup_slot_id"), nullable=False)
+    player_id = Column(Integer, ForeignKey("players.player_id"), nullable=False)
+    inning = Column(Integer, nullable=False)
+    outs_at_entry = Column(Integer, nullable=False)
+    pitch_sequence_at_entry = Column(Integer, nullable=False)  # overall game pitch # at entry -- orders changes within the slot, same convention as PitchingChange.pitch_sequence_at_entry
+    new_position_id = Column(Integer, ForeignKey("positions.position_id"), nullable=True)  # NULL = position unchanged from whoever/whatever was there before
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    game = relationship("Game", back_populates="lineup_substitutions")
+    lineup_slot = relationship("GameLineupSlot", back_populates="substitutions")
+    player = relationship("Player")
+    new_position = relationship("Position")
 
 
 class PlayerPitchArsenal(Base):
@@ -1239,6 +1472,28 @@ class GamePitch(Base):
     opponent_batting_order = Column(Integer, nullable=True)  # only meaningful when is_our_team_batting is False -- their lineup slot
     opponent_player_id = Column(Integer, ForeignKey("opponent_players.opponent_player_id"), nullable=True)  # optional: a specific named player from the opponent's roster, if their team roster is built out
     opponent_our_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)  # intrasquad games only: the OTHER side is actually one of our own roster players (Squad A vs Squad B) -- keeps their stats attributed to their real profile instead of a generic hand/order entry
+    # Which GameLineupSlot the batter currently occupies, at the moment
+    # this pitch was recorded -- set only when a real batter (our
+    # Squad A, or our Squad B in an intrasquad game) is at the plate;
+    # NULL for pitches where we're pitching, and NULL when batting
+    # against a genuine external opponent (their batters aren't backed
+    # by a GameLineupSlot at all). Lets game_tracking.py's
+    # suggest_next_our_batter/suggest_next_squad_b_batter look up "the
+    # next slot after this one" directly, instead of re-matching by
+    # player identity -- which stays robust even if a player is
+    # substituted out and later re-enters the same slot. See
+    # LineupSubstitution and _resolve_current_batting_slot().
+    batting_slot_id = Column(Integer, ForeignKey("game_lineup_slots.lineup_slot_id"), nullable=True)
+    # Three-team intrasquad mode only (Game.uses_three_squad_intrasquad)
+    # -- 'A'/'B'/'C', which of the three squads was actually batting on
+    # this pitch. is_our_team_batting still gets set too (True when the
+    # named batting_squad's players are the ones in our_player_id,
+    # False otherwise) so every existing query/report that reads that
+    # boolean keeps working unchanged; batting_squad is purely additive,
+    # letting _do_record_pitch credit the right one of THREE score
+    # totals instead of just our_score/opponent_score. NULL for every
+    # ordinary (non-three-squad) game.
+    batting_squad = Column(String(1), nullable=True)
 
     pa_pitch_number = Column(Integer, nullable=True)  # pitch # within this specific plate appearance
     balls_before = Column(Integer, nullable=True)
@@ -1262,8 +1517,8 @@ class GamePitch(Base):
     actual_plate_z = Column(Numeric(5, 3), nullable=True)
     intended_plate_x = Column(Numeric(5, 3), nullable=True)
     intended_plate_z = Column(Numeric(5, 3), nullable=True)
-    pitch_outcome = Column(String(20), nullable=True)  # "Ball" / "Called Strike" / "Swing and Miss" / "Foul" / "In Play" / "HBP"
-    contact_quality = Column(String(20), nullable=True)  # "Barrel" / "Solid" / "Weak" / "Miss" -- same categories as Hitter Tracking
+    pitch_outcome = Column(String(30), nullable=True)  # "Ball" / "Called Strike" / "Swing and Miss" / "Foul" / "In Play" / "HBP"
+    contact_quality = Column(String(20), nullable=True)  # "Barreled/Squared Up" / "Solid" / "Weak" / "Jammed" / "Off the End" / "Clipped" / "Miss" / "Bunt" -- same categories as Hitter Tracking, plus "Bunt" which is Game-Tracking-only (scored as weak contact in rate/score stats)
     # Only meaningful when pitch_outcome == "In Play". Swing/take itself
     # isn't a separate field -- it's already fully derivable from
     # pitch_outcome (Swing and Miss/Foul/In Play = swung; Ball/Called
@@ -1285,13 +1540,33 @@ class GamePitch(Base):
     # that was actually swung at (Swing and Miss/Foul/In Play); left
     # False on takes.
     is_sword = Column(Boolean, default=False, nullable=False)
+    # Oct 2026: False for a pitch clock violation or an intentional walk --
+    # it moves the count / ends the at-bat but no pitch was thrown, so it
+    # never counts toward pitch totals, strike % or pitch charts.
+    # (migrations/migrate_non_pitch_events.py)
+    is_pitch = Column(Boolean, default=True, server_default="true", nullable=False)
 
     ends_plate_appearance = Column(Boolean, default=False, nullable=False)
-    ab_outcome = Column(String(30), nullable=True)  # only set when ends_plate_appearance -- "K", "BB", "1B", "2B", "3B", "HR", "HBP", "E", "FC", "Sac Bunt", "Sac Fly", "Groundout", "Flyout", "Lineout", etc.
+    ab_outcome = Column(String(30), nullable=True)  # only set when ends_plate_appearance -- "K", "K (Looking)", "BB", "1B", "2B", "3B", "HR", "HBP", "E", "FC", "Sac Bunt", "Sac Fly", "Groundout", "Flyout", "Lineout", etc.
 
     outs_after = Column(Integer, nullable=True)
     bases_after = Column(String(3), nullable=True)
     runs_scored_on_play = Column(Integer, default=0, nullable=False)
+    # Of runs_scored_on_play, how many were UNEARNED -- manual per-play
+    # tagging (Ryker's explicit call, Aug 31 2026, over trying to derive
+    # this automatically: real earned-run scoring means reconstructing
+    # the inning as if no error had happened, a genuine judgment call
+    # even for human official scorers, not something derivable from
+    # pitch-by-pitch data alone -- same "deliberately not a fully
+    # automated rules engine" philosophy as this class's own docstring
+    # above already states for base/out state). Defaults to 0, i.e. "all
+    # earned" -- the common case -- and the coach bumps it up live only
+    # when an error (ab_outcome == "E" on this or an earlier pitch of
+    # the inning, a dropped third strike, etc.) caused a run that
+    # wouldn't have scored on clean defense. Always <= runs_scored_on_play
+    # (enforced at entry in game_tracking.py, not at the DB level).
+    # earned_runs_on_play property below is the derived complement.
+    unearned_runs_on_play = Column(Integer, default=0, nullable=False)
 
     # Run Expectancy / Run Value -- computed from RunExpectancy at save
     # time using Ryker's own table: re_before = lookup(outs_before,
@@ -1313,6 +1588,309 @@ class GamePitch(Base):
     opponent_our_player = relationship("Player", foreign_keys=[opponent_our_player_id])
     pitch_type = relationship("PitchType")
     opponent_player = relationship("OpponentPlayer")
+    batting_slot = relationship("GameLineupSlot", foreign_keys=[batting_slot_id])
+
+    @property
+    def earned_runs_on_play(self):
+        """Derived complement of unearned_runs_on_play -- never stored
+        separately so the two can't drift. Clamped at 0 as a defensive
+        floor only (unearned_runs_on_play should never legitimately
+        exceed runs_scored_on_play; game_tracking.py's entry form
+        enforces that at save time)."""
+        return max(0, (self.runs_scored_on_play or 0) - (self.unearned_runs_on_play or 0))
+
+
+class GameRunnerEvent(Base):
+    """A base-running event that happens BETWEEN two pitches to the same
+    batter -- a stolen base, caught stealing, pickoff, wild pitch,
+    passed ball, or balk (Aug 2026, Ryker: "we need to be able to put
+    if a guy steals a base, gets picked off etc.").
+
+    GamePitch.bases_before/outs_before only ever change on a pitch that
+    ENDS the plate appearance (see game_tracking.py's result_fields_body
+    -- the "Bases after" field only shows up then); compute_current_state()
+    otherwise just carries outs_before/bases_before straight forward
+    from the previous pitch. That left literally no way to record
+    something that happens MID-plate-appearance -- a runner stealing
+    second on ball two, say. This table is the fix: a small,
+    separately-recorded event, ordered by pitch_sequence_after (the
+    pitch_sequence of the last GamePitch actually recorded when this
+    happened -- 0 if it happened before the game's first pitch), the
+    same "small event table keyed by pitch_sequence_at_entry" pattern
+    PitchingChange/LineupSubstitution already use in this exact file.
+    compute_current_state() folds every event matching the current gap
+    on top of the pitch-derived state, including rolling to the next
+    half-inning if an event's out pushes the count to 3 -- see that
+    function's docstring in game_tracking.py.
+
+    from_base/to_base: 1/2/3 for a base, 4 for home (the runner scored).
+    to_base is NULL when is_out is True (Caught Stealing/Picked Off --
+    Wild Pitch/Passed Ball/Balk/Stolen Base/Defensive Indifference/
+    Throwing Error always advance, never out). Throwing Error (added
+    Sept 2026, Ryker: "like if a catcher throws it into center field
+    and then he goes from second to third") covers any defensive
+    misplay -- catcher, pitcher, or otherwise -- that lets a runner
+    take an extra base with no out recorded; whether the run it later
+    leads to counts as earned is tagged separately and manually via
+    GamePitch.unearned_runs_on_play, same as any other error, since
+    this event only records the base-state change itself.
+    Runs scored via to_base == 4 are added to Game.our_score/
+    opponent_score at the moment the event is recorded (mirroring how
+    record_pitch() bumps the score for a live-ball run), NOT re-derived
+    every render -- compute_current_state()'s fold-forward only touches
+    bases/outs, never the score total.
+
+    our_player_id/opponent_player_id: OPTIONAL identification of the
+    runner -- same "always overridable, don't force a pick you don't
+    have" philosophy as GamePitch.opponent_player_id. A coach can log
+    "runner on 2nd stole 3rd" without naming who if the opponent roster
+    isn't built out; both may be left NULL to just tag the base-state
+    change itself. Deliberately NOT a fully automated rules engine (no
+    attempt to track which specific player occupies which base across
+    the whole game) -- same human-judgment principle GamePitch's own
+    docstring states for base/out entry generally."""
+    __tablename__ = "game_runner_events"
+
+    runner_event_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id"), nullable=False)
+    pitch_sequence_after = Column(Integer, nullable=False)  # the pitch_sequence of the last actual pitch recorded before this event; 0 if none yet this game
+    is_our_team_batting = Column(Boolean, nullable=False)  # which side had the runner -- same convention as GamePitch.is_our_team_batting, stored (not just used transiently) so an undo can reverse a scored run against the right side's total without re-deriving it
+    batting_squad = Column(String(1), nullable=True)  # three-team intrasquad mode only -- 'A'/'B'/'C', mirroring GamePitch.batting_squad, so a run scored via to_base==4 credits the right one of three score totals (and undo reverses the right one). NULL for every ordinary game.
+    event_type = Column(String(30), nullable=False)  # "Stolen Base" / "Caught Stealing" / "Picked Off" / "Wild Pitch" / "Passed Ball" / "Balk" / "Defensive Indifference" / "Throwing Error"
+    from_base = Column(Integer, nullable=False)  # 1, 2, or 3
+    to_base = Column(Integer, nullable=True)  # 2, 3, or 4 (home) -- NULL when is_out
+    is_out = Column(Boolean, default=False, nullable=False)
+    our_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)  # the runner, if a real Player (Squad A or intrasquad Squad B)
+    opponent_player_id = Column(Integer, ForeignKey("opponent_players.opponent_player_id"), nullable=True)  # the runner, if a named external-opponent player
+    notes = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    game = relationship("Game", back_populates="runner_events")
+    our_player = relationship("Player")
+    opponent_player = relationship("OpponentPlayer")
+    created_by = relationship("User")
+
+
+class GameForcedHalfInningEnd(Base):
+    """A coach's manual override that ends the CURRENT half-inning right
+    where it stands, regardless of the actual out count -- built for
+    intrasquad pitch-count limits (Ryker, Sept 2026: "i also need the
+    ability to end the inning during intrasquads even if 3 outs haven't
+    been achieved because some innings may be ended due to pitch
+    counts... i need to be able to click something that ends that
+    inning where it was and moves on to the next", with a real example:
+    Kurt Kassner's outing ended on a pitch count with runners on base,
+    and the team just moved on to the next pitcher/lineup without
+    recording the extra outs that would have been needed to end the
+    half-inning normally).
+
+    Anchored by pitch_sequence_after (the pitch_sequence of the last
+    GamePitch actually recorded when this happened -- 0 if before the
+    game's first pitch), the same convention PitchingChange/
+    LineupSubstitution/GameRunnerEvent already use in this file.
+    compute_current_state()/replay_game() (game_tracking.py) fold this
+    in at that anchor the same way a runner event supplying the 3rd out
+    already does: outs are forced to 3, bases reset to "000", inning
+    increments, and is_our_team_batting flips -- regardless of what the
+    real out count was.
+
+    runs_scored: every runner left on base at the moment this fires
+    gets swept home (Ryker: "if there are runners on base when the half
+    inning ends those runs score and count towards era") -- always ALL
+    runners on base at the anchor, computed once at creation time, not
+    re-derived later. Added to Game.our_score/opponent_score/
+    squad_c_score the same way GameRunnerEvent's to_base==4 already is
+    (see replay_game()/the live "End half-inning now" handler), and
+    ALSO counted as EARNED runs against credited_player_id for that
+    pitcher's ERA (see game_stats.get_forced_half_inning_end_runs() and
+    compute_pitching_line()'s extra_earned_runs parameter) -- these
+    runs were never recorded on any GamePitch row (the half-inning
+    ended before another pitch or PA-ending play could record them
+    there), so they can't flow through runs_scored_on_play/
+    earned_runs_on_play like a normal play's runs do; this table is
+    their only record. Always treated as fully earned -- Ryker's own
+    framing ("count towards era") didn't distinguish earned/unearned,
+    unlike GamePitch.unearned_runs_on_play's manual per-play tagging.
+
+    credited_player_id: the pitcher being charged -- always the Player
+    who threw the anchor pitch (the GamePitch at pitch_sequence_after's
+    own our_player_id), since this feature is scoped to intrasquad
+    games only, where the pitcher being pulled for a pitch count is
+    always one of our own roster players, never an OpponentPlayer.
+
+    batting_squad: same three-squad-game meaning as GamePitch.
+    batting_squad -- which score column runs_scored credits. NULL for
+    an ordinary two-squad intrasquad game (falls back to
+    is_our_team_batting, same 5-way branch every other scoring site in
+    game_tracking.py already uses)."""
+    __tablename__ = "game_forced_half_inning_ends"
+
+    forced_end_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id"), nullable=False)
+    pitch_sequence_after = Column(Integer, nullable=False)  # the pitch_sequence of the last actual pitch recorded before this fired; 0 if none yet this game
+    inning = Column(Integer, nullable=False)  # the inning of the half being ended
+    is_our_team_batting = Column(Boolean, nullable=False)  # which side was batting in the half being ended
+    batting_squad = Column(String(1), nullable=True)  # three-team intrasquad mode only -- 'A'/'B'/'C', mirroring GamePitch.batting_squad. NULL for every ordinary game.
+    runs_scored = Column(Integer, nullable=False, default=0)  # every runner on base at the anchor, swept home
+    credited_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)  # the pitcher charged with runs_scored for ERA purposes
+    # True: the SAME side keeps pitching/batting after this fires (e.g. a
+    # three-squad pitch-count rotation to a fresh lineup/pitcher -- the
+    # ORIGINAL Kurt Kassner scenario this whole table was built for, Sept
+    # 2026) -- is_our_team_batting is NOT flipped by replay_game/
+    # compute_current_state when this is set; only outs/bases reset and
+    # inning still advances. False (default -- every row created before
+    # this field existed) is the original behavior: a genuine half-inning
+    # end, the other side comes up next. Flipping unconditionally when the
+    # same side actually continues corrupts which id column (our_player_id/
+    # opponent_our_player_id) reads as "batter" vs. "pitcher" for every
+    # pitch after the anchor, without the ids themselves being reassigned
+    # -- see the game #14 incident this field was added to fix. Only
+    # meaningful for uses_three_squad_intrasquad games.
+    same_side_continues = Column(Boolean, nullable=False, default=False)
+    notes = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    game = relationship("Game", back_populates="forced_half_inning_ends")
+    credited_player = relationship("Player")
+    created_by = relationship("User")
+
+
+class CollegeSeasonStat(Base):
+    """One college season from before (or outside) GBO's own charting --
+    Nov 2026, Ryker: pull each player's previous seasons (Pitt State
+    spring seasons, JUCO, other 4-years) from the schools' websites and
+    show them as a College Career section on Player Profile. Fall ball
+    stays GBO-charted only.
+
+    side = "batting" or "pitching". For pitching rows h/r/bb/so/hr/hbp are
+    ALLOWED. Every stat is nullable: many seasons were only published in
+    part (a bio line, a news story), and a blank means "not published",
+    never zero. college_career.py decides which rows are complete enough
+    to count toward the career totals. ip_outs = innings x 3."""
+    __tablename__ = "college_season_stats"
+    __table_args__ = (UniqueConstraint("player_id", "side", "season_year", "school", name="uq_college_season_stat"),)
+
+    college_season_stat_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False, index=True)
+    side = Column(String(10), nullable=False)
+    season_year = Column(Integer, nullable=False)
+    school = Column(String(120), nullable=False)
+    level = Column(String(20), nullable=True)  # NCAA D1/D2, NJCAA D1/D2/D3, NAIA, CCCAA, Other
+    g = Column(Integer); gs = Column(Integer)
+    ab = Column(Integer); r = Column(Integer); h = Column(Integer); doubles = Column(Integer); triples = Column(Integer)
+    hr = Column(Integer); rbi = Column(Integer); bb = Column(Integer); hbp = Column(Integer); so = Column(Integer)
+    gdp = Column(Integer); sf = Column(Integer); sh = Column(Integer); sb = Column(Integer); cs = Column(Integer); ibb = Column(Integer)
+    w = Column(Integer); l = Column(Integer); cg = Column(Integer); sho = Column(Integer); sv = Column(Integer)
+    ip_outs = Column(Integer); er = Column(Integer); wp = Column(Integer); bk = Column(Integer); bf = Column(Integer)
+    source_url = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class RapsodoHistory(Base):
+    """A Rapsodo pitch from before GBO's own imports (Nov 2026, Ryker:
+    Career Development tab on Player Profile). Sources: "rapsodo_account"
+    (Ryker's own Rapsodo Cloud history, Oct 2022 on) and "drive_fall_2025"
+    (the fall 2025 intrasquad export in the team Drive, Raw Rapsodo.xlsx).
+
+    Deliberately NOT in rapsodo_pitches: about 50 analytics read that table,
+    several over every pitch a player has (ratings, pitch class, fastball
+    shape, release comps), and old seasons would quietly move those numbers.
+    Only career_development.py reads this table. Loaded by
+    scripts/import_career_history.py, which skips any pitch already in
+    rapsodo_pitches (same Rapsodo unique id).
+
+    Same conventions as RapsodoPitch: release_side / hb are in Rapsodo's
+    pitcher-body frame (+ = the pitcher's right), IVB = vb_spin, HB =
+    hb_trajectory (analytics/bullpen_metrics.py). release_extension in feet
+    (the Drive export was in meters and is converted on import)."""
+    __tablename__ = "rapsodo_history"
+    __table_args__ = (UniqueConstraint("player_id", "source", "source_uid", name="uq_rapsodo_history_source"),)
+
+    rapsodo_history_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False, index=True)
+    source = Column(String(40), nullable=False)
+    source_uid = Column(String(100), nullable=False)  # Rapsodo "Unique ID" (player@epoch)
+    pitch_date = Column(DateTime, nullable=False)  # local (Central) time
+    session_key = Column(String(100), nullable=True)
+    session_type = Column(String(40), nullable=True)  # Rapsodo session type (Live, High Intent, Rehab...)
+    raw_pitch_type = Column(String(50), nullable=True)
+    pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=True)
+    velocity = Column(Numeric(6, 2)); total_spin = Column(Numeric(7, 2)); true_spin = Column(Numeric(7, 2))
+    spin_efficiency = Column(Numeric(6, 2)); spin_confidence = Column(Numeric(5, 3)); gyro_degree = Column(Numeric(6, 2))
+    spin_axis_degrees = Column(Numeric(5, 1)); vb_spin = Column(Numeric(6, 2)); hb_trajectory = Column(Numeric(6, 2))
+    release_height = Column(Numeric(6, 3)); release_side = Column(Numeric(6, 3)); release_extension = Column(Numeric(6, 3))
+    is_strike = Column(Boolean, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    player = relationship("Player")
+    pitch_type = relationship("PitchType")
+
+
+class SeasonPitchSplit(Base):
+    """Game numbers for one pitch type (or pitch_label "All pitches") over a
+    term, from an outside source -- Nov 2026: spring 2026 from the staff
+    game-tracking workbooks. runs_saved_per_100 is positive when good (the
+    workbook's per-pitch RV is flipped on import)."""
+    __tablename__ = "season_pitch_splits"
+    __table_args__ = (UniqueConstraint("player_id", "term", "pitch_label", name="uq_season_pitch_split"),)
+
+    season_pitch_split_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    term = Column(String(20), nullable=False)  # e.g. "Spring 2026"
+    pitch_label = Column(String(30), nullable=False)
+    pitches = Column(Integer, nullable=False)
+    strike_pct = Column(Numeric(5, 1)); called_pct = Column(Numeric(5, 1)); swing_pct = Column(Numeric(5, 1))
+    whiff_pct = Column(Numeric(5, 1)); csw_pct = Column(Numeric(5, 1)); putaway_pct = Column(Numeric(5, 1))
+    gb_pct = Column(Numeric(5, 1)); runs_saved_per_100 = Column(Numeric(7, 2))
+    oba = Column(Numeric(5, 3)); woba = Column(Numeric(5, 3)); hits = Column(Integer); hr = Column(Integer)
+    source = Column(String(150), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    player = relationship("Player")
+
+
+class SeasonPitchingLine(Base):
+    """One pitcher's leaderboard line for a term from an outside source
+    (Nov 2026: spring 2026 staff leaderboard). Feeds the staff comparison on
+    Career Development -- staff only. runs_saved_per_100 positive = good."""
+    __tablename__ = "season_pitching_lines"
+    __table_args__ = (UniqueConstraint("player_id", "term", name="uq_season_pitching_line"),)
+
+    season_pitching_line_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    term = Column(String(20), nullable=False)
+    ip = Column(Numeric(6, 2)); pitches = Column(Integer)
+    strike_pct = Column(Numeric(5, 1)); fps_pct = Column(Numeric(5, 1)); ea_pct = Column(Numeric(5, 1)); k_pct = Column(Numeric(5, 1))
+    whiff_pct = Column(Numeric(5, 1)); csw_pct = Column(Numeric(5, 1)); dominance_pct = Column(Numeric(5, 1)); putaway_pct = Column(Numeric(5, 1))
+    gb_pct = Column(Numeric(5, 1)); ld_pct = Column(Numeric(5, 1)); fb_pct = Column(Numeric(5, 1))
+    oba = Column(Numeric(5, 3)); woba = Column(Numeric(5, 3)); runs_saved_per_100 = Column(Numeric(7, 2))
+    era = Column(Numeric(6, 2)); fip = Column(Numeric(6, 2)); whip = Column(Numeric(5, 2)); siera = Column(Numeric(6, 2))
+    source = Column(String(150), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    player = relationship("Player")
+
+
+class GamePlayRunScorer(Base):
+    """Who scored on a PA-ending play, as confirmed (or fixed) by the coach
+    in Game Tracking (Nov 2026, Ryker: track runs scored). One row per run,
+    slot 1..runs_scored_on_play. Optional -- with no rows, run_scorers.py
+    infers the scorers from the base/runner data, and rows whose count no
+    longer matches the play's runs_scored_on_play are ignored the same way.
+    Both ids NULL = a run whose scorer is unknown."""
+    __tablename__ = "game_play_run_scorers"
+
+    run_scorer_id = Column(Integer, primary_key=True)
+    game_pitch_id = Column(Integer, ForeignKey("game_pitches.game_pitch_id", ondelete="CASCADE"), nullable=False, index=True)
+    slot = Column(Integer, nullable=False)
+    our_player_id = Column(Integer, ForeignKey("players.player_id", ondelete="SET NULL"), nullable=True)
+    opponent_player_id = Column(Integer, ForeignKey("opponent_players.opponent_player_id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class GameVideoClip(Base):
@@ -1339,3 +1917,784 @@ class GameVideoClip(Base):
 
     game = relationship("Game", back_populates="video_clips")
     matched_game_pitch = relationship("GamePitch")
+
+
+# ---------------------------------------------------------------------------
+# INTENDED LOCATION & COMMAND TRACKER
+#
+# GBO's own command-tracking system (inspired by, but not a copy of, any
+# third-party intended-zone tracker) -- captures where a pitcher/catcher/
+# coach INTENDED a pitch to go alongside where it ACTUALLY crossed the
+# plate, as continuous coordinates, so command (intent vs. execution) can
+# be measured directly instead of inferred from strike% or a coarse 1-9
+# zone. See the architecture doc agreed with Ryker (Aug 2026) for the
+# full spec and phased rollout; this is the Phase 1 (MVP) schema only --
+# Phase 2 adds no new columns (trend/heatmap/ellipse views are all
+# computed from what's already here), Phase 3 (automated Rapsodo
+# matching, game-tracking integration) is expected to need further
+# additions and is deliberately not designed yet.
+#
+# Deliberately reuses BullpenSession as the session container (Command
+# Tracker sessions are bullpens -- BullpenType already has a "Command"
+# value) rather than introducing a second, competing Session table.
+# CommandPitch is a NEW table rather than an extension of BullpenPitch:
+# BullpenPitch.target_zone is the older, coarse 1-9-zone manual-tracking
+# design already noted elsewhere in this file as being phased out in
+# favor of continuous coordinates -- bolting continuous x/z onto it would
+# extend a table on its way out rather than replace it cleanly. The two
+# tables coexist for now; a bullpen session can have BullpenPitch rows,
+# RapsodoPitch rows, and/or CommandPitch rows depending on which
+# tracking workflows were used on it.
+# ---------------------------------------------------------------------------
+
+class CommandPitch(Base):
+    """One tracked pitch in the Command Tracker -- intended location vs.
+    actual location, plus GBO-derived command metrics computed at save
+    time from those two points.
+
+    Coordinates (intended_x/z, actual_x/z) are stored in FEET, matching
+    the plate_x/plate_z convention already used everywhere else in GBO
+    (strike_zone.py, GamePitch.intended_plate_x/z and actual_plate_x/z):
+    x = 0 at the center of the plate, z = 0 at the ground. This is
+    deliberately the SAME convention as GamePitch's coordinates (not a
+    second, competing one) so a future Phase 3 game-tracking integration
+    doesn't need any unit translation, and so a future automated Rapsodo
+    actual-location match (Phase 3, see rapsodo_conventions.py's existing
+    inches->feet conversion) can populate actual_x/z directly.
+
+    intended_x/z are required -- the pitcher/catcher always has *some*
+    target in mind, even a chase pitch well outside the zone, so there's
+    no meaningful "no intended location" state for a tracked pitch.
+    actual_x/z are nullable: Phase 1 enters them manually right after
+    intended (see the Command Tracker module's fast-entry workflow), but
+    the column allows a pitch to be logged with intent only and its
+    actual location filled in later -- the same shape a future automated
+    Rapsodo match (Phase 3) will need, without a schema change then.
+
+    horizontal_miss/vertical_miss/miss_distance are stored already
+    converted to INCHES (not feet) -- every consumer of these three
+    columns (the session scorecard, command-by-pitch-type table, miss-
+    bias/miss-direction-distribution reports) only ever wants the inches
+    value coaches actually read ("Miss: 4.2 inches"), so the conversion
+    happens once at save time rather than at every read site. See
+    command_config.py for the target-radius thresholds these and the
+    three within_*_target flags are classified against, and
+    analytics/command_metrics.py for the actual calculation (miss
+    distance, direction -- handedness-aware per Player.throws --  and
+    classification), which is intentionally kept separate from this
+    model so the math has exactly one implementation.
+
+    source distinguishes how actual_x/z was populated: "manual" (Phase 1,
+    a coach/tracker clicked it in) vs. the Phase 3 reserved values
+    "rapsodo" / "trackman" / "game_tracking" for future automated
+    matching -- external_pitch_id is the corresponding foreign system's
+    pitch identifier (e.g. a future match to rapsodo_pitches via its
+    rapsodo_unique_id), left NULL for manual entries."""
+    __tablename__ = "command_pitches"
+
+    command_pitch_id = Column(Integer, primary_key=True)
+    bullpen_id = Column(Integer, ForeignKey("bullpen_sessions.bullpen_id"), nullable=False)
+    pitch_number = Column(Integer, nullable=False)  # sequential within the session, same convention as BullpenPitch.pitch_number
+    pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=True)
+    batter_side = Column(String(1), nullable=True)  # 'R' or 'L' -- who the pitch was aimed against, if simulated/specified; optional in Phase 1
+    balls = Column(Integer, nullable=True)  # count context at the time of the pitch, optional in Phase 1
+    strikes = Column(Integer, nullable=True)
+
+    intended_x = Column(Numeric(5, 3), nullable=False)  # feet, plate-center-at-0 -- see class docstring for convention
+    intended_z = Column(Numeric(5, 3), nullable=False)  # feet, ground-at-0
+    actual_x = Column(Numeric(5, 3), nullable=True)
+    actual_z = Column(Numeric(5, 3), nullable=True)
+
+    # Derived at save time by analytics/command_metrics.py -- never
+    # entered directly, so these can't drift from intended/actual above.
+    # Inches, not feet -- see class docstring.
+    horizontal_miss = Column(Numeric(6, 2), nullable=True)  # actual_x - intended_x, converted to inches (sign preserved -- see command_metrics for the handedness-aware arm-side/glove-side interpretation)
+    vertical_miss = Column(Numeric(6, 2), nullable=True)  # actual_z - intended_z, converted to inches (positive = high)
+    miss_distance = Column(Numeric(6, 2), nullable=True)  # Euclidean distance, inches
+    miss_direction = Column(String(30), nullable=True)  # e.g. "High Arm Side" -- handedness-aware, see command_metrics.classify_miss_direction
+
+    # Target-radius classification against command_config.py's configured
+    # thresholds -- nested (Precision inside Command inside Competitive),
+    # all three NULL until actual_x/z (and therefore miss_distance) exist.
+    within_precision_target = Column(Boolean, nullable=True)
+    within_command_target = Column(Boolean, nullable=True)
+    within_competitive_target = Column(Boolean, nullable=True)
+
+    pitch_result = Column(String(30), nullable=True)  # e.g. "Ball" / "Strike" / "In Play" -- free-standing outcome, deliberately NOT used as a command metric (see architecture doc's Section 38 principle: command is intent-vs-actual location, not strike/ball)
+    velocity = Column(Numeric(6, 2), nullable=True)  # mph, optional for manual tracking
+
+    source = Column(String(20), default="manual", nullable=False)  # "manual" (Phase 1) / "rapsodo" / "trackman" / "game_tracking" (Phase 3, reserved)
+    external_pitch_id = Column(String(100), nullable=True)  # foreign system's pitch identifier once Phase 3 automated matching exists; NULL for manual entries
+
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    bullpen = relationship("BullpenSession", back_populates="command_pitches")
+    pitch_type = relationship("PitchType")
+
+
+class PitchTypeChange(Base):
+    """One pitch relabeled through the Fastball Shape Check (Oct 2026,
+    Ryker: "if it fits the other type then we can switch it") -- an
+    audit/undo log, one row per switched Rapsodo reading. A switch
+    updates RapsodoPitch.pitch_type_id AND (when matched) the linked
+    GamePitch.pitch_type_id, so both previous values are kept here for
+    Undo. Both FKs are ON DELETE SET NULL (see
+    migrations/migrate_pitch_type_changes.py) so this log can never block
+    deleting a game, a pitch, or a Rapsodo import -- the FK-blocks-delete
+    bug class already hit twice in Sept 2026.
+
+    undone_at: set when a coach undoes the switch (row kept for history,
+    never deleted)."""
+    __tablename__ = "pitch_type_changes"
+
+    pitch_type_change_id = Column(Integer, primary_key=True)
+    rapsodo_pitch_id = Column(Integer, ForeignKey("rapsodo_pitches.rapsodo_pitch_id", ondelete="SET NULL"), nullable=True)
+    game_pitch_id = Column(Integer, ForeignKey("game_pitches.game_pitch_id", ondelete="SET NULL"), nullable=True)
+    player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True)
+    from_rapsodo_pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=True)
+    from_game_pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=True)
+    to_pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=False)
+    source = Column(String(30), nullable=False, default="shape_check")
+    reason = Column(Text, nullable=True)
+    changed_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    changed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    undone_at = Column(DateTime, nullable=True)
+
+
+class PlayerReportNote(Base):
+    """Coach's saved focus points for one Pitcher Meeting Report (Oct
+    2026, Ryker: "typed and saved" coach notes that print on the sheet).
+    One row per (player, report kind, game or season): kind "game" uses
+    game_id, kind "season" uses season_id. Uniqueness is enforced in the
+    module (save = update-or-insert), since a plain UNIQUE wouldn't catch
+    the NULL side of each pair in Postgres. Both FKs ON DELETE CASCADE --
+    notes about a deleted game/season go with it and never block the
+    delete (see migrations/migrate_player_report_notes.py)."""
+    __tablename__ = "player_report_notes"
+
+    note_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    report_kind = Column(String(10), nullable=False)  # "game" / "season"
+    game_id = Column(Integer, ForeignKey("games.game_id", ondelete="CASCADE"), nullable=True)
+    season_id = Column(Integer, ForeignKey("seasons.season_id", ondelete="CASCADE"), nullable=True)
+    notes = Column(Text, nullable=True)
+    updated_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class ExitReport(Base):
+    """Fall exit meeting plan (Oct 2026, Ryker: a deep-dive report coaches
+    go through with each player, ending in what he works on before the
+    season). One row per (player, season). priorities = the coach-edited
+    top 3: [{"title", "why", "measure" ("g:<GAME_METRICS key>" /
+    "t:<test name>" / ""), "target", "retest" (ISO date), "drills",
+    "goal_id"}] -- goal_id is the IDP goal that priority created, so
+    re-saving updates it instead of making a duplicate. status "draft"
+    until a coach saves the plan; players only see it once "saved".
+    (python3 -m migrations.migrate_exit_reports)"""
+    __tablename__ = "exit_reports"
+    __table_args__ = (UniqueConstraint("player_id", "season_id", name="uq_exit_reports_player_season"),)
+
+    exit_report_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    season_id = Column(Integer, ForeignKey("seasons.season_id", ondelete="CASCADE"), nullable=False)
+    status = Column(String(12), default="draft", nullable=False)
+    priorities = Column(JSON, nullable=True)
+    coach_notes = Column(Text, nullable=True)
+    met_on = Column(Date, nullable=True)
+    saved_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    saved_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class ResearchFBOutcome(Base):
+    """Study fastball outcomes for one pitcher and season, as computed for
+    the research study and imported from the testing workbook's
+    FB VELO&SPIN tab (Oct 2026, Ryker: the study uses these numbers --
+    games only, spin confidence 0.8+ -- rather than GBO recomputing them).
+    analytics/research_analysis.py prefers these over its own Rapsodo
+    numbers when a row exists. One row per (player, season_label).
+    (python3 -m migrations.migrate_study_workbook)"""
+    __tablename__ = "research_fb_outcomes"
+    __table_args__ = (UniqueConstraint("player_id", "season_label", name="uq_research_fb_player_season"),)
+
+    outcome_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    season_label = Column(String(20), nullable=False)
+    test_date = Column(Date, nullable=True)
+    avg_velo = Column(Numeric(6, 2), nullable=True)
+    peak_velo = Column(Numeric(6, 2), nullable=True)
+    avg_spin = Column(Numeric(7, 1), nullable=True)
+    peak_spin = Column(Numeric(7, 1), nullable=True)
+    n_pitches = Column(Integer, nullable=True)
+    note = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class ArsenalTarget(Base):
+    """A coach's override of one pitch's target shape on the Arsenal Plan
+    (Oct 2026, Ryker: REAPER-style recommender -- "a coach can override
+    any target"). One row per (player, pitch family); when present it's
+    used instead of the rule-based target from analytics/arsenal_plan.py.
+    Shape is in the pitcher's own frame: ivb = induced vertical break
+    (in), run = + toward his ARM side (in), velo = mph (optional)."""
+    __tablename__ = "arsenal_targets"
+    __table_args__ = (UniqueConstraint("player_id", "family", name="uq_arsenal_target_player_family"),)
+
+    target_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    family = Column(String(20), nullable=False)  # changeup / slider / sweeper / curveball / cutter / sinker / four_seam
+    velo = Column(Numeric(5, 1), nullable=True)
+    ivb = Column(Numeric(5, 1), nullable=False)
+    run = Column(Numeric(5, 1), nullable=False)
+    note = Column(Text, nullable=True)
+    updated_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class BodyCompTarget(Base):
+    """Team-wide Body Comp target for one measure (Oct 2026, Ryker:
+    "percentiles doesn't necessarily make sense" for body comp). Feeds the
+    PROPOSED target score (value / target, capped at 100) staff see next to
+    the official value / team max score; with no row, bucket_system falls
+    back to the roster median. One row
+    per test_name (Body Weight, Skeletal Muscle Mass)."""
+    __tablename__ = "body_comp_targets"
+
+    target_id = Column(Integer, primary_key=True)
+    test_name = Column(String(100), nullable=False, unique=True)
+    target_value = Column(Numeric(7, 2), nullable=False)
+    updated_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class PitchCard(Base):
+    """A saved pre-game Pitch Calling Card for one pitcher in one game (Oct
+    2026, Ryker -- analytics/pitch_card.py). data = the card JSON (rows of
+    hitters x count groups of Level-Pitch-Zone codes, plus generic vs
+    RHH/LHH), including any coach edits; the post-game Card vs Calls
+    report compares charted calls to it."""
+    __tablename__ = "pitch_cards"
+    __table_args__ = (UniqueConstraint("game_id", "pitcher_id", name="uq_pitch_card_game_pitcher"),)
+
+    card_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id", ondelete="CASCADE"), nullable=False)
+    pitcher_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    data = Column(JSON, nullable=False)
+    updated_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class WeeklyReportNote(Base):
+    """Coach's optional note on a pitcher's Weekly Progress Report (Oct
+    2026). week_start = the Monday of the week the report covers. Goes
+    out with Monday's report either way (Ryker's call)."""
+    __tablename__ = "weekly_report_notes"
+    __table_args__ = (UniqueConstraint("player_id", "week_start", name="uq_weekly_note_player_week"),)
+
+    note_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    week_start = Column(Date, nullable=False)
+    note = Column(Text, nullable=True)
+    updated_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class WeeklyReportSend(Base):
+    """One row per weekly-report email attempt (scripts/send_weekly_reports.py)
+    -- so a re-run never double-sends, and staff can see who got theirs."""
+    __tablename__ = "weekly_report_sends"
+    __table_args__ = (UniqueConstraint("player_id", "week_start", name="uq_weekly_send_player_week"),)
+
+    send_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    week_start = Column(Date, nullable=False)
+    email = Column(String(150), nullable=True)
+    status = Column(String(20), nullable=False)  # "sent" / "failed" / "no_email"
+    detail = Column(Text, nullable=True)
+    sent_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class PitcherAvailability(Base):
+    """Arm Care & Availability board entries (Oct 2026, Ryker approved; staff
+    only). Two kinds:
+      kind="status": a coach override -- status "Available" / "Limited" /
+                     "Hold", start_date..end_date (end NULL = until cleared).
+                     Always wins over the automatic rest/workload status.
+      kind="plan":   a planned outing -- plan_type "Start" / "Relief" /
+                     "Bullpen" on planned_date; the board warns if he won't
+                     be rested by then.
+    cleared=True keeps history instead of deleting."""
+    __tablename__ = "pitcher_availability"
+
+    availability_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    kind = Column(String(10), nullable=False)          # "status" / "plan"
+    status = Column(String(12), nullable=True)         # Available / Limited / Hold
+    plan_type = Column(String(12), nullable=True)      # Start / Relief / Bullpen
+    start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
+    planned_date = Column(Date, nullable=True)
+    note = Column(Text, nullable=True)
+    cleared = Column(Boolean, default=False, nullable=False)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TeamReportSend(Base):
+    """One row per Team Game Report email attempt (Oct 2026,
+    scripts/send_team_game_reports.py) -- one per (game, coach), so the
+    hourly job never double-sends."""
+    __tablename__ = "team_report_sends"
+    __table_args__ = (UniqueConstraint("game_id", "user_id", name="uq_team_report_send_game_user"),)
+
+    send_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    email = Column(String(150), nullable=True)
+    status = Column(String(20), nullable=False)  # "sent" / "failed"
+    detail = Column(Text, nullable=True)
+    sent_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AdvanceReport(Base):
+    """An advance scouting report for a series vs one opponent (Oct 2026).
+    Numbers are computed live from our charting (analytics/
+    advance_scouting.py); this row holds only what coaches decide: the
+    title/date, each of their pitchers' expected role (roles JSON,
+    {opponent_player_id: "Fri"/"Closer"/...}), the edited series plan,
+    and whether hitters can see it (published). Per-pitcher scouting
+    notes live on OpponentPlayer.notes so they carry across reports."""
+    __tablename__ = "advance_reports"
+
+    report_id = Column(Integer, primary_key=True)
+    opponent_team_id = Column(Integer, ForeignKey("opponent_teams.team_id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(200), nullable=False)
+    series_date = Column(Date, nullable=True)
+    roles = Column(JSON, nullable=True)
+    plan_text = Column(Text, nullable=True)
+    # Oct 2026: coach-edited one-line plans, {"p:<opponent_player_id>": "...",
+    # "h:<opponent_player_id>": "..."} (their pitchers / their hitters).
+    # migrations.migrate_advance_lines adds the column.
+    lines = Column(JSON, nullable=True)
+    published = Column(Boolean, default=False, nullable=False)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    opponent_team = relationship("OpponentTeam")
+
+
+class GameBoxScore(Base):
+    """Official box score line typed in by staff (Oct 2026, Ryker: "type
+    it"), one row per game. Data Health compares it to what the charting
+    adds up to, so a missed pitch / wrong result shows up right away.
+    Box-score convention: each side's E = errors that side COMMITTED in
+    the field; BB / K = that side's hitters' walks / strikeouts."""
+    __tablename__ = "game_box_scores"
+
+    game_id = Column(Integer, ForeignKey("games.game_id", ondelete="CASCADE"), primary_key=True)
+    our_r = Column(Integer, nullable=True)
+    our_h = Column(Integer, nullable=True)
+    our_e = Column(Integer, nullable=True)
+    our_bb = Column(Integer, nullable=True)
+    our_k = Column(Integer, nullable=True)
+    opp_r = Column(Integer, nullable=True)
+    opp_h = Column(Integer, nullable=True)
+    opp_e = Column(Integer, nullable=True)
+    opp_bb = Column(Integer, nullable=True)
+    opp_k = Column(Integer, nullable=True)
+    entered_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class AppError(Base):
+    """One row per unhandled error a user hit in the app (Oct 2026, Ryker
+    approved error alerts -- see error_log.py). fingerprint groups the same
+    bug (error type + the GBO file/line it came from) so the daily summary
+    and the burst alert count repeats, not one-offs."""
+    __tablename__ = "app_errors"
+
+    error_id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    fingerprint = Column(String(64), nullable=False)
+    error_type = Column(String(120), nullable=True)
+    message = Column(Text, nullable=True)
+    location = Column(String(255), nullable=True)      # gbo file:line in function
+    output_name = Column(String(255), nullable=True)   # Shiny output / effect that failed
+    page = Column(String(120), nullable=True)          # sidebar page they were on
+    user_id = Column(Integer, nullable=True)
+    role_name = Column(String(60), nullable=True)
+    traceback_text = Column(Text, nullable=True)
+    alert_sent = Column(Boolean, default=False, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# WHOOP pilot (Oct 2026, Ryker: pull players' WHOOP data into GBO for sports
+# science -- sleep, HRV, recovery -- and compare it to performance. Pilot is
+# one player first; everyone, players included, can see the data).
+#
+# The WHOOP sign-in and the nightly sync run in Supabase Edge Functions
+# (supabase/functions/whoop-oauth-callback, whoop-sync) -- they are the only
+# code that writes these tables. The OAuth tokens live in whoop_tokens, which
+# has NO ORM model on purpose: the Shiny app never needs them.
+# (python3 -m migrations.migrate_whoop)
+# ---------------------------------------------------------------------------
+from sqlalchemy import BigInteger  # noqa: E402
+
+
+class WhoopConnectLink(Base):
+    """A one-time "Connect WHOOP" link a staff member (or the player) made
+    for one player. The player opens it, signs into WHOOP, taps Allow; the
+    callback finds the player by this state value. Expires after 7 days."""
+    __tablename__ = "whoop_connect_links"
+
+    link_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    state = Column(String(64), nullable=False, unique=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class WhoopConnection(Base):
+    """One player's WHOOP account link. status: connected / error /
+    disconnected. last_error is the plain-English reason a sync failed
+    (e.g. he revoked access in the WHOOP app)."""
+    __tablename__ = "whoop_connections"
+
+    connection_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False, unique=True)
+    whoop_user_id = Column(BigInteger, nullable=True)
+    whoop_name = Column(String(150), nullable=True)
+    scopes = Column(Text, nullable=True)
+    status = Column(String(20), default="connected", nullable=False)
+    last_error = Column(Text, nullable=True)
+    connected_at = Column(DateTime, nullable=True)
+    last_synced_at = Column(DateTime, nullable=True)
+    active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    player = relationship("Player")
+
+
+class WhoopDaily(Base):
+    """One WHOOP physiological cycle (about one day) for one player: the
+    recovery he woke up with, the sleep that produced it, and the strain of
+    the day that followed. day_date = the day he woke up (cycle start in his
+    local time + 12 h -- a cycle starts when he falls asleep). score_state is
+    WHOOP's SCORED / PENDING_SCORE / UNSCORABLE; only SCORED values are used
+    in baselines."""
+    __tablename__ = "whoop_daily"
+    __table_args__ = (UniqueConstraint("player_id", "cycle_id", name="uq_whoop_daily_player_cycle"),)
+
+    whoop_daily_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    cycle_id = Column(BigInteger, nullable=False)
+    day_date = Column(Date, nullable=False)
+    cycle_start = Column(DateTime, nullable=True)
+    cycle_end = Column(DateTime, nullable=True)
+    timezone_offset = Column(String(10), nullable=True)
+    cycle_score_state = Column(String(20), nullable=True)
+    day_strain = Column(Numeric(5, 2), nullable=True)
+    kilojoule = Column(Numeric(10, 2), nullable=True)
+    avg_hr = Column(Integer, nullable=True)
+    max_hr = Column(Integer, nullable=True)
+    recovery_score_state = Column(String(20), nullable=True)
+    recovery_score = Column(Numeric(5, 1), nullable=True)
+    hrv_rmssd_ms = Column(Numeric(7, 2), nullable=True)
+    resting_hr = Column(Numeric(5, 1), nullable=True)
+    spo2_pct = Column(Numeric(5, 2), nullable=True)
+    skin_temp_c = Column(Numeric(5, 2), nullable=True)
+    user_calibrating = Column(Boolean, nullable=True)
+    sleep_id = Column(String(64), nullable=True)
+    sleep_start = Column(DateTime, nullable=True)
+    sleep_end = Column(DateTime, nullable=True)
+    sleep_score_state = Column(String(20), nullable=True)
+    sleep_performance_pct = Column(Numeric(5, 1), nullable=True)
+    sleep_consistency_pct = Column(Numeric(5, 1), nullable=True)
+    sleep_efficiency_pct = Column(Numeric(5, 1), nullable=True)
+    respiratory_rate = Column(Numeric(5, 2), nullable=True)
+    total_sleep_min = Column(Numeric(6, 1), nullable=True)
+    in_bed_min = Column(Numeric(6, 1), nullable=True)
+    light_sleep_min = Column(Numeric(6, 1), nullable=True)
+    deep_sleep_min = Column(Numeric(6, 1), nullable=True)
+    rem_sleep_min = Column(Numeric(6, 1), nullable=True)
+    awake_min = Column(Numeric(6, 1), nullable=True)
+    sleep_need_min = Column(Numeric(6, 1), nullable=True)
+    disturbances = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class WhoopWorkout(Base):
+    """One WHOOP-detected or logged workout. Note: WHOOP strain is heart-rate
+    load -- it does NOT capture arm load from throwing (pitch-count ACWR in
+    analytics/workload_metrics.py / arm_care.py stays the throwing load)."""
+    __tablename__ = "whoop_workouts"
+
+    whoop_workout_id = Column(String(64), primary_key=True)   # WHOOP's v2 UUID
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    day_date = Column(Date, nullable=True)
+    start_time = Column(DateTime, nullable=True)
+    end_time = Column(DateTime, nullable=True)
+    timezone_offset = Column(String(10), nullable=True)
+    sport_name = Column(String(80), nullable=True)
+    score_state = Column(String(20), nullable=True)
+    strain = Column(Numeric(5, 2), nullable=True)
+    avg_hr = Column(Integer, nullable=True)
+    max_hr = Column(Integer, nullable=True)
+    kilojoule = Column(Numeric(10, 2), nullable=True)
+    zone_durations = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# SmartPark (WIN Reality / Yakkertech) -- Oct 2026, built ahead of install
+# ---------------------------------------------------------------------------
+# Ryker's call (Oct 27 2026): SmartPark REPLACES manual game charting. One
+# uploaded game file builds the game's whole pitch-by-pitch GamePitch record
+# (count, outs, result, location, pitch type, batted ball) and keeps every
+# tracking reading in smartpark_pitches, linked 1:1 to the GamePitch it made.
+# The export format wasn't known yet when this was built -- all column names
+# live in services/smartpark_columns.py so the first real file only means
+# editing that one mapping file. migrations/migrate_smartpark.py.
+
+class SmartParkImport(Base):
+    """One uploaded SmartPark game file -- audit log + duplicate guard."""
+    __tablename__ = "smartpark_imports"
+    __table_args__ = (UniqueConstraint("file_hash", name="uq_smartpark_import_hash"),)
+
+    import_id = Column(Integer, primary_key=True)
+    game_id = Column(Integer, ForeignKey("games.game_id", ondelete="CASCADE"), nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    file_hash = Column(String(64), nullable=False)  # sha256 of the raw bytes
+    source_game_uid = Column(String(100), nullable=True)  # the file's own GameID, if it has one
+    uploaded_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    row_count = Column(Integer, nullable=False)
+    pitch_count = Column(Integer, default=0, nullable=False)  # GamePitch rows built
+    status = Column(String(20), nullable=False)  # "success" / "partial"
+    warnings = Column(Text, nullable=True)  # plain-English notes for the coach, one per line
+
+    game = relationship("Game")
+    uploaded_by = relationship("User")
+    pitches = relationship("SmartParkPitch", back_populates="import_record", cascade="all, delete-orphan")
+
+
+class SmartParkPitch(Base):
+    """One SmartPark row (one pitch), raw readings kept as imported. Field
+    names follow the TrackMan-style names Yakkertech exports have used;
+    anything the mapping doesn't know lands in raw_extra, never dropped."""
+    __tablename__ = "smartpark_pitches"
+
+    smartpark_pitch_id = Column(Integer, primary_key=True)
+    import_id = Column(Integer, ForeignKey("smartpark_imports.import_id", ondelete="CASCADE"), nullable=False, index=True)
+    game_id = Column(Integer, ForeignKey("games.game_id", ondelete="CASCADE"), nullable=False, index=True)
+    game_pitch_id = Column(Integer, ForeignKey("game_pitches.game_pitch_id", ondelete="SET NULL"), nullable=True, index=True)
+    pitcher_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True, index=True)  # set when the pitcher is ours
+    batter_player_id = Column(Integer, ForeignKey("players.player_id"), nullable=True, index=True)  # set when the batter is ours
+    pitch_type_id = Column(Integer, ForeignKey("pitch_types.pitch_type_id"), nullable=True)
+
+    # --- identity / game state, as in the file ---
+    pitch_no = Column(Integer, nullable=True)
+    source_pitch_uid = Column(String(100), nullable=True)
+    pitch_time = Column(DateTime, nullable=True)
+    inning = Column(Integer, nullable=True)  # real inning (1..9), not GBO's half-inning counter
+    top_bottom = Column(String(10), nullable=True)
+    pa_of_inning = Column(Integer, nullable=True)
+    pitch_of_pa = Column(Integer, nullable=True)
+    outs = Column(Integer, nullable=True)
+    balls = Column(Integer, nullable=True)
+    strikes = Column(Integer, nullable=True)
+    pitcher_name = Column(String(150), nullable=True)
+    pitcher_source_id = Column(String(50), nullable=True)
+    pitcher_throws = Column(String(10), nullable=True)
+    pitcher_team = Column(String(100), nullable=True)
+    batter_name = Column(String(150), nullable=True)
+    batter_source_id = Column(String(50), nullable=True)
+    batter_side = Column(String(10), nullable=True)
+    batter_team = Column(String(100), nullable=True)
+    tagged_pitch_type = Column(String(50), nullable=True)
+    auto_pitch_type = Column(String(50), nullable=True)
+    pitch_call = Column(String(40), nullable=True)
+    kor_bb = Column(String(20), nullable=True)
+    tagged_hit_type = Column(String(30), nullable=True)
+    play_result = Column(String(30), nullable=True)
+    outs_on_play = Column(Integer, nullable=True)
+    runs_scored = Column(Integer, nullable=True)
+
+    # --- pitch tracking ---
+    rel_speed = Column(Float, nullable=True)  # mph
+    spin_rate = Column(Float, nullable=True)  # rpm
+    spin_axis = Column(Float, nullable=True)  # degrees
+    spin_efficiency = Column(Float, nullable=True)  # %
+    tilt = Column(String(10), nullable=True)  # clock, e.g. "1:15"
+    rel_height = Column(Float, nullable=True)  # ft
+    rel_side = Column(Float, nullable=True)  # ft
+    extension = Column(Float, nullable=True)  # ft
+    vert_rel_angle = Column(Float, nullable=True)
+    horz_rel_angle = Column(Float, nullable=True)
+    induced_vert_break = Column(Float, nullable=True)  # in
+    horz_break = Column(Float, nullable=True)  # in
+    vert_break = Column(Float, nullable=True)  # in, gravity included
+    plate_loc_height = Column(Float, nullable=True)  # ft, as in the file
+    plate_loc_side = Column(Float, nullable=True)  # ft, as in the file
+    zone_speed = Column(Float, nullable=True)
+    vert_appr_angle = Column(Float, nullable=True)
+    horz_appr_angle = Column(Float, nullable=True)
+
+    # --- batted ball / swing ---
+    exit_speed = Column(Float, nullable=True)  # mph
+    launch_angle = Column(Float, nullable=True)  # deg
+    direction = Column(Float, nullable=True)  # spray angle, deg, + = right field
+    distance = Column(Float, nullable=True)  # ft
+    hit_spin_rate = Column(Float, nullable=True)
+    hang_time = Column(Float, nullable=True)
+    bat_speed = Column(Float, nullable=True)  # mph
+
+    # --- GBO-derived ---
+    plate_x_ft = Column(Float, nullable=True)  # GBO convention (strike_zone.py)
+    plate_z_ft = Column(Float, nullable=True)
+
+    raw_extra = Column(JSON, nullable=True)  # every column the mapping didn't recognise
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    import_record = relationship("SmartParkImport", back_populates="pitches")
+    game_pitch = relationship("GamePitch")
+    pitch_type = relationship("PitchType")
+
+
+class SmartParkPlayerLink(Base):
+    """Remembers which roster player a SmartPark name/ID is, so a coach
+    only fixes a name mismatch once (e.g. the file says "Curry, Ry")."""
+    __tablename__ = "smartpark_player_links"
+    __table_args__ = (UniqueConstraint("source_key", name="uq_smartpark_player_link_key"),)
+
+    link_id = Column(Integer, primary_key=True)
+    source_key = Column(String(200), nullable=False)  # "id:<SmartPark player id>" or "name:<normalized name>"
+    source_name = Column(String(150), nullable=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    player = relationship("Player")
+
+
+# ---------------------------------------------------------------------------
+# Throwing workload (Nov 2026, Ryker: count every throw, not just pitches --
+# catch play, long toss, warm-ups, plyos -- with a 9-day / 28-day ratio and a
+# weekly build vs benchmarks; ready for PULSE / Motus sensor exports).
+# Table setup: python3 -m migrations.migrate_throwing_workload
+# ---------------------------------------------------------------------------
+
+class ThrowLog(Base):
+    """Throws that aren't charted pitches. One row per player / day / type.
+      source "manual" -- typed in by staff on the Throwing Workload page
+      source "pulse" / "motus" / "sensor" -- a sensor export; a day with
+                 sensor throws uses the sensor total for that day instead of
+                 adding up pitches + logs + assumed throws (the sensor saw
+                 every throw).
+    throw_type "No throwing" with throws = 0 marks a real rest day so no
+    assumed catch play gets added for it."""
+    __tablename__ = "throw_logs"
+
+    throw_log_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    log_date = Column(Date, nullable=False)
+    throw_type = Column(String(20), nullable=False)
+    throws = Column(Integer, nullable=False, default=0)
+    high_intent = Column(Integer, nullable=True)          # throws at or near full effort, if known
+    source = Column(String(12), nullable=False, default="manual")
+    workload = Column(Numeric(10, 2), nullable=True)       # the sensor's own workload / stress number
+    peak_torque = Column(Numeric(6, 1), nullable=True)     # sensor peak elbow torque (Nm), if exported
+    notes = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    player = relationship("Player")
+
+
+class ThrowingAssumption(Base):
+    """One row (setting_id = 1): the throws GBO assumes when nobody logged
+    them -- warm-up before a bullpen / game outing, and daily catch play."""
+    __tablename__ = "throwing_assumptions"
+
+    setting_id = Column(Integer, primary_key=True)
+    pen_warmup = Column(Integer, nullable=False, default=25)
+    game_warmup = Column(Integer, nullable=False, default=35)
+    catch_play = Column(Integer, nullable=False, default=40)
+    catch_play_days = Column(String(12), nullable=False, default="practice")   # practice / weekdays / daily / off
+    updated_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# VALD testing (Nov 2026, Ryker: put every VALD test on GBO -- display only,
+# NOT an assessment: nothing here feeds Assessments, percentiles or the
+# Bucket System). Loaded from VALD Hub CSV exports on Import VALD
+# (services/vald_import.py); shown on Player Profile's VALD Testing tab.
+# Table setup: python3 -m migrations.migrate_vald
+# ---------------------------------------------------------------------------
+
+class ValdImport(Base):
+    """One uploaded VALD export file."""
+    __tablename__ = "vald_imports"
+
+    vald_import_id = Column(Integer, primary_key=True)
+    system = Column(String(20), nullable=False)          # ForceDecks / ForceFrame
+    file_name = Column(String(200), nullable=True)
+    first_test_date = Column(Date, nullable=True)
+    last_test_date = Column(Date, nullable=True)
+    test_count = Column(Integer, nullable=False, default=0)
+    imported_by_user_id = Column(Integer, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ValdTest(Base):
+    """One VALD test for one player. ForceDecks: one test (e.g. an IMTP).
+    ForceFrame: one test + position on one day, both directions and both
+    sides merged -- metrics = {"directions": {"IR": {"L": {...}, "R": {...}},
+    "ER": {...}}}. ForceDecks metrics = {"values": {VALD column: number},
+    "asym": {VALD column: {"value", "side"}}}. test_key makes re-imports
+    update instead of duplicate."""
+    __tablename__ = "vald_tests"
+    __table_args__ = (UniqueConstraint("player_id", "system", "test_key", name="uq_vald_test"),)
+
+    vald_test_id = Column(Integer, primary_key=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False, index=True)
+    vald_import_id = Column(Integer, ForeignKey("vald_imports.vald_import_id", ondelete="SET NULL"), nullable=True)
+    system = Column(String(20), nullable=False)
+    test_type = Column(String(100), nullable=False)      # IMTP, CMJ, Shoulder IR/ER, ...
+    position = Column(String(150), nullable=True)        # ForceFrame position
+    test_key = Column(String(250), nullable=False)
+    test_date = Column(Date, nullable=False, index=True)
+    tested_at = Column(DateTime, nullable=False)
+    body_weight_kg = Column(Numeric(6, 2), nullable=True)
+    reps = Column(Integer, nullable=True)
+    metrics = Column(JSON, nullable=False, default=dict)
+    vald_name = Column(String(150), nullable=True)       # name as spelled in VALD
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    player = relationship("Player")
+
+
+class ValdNameLink(Base):
+    """Remembers which roster player a (misspelled) VALD name is, so staff
+    only fix a name once."""
+    __tablename__ = "vald_name_links"
+    __table_args__ = (UniqueConstraint("vald_name_key", name="uq_vald_name_link_key"),)
+
+    vald_name_link_id = Column(Integer, primary_key=True)
+    vald_name_key = Column(String(150), nullable=False)  # normalized (lowercase, letters only)
+    vald_name = Column(String(150), nullable=True)
+    player_id = Column(Integer, ForeignKey("players.player_id", ondelete="CASCADE"), nullable=False)
+    created_by_user_id = Column(Integer, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    player = relationship("Player")

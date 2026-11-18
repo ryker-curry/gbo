@@ -1,0 +1,277 @@
+"""
+GBO -- Glossary content (Sept 2026, Pitcher Profile's per-tab "Glossary"
+links).
+
+Ryker's reference is mlbpitchprofiler.com's own /glossary/statistics,
+/glossary/zone, /glossary/results, and /glossary/modeling pages -- one
+"Glossary" link per tab, opening the definitions relevant to what that
+tab actually shows, so a coach or player can click and learn what a
+stat means without leaving the page. Content here is GBO's own,
+written for GBO's own metrics and formulas (not a copy of that site's
+text) -- their pages were used as a reference for WHICH terms are worth
+explaining and roughly how much detail belongs in one entry, not as
+copy to reproduce.
+
+Deliberately skips plain box-score counting stats that don't need a
+definition (BB, K, Hits, At Bats, 1B/2B/3B/HR, Balls, Strikes, Total
+Pitches, Swings, Whiffs as raw counts, etc.) -- only rate stats, grades,
+and GBO-specific jargon get an entry.
+
+Each section below is a list of (term, definition) tuples, in the order
+they should display -- roughly matching the order those terms actually
+appear on that tab. shiny_app/ui_helpers.glossary_modal() renders one of
+these lists as a modal; shiny_app/modules/pitcher_profile.py wires one
+"Glossary" link per view (pp_view) to the matching list here.
+"""
+
+OVERVIEW = [
+    ("Plus stats (vs D2)", "ERA+, FIP+, WHIP+, K%+, BB%+, K-BB%+: each stat compared to the 2026 NCAA Division II average (ERA 6.73, WHIP 1.75, K 17.1% / BB 11.6% of batters, K-BB 5.5 points). 100 = D2 average and higher is always better -- ERA+, FIP+, WHIP+ and BB%+ are flipped so lower ERA/WHIP/walks score higher. GBO's FIP constant (4.72) is set so a D2-average pitcher's FIP equals the D2 ERA."),
+    ("TBIP (Total Bases per Inning)", "Every base a pitcher hands out at the plate, per inning: walks + HBP + singles + 2 x doubles + 3 x triples + 4 x homers, divided by innings. Lower is better. In D1 college baseball each base allowed turns into about half a run (0.51), and TBIP explains 94% of how many runs a team gives up per inning -- more than FIP (77%) or WHIP (93%) (SABR Tooth Tigers, 2025). Unlike WHIP it counts how far each runner got, and it includes hit batters. It describes damage done (hits depend partly on defense and luck); FIP is still the better predictor of what comes next."),
+    ("IP / WHIP / FIP", "Traditional pitching-line stats. WHIP = (Walks + Hits Allowed) / IP. FIP is an ERA-shaped estimate built only from K/BB/HBP/HR -- the outcomes a pitcher controls directly -- scaled with GBO's own constants, not real MLB FIP constants."),
+    ("Strike %", "Strikes (called, swinging, foul, or in play) as a share of all pitches thrown."),
+    ("Zone Execution %", "Yes-or-no: how often a pitch landed in the box the catcher called (the Level-Zone code) or within 6 inches (half a foot) of it. Calls off the plate (the outside boxes) count anywhere off the plate on that side. Same as Hit-the-spot % on the reports. Our staff was at 33% this fall."),
+    ("Command Execution %", "Partial-credit command: each pitch scores 4 (within 4 in of the called box), 3 (8 in), 2 (12 in), 1 (16 in) or 0 (farther); Command Execution % is the average score out of a perfect 4. Reads higher than Zone Execution % because near-misses still earn points."),
+    ("Zone Execution % vs Command Execution %", "Both grade how far a pitch landed from the box the catcher called. Zone Execution % is YES-OR-NO: within half a foot of the box counts, anything else doesn't -- easy to read ('1 in 3 spots') and good for goals. Command Execution % gives PARTIAL CREDIT: every pitch earns 4 points (within 4 in of the box), 3 (within 8 in), 2 (within 12 in), 1 (within 16 in) or 0 (farther), and the % is the average out of a perfect 4. So a 7-inch miss and a 2-foot miss both count as a plain miss in Zone Execution %, but Command Execution % still gives the 7-inch one most of the credit. Use Zone Execution % to see how often he hits it; use Command Execution % to see how close he usually gets. Command+ grades the same misses compared to our staff."),
+    ("OBA / wOBA*", "OBA is opponent batting average against this pitcher. wOBA* uses generic linear weights (not MLB's own run-value constants) -- a relative read within this team's own games, not an MLB-exact number."),
+    ("Stuff+ / Location+ / Pitching+", "GBO's own pitch-quality grades, each on a 100-point scale where 100 = this TEAM's own average across every graded pitch this season and each 10 points = one standard deviation. Team-relative only -- GBO has no access to league-wide pitch data to compare against a real MLB Stuff+ number. Stuff+ grades a pitch's physical characteristics alone (velocity, movement, spin, release); Location+ grades the spot it was thrown to -- the team's average result for that pitch type in that area (heart, edge, chase, way off), not what happened on that one pitch -- with 10 points = one step between pitchers and small samples pulled toward 100; Pitching+ blends them, 60% Stuff+ and 40% Location+. The number shown here on Overview is blended across every pitch type in this window (each type counted once, not weighted by how often it's thrown) -- for the grade broken out by individual pitch type, see the Arsenal tab."),
+    ("Command+", "Same 100-point team-relative scale, built from how far a pitcher's located pitches land from their own CALLED target, compared pitch-type by pitch-type against the team's own average miss distance -- not how far from the plate's center, how far from where the dugout asked for it. A miss that drifts toward the middle of the plate counts half again; missing off the plate is just a miss, never a bonus. 10 points = one step between pitchers on our staff, and pitchers with only a few charted pitches stay close to 100 until there's enough to trust."),
+    ("Arsenal (score)", "Usage-weighted average of Pitching+ across a pitcher's own pitch mix -- a pitch type thrown more often counts for more toward this number."),
+    ("Results (score)", "How this pitcher's FIP/WHIP/K-BB%/CSW%/Zone Execution% compare to the rest of the team, blended into one team-relative score."),
+    ("Team Percentile / Grade", "The two numbers next to each bar: \"Grade\" is the raw 100-point-scale number above; \"Team Percentile\" converts it to an approximate percentile using the normal curve. It's an approximation from the grade's own distribution, not a true rank against the live roster."),
+    ("Pitch Usage", "Share of total pitches thrown, broken out by pitch type."),
+    ("Pitching+ Trend", "Pitching+ per pitch, plotted by game date (oldest to newest) -- shows whether a pitcher's stuff-plus-location grade is trending up or down over the selected window."),
+]
+
+METRICS = [
+    ("Bauer Units / BU vs team", "Total spin divided by velocity (rpm per mph) -- spin ability apart from arm speed, since spin naturally rises when a pitcher throws harder. Most telling on breaking balls (high = a natural spinner). BU vs team compares him to our staff's average for that pitch type; within +/-1 is typical."),
+    ("Velocity", "Ball speed off the hand, in mph, as read by Rapsodo."),
+    ("Spin Rate", "Total spin on the ball, in rpm."),
+    ("IVB (Induced Vertical Break)", "Vertical movement caused by spin alone, with gravity's own drop already factored out -- a positive number means the pitch drops less than a spinless pitch would, not that it actually rises (except for a true rise ball)."),
+    ("HB (Horizontal Break)", "Side-to-side movement from the pitcher's own release line, in inches."),
+    ("Release Height / Release Side", "Where the ball leaves the hand: Release Height is measured straight up from the ground, Release Side is measured left/right from the center of the rubber."),
+    ("Spin Axis", "The tilt of the ball's spin on a clock face, as read directly off the ball by Rapsodo -- e.g. \"12:18\" means the axis is tilted just past straight-up-and-down. GBO shows this single measured value only; it doesn't currently compute a separate \"inferred from movement\" axis to compare it against."),
+    ("Spin Efficiency", "The share of total spin that's actually contributing to the ball's movement, versus spin wasted on the bullet-like (gyroscopic) axis that doesn't move the ball at all."),
+    ("Gyro Degree", "How much of a pitch's spin is pure bullet-spin (gyro) rather than transverse spin that creates movement -- higher gyro means less of that total spin translates into break."),
+    ("Est. VAA (Vertical Approach Angle)", "The angle the pitch is on as it crosses the front of the plate, measured down from a flat horizontal line -- more negative (steeper) means it's dropping into the zone more; closer to zero (flatter) means it's playing more like a rising fastball relative to a hitter's swing plane. GBO estimates this from release height, release angle, and extension rather than measuring it directly off the plate crossing, so treat it as a useful relative comparison (pitch to pitch, pitcher to pitcher) rather than an exact number -- it's labeled \"Est.\" everywhere it's shown for that reason."),
+    ("IVB Over Expected", "How much more (or less) ride a pitch has than a pitcher with his arm slot usually gets. Ride mostly follows slot -- higher slots get more, lower slots get more run -- so this subtracts the IVB our staff's line predicts for his estimated arm angle. Fastballs: + means it carries more than hitters expect from that arm (plays up in the zone), - means it sinks/runs more. Breaking balls: + = more carry, - = more depth. Built on our own Rapsodo readings, so it's compared to our staff, not a league. Within +/-1.5 inches is typical."),
+    ("Movement chart", "IVB vs. HB, one point per pitch, colored by pitch type -- shows the shape of each pitch's break relative to the others in the arsenal."),
+    ("Release Point graphic", "Where each pitch type actually left the hand, viewed from behind or in front of the rubber -- consistency here (a tight cluster) is generally a good sign; different release points for different pitch types can tip a hitter off."),
+    ("Spin Axis chart", "Each pitch type's spin axis plotted on a clock face -- \"Average by Pitch Type\" shows one arrow per type at its circular average (the right way to average clock-face angles); \"Individual Pitches\" shows every pitch's own arrow."),
+]
+
+RESULTS = [
+    ("Weak / Jammed / Off the End / Clipped / Solid Contact / Barreled", "GBO's own six contact-quality grades, assigned live by the charting coach to every ball in play, ordered worst-for-the-pitcher to best-for-the-pitcher on the stacked bar (Weak/Jammed/Off the End/Clipped are all rough outs for the pitcher; Solid and Barreled are increasingly dangerous contact). Each pitch type's bar always sums to 100% of that type's own balls in play."),
+    ("Hard Hit %", "Solid Contact + Barreled, as a share of balls in play -- GBO's stand-in for exit-velocity-based Hard Hit% (GBO doesn't track exit velocity)."),
+    ("Whiff %", "Swings that missed, as a share of swings."),
+    ("SwStr %", "Swings that missed, as a share of EVERY pitch thrown (not just swings) -- a different denominator from Whiff%, so the two numbers are never the same."),
+    ("Chase %", "Swings at pitches located outside the strike zone, as a share of all out-of-zone pitches thrown -- an approach/results stat (how often a hitter bit), not a location stat. See the Zone tab's Chase Zone % for the pure \"where was it thrown\" version."),
+    ("RV / RV/100", "Run Value: the total run impact of that pitch type's outcomes (negative = runs saved, good for the pitcher). RV/100 normalizes it to a per-100-pitches rate so pitch types and pitchers with different pitch counts can be compared fairly."),
+]
+
+ZONE = [
+    ("Heart / Shadow / Chase / Waste", "GBO's four attack-zone tiers, nested boxes working outward from the true strike zone: Heart is the heart of the zone (what a hitter is sitting on), Shadow straddles the zone's edge, Chase is further out but still tempting, Waste is nowhere near the zone. Attack Zone Distribution shows what share of ALL located pitches in this window fell in each tier."),
+    ("Zone %", "Share of a pitch type's LOCATED pitches that landed inside the actual strike zone."),
+    ("Heart / Shadow / Chase / Waste Zone % (per pitch type)", "The same four tiers as above, broken out per pitch type instead of blended across every pitch in the outing -- e.g. \"the slider lives in the Chase zone, the fastball lives in the Heart\"."),
+    ("Pitch Location Heatmaps", "Density of where each pitch type actually landed, real-game charted locations only -- darker/denser areas are where the pitcher throws that pitch most often. A pitch type with fewer than 5 located pitches shows plain dots instead of a density surface, since a handful of points can't support a real density read."),
+    ("Command Target Zones", "Every located pitch plotted by its distance from its own CALLED target -- the level-zone code the dugout signaled in -- not from the center of the plate. The origin on this chart is always \"exactly where it was asked to go\", wherever that happened to be on the real strike zone."),
+    ("Elite / Plus / Average / Fringe / Competitive / Major Miss", "The six miss-distance tiers a located pitch falls into, based on how far it landed from its own target: Elite <=4in, Plus <=8in, Average <=12in, Fringe <=16in, Competitive <=20in, Major Miss beyond that -- the same nested-ring idea as Heart-through-Waste above, but measuring distance from the pitcher's own target instead of from the plate."),
+    ("Command+", "See the Overview glossary -- same grade, same team-relative 100-point scale, built from these miss distances."),
+]
+
+ARSENAL = [
+    ("Arsenal Breadth+", "How much speed and movement range his arsenal covers, weighted by how often he throws each pitch. 100 = our staff average, 25 points = one SD. Descriptive, not a grade."),
+    ("Outcome profile", "For each pitch: the whiff %, CSW % and ground-ball % that the 60 most similar pitches (velo, ride, run) thrown by other staff pitchers got in games, next to the staff rate and his own."),
+    ("Slider type", "Gyro (tight, little sweep), traditional (5-10 in. glove-side), sweeper (10 in.+), carry sweeper (sweeper with 3 in.+ ride over expected), curveball (-6 in. ride or less), slurve (curveball depth plus 10 in.+ sweep)."),
+    ("Usage % / Reliable", "Usage % is that pitch type's share of total pitches thrown. \"Reliable\" means this window has at least the minimum pitch count needed for that pitch type's Stuff+/Location+/Pitching+ grade to hold up -- below it, the grade still shows but can swing wildly with every new pitch."),
+    ("Strike % / Called Strike % / FPS %", "Strike% is any strike (swing or take) as a share of all pitches of that type. Called Strike% narrows that to takes the umpire rang up. FPS% (First Pitch Strike%) looks only at the very first pitch of each plate appearance."),
+    ("Swing % / Zone Swings", "Swing% is how often that pitch type gets swung at, out of every pitch thrown. Zone Swings counts how many of those swings came against a pitch that was actually located in the strike zone."),
+    ("Whiff % / SwStr % / Zone Whiff %", "Whiff% and SwStr% are defined the same as on the Results tab (misses per swing, and misses per pitch, respectively). Zone Whiff% narrows Whiff% further to swings at pitches that were actually in the strike zone -- missing a pitch down the middle is a different skill than missing one out of the zone."),
+    ("CSW %", "Called Strikes + Whiffs, as a share of all pitches of that type -- one number for \"how often did this pitch either freeze the hitter or fool him into missing.\""),
+    ("Chase %", "Same definition as the Results tab: swing rate on pitches of this type located outside the zone. See the Zone tab's Chase Zone % for the pure location version (where it was thrown, regardless of whether the batter swung)."),
+    ("Putaway %", "With two strikes already on the batter, how often this pitch type actually finished the strikeout."),
+    ("Dominance %", "Pitches that produced a whiff, a called strike, or a foul ball -- anything except a ball or a ball in play -- as a share of all pitches of that type."),
+    ("E+A % (Early + Ahead %)", "Plate appearances this pitch type ended or helped push to a pitcher-friendly count, as a share of batters faced. \"Early\" credits contact within the first 3 pitches at a count that hasn't gone the hitter's way (0-0/1-0/0-1/1-1); \"Ahead\" credits reaching an 0-2 or 1-2 count at any point in the plate appearance. Each plate appearance counts as at most one of the two, never both."),
+    ("A3P %", "\"Ahead after 3 pitches\": of the plate appearances where the count after exactly 3 pitches is actually knowable -- a real 4th pitch was thrown, or the PA ended on the 3rd pitch via a strikeout -- how many had the pitcher ahead in the count at that point. A PA that instead ended on the 3rd pitch via a ball in play, walk, or HBP has no clean 'count after 3 pitches' to check (GBO stores the count before each pitch, not after), so it's excluded rather than guessed."),
+    ("Sword %", "Swings a coach flagged live as an ugly, off-balance checked swing (\"sword\"), as a share of swings at that pitch type -- a judgment call entered at charting time, not something derived from the pitch outcome."),
+    ("Zone Execution %", "Same definition as the Overview glossary, broken out per pitch type here: how often this pitch type landed in its called box or within 6 inches of it."),
+    ("GB / FB / LD / PopUp %", "Batted-ball-type mix (Ground Ball / Fly Ball / Line Drive / Pop Up) on balls put in play off this pitch type."),
+    ("RV / RV/100", "Same definition as the Results glossary, per pitch type."),
+    ("Weak / Jammed / ... / Barreled %, Hard Hit %", "Same contact-quality definitions as the Results glossary, per pitch type."),
+    ("Zone %, Heart / Shadow / Chase / Waste Zone %", "Same location-mix definitions as the Zone glossary, per pitch type."),
+]
+
+
+# Pitching Leaderboard (Sept 2026, Ryker: "have a glossary
+# explaining each stat. pull definitions for stats from trustworthy
+# sources, fangraphs, mlb.com, pitchprofiler."). Traditional-stat
+# entries below are written from real definitions pulled from MLB.com's
+# own glossary (mlb.com/glossary -- ERA, WHIP, FIP, K/BB) and
+# FanGraphs' Sabermetrics Library (library.fangraphs.com/pitching/
+# rate-stats -- K%, BB%, K-BB%, K/9, BB/9), not copied verbatim (GBO's
+# own words, same house style as every other entry in this file), each
+# noting which direction is better since that's what the leaderboard's
+# own sort uses. The team-relative grade entries (Stuff+ through
+# Performance) are GBO's own invented stats -- no external source
+# defines them -- so those five are reused word-for-word from the
+# Overview glossary above rather than re-written, same numbers/scale, so
+# a coach or player doesn't hit two different explanations of "Command+"
+# depending on which tab they read it from.
+LEADERBOARD = [
+    ("RV/100", "Run value per 100 pitches from charted games -- how many runs his pitches added or saved compared to an average pitch in the same count. Negative is good for the pitcher."),
+    ("Beats Stuff", "How many runs per 100 pitches better (+) or worse (-) his results are than pitchers with his Stuff+ usually get on our staff. A line is fit across the staff (RV/100 vs Stuff+); this is his distance from it. + means he's getting more out of his stuff than it predicts -- command, deception, sequencing. Needs 60+ game pitches."),
+    ("Release Outlier", "How unusual his release point is compared to the rest of our staff -- the largest of his release height, release side and extension, in standard deviations from the staff average. 1.3+ is roughly the top or bottom 10%. An unusual release is one of the main ways pitchers without big stuff still get outs."),
+    ("Plus stats (vs D2)", "ERA+, FIP+, WHIP+, K%+, BB%+, K-BB%+: each stat compared to the 2026 NCAA Division II average (ERA 6.73, WHIP 1.75, K 17.1% / BB 11.6% of batters, K-BB 5.5 points). 100 = D2 average and higher is always better -- ERA+, FIP+, WHIP+ and BB%+ are flipped so lower ERA/WHIP/walks score higher. GBO's FIP constant (4.72) is set so a D2-average pitcher's FIP equals the D2 ERA."),
+    ("IP", "Innings Pitched, standard fractional notation -- X.1 means one out into the next inning, X.2 means two outs in (thirds of an inning, not tenths)."),
+    ("ERA", "Earned Run Average: earned runs allowed per 9 innings pitched -- runs that scored without the help of a fielding error or passed ball. MLB.com calls it \"the most commonly accepted statistical tool for evaluating pitchers,\" though team defense and park factors can move it independent of how a pitcher actually threw. Lower is better."),
+    ("TBIP (Total Bases per Inning)", "Every base a pitcher hands out at the plate, per inning: walks + HBP + singles + 2 x doubles + 3 x triples + 4 x homers, divided by innings. Lower is better. In D1 college baseball each base allowed turns into about half a run (0.51), and TBIP explains 94% of how many runs a team gives up per inning -- more than FIP (77%) or WHIP (93%) (SABR Tooth Tigers, 2025). Unlike WHIP it counts how far each runner got, and it includes hit batters. It describes damage done (hits depend partly on defense and luck); FIP is still the better predictor of what comes next."),
+    ("WHIP", "Walks and Hits per Inning Pitched -- how well a pitcher keeps runners off the bases (MLB.com). Doesn't distinguish how a runner reached (a walk and a home run count the same), and HBP/errors/fielder's-choice reaches aren't counted at all. Lower is better."),
+    ("SIERA", "Skill-Interactive ERA (Matt Swartz, FanGraphs): an ERA-shaped estimate from strikeout rate, walk rate and ground balls minus fly balls and pop-ups per batter faced, with the three allowed to interact (strikeout pitchers get more out of ground balls, for example). Like FIP it ignores hits on balls in play, but unlike FIP it uses batted-ball type instead of home runs, so it's steadier in small samples. GBO shifts it to the 2026 D2 run environment (a D2-average pitcher = D2 ERA, 6.73). Needs batted-ball type charted on balls in play. Lower is better."),
+    ("FIP", "Fielding Independent Pitching: an ERA-shaped estimate built only from strikeouts, walks, hit-by-pitches, and home runs -- \"the events a pitcher has the most control over,\" per MLB.com, entirely removing what happens to a ball once it's put in play. GBO's own FIP_CONSTANT (4.72) is calibrated to the 2026 D2 ERA rather than MLB's -- see game_stats.py. Lower is better."),
+    ("K/9, BB/9, HR/9", "Strikeouts, walks, and home runs allowed, scaled to a 9-inning rate (FanGraphs' own formula: count x 9 / IP) so pitchers with different workloads compare on equal footing. K/9: higher is better. BB/9 and HR/9: lower is better."),
+    ("K %, BB %", "Strikeouts (or walks) as a share of batters faced, not innings. FanGraphs prefers this over K/9 or BB/9 for comparing pitchers head to head, since \"worse pitchers will often face more batters per inning than better pitchers\" -- a stat scaled to innings can flatter a pitcher who's just working through more traffic. K%: higher is better. BB%: lower is better."),
+    ("K-BB %", "K% minus BB% -- FanGraphs' single-number read on overall command, the gap between how often a pitcher misses bats and how often he loses the zone entirely. Higher is better."),
+    ("K/BB", "Strikeout-to-walk ratio: strikeouts divided by walks -- \"how many strikeouts a pitcher records for each walk he allows\" (MLB.com). Higher is better."),
+    ("OBA (opponent AVG)", "Opponent batting average against this pitcher -- hits allowed divided by at-bats, the pitching side's version of a hitter's own AVG. Lower is better."),
+    ("Strike %", "Same definition as the Overview glossary: strikes (called, swinging, foul, or in play) as a share of all pitches thrown. Higher is better."),
+    ("FPS % (First Pitch Strike %)", "Of all completed plate appearances, how many opened with pitch #1 going for a strike (called, swinging, foul, or in play -- a ball or hit-by-pitch on pitch 1 doesn't count). Higher is better."),
+    ("CSW %", "Called Strikes + Whiffs, as a share of every pitch thrown -- one number for how often a pitcher either froze the hitter or fooled him into missing entirely. Higher is better."),
+    ("Zone Execution %", "Yes-or-no: how often a pitch landed in the box the catcher called (the Level-Zone code) or within 6 inches (half a foot) of it. Calls off the plate (the outside boxes) count anywhere off the plate on that side. Same as Hit-the-spot % on the reports. Our staff was at 33% this fall. Higher is better."),
+    ("BF, K, BB", "Batters Faced, Strikeouts, and Walks -- the raw counting stats the rate stats above are built from, useful here mainly as a workload/sample-size check next to them."),
+    ("Stuff+ / Location+ / Pitching+", "GBO's own pitch-quality grades, each on a 100-point scale where 100 = this TEAM's own average across every graded pitch this season and each 10 points = one standard deviation. Team-relative only -- GBO has no access to league-wide pitch data to compare against a real MLB Stuff+ number. Stuff+ grades a pitch's physical characteristics alone (velocity, movement, spin, release); Location+ grades the spot it was thrown to -- the team's average result for that pitch type in that area (heart, edge, chase, way off), not what happened on that one pitch -- with 10 points = one step between pitchers and small samples pulled toward 100; Pitching+ blends them, 60% Stuff+ and 40% Location+. Higher is better."),
+    ("Command+", "Same 100-point team-relative scale, built from how far a pitcher's located pitches land from their own CALLED target, compared pitch-type by pitch-type against the team's own average miss distance -- not how far from the plate's center, how far from where the dugout asked for it. A miss that drifts toward the middle of the plate counts half again; missing off the plate is just a miss, never a bonus. 10 points = one step between pitchers on our staff, and pitchers with only a few charted pitches stay close to 100 until there's enough to trust. Higher is better."),
+    ("Arsenal", "Usage-weighted average of Pitching+ across a pitcher's own pitch mix -- a pitch type thrown more often counts for more toward this number. Higher is better."),
+    ("Results", "How this pitcher's FIP/WHIP/K-BB%/CSW%/Zone Execution% compare to the rest of the team, blended into one team-relative score. Higher is better."),
+]
+
+
+# Hitter Game Breakdown / Hitter Profile (Sept 2026, Ryker: "add glossary
+# that explains all hitting stats"). Traditional-stat entries below are
+# written from real definitions pulled from MLB.com's own glossary
+# (mlb.com/glossary -- AVG, OBP, SLG, OPS, ISO) and FanGraphs'
+# Sabermetrics Library (library.fangraphs.com/offense/woba,
+# library.fangraphs.com/offense/obp, etc. -- wOBA, OPS+), not copied
+# verbatim (GBO's own words, same house style as the pitching-side
+# glossaries above), each noting which direction is better. The
+# GBO-specific entries (QAB, Ahead/Even/Behind, Contact Quality by
+# Zone/Pitch Type, RV) have no external source -- they're GBO's own
+# metrics, defined from how this app actually computes them
+# (game_stats.py/plate_discipline.py). One shared "Stats Glossary" link
+# per page (matching pitching_staff_leaderboard's single-link pattern,
+# not pitcher_profile.py's per-tab pattern -- neither hitter page has
+# tabs), covering everything shown on either page so a coach or player
+# hits the same explanation whichever hitting page they're reading.
+HITTING = [
+    ('AVG (Batting Average)', 'Hits divided by At Bats -- "the most commonly used statistic for evaluating hitters" (MLB.com), though it treats every hit the same regardless of type and ignores walks/HBP entirely. Higher is better.'),
+    ('OBP (On-Base Percentage)', "How often a batter reaches base by any means -- hits, walks, or hit-by-pitch -- divided by plate appearances that could have ended in an out (AB + BB + HBP + SF). MLB.com calls it a broader read on a hitter's value than AVG since it credits walks. Higher is better."),
+    ('SLG (Slugging Percentage)', 'Total bases (1B=1, 2B=2, 3B=3, HR=4) divided by At Bats -- measures power, not just contact rate, since extra-base hits count for more. Higher is better.'),
+    ('OPS (On-Base Plus Slugging)', "OBP + SLG added together -- a quick single-number blend of getting on base and hitting for power. MLB.com notes it's not perfectly weighted (a point of OBP and a point of SLG aren't actually equal in run value), but it's a fast, widely-used shorthand. Higher is better."),
+    ('OPS+', 'OPS scaled against a baseline via the standard Baseball-Reference formula: 100 x (OBP / baseline OBP + SLG / baseline SLG - 1). Since Oct 2026 GBO\'s baseline is the 2026 NCAA Division II average (.406 OBP / .457 SLG, 136 teams across 11 conferences -- see analytics/league_baselines.py). 100 = a D2-average hitter; 120 = about 20% better. Unlike GBO\'s pitcher-side "+" grades (Stuff+/Location+/etc., which are standard-deviation-scaled), OPS+ is the literal unscaled ratio formula. Higher is better.'),
+    ('ISO (Isolated Power)', "SLG minus AVG -- FanGraphs' own read on raw power that strips out batting average entirely, so a hitter who mostly singles and a hitter who mostly walks-or-homers can be told apart even at the same AVG. Higher is better."),
+    ('wOBA*', 'Weighted On-Base Average (FanGraphs): every way of reaching base is weighted by its own actual run value, instead of OBP\'s all-or-nothing or SLG\'s arbitrary 1/2/3/4 weighting -- "combines all the different aspects of hitting into one metric, weighting each of them in proportion to their actual run value," per FanGraphs. GBO\'s version (marked wOBA*) uses generic linear weights, not a real MLB/season-specific weight set recalculated from actual run environment -- a relative read within this team\'s own games, not MLB-exact. Higher is better.'),
+    ('QAB / QAB %', 'Quality At-Bat: an at-bat that made a positive team contribution, credited automatically when any of several things happened -- a walk, HBP, sacrifice bunt or bunt hit, any RBI (with 2 or fewer outs), moving a runner station-to-station with a productive out, a hard-hit ball in play (GBO\'s own Solid/Barreled contact-quality calls), an at-bat of 8+ pitches, or battling back to see 4+ more pitches after falling behind 0-2. Definition follows Brian Cain\'s published Quality At-Bat criteria. QAB % is QAB divided by PA -- the "quality at-bats per plate appearance" rate those goal figures (54% per game, .500 by season\'s end) are expressed in. Two of Cain\'s original criteria (a hit-and-run play specifically, and reaching on catcher\'s interference) aren\'t separately trackable in GBO\'s data yet, so those two never trigger a credit on their own -- everything else does. Higher is better.'),
+    ('Ahead / Even / Behind (count leverage)', "AVG/OBP/SLG/wOBA split by the ball-strike count at the moment the at-bat ended: Ahead = the hitter had more balls than strikes (the count favored them), Behind = more strikes than balls (the count favored the pitcher), Even = equal. A walk always ends Even-or-Ahead by definition (ball four never has more strikes than balls); a strikeout always ends Even-or-Behind for the same reason in reverse. Shows how a hitter's production shifts depending on whether they were controlling the at-bat or fighting from behind in it."),
+    ('BB % / K %', 'Walks (or strikeouts) as a share of plate appearances -- how often a hitter draws a walk or strikes out regardless of how many other things happen in between. BB %: higher is better. K %: lower is better.'),
+    ('BB/K', 'Walk-to-strikeout ratio -- walks divided by strikeouts, a single-number read on plate discipline (drawing walks relative to chasing/missing into a K). Higher is better.'),
+    ('RISP AVG', 'Batting average specifically in at-bats with a Runner In Scoring Position (a runner on 2nd and/or 3rd) -- a "in the moments that matter most" read, separate from overall AVG.'),
+    ('2-Strike AVG / 2-Strike K %', "Batting average, and strikeout rate, specifically in plate appearances that reached two strikes -- shows how a hitter performs once they're in the pitcher's most dangerous count, not just their overall numbers."),
+    ('Leadoff AVG', 'Batting average specifically when leading off an inning (the first batter to hit that inning) -- table-setting production, separate from overall AVG.'),
+    ('Total RV / Avg RV per PA', 'Run Value: each pitch\'s real, data-driven change in expected runs scored the rest of that half-inning (an RE24-style calculation, same run-expectancy framework used across GBO\'s pitching side too), summed for every pitch in the at-bat. Total RV is the sum across every tracked plate appearance; Avg RV/PA divides that by PA count -- GBO\'s most granular "how much offense did this hitter actually create" number, since it accounts for the specific base/out situation each pitch happened in rather than treating every hit the same regardless of context. Higher (more positive) is better.'),
+    ('Zone %, Swing %, Chase %, Whiff %, SwStr %', 'Same plate-discipline definitions as the pitching side, read from the hitter\'s own perspective: Zone % = pitches seen inside the strike zone; Swing % = swung at (in or out of zone); Chase % = swung at pitches OUTSIDE the zone; Whiff % = swings that missed, as a share of all swings; SwStr % = swinging strikes as a share of all pitches seen. Zone %/Swing % are read situationally (neither direction is simply "better"); Chase % and Whiff %/SwStr %: lower is generally better for a hitter (fewer bad chases, fewer misses).'),
+    ('Zone Contact %, Chase Contact %', "Of pitches swung at inside the zone (or outside it, for Chase Contact %), how often the swing made contact rather than missing entirely -- a hitter's bat-to-ball rate split by whether the pitch was a strike or a chase. Higher is better for both."),
+    ('1st-Pitch Swing %', 'How often a hitter swung at the very first pitch of the at-bat. Read situationally -- an approach/aggression number, not inherently good or bad.'),
+    ('Zone-Tier Discipline (Heart / Shadow / Chase / Waste)', "Every pitch seen bucketed into four zone tiers by how tempting/hittable its location was: Heart = down the middle, Shadow = straddles the zone edge, Chase = tempting but outside the zone, Waste = nowhere near the zone. Shows a hitter's swing decisions broken out by how good (or bad) the pitch actually was, not just in-zone-vs-out."),
+    ('Ground Ball %, Fly Ball %, Line Drive %, Pop Up %', 'Batted-ball type, as a share of all balls put in play -- the shape of contact a hitter makes, independent of the outcome (a hard-hit line drive and a bloop single are both "hits," but very different batted-ball types).'),
+    ('Pull %, Center %, Oppo %', "Spray direction on balls in play, split into thirds by the standard 30/30/30-degree spray-angle convention -- Pull = pulled to the batter's power side, Oppo = hit the opposite way, Center = up the middle. Shown as Left/Center/Right Field % instead for switch-hitters or batters with no recorded bats, since Pull/Oppo needs a known handedness to assign a side."),
+    ('Barrel %, Hard Contact %', "GBO's own contact-quality read, built from the coach's live contact-quality call on each batted ball (Barreled/Squared Up, Solid, Weak, Jammed, Off the End, Clipped) rather than a measured exit velocity -- GBO has no exit-velo radar, so this is a scouted read, not a real Statcast Barrel. Barrel % is the Barreled/Squared Up share specifically; Hard Contact % folds in Solid contact too. Higher is better for both."),
+    ('Contact Quality by Zone / Pitch Type', 'A heat map of the same 0-3 Barrel/Solid/Weak/Miss contact-quality scale, broken out by where in the strike zone (or which pitch type) the contact happened -- shows WHERE and on WHAT a hitter does the most damage, from real game at-bats only (not simulated Hitter Tracking sessions). Same scoring scale Hitter Tracking uses elsewhere in the app.'),
+    ('Pitch Locations (by at-bat)', "Every pitch of one plate appearance, numbered in the order it was thrown and plotted at its real location on the strike zone, connected by a thin dotted line so the AT-BAT'S own path (ball away, ball in, strike down the middle...) reads at a glance. Colored by pitch type, same convention as every other pitch-location chart in the app."),
+]
+
+
+HITTING_OVERVIEW = [
+    ("Plus stats (vs D2)", "wOBA+, AVG+, OBP+, SLG+, ISO+, K%+, BB%+, BABIP+: each stat as a percent of the 2026 NCAA Division II average (136 teams, 11 conferences). 100 = D2 average and higher is always better -- K%+ is flipped so fewer strikeouts score higher. BABIP+ is mostly a luck check and swings a lot in small samples."),
+    ('AVG (Batting Average)', 'Hits divided by At Bats -- "the most commonly used statistic for evaluating hitters" (MLB.com), though it treats every hit the same regardless of type and ignores walks/HBP entirely. Higher is better.'),
+    ('OBP (On-Base Percentage)', "How often a batter reaches base by any means -- hits, walks, or hit-by-pitch -- divided by plate appearances that could have ended in an out (AB + BB + HBP + SF). MLB.com calls it a broader read on a hitter's value than AVG since it credits walks. Higher is better."),
+    ('SLG (Slugging Percentage)', 'Total bases (1B=1, 2B=2, 3B=3, HR=4) divided by At Bats -- measures power, not just contact rate, since extra-base hits count for more. Higher is better.'),
+    ('OPS (On-Base Plus Slugging)', "OBP + SLG added together -- a quick single-number blend of getting on base and hitting for power. MLB.com notes it's not perfectly weighted (a point of OBP and a point of SLG aren't actually equal in run value), but it's a fast, widely-used shorthand. Higher is better."),
+    ('OPS+', "OPS scaled against a baseline via the standard Baseball-Reference formula: 100 x (OBP / baseline OBP + SLG / baseline SLG - 1). Since Oct 2026 GBO's baseline is the 2026 NCAA Division II average (.406 OBP / .457 SLG, 136 teams across 11 conferences -- see analytics/league_baselines.py). 100 = a D2-average hitter; 120 = about 20% better. Higher is better."),
+    ('ISO (Isolated Power)', "SLG minus AVG -- FanGraphs' own read on raw power that strips out batting average entirely, so a hitter who mostly singles and a hitter who mostly walks-or-homers can be told apart even at the same AVG. Higher is better."),
+    ('wOBA*', "Weighted On-Base Average (FanGraphs): every way of reaching base is weighted by its own actual run value, instead of OBP's all-or-nothing or SLG's arbitrary 1/2/3/4 weighting. GBO's version (marked wOBA*) uses generic linear weights, not a real MLB/season-specific weight set -- a relative read within this team's own games, not MLB-exact. Higher is better."),
+    ('Total RV / Avg RV per PA', "Run Value: each pitch's real, data-driven change in expected runs scored the rest of that half-inning (an RE24-style calculation), summed for every pitch in the at-bat. Total RV is the sum across every tracked plate appearance; Avg RV/PA divides that by PA count. Higher (more positive) is better."),
+    ('Team Percentile / Grade', 'The two numbers next to each bar: "Grade" is the raw 100-point-scale number (100 = this team\'s own average over the selected window, each 10 points = one standard deviation); "Team Percentile" converts it to an approximate percentile using the normal curve -- an approximation from the grade\'s own distribution, not a true rank against the live roster.'),
+]
+
+HITTING_DISCIPLINE = [
+    ("Decision Q % / Decision Floor", "Decision Q % = share of swing/take choices that were the better one for that zone and count (from the Decision runs values). Decision Floor = the 25th percentile of that % across every run of 10 straight plate appearances -- how good the approach stays in his worst stretches."),
+    ("Decision RV/100", "Swing and take choices valued in runs. Every pitch is worth what a swing or a take in that zone and count is worth across all of our charted games (run expectancy); the hitter gets the value of what he did minus the value of the other choice. Per 100 graded pitches. + = good decisions. Unlike Swing Decision %, it knows the count: taking a strike down the middle at 3-1 costs more than at 0-2."),
+    ("Decision Score", "One plate-discipline number (from the BEAR idea): Swing Decision %, Decision RV/100, Chase %, Zone Swing %, Zone contact %, Whiff %, BB% and K%, each compared to the team and averaged with equal weights. 100 = team average, 25 points = one standard deviation. Ranks hitters with 10+ PA."),
+    ('BB % / K %', 'Walks (or strikeouts) as a share of plate appearances. BB %: higher is better. K %: lower is better.'),
+    ('BB/K', 'Walk-to-strikeout ratio -- a single-number read on plate discipline. Higher is better.'),
+    ('Zone %, Swing %, Chase %, Whiff %, SwStr %', 'Zone % = pitches seen inside the strike zone; Swing % = swung at (in or out of zone); Chase % = swung at pitches OUTSIDE the zone; Whiff % = swings that missed, as a share of all swings; SwStr % = swinging strikes as a share of all pitches seen. Chase % and Whiff %/SwStr %: lower is generally better for a hitter.'),
+    ('Zone Contact %, Chase Contact %', 'Of pitches swung at inside the zone (or outside it, for Chase Contact %), how often the swing made contact rather than missing entirely. Higher is better for both.'),
+    ('1st-Pitch Swing %', 'How often a hitter swung at the very first pitch of the at-bat. Read situationally -- an approach/aggression number, not inherently good or bad.'),
+    ('wOBA*', "Weighted On-Base Average (FanGraphs), GBO's generic-linear-weights version -- see the Overview glossary for the full definition. Shown here as its own team-percentile bar, one metric at a time."),
+    ('Zone-Tier Discipline (Heart / Shadow / Chase / Waste)', 'Every pitch seen bucketed into four zone tiers by how tempting/hittable its location was: Heart = down the middle, Shadow = straddles the zone edge, Chase = tempting but outside the zone, Waste = nowhere near the zone.'),
+    ('Team Percentile / Grade', 'The two numbers next to each bar: "Grade" is the raw 100-point-scale number (100 = this team\'s own average over the selected window, each 10 points = one standard deviation); "Team Percentile" converts it to an approximate percentile using the normal curve -- an approximation from the grade\'s own distribution, not a true rank against the live roster. Sept 2026, Ryker\'s own reference for these bars was Baseball Savant\'s percentile-rank rows -- GBO has no real league-wide Statcast data, so this is the same team-relative "+" grade system as the other grades, shown one metric (wOBA/Chase %/Whiff %/Zone Swing %) at a time instead of blended together.'),
+]
+
+HITTING_BATTED_BALL = [
+    ('Ground Ball %, Fly Ball %, Line Drive %, Pop Up %', 'Batted-ball type, as a share of all balls put in play -- the shape of contact a hitter makes, independent of the outcome.'),
+    ('Pull %, Center %, Oppo %', "Spray direction on balls in play, split into thirds by the standard 30/30/30-degree spray-angle convention -- Pull = pulled to the batter's power side, Oppo = hit the opposite way, Center = up the middle. Shown as Left/Center/Right Field % instead for switch-hitters or batters with no recorded bats, since Pull/Oppo needs a known handedness to assign a side."),
+    ('Barrel %, Hard Contact %', "GBO's own contact-quality read, built from the coach's live contact-quality call on each batted ball (Barreled/Squared Up, Solid, Weak, Jammed, Off the End, Clipped) rather than a measured exit velocity -- GBO has no exit-velo radar, so this is a scouted read, not a real Statcast Barrel. Barrel % is the Barreled/Squared Up share specifically; Hard Contact % folds in Solid contact too. Higher is better for both."),
+]
+
+HITTING_SITUATIONAL = [
+    ("Count by count", "Run value per 100 pitches in each of the 12 counts, split fastball vs breaking/offspeed. Starred counts (2-0, 3-1, 2-1, 1-1) are where hitters who got called up separated themselves."),
+    ("Early win %", "Share of plate appearances where you got to a hitter's count (more balls than strikes) or put pitch 1 or 2 in play with barreled / solid contact."),
+    ("Run leverage", "GBO's own measure of how much an outs/bases spot swings runs, from our charted games -- 1.0 = an average plate appearance. High leverage = 1.5+ or late & close (7th inning on, within 2 runs)."),
+    ('QAB / QAB %', "Quality At-Bat: an at-bat that made a positive team contribution, credited automatically when any of several things happened -- a walk, HBP, sacrifice bunt or bunt hit, any RBI (with 2 or fewer outs), moving a runner station-to-station with a productive out, a hard-hit ball in play, an at-bat of 8+ pitches, or battling back to see 4+ more pitches after falling behind 0-2. Definition follows Brian Cain's published Quality At-Bat criteria. QAB % is QAB divided by PA. Higher is better."),
+    ('Ahead / Even / Behind (count leverage)', 'AVG/OBP/SLG/wOBA split by the ball-strike count at the moment the at-bat ended: Ahead = the hitter had more balls than strikes (the count favored them), Behind = more strikes than balls (the count favored the pitcher), Even = equal.'),
+    ('RISP AVG', 'Batting average specifically in at-bats with a Runner In Scoring Position (a runner on 2nd and/or 3rd).'),
+    ('2-Strike AVG / 2-Strike K %', 'Batting average, and strikeout rate, specifically in plate appearances that reached two strikes.'),
+    ('Leadoff AVG', 'Batting average specifically when leading off an inning (the first batter to hit that inning).'),
+]
+
+HITTING_CONTACT_ZONE = [
+    ('Contact Quality by Zone / Pitch Type', 'A heat map of the 0-3 Barrel/Solid/Weak/Miss contact-quality scale, broken out by where in the strike zone (or which pitch type) the contact happened -- shows WHERE and on WHAT a hitter does the most damage, from real game at-bats only (not simulated Hitter Tracking sessions). Same scoring scale Hitter Tracking uses elsewhere in the app.'),
+]
+
+
+HITTING_SPRAY = [
+    ('Spray Chart', 'Every base hit (1B/2B/3B/HR) plotted at its recorded field location (batted-ball x/y from Game Tracking), colored by hit type -- matches Baseball Savant\'s own default "BASE HITS" spray chart. Outs are not plotted, same as Savant\'s default view.'),
+    ('Infield Slice Chart', "The share of all batted balls with a projected distance of 200 ft or less from home plate that land in each of five equal 18-degree field wedges, left field line to right field line -- Baseball Savant's own definition and threshold for this chart. A higher share in a wedge means more weak/short contact hit that direction; wedges are raw field side (left/center/right), not adjusted for batter handedness, same as Savant's own non-mirrored treatment."),
+    ('Why hits-only on the Spray Chart', 'Ryker\'s own call (Sept 2026), matching Savant\'s default BASE HITS view rather than plotting every ball in play -- outs would clutter the picture and this chart is meant to answer "where does this hitter get his hits," not "where does he hit the ball."'),
+]
+
+
+# Oct 2026: Hitting Leaderboard (shiny_app/modules/hitting_leaderboard.py).
+# Traditional stats follow the standard FanGraphs / MLB.com definitions;
+# plate-discipline stats are GBO's own, from our charting.
+HITTING_LEADERBOARD = [
+    ("Decision Q % / Decision Floor", "Decision Q % = share of swing/take choices that were the better one for that zone and count (from the Decision runs values). Decision Floor = the 25th percentile of that % across every run of 10 straight plate appearances -- how good the approach stays in his worst stretches."),
+    ("Decision RV/100", "Swing and take choices valued in runs. Every pitch is worth what a swing or a take in that zone and count is worth across all of our charted games (run expectancy); the hitter gets the value of what he did minus the value of the other choice. Per 100 graded pitches. + = good decisions. Unlike Swing Decision %, it knows the count: taking a strike down the middle at 3-1 costs more than at 0-2."),
+    ("Decision Score", "One plate-discipline number (from the BEAR idea): Swing Decision %, Decision RV/100, Chase %, Zone Swing %, Zone contact %, Whiff %, BB% and K%, each compared to the team and averaged with equal weights. 100 = team average, 25 points = one standard deviation. Ranks hitters with 10+ PA."),
+    ("Plus stats (vs D2)", "OPS+, wOBA+, AVG+, OBP+, SLG+, ISO+, K%+, BB%+, BABIP+: each stat compared to the 2026 NCAA Division II average (AVG .300 / OBP .406 / SLG .457, K 17.1% / BB 11.6% of plate appearances). 100 = D2 average and higher is always better -- K%+ is flipped so striking out less scores higher. OPS+ uses the Baseball-Reference formula 100 x (OBP/D2 OBP + SLG/D2 SLG - 1)."),
+    ("PA / Min PA", "Plate appearances. Hitters under the Min PA box sort to the bottom, grayed out and unranked -- a few at-bats can make any rate stat look great or awful."),
+    ("AVG / OBP / SLG / OPS", "Batting average (hits per at-bat), on-base percentage (times on base -- hits, walks, HBP -- per plate appearance, sac flies counted), slugging (total bases per at-bat) and OPS (OBP + SLG). Higher is better."),
+    ("wOBA", "Weighted on-base average: every way of reaching base weighted by how much it's worth (a double counts more than a walk). GBO uses generic linear weights -- a relative read within our own games, not MLB-exact. Higher is better."),
+    ("ISO", "Isolated power: SLG minus AVG -- extra bases per at-bat, i.e. raw power apart from singles. Higher is better."),
+    ("BABIP", "Batting average on balls in play: (H - HR) / (AB - K - HR + SF). Very high or low numbers usually drift back toward normal over time. Higher is better."),
+    ("K% / BB% / BB/K", "Strikeouts and walks per plate appearance, and walks per strikeout. Lower K%, higher BB% and BB/K are better."),
+    ("QAB%", "Quality at-bats per plate appearance (Brian Cain's definition): hard-hit ball, walk/HBP, RBI, moving a runner 2nd to 3rd with no outs, sac bunt, bunt hit, 8+ pitch at-bat, or 4+ pitches after 0-2. Team goal: 54%."),
+    ("Swing Dec% / Chase% / Zone Swing%", "From our charting. Swing decisions = good swings at strikes + good takes of balls out of every graded pitch. Chase = swings at pitches off the plate. Zone swing = swings at pitches in the zone. Higher swing decisions and zone swing, lower chase are better."),
+    ("Whiff% / Hard Contact%", "Whiff = misses per swing (lower is better). Hard contact = barreled or solid contact per ball in play (higher is better)."),
+    ("P/PA / 2-Strike K%", "Pitches seen per plate appearance (making the pitcher work -- higher is better) and how often two-strike plate appearances end in a strikeout (lower is better)."),
+]
+
+
+# Oct 2026: Pitcher Profile > Command & Execution glossary.
+COMMAND = [
+    ("Release angle consistency", "Pitch-to-pitch spread (standard deviation, degrees) of the vertical and horizontal release angle within each outing, from Rapsodo -- tighter = he repeats his release, the root of command. Release consistency grade: 100 = team average for that pitch type, higher = tighter."),
+    ("Zone Execution %", "Yes-or-no: how often a pitch landed in the box the catcher called (the Level-Zone code) or within 6 inches (half a foot) of it. Calls off the plate (the outside boxes) count anywhere off the plate on that side. Same as Hit-the-spot % on the reports. Our staff was at 33% this fall."),
+    ("Command Execution %", "Partial-credit command: each pitch scores 4 (within 4 in of the called box), 3 (8 in), 2 (12 in), 1 (16 in) or 0 (farther); Command Execution % is the average score out of a perfect 4. Reads higher than Zone Execution % because near-misses still earn points."),
+    ("Zone Execution % vs Command Execution %", "Both grade how far a pitch landed from the box the catcher called. Zone Execution % is YES-OR-NO: within half a foot of the box counts, anything else doesn't -- easy to read ('1 in 3 spots') and good for goals. Command Execution % gives PARTIAL CREDIT: every pitch earns 4 points (within 4 in of the box), 3 (within 8 in), 2 (within 12 in), 1 (within 16 in) or 0 (farther), and the % is the average out of a perfect 4. So a 7-inch miss and a 2-foot miss both count as a plain miss in Zone Execution %, but Command Execution % still gives the 7-inch one most of the credit. Use Zone Execution % to see how often he hits it; use Command Execution % to see how close he usually gets. Command+ grades the same misses compared to our staff."),
+    ("Command+", "Same 100-point team-relative scale as the other '+' grades: how far each pitch landed from its called box compared to our staff for the same pitch type, with a miss that drifts toward the middle counting half again. 10 points = one step between pitchers."),
+    ("Missed over the middle", "Of the pitches that missed their spot, how many ended up over the heart of the plate -- the misses that get hit."),
+    ("Miss lean", "Which way his misses tend to go (up / down, arm side / glove side) when one direction shows up at least 15 points more than the other."),
+]

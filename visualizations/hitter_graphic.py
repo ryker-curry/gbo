@@ -1,0 +1,217 @@
+"""
+GBO -- Generic hitter silhouette + home plate context shapes for
+pitch-location charts (Sept 2026, Ryker: wants a batter graphic on
+each side of the strike zone plus the plate on the ground, similar in
+spirit to Baseball Savant's illustrator pitch-location graphics).
+
+Sept 2026, rebuild history (for whoever reads this next): two
+hand-drawn attempts (overlapping capsule shapes -- seamed/faceted;
+then one single outline path -- no seams, but a guessed pose) didn't
+hold up, and a third hand-drawn "back view" attempt (Ryker briefly
+wanted to see the back elbow, as if the chart were viewed from the
+catcher's side) also came out looking bad with no way to preview it
+well. Settled convention: this chart's hitters are drawn from the
+PITCHER's point of view, not the catcher's -- so the correct image is
+a front/side stance (face, arms, bat visible), not a back view. Ryker
+supplies the actual reference photo directly; each one gets cleaned up
+here (checkerboard/background thresholded out to real alpha
+transparency, recolored to the app's own MUTED_GRAY so it reads as
+chart context rather than a mismatched gray, cropped tight, downsized)
+into assets/hitter_silhouette.png, mirrored once into
+assets/hitter_silhouette_flipped.png (see the repo's assets/ dir --
+app.py already serves it at the /assets static route via
+theme.ASSETS_DIR, same mechanism the GBO logo uses) -- current pair is
+Ryker's loaded/leg-kick stance photo. The mirrored copy doubles as
+both "the other side of the chart" (pure decoration, flanking the
+zone) and, since mirroring a batting stance reads as the opposite-
+handed stance, "a left-handed version" of the same pose -- one image
+pair serves both asks. Both are placed as Plotly layout images rather
+than drawn shapes.
+
+hitter_images(...) returns plain dicts for fig.add_layout_image(**d) --
+NOT fig.add_shape like this module's earlier shape-based versions, and
+NOT the fig.images property list Plotly also exposes; add_layout_image
+is the one Figure method that actually applies the dict's `layer` key
+correctly for images (setting it on fig.layout.images entries directly
+skips validation of some fields), so callers must use that method, not
+add_shape. Sized/positioned in the SAME real-world feet coordinate
+system as the calling chart (feet, plate-center at x=0, ground at
+y=0), same convention as this module's shape-based functions before
+it and as strike_zone.py / chart_theme.py elsewhere in visualizations/.
+
+Usage:
+    from visualizations.hitter_graphic import hitter_images, home_plate_shape
+    for img in hitter_images(center_x=-1.7, facing="left"):
+        fig.add_layout_image(**img)
+    for img in hitter_images(center_x=1.7, facing="right"):
+        fig.add_layout_image(**img)
+    fig.add_shape(**home_plate_shape(view="pitcher"))
+
+Image source (Sept 2026 fix, Ryker: "theres no graphic" -- the batter
+silhouette was invisible on Pitcher Game Breakdown's Pitch-by-Pitch card):
+hitter_images() embeds each PNG as a base64 data: URI rather than
+pointing at the "/assets/..." static route. That relative URL only
+resolves when Plotly renders live in a browser (command_charts.py's
+usage, via shinywidgets render_plotly, where the page's own origin
+supplies the base for the fetch) -- it means nothing to kaleido's
+headless-Chrome fig.to_image() export (chart_helpers.fig_to_img,
+which pitcher_game_report.py's per-pitch Location card uses), which
+isn't running inside the app's page at all, so the layout image
+silently failed to load there while everything else in the same
+figure rendered fine. A data: URI needs no fetch in either context, so
+it's used for every caller now, not just the kaleido ones -- one image
+path instead of two silently-diverging ones."""
+
+import base64
+from pathlib import Path
+
+PLATE_COLOR = "#AEB6C2"
+PLATE_OUTLINE = "#1E1E1E"
+
+# The source image (see module docstring) is 260x818px, bat swinging up
+# toward the image's own right -- i.e. it's already the "facing=right"
+# pose. hitter_silhouette_flipped.png is a plain horizontal mirror of
+# it (the "facing=left" / left-handed pose), NOT a negative-sizex trick
+# on the same file -- simpler and avoids relying on how a given Plotly
+# version handles a negative image size. Update this if the source
+# photo is ever swapped again -- it must match the new file's actual
+# pixel dimensions or "contain" sizing will letterbox instead of fill.
+_IMAGE_ASPECT = 260 / 818  # width / height
+# Repo-root assets/ dir -- same file theme.ASSETS_DIR points the
+# "/assets" static route at, just read directly here instead of served,
+# since these need to work outside a browser too (see module docstring's
+# "Image source" section above).
+_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+_SOURCE_FILE_BY_FACING = {
+    "right": "hitter_silhouette.png",
+    "left": "hitter_silhouette_flipped.png",
+}
+IMAGE_OPACITY = 0.55
+
+# {filename: "data:image/png;base64,..."} -- populated lazily by
+# _image_data_uri, once per filename per process, so the PNG is read
+# and re-encoded at most twice total (right/left) no matter how many
+# charts call hitter_images().
+_DATA_URI_CACHE = {}
+
+
+def _image_data_uri(filename):
+    if filename not in _DATA_URI_CACHE:
+        png_bytes = (_ASSETS_DIR / filename).read_bytes()
+        encoded = base64.b64encode(png_bytes).decode("ascii")
+        _DATA_URI_CACHE[filename] = f"data:image/png;base64,{encoded}"
+    return _DATA_URI_CACHE[filename]
+
+
+# Oct 2026, Ryker: "it looks like hitters in the left handed batters box
+# are right handed because their hands look to be in front of their
+# body ... need separate ones, a left handed graphic and a right handed
+# graphic". Every hand-specific chart here is drawn from the CATCHER's
+# view, so the hitter should be seen from behind (back to us, hands up
+# by the back shoulder) -- the front-view photo above is only right for
+# the decorative pitcher-view pair (command_charts). Source: Ryker's
+# behind-the-plate photo of a right-handed hitter, cut out (rembg),
+# smoothed and recolored to match; the lefty file is its mirror, which
+# for a view from directly behind IS a left-handed stance.
+_BACK_VIEW_BY_HAND = {"R": "hitter_rhb_back.png", "L": "hitter_lhb_back.png"}
+
+
+def _aspect(filename):
+    import struct
+    head = (_ASSETS_DIR / filename).read_bytes()[16:24]
+    w, h = struct.unpack(">II", head)       # PNG IHDR width/height
+    return w / h
+
+
+def hitter_images(center_x, facing="right", height_ft=4.2, ground_y=0.0, batter_hand=None):
+    """One generic hitter image, anchored by its feet. facing="right"
+    plants the hitter with the bat swinging up toward +x (the RIGHT-
+    side hitter); facing="left" uses the pre-mirrored image (the LEFT-
+    side hitter) so the bat swings up toward -x instead -- both bats
+    point OUTWARD, away from the plate/zone in the middle. Returns a
+    single-item list of a dict for fig.add_layout_image(**d)."""
+    if batter_hand in _BACK_VIEW_BY_HAND:        # catcher-view chart: hitter seen from behind
+        filename = _BACK_VIEW_BY_HAND[batter_hand]
+        width_ft = height_ft * _aspect(filename)
+    else:
+        filename = _SOURCE_FILE_BY_FACING[facing]
+        width_ft = height_ft * _IMAGE_ASPECT
+    return [dict(
+        source=_image_data_uri(filename),
+        xref="x", yref="y",
+        x=center_x, y=ground_y,
+        xanchor="center", yanchor="bottom",
+        sizex=width_ft, sizey=height_ft,
+        sizing="contain",
+        opacity=IMAGE_OPACITY,
+        layer="below",
+    )]
+
+
+def home_plate_shape(half_width_ft=0.708, depth_ft=0.22, ground_y=0.0, center_x=0.0, view="pitcher"):
+    """Home plate, drawn at the ground line -- same half-width as the
+    strike zone (strike_zone.ZONE_HALF_WIDTH, passed in by the caller
+    so the two stay in sync) so it reads as directly under the zone.
+    Purely decorative context like the hitters above, not a real
+    top-down plate outline -- this chart has no "depth" axis to draw
+    one on, just enough of a pentagon silhouette sitting on the ground
+    line to read as a plate.
+
+    Orientation (Sept 2026, Ryker -- "add a home plate to everything
+    that has a strike zone... face the correct way based on the view,
+    either pitcher or catcher view, that way the viewer can tell which
+    view they're looking at based on the plate"): on a real plate the
+    flat 17in edge faces the pitcher and the back point faces the
+    catcher. view="pitcher" (default) draws the point -- the edge
+    nearest the catcher/backstop, i.e. farthest from the pitcher --
+    reading as farthest from the viewer too, which in this
+    ground-level side elevation means closest to the zone above; the
+    flat pitcher-facing edge is nearest the viewer, at the bottom. This
+    is Command Tracking's pitch_locations_chart convention (see
+    hitter_graphic module docstring) -- an earlier version had this
+    reversed (flat edge up touching the zone, point hanging down),
+    which Ryker caught as "the plate is backwards" for THIS chart.
+    That reversed shape is exactly view="catcher": the flat edge
+    (nearest the pitcher, i.e. farthest from a viewer standing behind
+    the plate) sits touching the zone, and the point (nearest the
+    catcher/viewer) hangs down toward the viewer -- correct for the
+    click-to-place location widgets (strike_zone.py) and any other
+    chart drawn from behind the plate, Statcast/broadcast-style. The
+    two are exact vertical mirrors of each other (same total depth,
+    point and flat edge swap ends) so a caller can tell at a glance
+    which viewpoint a given chart uses just by which end of the plate
+    touches the zone.
+
+    Still a plain fig.add_shape shape (not an image) -- a five-point
+    polygon is simpler to draw directly than to round-trip through an
+    image asset."""
+    hw = half_width_ft
+    if view == "pitcher":
+        y_point = ground_y
+        y_mid = ground_y - depth_ft
+        y_flat = ground_y - depth_ft * 1.7
+        path = (
+            f"M {center_x:.3f} {y_point:.3f} "
+            f"L {center_x + hw:.3f} {y_mid:.3f} "
+            f"L {center_x + hw:.3f} {y_flat:.3f} "
+            f"L {center_x - hw:.3f} {y_flat:.3f} "
+            f"L {center_x - hw:.3f} {y_mid:.3f} Z"
+        )
+    elif view == "catcher":
+        y_flat = ground_y
+        y_mid = ground_y - (depth_ft * 0.7)
+        y_point = ground_y - depth_ft * 1.7
+        path = (
+            f"M {center_x - hw:.3f} {y_flat:.3f} "
+            f"L {center_x + hw:.3f} {y_flat:.3f} "
+            f"L {center_x + hw:.3f} {y_mid:.3f} "
+            f"L {center_x:.3f} {y_point:.3f} "
+            f"L {center_x - hw:.3f} {y_mid:.3f} Z"
+        )
+    else:
+        raise ValueError(f"home_plate_shape: view must be 'pitcher' or 'catcher', got {view!r}")
+    return dict(
+        type="path", xref="x", yref="y", path=path,
+        fillcolor=PLATE_COLOR, opacity=0.85,
+        line=dict(color=PLATE_OUTLINE, width=1), layer="below",
+    )

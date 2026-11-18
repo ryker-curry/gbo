@@ -19,15 +19,28 @@ Canonical pitch types (PitchType.type_name rows):
     4-Seam Fastball, 2-Seam Fastball, Cutter, Slider, Changeup,
     Curveball, Splitter, Fastball
 
-"Fastball" (generic/undifferentiated) is its own canonical type, distinct
-from "4-Seam Fastball" -- NOT an alias for it. Rapsodo's real export
-reviewed (Saben Seager's bullpen) classifies fastballs as plain
-"Fastball" with no 2-seam/4-seam distinction. Forcing that into
-"4-Seam Fastball" would assert a grip/pitch-design detail the device
-never actually reported. If a export or manual entry DOES distinguish
-4-seam from 2-seam, those map to their own existing types as before.
-This is a judgment call, not a settled convention -- flag to Ryker if a
-different mapping is preferred once more real exports are seen.
+Sept 2026, Ryker's call ("treat fastball as 4sfb"): generic "Fastball"
+now maps onto "4-Seam Fastball", reversing the original judgment call
+below. Originally kept as its own separate type because Rapsodo's real
+export reviewed (Saben Seager's bullpen) classifies fastballs as plain
+"Fastball" with no 2-seam/4-seam distinction, and forcing that into
+"4-Seam Fastball" asserts a grip/pitch-design detail the device never
+actually reported -- but with generic "Fastball" import readings vastly
+outnumbering "4-Seam Fastball" readings team-wide (298 vs. 0 in
+rapsodo_pitches, all from imports -- no manual entry anywhere in the app
+had ever actually picked "Fastball" over "4-Seam Fastball"), the split
+was mainly starving "4-Seam Fastball" of enough real-game training data
+for pitch_grading.fit_stuff_plus_model to ever fit it (see
+MIN_STUFF_TRAINING_PITCHES there), while every straight fastball the
+team actually throws was correctly assumed elsewhere in the app (Game
+Tracking's arsenal picker, etc.) to BE 4-seam unless picked otherwise.
+migrations/migrate_fastball_to_4seam.py backfilled every existing
+rapsodo_pitches row already tagged "Fastball" onto "4-Seam Fastball" to
+match -- the "Fastball" PitchType row itself is left in the catalog
+(unused going forward, not deleted) in case this ever needs reverting.
+If a export or manual entry DOES distinguish 4-seam from 2-seam, those
+still map to their own existing types as before -- only generic,
+undifferentiated "Fastball"/"FB" changed.
 """
 
 import re
@@ -45,9 +58,11 @@ def _normalize(raw: str) -> str:
 # Keys are pre-normalized (see _normalize) so lookups don't need to
 # special-case punctuation at call sites.
 _RAW_ALIASES = {
-    # Fastballs
-    "fastball": "Fastball",
-    "fb": "Fastball",
+    # Fastballs -- generic "fastball"/"fb" now maps to 4-Seam Fastball
+    # (Ryker, Sept 2026: "treat fastball as 4sfb"), not its own
+    # "Fastball" type -- see module docstring for the full reasoning.
+    "fastball": "4-Seam Fastball",
+    "fb": "4-Seam Fastball",
     "4seamfastball": "4-Seam Fastball",
     "4seam": "4-Seam Fastball",
     "fourseam": "4-Seam Fastball",
@@ -88,21 +103,56 @@ _RAW_ALIASES = {
 
 # Canonical type -> chart color (hex). Every chart module should import
 # this dict rather than hardcoding or positionally cycling colors.
+#
+# Sept 2026: replaced the v2 design-system palette shipped in
+# GBO-DESIGN-SYSTEM.md -- Ryker flagged Curveball/Splitter as reading
+# as the same color on Bullpen Dashboard, and running that palette
+# through the dataviz skill's validator (scripts/validate_palette.js)
+# confirmed real, measurable problems, not just those two: Curveball
+# vs Splitter scored a normal-vision Delta E of 7.3 (below the 15
+# floor -- hard to tell apart even with full color vision), and
+# 4-Seam Fastball vs 2-Seam Fastball scored a deutan (colorblind) Delta
+# E of 1.1 (effectively identical for that kind of color blindness),
+# neither of which anyone had actually flagged yet.
+#
+# These 7 colors are slots 1-7 of the skill's validated default
+# categorical theme (references/palette.md), taken in its fixed
+# published order (never cycled/reordered -- that order IS the
+# colorblind-safety mechanism) and validated together as a set:
+# adjacent-pair CVD Delta E >= 8.4, adjacent-pair normal-vision Delta E
+# >= 19.3, all >= 3:1 contrast on the dark card surface. (7
+# simultaneous series can't clear the strict ALL-PAIRS floor no matter
+# the ordering -- the skill documents that as a hard limit past 3
+# series -- but every chart these colors appear on already carries a
+# legend and a hover tooltip naming the pitch type, which is exactly
+# the secondary encoding the skill requires to make that acceptable.)
+# Crimson and gold are still deliberately excluded: those are the
+# app's action and rating colors, not chart series colors.
 PITCH_TYPE_COLORS = {
-    "4-Seam Fastball": "#BF1E2D",  # GBO crimson
-    "2-Seam Fastball": "#F76707",
-    "Cutter": "#D4AF37",  # GBO gold
-    "Slider": "#4C6EF5",
-    "Changeup": "#37B24D",
-    "Curveball": "#AE3EC9",
-    "Splitter": "#0CA678",
-    "Fastball": "#E64980",
+    "4-Seam Fastball": "#3987E5",
+    "Fastball": "#3987E5",
+    "2-Seam Fastball": "#D95926",
+    "Cutter": "#199E70",
+    "Slider": "#C98500",
+    "Changeup": "#D55181",
+    "Curveball": "#008300",
+    "Splitter": "#9085E9",
 }
 
 # Used for any pitch type that reaches a chart without a color assigned
 # above (a newly added PitchType row nobody's updated this dict for yet)
 # -- a chart should never fail to render for a missing color.
-DEFAULT_PITCH_COLOR = "#6B6B6B"
+DEFAULT_PITCH_COLOR = "#7A8594"
+
+# Canonical fastball-family types -- single source of truth for "is this
+# pitch a fastball" (Aug 2026, Ryker: the player card's VELO stat should
+# read as average FASTBALL velocity, not an average across every pitch
+# type a pitcher threw that session -- a bullpen heavy on changeups/
+# breaking stuff was dragging VELO down and misrepresenting what the
+# pitcher's fastball actually sits at). Deliberately excludes Cutter --
+# it's its own canonical type above, not folded into "fastball" here,
+# same judgment call as everywhere else in this file.
+FASTBALL_TYPES = {"Fastball", "4-Seam Fastball", "2-Seam Fastball"}
 
 
 def normalize_pitch_type(raw_label):

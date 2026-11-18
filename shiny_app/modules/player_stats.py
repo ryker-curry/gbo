@@ -1,0 +1,411 @@
+"""
+GBO -- My Assessments module (Player role only).
+
+Direct port of pages/player_stats.py -- same score rings + development
+profile at the top, "Goals in progress" section (baseline vs. current
+for any metric tied to an active IDP goal), full Physical Testing
+breakdown, and a category-filterable full history table at the bottom.
+Read-only, same as the original (entering assessments stays staff-only
+on Assessments -- not migrated yet).
+
+Reuses bucket_system.compute_bucket_system (engine, unchanged) and
+bucket_display.py (Shiny port of bucket_system_display.py) for the
+rings/bars -- both shared with Dashboard and Analytics once those are
+migrated too, same sharing bucket_system_display.py provided originally.
+
+Reactive layout note: category select -> optional pitch-type select ->
+history table is a chain of dependent choices, same as the original's
+st.selectbox -> st.selectbox -> st.expander flow. Rather than building
+the pitch-type select dynamically only when a Pitcher-Specific category
+is chosen (which would require reading an input that might not exist
+in the DOM yet -- a real ordering hazard with Shiny's reactive outputs),
+BOTH selects are built together, once, in category_controls() below,
+with the pitch-type select wrapped in ui.panel_conditional() so it's
+always present (just hidden via CSS) until Pitcher-Specific is picked.
+That sidesteps the ordering hazard entirely: history_section() can
+always safely read input.pitch_type_filter() once category_controls()
+has rendered at all.
+"""
+
+from datetime import date, timedelta
+
+from shiny import module, ui, render, req, reactive
+from sqlalchemy.orm import joinedload
+
+from database import get_session
+from models import (
+    Player, User, AssessmentCategory, Assessment, AssessmentResult,
+    PitchType, IDPGoal, IDPStatus, BullpenPitch,
+)
+from bucket_system import compute_bucket_system, player_groups
+from analytics import assessment_progress as ap
+from visualizations import progress_chart as pchart
+
+from assessment_period import period_label
+import ui_helpers
+import bucket_display
+
+
+@module.ui
+def player_stats_ui():
+    return ui.div(
+        ui.output_ui("header"),
+        # Oct 2026, Ryker: "rather than everything showing up like it does
+        # right now switch it to the tab like view ... allow the player to
+        # click on the different test categories". top_section renders the
+        # tab row; Progress and Every Entry tabs hold the outputs below.
+        ui.output_ui("top_section"),
+        ui_helpers.page_footer(),
+    )
+
+
+@module.server
+def player_stats_server(input, output, session, app_state):
+    def _my_player_id(db):
+        me = db.query(User).filter(User.user_id == app_state.user_id()).first()
+        return me.player_id if me is not None else None
+
+    @render.ui
+    def header():
+        if not app_state.is_authenticated():
+            return ui_helpers.page_header("My Assessments")
+        db = get_session()
+        try:
+            pid = _my_player_id(db)
+            last = ap.last_tested(ap.history(db, pid)) if pid else None
+        finally:
+            db.close()
+        sub = f"Last tested {last.strftime('%b %-d, %Y')}" if last else None
+        return ui_helpers.page_header("My Assessments", sub)
+
+    @render.ui
+    def top_section():
+        if not app_state.is_authenticated():
+            return None
+
+        db = get_session()
+        try:
+            me = db.query(User).filter(User.user_id == app_state.user_id()).first()
+            if me is None or me.player_id is None:
+                return ui.p("Your player profile isn't linked yet. Check with an administrator.", class_="text-muted")
+
+            my_player = db.query(Player).filter(Player.player_id == me.player_id).first()
+            bucket_data = compute_bucket_system(db, my_player.player_id)
+
+            mode = app_state.dark_mode() or "dark"
+            hist = ap.history(db, my_player.player_id)
+            changes = ap.changes_for_bucket(hist, bucket_data)
+
+            # --- Overview tab: best tests / room to grow, score rings,
+            # development profile, goals in progress. ---
+            overview = []
+            sw = _strengths_ui(db, bucket_data, changes)
+            if sw is not None:
+                overview.append(sw)
+            rings = bucket_display.build_score_rings(bucket_data, "myassess_top", mode=mode)
+            # Nov 2026 (Ryker): no combined scores -- the score rings and the
+            # Output vs. Capacity development profile (also built from
+            # combined scores) both stay hidden; build_score_rings now
+            # returns None, so neither shows.
+            if rings is not None:
+                overview.append(rings)
+                profile = bucket_display.build_development_profile(bucket_data, "myassess_top", mode=mode)
+                if profile is not None:
+                    overview.append(profile)
+            # Goals in progress: baseline vs. current for any metric tied to
+            # an active IDP goal, same computation as the IDP page.
+            open_goals = (
+                db.query(IDPGoal)
+                .join(IDPStatus)
+                .options(joinedload(IDPGoal.category), joinedload(IDPGoal.target_test_type))
+                .filter(
+                    IDPGoal.player_id == my_player.player_id,
+                    IDPGoal.target_test_type_id.isnot(None),
+                    IDPStatus.status_name != "Completed",
+                )
+                .all()
+            )
+            if open_goals:
+                overview.append(ui.h5("Goals in progress", class_="gbo-section-title"))
+                overview.append(_goals_table_ui(db, open_goals))
+                overview.append(ui.p("Full goal details (action steps, progress notes) are on My Development.", class_="text-muted small"))
+
+            # A player can have real data in a reference-only section
+            # (Mobility & ROM, Speed, etc.) before ever having Total/
+            # Body Comp/Power/Strength data, or a movement flag (injury)
+            # before any ROM data -- don't gate on the wrong section.
+            has_any_data = (
+                any(bucket_data[k] is not None for k in ("total_score", "body_comp_score", "power_score", "strength_score"))
+                or bool(bucket_data.get("mobility_rom_report"))
+                or bool(bucket_data.get("movement_flag"))
+            )
+            legend = bucket_display.bar_legend()
+            panels = [ui.nav_panel("Overview", ui.div(*overview) if overview else
+                                   ui_helpers.empty_state("No physical testing data yet."), value="overview")]
+            if has_any_data:
+                for key, label, els in bucket_display.breakdown_groups(bucket_data, "myassess", mode=mode,
+                                                                        changes=changes, compact_mobility=True):
+                    panels.append(ui.nav_panel(label, ui.div(legend if key != "mobility" else None, *els), value=key))
+            panels.append(ui.nav_panel("Progress", ui.output_ui("progress_controls"), ui.output_ui("progress_chart"),
+                                       value="progress"))
+            panels.append(ui.nav_panel("Every Entry", ui.output_ui("category_controls"), ui.output_ui("history_section"),
+                                       value="entries"))
+            # Keep the tab the player was on when this re-renders (e.g. the
+            # dark/light toggle), instead of jumping back to Overview.
+            with reactive.isolate():
+                current = input.ma_tab() if "ma_tab" in input else None
+            return ui.div(ui.navset_tab(*panels, id="ma_tab", selected=current or "overview"), class_="gbo-ma-tabs")
+        finally:
+            db.close()
+
+    @render.ui
+    def progress_controls():
+        if not app_state.is_authenticated():
+            return None
+        db = get_session()
+        try:
+            pid = _my_player_id(db)
+            hist = ap.history(db, pid) if pid else {}
+            work_on = [m[0] for m in ap.strengths_and_work_on(db, compute_bucket_system(db, pid))[1]] if hist else []
+        finally:
+            db.close()
+        choices = ap.chart_choices(hist)
+        if not choices:
+            return None
+        return ui.div(
+            ui.div(ui.input_select("progress_test", "Test", choices=choices, selected=ap.default_chart_test(hist, work_on)),
+                   class_="gbo-progress-controls"),
+        )
+
+    @render.ui
+    def progress_chart():
+        if not app_state.is_authenticated():
+            return None
+        name = input.progress_test() if "progress_test" in input else None
+        req(name)
+        db = get_session()
+        try:
+            pid = _my_player_id(db)
+            h = ap.history(db, pid).get(name) if pid else None
+            if not h:
+                return None
+            avg = ap.team_average(db, name, is_pitcher=player_groups(db).get(pid, False))
+        finally:
+            db.close()
+        pts, unit = h["points"], h["unit"]
+        d = ap.direction_map().get(name)
+        if len(pts) == 1:
+            note = "Only one test so far -- the line starts after your next one."
+        else:
+            first, last = pts[0][1], pts[-1][1]
+            total = last - first
+            word = ""
+            if d is not None and abs(total) > 1e-9:
+                word = " better" if (total > 0) == (d == "higher") else " worse"
+            if abs(total) < 1e-9:
+                moved = "no change"
+            else:
+                moved = f"{'up' if total > 0 else 'down'} {bucket_display._fmt_delta(total, unit)}"
+                moved += f" ({word.strip()})" if word else ""
+            note = f"{len(pts)} tests. Since your first test ({pts[0][0].strftime('%b %-d, %Y')}): {moved}."
+            if d == "lower":
+                note += " Lower is better on this one."
+        return ui.div(
+            ui.HTML(pchart.render_svg(pts, unit, team_avg=avg, name=name)),
+            ui.p(note + (" Dashed line = team average." if avg is not None else ""), class_="gbo-progress-note"),
+            class_="gbo-card", style="padding:14px 16px;margin-bottom:16px;",
+        )
+
+    @render.ui
+    def category_controls():
+        if not app_state.is_authenticated():
+            return None
+
+        db = get_session()
+        try:
+            categories = (
+                db.query(AssessmentCategory)
+                .filter(AssessmentCategory.category_name != "Anthropometrics")
+                .order_by(AssessmentCategory.display_order)
+                .all()
+            )
+            if not categories:
+                return None
+            cat_choices = {str(c.category_id): c.category_name for c in categories}
+            pitcher_specific = next((c for c in categories if c.category_name == "Pitcher-Specific"), None)
+
+            controls = [ui.input_select("category", "Category", choices=cat_choices)]
+
+            if pitcher_specific is not None:
+                me = db.query(User).filter(User.user_id == app_state.user_id()).first()
+                pt_options = {"": "All pitch types"}
+                if me and me.player_id:
+                    used_pitch_types = (
+                        db.query(PitchType)
+                        .join(Assessment, Assessment.pitch_type_id == PitchType.pitch_type_id)
+                        .filter(
+                            Assessment.player_id == me.player_id,
+                            Assessment.category_id == pitcher_specific.category_id,
+                        )
+                        .distinct()
+                        .all()
+                    )
+                    for pt in used_pitch_types:
+                        pt_options[str(pt.pitch_type_id)] = pt.type_name
+                controls.append(
+                    ui.panel_conditional(
+                        f"input.category == '{pitcher_specific.category_id}'",
+                        ui.input_select("pitch_type_filter", "Filter by pitch type", choices=pt_options),
+                    )
+                )
+            return ui.div(*controls)
+        finally:
+            db.close()
+
+    @render.ui
+    def history_section():
+        if not app_state.is_authenticated():
+            return None
+        category_id_str = input.category()
+        req(category_id_str)  # wait until category_controls() has rendered
+        category_id = int(category_id_str)
+
+        db = get_session()
+        try:
+            me = db.query(User).filter(User.user_id == app_state.user_id()).first()
+            if me is None or me.player_id is None:
+                return None
+            category = db.query(AssessmentCategory).filter(AssessmentCategory.category_id == category_id).first()
+            if category is None:
+                return None
+
+            pitch_type_filter_id = None
+            if category.category_name == "Pitcher-Specific":
+                pt_filter_raw = input.pitch_type_filter() if "pitch_type_filter" in input else ""
+                if pt_filter_raw:
+                    pitch_type_filter_id = int(pt_filter_raw)
+
+            history_query = (
+                db.query(Assessment)
+                .options(
+                    joinedload(Assessment.results).joinedload(AssessmentResult.test_type),
+                    joinedload(Assessment.pitch_type),
+                )
+                .filter(Assessment.player_id == me.player_id, Assessment.category_id == category_id)
+                # Exclude entries auto-created by a Rapsodo import tied to
+                # a Bullpen Tracking session -- that data already has a
+                # proper home there (same exclusion as the original page).
+                .filter(~Assessment.assessment_id.in_(
+                    db.query(BullpenPitch.linked_assessment_id).filter(BullpenPitch.linked_assessment_id.isnot(None))
+                ))
+            )
+            if pitch_type_filter_id is not None:
+                history_query = history_query.filter(Assessment.pitch_type_id == pitch_type_filter_id)
+            past_assessments = history_query.order_by(Assessment.assessment_date.desc()).limit(500).all()
+
+            if not past_assessments:
+                body = ui_helpers.empty_state("No entries to show.")
+            else:
+                content = []
+                if len(past_assessments) == 500:
+                    content.append(ui.p("Showing the most recent 500 entries.", class_="text-muted small"))
+                content.append(_history_table_ui(past_assessments))
+                body = ui.div(*content)
+
+            return body
+        finally:
+            db.close()
+
+
+def _strengths_ui(db, bucket_data, changes):
+    """Your best 3 tests and 3 to work on, ranked against the team, in
+    plain words ("better than 85% of our team")."""
+    top, low = ap.strengths_and_work_on(db, bucket_data)
+    if not top:
+        return None
+
+    def item(m):
+        name, raw, unit, pct = m
+        sub = ("Best on our team" if pct >= 100 else "Lowest on our team" if pct <= 0
+               else f"Better than {pct}% of our team")
+        c = changes.get(name)
+        chip = bucket_display.change_chip(c, unit) if c else None
+        return ui.div(
+            ui.div(name, class_="gbo-sw-name"),
+            ui.div(f"{bucket_display._fmt_value(raw, unit, name)} · {sub}", class_="gbo-sw-sub"),
+            ui.div(chip, class_="gbo-sw-sub") if chip is not None else None,
+            class_="gbo-sw-item",
+        )
+
+    cols = [ui.div(ui.h6("Your best tests"), *[item(m) for m in top], class_="gbo-sw-col good")]
+    if low:
+        cols.append(ui.div(ui.h6("Most room to grow"), *[item(m) for m in low], class_="gbo-sw-col work"))
+    return ui.div(*cols, class_="gbo-sw")
+
+
+def _goals_table_ui(db, open_goals):
+    columns = ["Category", "Metric", "Baseline", "Current", "Target", "Target date"]
+    rows = []
+    for g in open_goals:
+        unit = f" {g.target_test_type.unit}" if g.target_test_type.unit else ""
+        if g.category.category_name == "Pitcher-Specific":
+            cutoff = date.today() - timedelta(days=30)
+            recent_results = (
+                db.query(AssessmentResult)
+                .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
+                .filter(
+                    Assessment.player_id == g.player_id,
+                    Assessment.category_id == g.category_id,
+                    Assessment.assessment_date >= cutoff,
+                    AssessmentResult.test_type_id == g.target_test_type_id,
+                )
+                .all()
+            )
+            current_value = sum(float(r.value) for r in recent_results) / len(recent_results) if recent_results else None
+        else:
+            latest_pair = (
+                db.query(AssessmentResult, Assessment.assessment_date)
+                .join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
+                .filter(Assessment.player_id == g.player_id, AssessmentResult.test_type_id == g.target_test_type_id)
+                .order_by(Assessment.assessment_date.desc())
+                .first()
+            )
+            current_value = float(latest_pair[0].value) if latest_pair else None
+
+        rows.append({
+            "Category": g.category.category_name,
+            "Metric": g.target_test_type.test_name,
+            "Baseline": f"{float(g.baseline_value):.2f}{unit}" if g.baseline_value is not None else "—",
+            "Current": f"{current_value:.2f}{unit}" if current_value is not None else "—",
+            "Target": f"{float(g.target_value):.2f}{unit}" if g.target_value is not None else "—",
+            "Target date": g.target_date.strftime("%Y-%m-%d (%a)") if g.target_date else "—",
+        })
+
+    header = ui.tags.tr(*[ui.tags.th(c) for c in columns])
+    body_rows = [ui.tags.tr(*[ui.tags.td(row[c]) for c in columns]) for row in rows]
+    return ui.tags.table(ui.tags.thead(header), ui.tags.tbody(*body_rows), class_="table table-sm")
+
+
+def _history_table_ui(assessments):
+    """st.dataframe(list_of_dicts) auto-unions heterogeneous keys across
+    rows (pandas fills the gaps); a plain HTML table has to do that
+    explicitly -- columns is built as the union of every row's keys, in
+    first-seen order, and missing cells render as "—"."""
+    rows_data = []
+    columns = []
+    for a in assessments:
+        row = {"Date": period_label(a.assessment_date)}
+        if a.pitch_type:
+            row["Pitch Type"] = a.pitch_type.type_name
+        for r in a.results:
+            unit_label = f" ({r.test_type.unit})" if r.test_type.unit else ""
+            row[f"{r.test_type.test_name}{unit_label}"] = round(float(r.value), 2)
+        rows_data.append(row)
+        for key in row:
+            if key not in columns:
+                columns.append(key)
+
+    header = ui.tags.tr(*[ui.tags.th(c) for c in columns])
+    body_rows = [ui.tags.tr(*[ui.tags.td(row.get(c, "—")) for c in columns]) for row in rows_data]
+    return ui.div(ui.tags.table(ui.tags.thead(header), ui.tags.tbody(*body_rows), class_="table table-sm"),
+                  class_="table-responsive")

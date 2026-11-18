@@ -1,0 +1,563 @@
+"""
+GBO -- Pitcher Meeting Report (Oct 2026).
+
+Ryker: "build reports to where a player could sit down and go through it
+like in a meeting style with a coach ... print off a sheet and be able to
+see everything important and have a better understanding of what it all
+means and how you as a pitcher performed and what you need to work on."
+A separate, simpler one-page companion to Pitcher Game Breakdown and
+Pitcher Profile -- not a replacement for either.
+
+Decisions agreed with Ryker (AskUserQuestion, Oct 2026):
+  - Two versions: one GAME, one SEASON.
+  - Staff can open anyone's; a Player only his own.
+  - Coach notes are typed and saved (models.PlayerReportNote) and print
+    on the sheet.
+  - Compare every number to the TEAM average, his OWN average, and his
+    goals (team goals + IDP goals).
+  - Strictly one page.
+
+This module is pure data -- no Shiny. It reuses analytics/
+pitcher_game_report.py's own stat helpers (same definitions as the full
+Game Report, so the two never disagree) over any list of one pitcher's
+GamePitch rows, single game or many.
+
+COMPARISONS
+  Game report:   You (this game) | Your season (his other games this
+                 season) | Team (staff, whole season) | Goal
+  Season report: You (season)    | Last 3 games | Team (season) | Goal
+  The colored mark compares him to the GOAL when there is one, else to
+  the team average. A metric whose sample is too small (fewer than
+  MIN_SAMPLE opportunities) gets no mark -- one walk in two hitters
+  shouldn't read as a red flag.
+
+WENT WELL / WORK ON
+  Auto-written, plain-English, top 3 each, from (a) the key numbers that
+  are clearly better/worse than the goal or team (by each metric's own
+  SCALE), (b) his best and shakiest pitch, (c) a pitch that keeps missing
+  the same way (Miss Map lean of LEAN_IN+ inches). Coaches add their own
+  points in the saved notes.
+"""
+
+from collections import defaultdict
+
+from sqlalchemy import or_, and_
+from sqlalchemy.orm import joinedload
+
+from models import Season, Game, GamePitch, PitchType, Player, RapsodoPitch, IDPGoal, IDPStatus, Assessment, AssessmentResult
+from pitch_type_config import FASTBALL_TYPES
+from analytics.pitcher_game_report import (
+    _compute_header_stats, _fps_stat, _secondary_strike_stat, _pitcher_id,
+    STRIKE_OUTCOMES, SWING_OUTCOMES, FPS_GOAL_PCT, SECONDARY_STRIKE_GOAL_PCT,
+)
+from analytics import command_metrics, best_zone, league_baselines
+from gbo_cache import cached
+from analytics.rapsodo_goal_metrics import rapsodo_field_for_test_name, average_rapsodo_metric
+
+MIN_SAMPLE = 5
+LEAN_IN = 3.0
+MIN_PITCHES_FOR_PITCH_NOTE = 8
+
+# key, label, higher_is_better, scale (what counts as "clearly" different),
+# unit, what it means (plain English), denominator key, goal, tip when low
+METRICS = [
+    dict(key="strike_pct", label="Strike %", hib=True, scale=4.0, unit="%", n="pitches",
+         means="Share of all pitches that were strikes (called, swinging, foul or put in play).",
+         tip="Get ahead and stay in the zone -- make hitters earn it."),
+    dict(key="fps_pct", label="First-pitch strike %", hib=True, scale=5.0, unit="%", n="fps_opportunities",
+         goal=FPS_GOAL_PCT, means="How often you started a hitter 0-1. Hitters do far worse after 0-1 than 1-0.",
+         tip="Attack 0-0 with your most reliable strike pitch."),
+    dict(key="e_plus_a_pct", label="Early & ahead %", hib=True, scale=5.0, unit="%", n="bf",
+         means="Hitters who put it in play in the first 3 pitches, or who you got to 2 strikes.",
+         tip="Win the first 3 pitches -- early contact or 2 strikes, not deep counts."),
+    dict(key="leadoff_out_pct", label="Leadoff out %", hib=True, scale=8.0, unit="%", n="leadoff_pas",
+         means="Got the first hitter of the inning out. Innings go much better when he's out.",
+         tip="Treat the leadoff hitter like the most important one of the inning."),
+    dict(key="secondary_strike_pct", label="Off-speed strike %", hib=True, scale=5.0, unit="%", n="secondary_pitches",
+         goal=SECONDARY_STRIKE_GOAL_PCT, means="Strikes with anything that isn't a fastball.",
+         tip="Land off-speed for strikes so hitters can't sit fastball."),
+    dict(key="whiff_pct", label="Whiff %", hib=True, scale=5.0, unit="%", n="swings",
+         means="Swings that missed. Shows how hard your stuff is to hit.",
+         tip="Finish pitches out of the zone with 2 strikes."),
+    dict(key="k_pct", label="Strikeout %", hib=True, scale=5.0, unit="%", n="bf",
+         means="Hitters faced who struck out.",
+         tip="Use your put-away pitch once you're ahead."),
+    dict(key="bb_pct", label="Walk %", hib=False, scale=3.0, unit="%", n="bf",
+         means="Hitters faced who walked. Lower is better.",
+         tip="Cut walks -- fill the zone in hitters' counts."),
+    dict(key="execution_pct", label="Hit-the-spot %", hib=True, scale=6.0, unit="%", n="execution_reviewed",
+         means="Pitches that landed in the zone the catcher called (needs video review).",
+         tip="Pick a small target and finish to it."),
+    dict(key="pitches_per_out", label="Pitches per out", hib=False, scale=0.6, unit="", n="outs",
+         means="Efficiency that works for partial innings. About 5 (15 an inning) is efficient; 6+ costs innings.",
+         tip="Get outs early in counts -- in play or 2 strikes by pitch 3."),
+    dict(key="pitches_per_bf", label="Pitches per batter", hib=False, scale=0.3, unit="", n="bf",
+         means="Pitches per hitter faced. Around 3.8 is typical; higher means deep counts.",
+         tip="Win 0-0 and 1-1 so hitters are swinging early."),
+    dict(key="pitches_per_inning", label="Pitches per inning", hib=False, scale=2.0, unit="", n="outs",
+         means="Efficiency. Around 15 or fewer lets you go deeper in games.",
+         tip="Be efficient -- early contact saves pitches."),
+]
+METRIC_BY_KEY = {m["key"]: m for m in METRICS}
+
+
+# ---------------------------------------------------------------------------
+# Stat bundle over any list of one or many pitchers' pitches
+# ---------------------------------------------------------------------------
+
+def _completed_pas(pitches):
+    """Group into PAs per (game, pitcher), in pitch order."""
+    by_frame = defaultdict(list)
+    for p in pitches:
+        by_frame[(p.game_id, _pitcher_id(p))].append(p)
+    out = []
+    for key in sorted(by_frame, key=lambda k: (k[0], k[1] or 0)):
+        cur = []
+        for p in sorted(by_frame[key], key=lambda p: p.pitch_sequence):
+            if p.pa_pitch_number == 1 and cur:
+                out.append(cur)
+                cur = []
+            cur.append(p)
+        if cur:
+            out.append(cur)
+    return [pa for pa in out if pa[-1].ends_plate_appearance and pa[-1].ab_outcome != "No Result"]
+
+
+def _pct(a, b):
+    return round(a / b * 100, 1) if b else None
+
+
+def stat_bundle(pitches, pitch_types, db=None):
+    """Every key number on the sheet, plus each one's sample size.
+    db (Oct 2026 audit): pass it so IP / runs / ERA include pickoff &
+    caught-stealing outs, runner-event and forced-end runs and inherited
+    runners -- the same line Pitcher Profile shows."""
+    if not pitches:
+        return None
+    pitches = sorted(pitches, key=lambda p: (p.game_id, p.pitch_sequence))
+    pas = _completed_pas(pitches)
+    extras = None
+    if db is not None:
+        from game_stats import extras_for_pitch_set
+        extras = extras_for_pitch_set(db, pitches)
+    h = _compute_header_stats(pitches, pas, extras)
+    fps = _fps_stat(pas)
+    sec = _secondary_strike_stat(pitches, pitch_types)
+    swings = sum(1 for p in pitches if p.pitch_outcome in SWING_OUTCOMES)
+    whiffs = sum(1 for p in pitches if p.pitch_outcome == "Swing and Miss")
+    bf = h["bf"]
+    outs = round((h["ip_decimal"] or 0) * 3)
+    games = len({p.game_id for p in pitches})
+    return {
+        "games": games, "pitches": h["pitches"], "bf": bf, "ip_display": h["ip_display"], "outs": outs,
+        "hits": h["hits"], "runs": h["runs"], "er": h["earned_runs"], "bb": h["bb"], "hbp": h["hbp"], "ks": h["ks"], "xbh": h["xbh"],
+        "era": h["era"], "whip": h["whip"], "tbip": h["tbip"], "bases": h["bases"],
+        "strike_pct": h["strike_pct"],
+        "fps_pct": fps["fps_pct"], "fps_opportunities": fps["fps_opportunities"],
+        "e_plus_a_pct": h["e_plus_a_pct"],
+        "leadoff_out_pct": h["leadoff_out_pct"], "leadoff_pas": h["leadoff_pas"],
+        "secondary_strike_pct": sec["secondary_strike_pct"], "secondary_pitches": sec["secondary_pitches"],
+        "whiff_pct": _pct(whiffs, swings), "swings": swings,
+        "k_pct": h["k_pct"], "bb_pct": _pct(h["bb"], bf),
+        "execution_pct": h["execution_pct"], "execution_reviewed": h["execution_reviewed"],
+        "pitches_per_inning": h["pitches_per_inning"],
+        "pitches_per_out": h["pitches_per_out"], "pitches_per_out_e": h["pitches_per_out_e"],
+        "errors_behind": h["errors_behind"], "pitches_per_bf": h["pitches_per_bf"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Queries
+# ---------------------------------------------------------------------------
+
+def _pitcher_filter(player_id):
+    return or_(
+        and_(GamePitch.is_our_team_batting.is_(False), GamePitch.our_player_id == player_id),
+        and_(GamePitch.is_our_team_batting.is_(True), GamePitch.opponent_our_player_id == player_id),
+    )
+
+
+def pitcher_pitches(db, player_id, season_id=None, game_id=None):
+    q = (db.query(GamePitch).join(Game, GamePitch.game_id == Game.game_id)
+         .options(joinedload(GamePitch.pitch_type)).filter(_pitcher_filter(player_id)))
+    if season_id is not None:
+        q = q.filter(Game.season_id == season_id)
+    if game_id is not None:
+        q = q.filter(GamePitch.game_id == game_id)
+    return q.all()
+
+
+@cached("team_pitches", {"game_pitches", "games", "pitch_types"})
+def team_pitches(db, season_id):
+    """Every pitch thrown by one of OUR pitchers in this season (our side
+    of real games; both sides of intrasquads)."""
+    q = (db.query(GamePitch).join(Game, GamePitch.game_id == Game.game_id)
+         .options(joinedload(GamePitch.pitch_type), joinedload(GamePitch.game).selectinload(Game.pitches))
+         .filter(or_(GamePitch.is_our_team_batting.is_(False),
+                     and_(GamePitch.is_our_team_batting.is_(True), GamePitch.opponent_our_player_id.isnot(None)))))
+    if season_id is not None:
+        q = q.filter(Game.season_id == season_id)
+    return q.all()
+
+
+def pitcher_games(db, player_id, season_id=None):
+    ids = {gid for (gid,) in db.query(GamePitch.game_id).filter(_pitcher_filter(player_id)).distinct().all()}
+    if not ids:
+        return []
+    q = db.query(Game).options(joinedload(Game.opponent_team)).filter(Game.game_id.in_(ids))
+    if season_id is not None:
+        q = q.filter(Game.season_id == season_id)
+    return q.order_by(Game.game_date.desc(), Game.game_id.desc()).all()
+
+
+def _velo_by_game_pitch(db, pitches):
+    ids = [p.game_pitch_id for p in pitches]
+    if not ids:
+        return {}
+    rows = db.query(RapsodoPitch.game_pitch_id, RapsodoPitch.velocity).filter(
+        RapsodoPitch.game_pitch_id.in_(ids), RapsodoPitch.velocity.isnot(None)).all()
+    return {gid: float(v) for gid, v in rows}
+
+
+# ---------------------------------------------------------------------------
+# Pitch mix
+# ---------------------------------------------------------------------------
+
+def _lean_text(h, v):
+    parts = []
+    if h is not None and abs(h) >= 1.5:
+        parts.append(f'{abs(h):.0f}" {"arm side" if h > 0 else "glove side"}')
+    if v is not None and abs(v) >= 1.5:
+        parts.append(f'{abs(v):.0f}" {"high" if v > 0 else "low"}')
+    return " & ".join(parts) if parts else "on target"
+
+
+def pitch_mix(db, pitches, throws):
+    total = len(pitches)
+    velo = _velo_by_game_pitch(db, pitches)
+    views = command_metrics.game_pitches_command_view(pitches, throws)
+    view_by_type = defaultdict(list)
+    for v in views:
+        view_by_type[command_metrics.pitch_type_label(v)].append(v)
+    by_type = defaultdict(list)
+    for p in pitches:
+        by_type[command_metrics.pitch_type_label(p)].append(p)
+    bz_scored, _maps = best_zone.score_for_pitcher(db, pitches, throws) if throws in ("R", "L") else ([], None)
+    bz_by_type = {r["label"]: r for r in best_zone.summary_by_type(bz_scored)}
+    rows = []
+    for label, ps in sorted(by_type.items(), key=lambda kv: -len(kv[1])):
+        n = len(ps)
+        strikes = sum(1 for p in ps if p.pitch_outcome in STRIKE_OUTCOMES)
+        swings = sum(1 for p in ps if p.pitch_outcome in SWING_OUTCOMES)
+        whiffs = sum(1 for p in ps if p.pitch_outcome == "Swing and Miss")
+        reviewed = [p for p in ps if p.intended_zone is not None and p.pitch_zone is not None]
+        hit = sum(1 for p in reviewed if p.intended_zone == p.pitch_zone)
+        vs = [velo[p.game_pitch_id] for p in ps if p.game_pitch_id in velo]
+        located = [v for v in view_by_type.get(label, []) if v.horizontal_miss is not None]
+        h_lean = v_lean = None
+        if located:
+            h_lean = sum(command_metrics.normalize_horizontal_to_arm_side(v.horizontal_miss, throws) for v in located) / len(located)
+            v_lean = sum(float(v.vertical_miss) for v in located) / len(located)
+        rows.append({
+            "pitch": label, "n": n, "usage_pct": _pct(n, total),
+            "velo": round(sum(vs) / len(vs), 1) if vs else None, "velo_max": round(max(vs), 1) if vs else None,
+            "strike_pct": _pct(strikes, n), "swings": swings, "whiff_pct": _pct(whiffs, swings),
+            "spot_pct": _pct(hit, len(reviewed)), "spot_n": len(reviewed),
+            "located": len(located), "h_lean": h_lean, "v_lean": v_lean,
+            "lean": _lean_text(h_lean, v_lean) if located else None,
+            "is_fastball": label in FASTBALL_TYPES,
+            "bz_pct": bz_by_type[label]["inside_pct"] if label in bz_by_type else None,
+            "bz_n": bz_by_type[label]["n"] if label in bz_by_type else 0,
+            "bz_where": bz_by_type[label]["where"] if label in bz_by_type else None,
+        })
+    return rows
+
+
+def locations(pitches):
+    return [
+        (float(p.actual_plate_x), float(p.actual_plate_z), command_metrics.pitch_type_label(p), p.pitch_outcome)
+        for p in pitches if p.actual_plate_x is not None and p.actual_plate_z is not None
+    ]
+
+
+# ---------------------------------------------------------------------------
+# IDP goals
+# ---------------------------------------------------------------------------
+
+def idp_goals(db, player_id, limit=3):
+    goals = (
+        db.query(IDPGoal).options(joinedload(IDPGoal.status), joinedload(IDPGoal.target_test_type),
+                                  joinedload(IDPGoal.target_pitch_type))
+        .filter(IDPGoal.player_id == player_id).order_by(IDPGoal.created_at.desc()).all()
+    )
+    out = []
+    from analytics import game_goals
+    ginfo = game_goals.goal_info(db, [g.goal_id for g in goals])
+    for g in goals:
+        status = g.status.status_name if g.status else ""
+        if status.lower() in ("completed", "complete", "achieved", "cancelled", "canceled"):
+            continue
+        if g.goal_id in ginfo:
+            # Oct 2026: game-stat goal -- live progress from game_goals.
+            gp = game_goals.progress(db, g, ginfo[g.goal_id])
+            if gp is not None:
+                out.append({
+                    "description": g.description, "status": f"{status} · {gp['status']}" if status else gp["status"],
+                    "metric": gp["label"] + f" ({game_goals.WINDOWS[gp['window']][0].lower()})", "pitch": None,
+                    "baseline": gp["baseline"], "target": gp["target"],
+                    "current": round(gp["current"], 1) if gp["current"] is not None else None,
+                    "target_date": g.target_date,
+                })
+                if len(out) >= limit:
+                    break
+                continue
+        current = None
+        if g.target_test_type is not None:
+            field = rapsodo_field_for_test_name(g.target_test_type.test_name)
+            if field:
+                q = db.query(RapsodoPitch).filter(RapsodoPitch.player_id == player_id)
+                if g.target_pitch_type_id:
+                    q = q.filter(RapsodoPitch.pitch_type_id == g.target_pitch_type_id)
+                recent = q.order_by(RapsodoPitch.pitch_date.desc()).limit(60).all()
+                current = average_rapsodo_metric(recent, field)
+            else:
+                r = (db.query(AssessmentResult).join(Assessment, AssessmentResult.assessment_id == Assessment.assessment_id)
+                     .filter(Assessment.player_id == player_id, AssessmentResult.test_type_id == g.target_test_type_id)
+                     .order_by(Assessment.assessment_date.desc()).first())
+                current = float(r.value) if r else None
+        out.append({
+            "description": g.description, "status": status,
+            "metric": g.target_test_type.test_name if g.target_test_type else None,
+            "pitch": g.target_pitch_type.type_name if g.target_pitch_type else None,
+            "baseline": float(g.baseline_value) if g.baseline_value is not None else None,
+            "target": float(g.target_value) if g.target_value is not None else None,
+            "current": round(current, 1) if current is not None else None,
+            "target_date": g.target_date,
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Comparison rows + went well / work on
+# ---------------------------------------------------------------------------
+
+def _mark(m, you, n, team, d2=None):
+    """('good'|'ok'|'bad'|None, diff in scale units vs goal, else the D2
+    average (Oct 2026, Ryker: grade against D2 wherever D2 exists), else
+    the team average)."""
+    if you is None or n is None or n < MIN_SAMPLE:
+        return None, None
+    ref = m.get("goal") if m.get("goal") is not None else (d2 if d2 is not None else team)
+    if ref is None:
+        return None, None
+    diff = (you - ref) / m["scale"]
+    if not m["hib"]:
+        diff = -diff
+    return ("good" if diff >= 1 else "bad" if diff <= -1 else "ok"), diff
+
+
+def key_rows(you, mine, team):
+    rows = []
+    for m in METRICS:
+        y = you.get(m["key"]) if you else None
+        n = you.get(m["n"]) if you else None
+        t = team.get(m["key"]) if team else None
+        d2, miaa = league_baselines.pitching(m["key"], "D2"), league_baselines.pitching(m["key"], "MIAA")
+        mark, diff = _mark(m, y, n, t, d2)
+        rows.append({**m, "you": y, "sample": n, "mine": mine.get(m["key"]) if mine else None,
+                     "team": t, "d2": d2, "miaa": miaa, "mark": mark, "diff": diff})
+    return rows
+
+
+def _fmt(m, v):
+    if v is None:
+        return "—"
+    return f"{v:.0f}{m['unit']}" if m["unit"] == "%" else f"{v:.1f}"
+
+
+def takeaways(rows, mix, total_pitches):
+    good, bad = [], []
+    for r in rows:
+        if r["diff"] is None:
+            continue
+        ref_name = f"the {r['goal']:.0f}% goal" if r.get("goal") is not None else f"the team ({_fmt(r, r['team'])})"
+        if r["mark"] == "good":
+            good.append((r["diff"], f"{r['label']}: {_fmt(r, r['you'])}, better than {ref_name}."))
+        elif r["mark"] == "bad":
+            bad.append((-r["diff"], f"{r['label']}: {_fmt(r, r['you'])}, below {ref_name}. {r['tip']}"))
+
+    enough = [p for p in mix if p["n"] >= MIN_PITCHES_FOR_PITCH_NOTE and p["pitch"] != "Unspecified"]
+    whiffy = [p for p in enough if p["swings"] >= 5 and p["whiff_pct"] is not None]
+    if whiffy:
+        best = max(whiffy, key=lambda p: p["whiff_pct"])
+        if best["whiff_pct"] >= 25:
+            good.append((best["whiff_pct"] / 25, f"Your {best['pitch'].lower()} got swings and misses "
+                                                  f"({best['whiff_pct']:.0f}% of swings) -- trust it."))
+    if enough:
+        best_s = max(enough, key=lambda p: p["strike_pct"] or 0)
+        if (best_s["strike_pct"] or 0) >= 68:
+            good.append((1.2, f"You threw your {best_s['pitch'].lower()} for strikes "
+                              f"({best_s['strike_pct']:.0f}% of {best_s['n']})."))
+        worst = min(enough, key=lambda p: p["strike_pct"] or 0)
+        if (worst["strike_pct"] or 0) < 55:
+            bad.append((1.5 + (55 - worst["strike_pct"]) / 10,
+                        f"Your {worst['pitch'].lower()} was a strike only {worst['strike_pct']:.0f}% of the time "
+                        f"({worst['n']} thrown). Make it a pitch you can land when you need to."))
+    for p in mix:
+        if p.get("bz_n", 0) >= MIN_PITCHES_FOR_PITCH_NOTE and p["bz_pct"] is not None:
+            if p["bz_pct"] >= 60:
+                good.append((1.1 + (p["bz_pct"] - 60) / 20, f"Your {p['pitch'].lower()} landed in its best zone "
+                                                              f"{p['bz_pct']:.0f}% of the time ({p['bz_where']})."))
+            elif p["bz_pct"] <= 35:
+                bad.append((1.2 + (35 - p["bz_pct"]) / 20, f"Your {p['pitch'].lower()} landed in its best zone only "
+                                                            f"{p['bz_pct']:.0f}% of the time. Aim it {p['bz_where']}."))
+    for p in mix:
+        if p["located"] >= 6 and p["h_lean"] is not None:
+            big = max(abs(p["h_lean"]), abs(p["v_lean"]))
+            if big >= LEAN_IN:
+                bad.append((big / LEAN_IN, f"Your {p['pitch'].lower()} missed {p['lean']} of the target on average. "
+                                           f"Adjust your aim or finish to correct it."))
+
+    good = [t for _s, t in sorted(good, key=lambda x: -x[0])][:3]
+    bad = [t for _s, t in sorted(bad, key=lambda x: -x[0])][:3]
+    if not good:
+        good = ["Nothing jumped out above the goal or team average -- a steady outing to build on."] if total_pitches else []
+    if not bad:
+        bad = ["Nothing stood out as a problem in the numbers -- keep doing what you're doing."] if total_pitches else []
+    return good, bad
+
+
+# ---------------------------------------------------------------------------
+# Whole reports
+# ---------------------------------------------------------------------------
+
+def _pitch_type_names(db):
+    return {pt.pitch_type_id: pt.type_name for pt in db.query(PitchType).all()}
+
+
+def stuff_why(db, pitches, limit=3):
+    """Oct 2026 (Kyle Bland-style Stuff+ breakdown): one plain-English
+    "why it grades what it grades" line per pitch type, most-thrown first,
+    from the Rapsodo readings linked to these game pitches. Types with
+    fewer than stuff_breakdown.MIN_PITCHES_FOR_BREAKDOWN readings are
+    skipped -- a one-page sheet shouldn't carry a 3-pitch read."""
+    from analytics import stuff_breakdown
+    ids = [p.game_pitch_id for p in pitches]
+    if not ids:
+        return []
+    try:
+        raps = (db.query(RapsodoPitch).options(joinedload(RapsodoPitch.pitch_type))
+                .filter(RapsodoPitch.game_pitch_id.in_(ids)).all())
+        if not raps:
+            return []
+        breakdown, outcomes = stuff_breakdown.get_for_pitcher(db, raps, pitches)
+    except Exception:
+        return []
+    lines = []
+    for e in breakdown:
+        if not e.get("features") or not e.get("enough"):
+            continue
+        line = stuff_breakdown.why_line(e, outcomes)
+        if line:
+            lines.append(line)
+        if len(lines) >= limit:
+            break
+    return lines
+
+
+def game_report(db, player_id, game_id):
+    player = db.query(Player).filter(Player.player_id == player_id).first()
+    game = db.query(Game).options(joinedload(Game.opponent_team)).filter(Game.game_id == game_id).first()
+    if player is None or game is None:
+        return None
+    names = _pitch_type_names(db)
+    mine_game = pitcher_pitches(db, player_id, game_id=game_id)
+    if not mine_game:
+        return None
+    you = stat_bundle(mine_game, names, db)
+    season_pitches = [p for p in pitcher_pitches(db, player_id, season_id=game.season_id) if p.game_id != game_id] \
+        if game.season_id is not None else []
+    mine = stat_bundle(season_pitches, names, db) if season_pitches else None
+    team = stat_bundle(team_pitches(db, game.season_id), names, db)
+    mix = pitch_mix(db, mine_game, player.throws)
+    rows = key_rows(you, mine, team)
+    good, bad = takeaways(rows, mix, you["pitches"])
+    return {
+        "kind": "game", "player": player, "game": game, "season_id": game.season_id,
+        "you": you, "mine": mine, "team": team, "mine_label": "Your season", "rows": rows,
+        "mix": mix, "locations": locations(mine_game), "good": good, "bad": bad,
+        "goals": idp_goals(db, player_id), "game_log": None,
+        "stuff_why": stuff_why(db, mine_game + season_pitches), "stuff_why_scope": "season to date",
+    }
+
+
+def season_report(db, player_id, season_id):
+    player = db.query(Player).filter(Player.player_id == player_id).first()
+    if player is None:
+        return None
+    names = _pitch_type_names(db)
+    pitches = pitcher_pitches(db, player_id, season_id=season_id)
+    if not pitches:
+        return None
+    you = stat_bundle(pitches, names, db)
+    games = pitcher_games(db, player_id, season_id=season_id)
+    last3_ids = {g.game_id for g in games[:3]}
+    last3 = stat_bundle([p for p in pitches if p.game_id in last3_ids], names, db) if len(games) > 3 else None
+    team = stat_bundle(team_pitches(db, season_id), names, db)
+    mix = pitch_mix(db, pitches, player.throws)
+    rows = key_rows(you, last3, team)
+    good, bad = takeaways(rows, mix, you["pitches"])
+    by_game = defaultdict(list)
+    for p in pitches:
+        by_game[p.game_id].append(p)
+    log = []
+    for g in games[:6]:
+        b = stat_bundle(by_game[g.game_id], names, db)
+        log.append({"game": g, **b})
+    season = db.query(Season).filter(Season.season_id == season_id).first() if season_id is not None else None
+    return {
+        "kind": "season", "player": player, "game": None, "season_id": season_id,
+        "season_name": season.season_name if season else "All games",
+        "you": you, "mine": last3, "team": team, "mine_label": "Last 3 games", "rows": rows,
+        "mix": mix, "locations": locations(pitches), "good": good, "bad": bad,
+        "goals": idp_goals(db, player_id), "game_log": log,
+        "stuff_why": stuff_why(db, pitches), "stuff_why_scope": None,
+    }
+
+
+def range_report(db, player_id, game_ids, label):
+    """Oct 2026 (Team Game Report): the season-style sheet for any set of
+    games -- a series or a custom date range. Same shape as season_report
+    (kind "season", season_name = label) so render_sheet needs no change;
+    the comparison column is his whole season, the team column is the
+    staff over these same games."""
+    player = db.query(Player).filter(Player.player_id == player_id).first()
+    if player is None or not game_ids:
+        return None
+    ids = set(game_ids)
+    names = _pitch_type_names(db)
+    pitches = [p for p in pitcher_pitches(db, player_id) if p.game_id in ids]
+    if not pitches:
+        return None
+    you = stat_bundle(pitches, names, db)
+    season_id = next((g.season_id for g in db.query(Game).filter(Game.game_id.in_(ids)).all() if g.season_id), None)
+    season_all = pitcher_pitches(db, player_id, season_id=season_id) if season_id is not None else None
+    mine = stat_bundle(season_all, names, db) if season_all else None
+    team = stat_bundle([p for p in team_pitches(db, None) if p.game_id in ids], names, db)
+    mix = pitch_mix(db, pitches, player.throws)
+    rows = key_rows(you, mine, team)
+    good, bad = takeaways(rows, mix, you["pitches"])
+    games = [g for g in pitcher_games(db, player_id) if g.game_id in ids]
+    by_game = defaultdict(list)
+    for p in pitches:
+        by_game[p.game_id].append(p)
+    log = [{"game": g, **stat_bundle(by_game[g.game_id], names, db)} for g in games[:6]]
+    return {
+        "kind": "season", "player": player, "game": None, "season_id": season_id,
+        "season_name": label, "you": you, "mine": mine, "team": team, "mine_label": "His season",
+        "rows": rows, "mix": mix, "locations": locations(pitches), "good": good, "bad": bad,
+        "goals": idp_goals(db, player_id), "game_log": log,
+        "stuff_why": stuff_why(db, pitches), "stuff_why_scope": None,
+    }

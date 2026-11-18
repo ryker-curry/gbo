@@ -1,0 +1,4423 @@
+"""
+GBO -- Pitcher Profile (Aug 2026, Phase 0 of STUFF-LOCATION-PITCHING-
+PLUS-PLAN.md). A filterable, per-pitcher deep dive: counting stats,
+pitch-type breakdown, Stuff+/Location+/Pitching+ grades, pitch usage,
+attack-zone distribution, a grade trend over time, physical-profile
+Movement/Release Point/Spin Axis charts, Command Target Zones, and a
+full Individual Pitches table. Sits alongside the existing Analytics
+page as a coach-facing (and player-facing, self-scoped) advanced
+view -- not a replacement for it.
+
+Sept 2026 (Ryker, looking at this page on his own Player login, and at
+mlbpitchprofiler.com's own pitcher page as a reference): everything used
+to render at once in one long scroll (pp_body). Restructured behind a
+"View" dropdown instead -- Overview / Metrics / Results / Zone /
+Arsenal, same convention pitcher_game_report.py's own "View" dropdown
+already established, so only the selected view's section actually
+queries the DB (see pp_view_picker's docstring). Results is genuinely
+new: quality-of-contact-allowed per pitch type (GBO's own
+contact_quality vocabulary, six buckets summing to 100% of that type's
+balls in play) plus Hard Hit %/Whiff %/Chase % alongside, styled after
+mlbpitchprofiler.com's own Results tab (visualizations/
+pitch_results_chart.py). Metrics is the Physical Profile section,
+Zone is Attack Zone Distribution + per-pitch-type location density
+heatmaps (Sept 2026, visualizations/pitch_location_heatmap.py) +
+Command Target Zones, Arsenal is the
+Arsenal table + Pitch Type Breakdown + Individual Pitches. Overview
+keeps the Line/Grades/Performance/Pitch Usage/Trend content pp_body
+used to open with -- still the default first thing a viewer sees.
+
+Sept 2026 (Ryker: "need to make the pitcher profile metrics (physical
+profile) better. right now have to click show charts, don't
+neccesarily want to have to do that") -- Metrics used to embed the
+reused Bullpen Dashboard fragment (bullpen_dashboard_display.
+register_bullpen_dashboard), which gates its charts behind a "Show
+Charts" button because those charts render server-side through
+kaleido (slow -- ~30s -- and prone to websocket timeouts on an
+ungated page). Rebuilt to call the underlying PURE chart-builder
+functions directly instead -- analytics/bullpen_metrics.py's
+pitch_type_summary/average_estimated_arm_angle and visualizations/
+bullpen_charts.py's movement_chart/release_point_chart, visualizations/
+spin_axis_chart.py's average_spin_axis_chart/individual_spin_axis_chart
+-- as plain @render_plotly/output_widget outputs, the same fast,
+client-side, click-free pattern this page already uses for
+pp_trend_chart/pp_results_chart/pp_location_heatmap. No gate needed
+because there's no kaleido step. Also drops the old bullpen-only
+Location heatmap from this tab -- redundant now that the Zone tab
+has its own real-game pitch-location heatmaps, and dropping it keeps
+this tab focused on release/movement/spin mechanics rather than
+location (which already has its own tab).
+
+Self-scoping, same pattern as player_profile.py: a staff role sees a
+player picker (scoped to assigned players unless can_view_all_players);
+a "Player" role always sees their own linked player, no picker, and
+gets nothing at all if that player isn't a pitcher (see hitter_profile.py
+for that mirror case). Both cases render the exact same page body
+otherwise -- no simplified/stripped-down player version, per the design
+brief.
+
+Reuses, doesn't reinvent: game_stats.py (line/pitch-type breakdown),
+plate_discipline.py, analytics/command_metrics.py + visualizations/
+command_charts.py (Command Target Zones, same code pitcher_game_report.py
+already uses, just scoped by this page's own filters instead of one
+game_id), analytics/bullpen_metrics.py + visualizations/bullpen_charts.py
++ visualizations/spin_axis_chart.py (Physical Profile -- the same
+Movement/Release Point/Spin Axis figure builders the Bullpen Dashboard
+uses, called directly here against this pitcher's WHOLE Rapsodo history
+in the selected date range -- games only, not bullpen sessions (Sept
+2026, Ryker: "i want pitcher profile to only pull pitches from games"
+-- see profile_queries.get_pitcher_rapsodo_pitches' game_linked_only
+param), via profile_queries.get_pitcher_rapsodo_pitches, the same
+unified query this page's Zone tab already uses), and
+analytics/pitch_grading.py (Stuff+/Location+/Pitching+/Arsenal).
+analytics/profile_queries.py is the one new piece: the date-range/
+pitch-type/game-scope filtered queries this page needs that
+game_stats.py's season/single-game queries don't cover.
+"""
+
+from datetime import date, timedelta
+
+from shiny import module, ui, render, req, reactive
+from shinywidgets import output_widget, render_plotly
+from sqlalchemy.orm import joinedload
+from database import get_session
+from models import Player, User, PitchType, PlayerPitchArsenal, StaffPlayerAssignment, Game, GamePitch, RapsodoPitch
+from game_stats import compute_pitching_line, compute_pitch_type_breakdown, get_batter_hands, compute_pitch_mix_by_count, pitching_line_for
+from strike_zone import classify_attack_zone
+import command_config
+from analytics import command_metrics, performance_score, profile_queries
+from analytics.pitch_grading import (
+    stuff_plus, location_plus, pitching_plus, MIN_BASELINE_PITCHES,
+)
+# Pitch Type Breakdown's cards-plus-grouped-tabs display (Sept 2026,
+# Ryker: "want it to be similar in pitcher profile") -- reused from
+# pitcher_game_report.py, where that redesign happened first, rather
+# than a second implementation. Same cross-module private-helper reuse
+# convention modules/hitter_tracking.py already establishes for
+# hitter_game_report.py/hitter_profile.py.
+from modules.pitcher_game_report import _pitch_type_breakdown_with_stuff, _pitch_type_breakdown_view
+from visualizations import command_charts, profile_charts
+from visualizations.count_leverage_chart import count_leverage_chart
+from visualizations.pitch_location_heatmap import pitch_location_heatmaps, MIN_FOR_CONTOUR
+# Sept 2026, Ryker: "an opposing hitters heat map for each of my
+# pitchers ... this would go in pitcher profile ... under the
+# results section" -- run-value-by-zone, reusing this page's own
+# existing Pitch Type filter (no separate dropdown needed, see
+# pp_zone_damage_chart's own comment).
+import plotly.graph_objects as go
+from visualizations.chart_theme import apply_gbo_theme
+import glossary_content
+from pitch_type_config import get_pitch_color, FASTBALL_TYPES
+from analytics import fastball_shape, pitch_class, command_lanes
+import command_lanes_display
+import velo_fade_display
+from analytics import velo_fade
+from services.pitch_type_switch import apply_switches, undo_switches
+from models import PitchTypeChange, ArsenalTarget
+from analytics import results_view
+from analytics import approach_angles, best_zone, arsenal_plan, stuff_breakdown, trends, ivb_expected, slider_fit, sequencing, outperform, arsenal_breadth, outcome_profile, bauer_units, release_consistency
+from visualizations import trend_charts
+from visualizations.stuff_breakdown_chart import trait_impact_figure, strip_figure, outcome_figure, ordinal, fmt_value
+
+# Stuff+ Breakdown styling (hide the plotly toolbar -- it sat on the titles).
+_SB_CSS = """
+.gbo-sb .modebar-container{display:none!important}
+.gbo-sb .gbo-sb-why{font-weight:600;font-size:15px;margin:12px 0 4px}
+.gbo-sb .gbo-sb-tips{margin:4px 0 6px;font-size:13.5px}
+.gbo-sb .gbo-sb-val{font-size:20px;font-weight:700}
+.gbo-sb .gbo-sb-pct{font-weight:700;font-size:13px;padding:2px 8px;border-radius:10px}
+.gbo-sb .gbo-sb-pct.up{color:#3FB27F;background:rgba(63,178,127,.12)}
+.gbo-sb .gbo-sb-pct.down{color:#D64545;background:rgba(214,69,69,.12)}
+.gbo-sb .gbo-section-title-row .form-group{margin-bottom:0}
+"""
+from analytics.bullpen_metrics import average_estimated_arm_angle
+from visualizations.arsenal_plan_chart import plan_movement_figure, progress_figure
+from visualizations.best_zone_chart import best_zone_figure
+
+import ui_helpers
+from analytics import league_baselines
+import format_helpers
+from analytics.bullpen_metrics import (
+    pitch_type_summary, average_estimated_arm_angle, pitch_type_label,
+    fastball_trajectory_diagnostic, vaa_trajectory_triples, team_havaa_baseline,
+)
+from visualizations.bullpen_charts import movement_chart, release_point_chart, color_for_pitch_label
+from visualizations.pitcher_graphic import pitcher_release_svg
+import release_graphics
+from visualizations.attack_zones_chart import attack_zones_figure
+from pitch_location_stats import compute_attack_zones
+from visualizations.spin_axis_chart import average_spin_axis_chart, individual_spin_axis_chart
+from format_helpers import (
+    format_pct as _fmt_pct,
+    format_num as _fmt,
+    game_label as _game_label,
+)
+
+STAFF_ROLES = ("Administrator", "Head Coach", "Coach", "Sports Scientist", "Data Analyst", "Video Coordinator")
+
+# V1 fixed palette for the Attack Zone bar (Heart -> Waste), innermost
+# to outermost -- no existing app-wide convention to reuse (Heart/
+# Shadow/Chase/Waste only ever appear as text/percentages elsewhere,
+# see plate_discipline.py/pitch_location_stats.py), so this picks a
+# brand-consistent crimson-to-gray fade rather than inventing an
+# unrelated scheme. Flag for Ryker/the designer to revise if a
+# different treatment is wanted.
+ATTACK_ZONE_COLORS = {"Heart": "#BF1E2D", "Shadow": "#F2B529", "Chase": "#7A8594", "Waste": "#3A3F47"}
+
+
+def _fmt_grade(value):
+    return f"{value:.1f}" if value is not None else "—"
+
+
+def _avg_or_none(values):
+    """Plain mean of the non-None values, rounded to 1 decimal, or
+    None if every value is missing -- used for the Metrics tab's
+    Spin Efficiency/Gyro Degree columns, which analytics/bullpen_
+    metrics.pitch_type_summary() doesn't already compute (kept local
+    to this page rather than added to that shared function, since
+    pitch_type_summary's column set matches a documented spec table
+    reused by several other pages -- My Bullpens, the standalone
+    Bullpen Dashboard, Player Profile -- that this change shouldn't
+    silently widen)."""
+    vals = [float(v) for v in values if v is not None]
+    return round(sum(vals) / len(vals), 1) if vals else None
+
+
+def _my_player(db, app_state):
+    me = db.query(User).filter(User.user_id == app_state.user_id()).first()
+    if me is None or me.player_id is None:
+        return None
+    return db.query(Player).filter(Player.player_id == me.player_id).first()
+
+
+# NOTE (Aug 31 2026): _grade_ring_status/_grade_rings used to live here
+# -- moved to shiny_app/ui_helpers.py as render_percentile_bars
+# (Savant/mlbpitchprofiler.com-style percentile bars, per Ryker's own
+# reference site, replacing the ring treatment for this grade family)
+# so hitter_profile.py's new Performance section can reuse the same
+# component. Sept 2026: recolored to that site's own continuous
+# blue-to-red percentile scale (ui_helpers.percentile_color) -- see
+# pp_overview_section()'s Grades section below and
+# ui_helpers.render_percentile_bars' docstring.
+
+
+def _stacked_bar(segments):
+    """segments: list of (label, pct, color), pct 0-100 (need not sum
+    to exactly 100 after rounding). Plain CSS flex bar -- same
+    zero-image-render approach as bucket_display.py's rings/metric bars,
+    no Plotly/kaleido needed for a simple stacked-percentage bar."""
+    segments = [(label, pct, color) for label, pct, color in segments if pct]
+    if not segments:
+        return None
+    bar = ui.div(
+        *[ui.div(style=f"width:{pct}%; background:{color};", title=f"{label}: {pct:.0f}%") for label, pct, color in segments],
+        style="display:flex; height:22px; border-radius:6px; overflow:hidden; width:100%;",
+    )
+    legend = ui.div(
+        *[
+            ui.div(
+                ui.span(style=f"display:inline-block; width:10px; height:10px; border-radius:5px; background:{color}; margin-right:5px;"),
+                f"{label} {pct:.0f}%",
+                style="display:inline-flex; align-items:center; font-size:0.8rem; margin:2px 10px 2px 0;",
+            )
+            for label, pct, color in segments
+        ],
+        style="display:flex; flex-wrap:wrap; margin-top:6px;",
+    )
+    return ui.div(bar, legend)
+
+
+def _zone_hand_filtered(db, pitches, hand_choice):
+    """Sept 2026, Ryker: "for the zone tab in pitcher profile be able
+    to select vs right and left handed hitters" -- shared by pp_zone_
+    section (Attack Zone Distribution bar + per-type breakdown table)
+    and pp_location_heatmap (the density heatmap widget) so both
+    pieces of the Zone tab reflect the same selection. Resolved via
+    get_batter_hands (roster Player.bats/OpponentPlayer.bats, with the
+    switch-hitter fix), same as every other hand-split view on this
+    page (pp_arsenal_section, pp_zone_damage_chart) -- never the raw
+    GamePitch.opponent_hand column, which silently holds the pitcher's
+    own throwing hand instead of the batter's on a three-squad
+    intrasquad pitch (get_batter_hands' own docstring)."""
+    if hand_choice in (None, "All Batters"):
+        return pitches
+    hands = get_batter_hands(db, pitches)
+    target = "R" if hand_choice == "vs RHH" else "L"
+    return [p for p in pitches if hands.get(p.game_pitch_id) == target]
+
+
+PLUS_MIN_IP = 15   # Oct 2026 coach pass: plus stats hidden below this
+
+
+# Nov 2026: the view a player opens on (the Coach Summary is staff-only).
+PLAYER_DEFAULT_VIEW = "overview"
+
+
+@module.ui
+def pitcher_profile_ui():
+    return ui.div(
+        ui_helpers.page_header("Pitcher Deep Dive", "Everything on one pitcher -- pick a view below for the detail.", actions=ui_helpers.how_to_link("pitcher_profile")),
+        ui.output_ui("pp_player_picker"),
+        ui.output_ui("pp_filters"),
+        # Sept 2026, Ryker: a "View" dropdown instead of every section
+        # rendering at once and scrolling forever -- same convention
+        # pitcher_game_report.py's own "View" dropdown already
+        # established. Each of these five stays statically listed here
+        # (Shiny needs a placeholder in the DOM for each output id) --
+        # the gate inside each render.ui function is what actually
+        # controls which one does anything.
+        ui.output_ui("pp_view_picker"),
+        ui.output_ui("pp_overview_section"),
+        ui.output_ui("pp_outperform"),
+        ui.output_ui("pp_release_comps"),
+        ui.output_ui("pp_release_view"),
+        ui.output_ui("pp_metrics_section"),
+        ui.output_ui("pp_results_section"),
+        ui.output_ui("pp_zone_hand_filter"),
+        ui.output_ui("pp_zone_section"),
+        ui.output_ui("pp_command_section"),
+        ui.output_ui("pp_arsenal_section"),
+        ui.output_ui("pp_arsenal_extras"),
+        ui.output_ui("pp_trends_section"),
+        ui.output_ui("pp_count_leverage_section"),
+        ui.output_ui("pp_sequencing_section"),
+        ui.output_ui("pp_fastball_shape_section"),
+        ui.output_ui("pp_pitch_type_check_section"),
+        ui.output_ui("pp_arsenal_plan_section"),
+        ui.output_ui("pp_insights_section"),
+        ui_helpers.page_footer(),
+    )
+
+
+@module.server
+def pitcher_profile_server(input, output, session, app_state):
+
+    def _visible_pitchers(db):
+        q = db.query(Player).filter(Player.is_pitcher.is_(True))
+        if not app_state.can_view_all_players():
+            ids = [a.player_id for a in db.query(StaffPlayerAssignment).filter(StaffPlayerAssignment.staff_user_id == app_state.user_id()).all()]
+            q = q.filter(Player.player_id.in_(ids))
+        return q.filter(Player.active.is_(True)).order_by(Player.last_name, Player.first_name).all()
+
+    # Deep link from Data Health "Pitch labels" (Oct 2026): open a pitcher on
+    # a given view. Held until the pickers render with it, then cleared.
+    _pending = {"pid": None, "view": None, "view_pid": None}
+    _pending_tick = reactive.Value(0)
+
+    @reactive.effect
+    def _consume_pitcher_link():
+        link = app_state.deep_link_pitcher()
+        if link is None:
+            return
+        pid, view = link
+        _pending.update(pid=pid, view=view, view_pid=pid)
+        app_state.deep_link_pitcher.set(None)
+        ui.update_select("pp_player_select", selected=str(pid))
+        ui.update_select("pp_view", selected=view)
+        _pending_tick.set(_pending_tick() + 1)
+
+    @render.ui
+    def pp_release_consistency():
+        """Release angle consistency (Oct 2026, analytics/release_consistency.py)."""
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            raps = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+                game_scope=f["game_scope"], game_id=f["game_id"]) or []
+            base = release_consistency.team_baselines(db)
+        finally:
+            db.close()
+        sp = release_consistency.spreads(raps)
+        head = [ui.p(ui.strong("Release angle consistency"), "  ", ui_helpers.how_to_link("release_consistency"),
+                     style="margin-bottom:0;"),
+                ui.p("How much the angle the ball leaves his hand varies pitch to pitch, within each outing (Rapsodo). "
+                     "The release angle sets where the pitch goes, so a tighter spread is the root of command. Compared to "
+                     "our staff for the same pitch; Release consistency = 100 at team average, higher = tighter. Some spread "
+                     "is on purpose (aiming up vs. down), so read it against teammates, not on its own.",
+                     class_="text-muted small")]
+        if not sp:
+            return ui.div(*head, ui.p(f"Needs {release_consistency.MIN_OUTING}+ Rapsodo readings of a pitch in an outing.",
+                                      class_="text-muted small"), ui.hr())
+        g = release_consistency.grade(sp, base)
+        rows = []
+        for lab, s_ in sorted(sp.items(), key=lambda kv: -kv[1]["n"]):
+            b = base.get(lab)
+            rows.append({
+                "Pitch Type": lab, "Readings": s_["n"], "Outings": s_["outings"],
+                "Vertical spread": f"{s_['v']:.2f}°", "vs team": f"{s_['v'] - b['v'][0]:+.2f}°" if b else "—",
+                "Horizontal spread": f"{s_['h']:.2f}°", "vs team ": f"{s_['h'] - b['h'][0]:+.2f}°" if b else "—",
+                "Release consistency": f"{g['by_type'][lab]:.0f}" if lab in g["by_type"] else "—",
+            })
+        kpis = [{"label": "Release consistency", "value": f"{g['overall']:.0f}" if g["overall"] is not None else "—"}]
+        return ui.div(
+            *head,
+            ui_helpers.render_kpi_cards(kpis),
+            *[ui.p(ui.strong(t), class_="small", style="margin:4px 0;") for t in release_consistency.read(sp, base)],
+            ui_helpers.render_dict_table(rows),
+            ui.p(f"Grades need {release_consistency.MIN_N}+ readings of that pitch and {release_consistency.MIN_STAFF}+ "
+                 "staff pitchers with the same pitch for comparison. − vs team = tighter than our average.",
+                 class_="text-muted small"),
+            ui.hr(),
+        )
+
+    def _take_pending_view():
+        """The linked view, once the linked pitcher is the one showing."""
+        if _pending["view"] is None:
+            return None
+        cur = input.pp_player_select() if "pp_player_select" in input else None
+        if app_state.role_name() in STAFF_ROLES and cur != str(_pending["view_pid"]):
+            return _pending["view"]          # still switching pitchers -- keep it for the next render
+        v, _pending["view"] = _pending["view"], None
+        return v
+
+    def _current_player_id(db):
+        if app_state.role_name() == "Player":
+            me = _my_player(db, app_state)
+            return me.player_id if (me is not None and me.is_pitcher) else None
+        if "pp_player_select" not in input or not input.pp_player_select():
+            return None
+        return int(input.pp_player_select())
+
+    @render.ui
+    def pp_player_picker():
+        if not app_state.is_authenticated() or app_state.role_name() == "Player":
+            return None
+        if app_state.role_name() not in STAFF_ROLES:
+            return ui.p("You don't have access to this page.", class_="text-danger")
+        db = get_session()
+        try:
+            pitchers = _visible_pitchers(db)
+        finally:
+            db.close()
+        if not pitchers:
+            return ui_helpers.empty_state("No pitchers to show yet.")
+        choices = {str(p.player_id): f"{p.name_last_first}" + (f"  #{p.jersey_number}" if p.jersey_number else "") for p in pitchers}
+        _pending_tick()
+        sel = str(_pending["pid"]) if _pending["pid"] is not None and str(_pending["pid"]) in choices else None
+        _pending["pid"] = None
+        return ui.div(ui.input_select("pp_player_select", "Pitcher", choices=choices, selected=sel, width="320px"), style="margin-bottom:8px;")
+
+    @render.ui
+    def pp_filters():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        if role in STAFF_ROLES:
+            req("pp_player_select" in input)
+
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            arsenal = (
+                db.query(PitchType)
+                .join(PlayerPitchArsenal, PlayerPitchArsenal.pitch_type_id == PitchType.pitch_type_id)
+                .filter(PlayerPitchArsenal.player_id == pid, PlayerPitchArsenal.active.is_(True))
+                .order_by(PitchType.display_order)
+                .all()
+            )
+            type_choices = {"__all__": "All Pitches"}
+            for t in arsenal:
+                type_choices[t.type_name] = t.type_name
+
+            # Game selector (Sept 2026, Ryker: "for everything in
+            # pitcher profile be able to select a specific game as
+            # well as the entire season view") -- same own_player_id/
+            # opponent_our_player_id dual lookup pitcher_game_report.py's
+            # own game_picker uses (an intrasquad game records "the
+            # other squad's" pitcher under opponent_our_player_id, not
+            # our_player_id), scoped to this one pitcher. "Season" is
+            # the default and behaves exactly as before this feature --
+            # From/To/Games below still apply. Picking one game
+            # overrides From/To/Games entirely (see _current_filters).
+            own_game_ids = {
+                gid for (gid,) in db.query(GamePitch.game_id)
+                .filter(GamePitch.our_player_id == pid, GamePitch.is_our_team_batting.is_(False))
+                .distinct().all()
+            } | {
+                gid for (gid,) in db.query(GamePitch.game_id)
+                .filter(GamePitch.opponent_our_player_id == pid, GamePitch.is_our_team_batting.is_(True))
+                .distinct().all()
+            }
+            games = (
+                db.query(Game).filter(Game.game_id.in_(own_game_ids)).order_by(Game.game_date.desc()).all()
+                if own_game_ids else []
+            )
+            game_choices = {"__season__": "Season (All Games)"}
+            for g in games:
+                game_choices[str(g.game_id)] = _game_label(g)
+        finally:
+            db.close()
+
+        return ui.layout_columns(
+            ui.input_select("pp_game_select", "Game", choices=game_choices),
+            ui.input_date("pp_date_from", "From", value=date.today() - timedelta(days=365)),
+            ui.input_date("pp_date_to", "To", value=date.today()),
+            ui.input_select("pp_pitch_type", "Pitch Type", choices=type_choices),
+            ui.input_select("pp_game_scope", "Games", choices={"all": "All Games", "intrasquad": "Intrasquad Only", "external": "External Only"}),
+            col_widths=[2, 3, 3, 2, 2],
+        )
+
+    def _current_filters():
+        req("pp_date_from" in input)
+        req("pp_date_to" in input)
+        req("pp_pitch_type" in input)
+        req("pp_game_scope" in input)
+        pitch_type = input.pp_pitch_type()
+        game_id = None
+        if "pp_game_select" in input and input.pp_game_select() and input.pp_game_select() != "__season__":
+            game_id = int(input.pp_game_select())
+        return {
+            # A specific game overrides the date range entirely rather
+            # than narrowing within it -- picking a game and having
+            # From/To silently also exclude it (e.g. From/To left at
+            # last season while switching games) would be a confusing
+            # way to fail. game_scope is moot too once one exact game
+            # is picked, so it's left as-is and simply unused downstream
+            # (see analytics.profile_queries._apply_filters).
+            "date_from": None if game_id is not None else input.pp_date_from(),
+            "date_to": None if game_id is not None else input.pp_date_to(),
+            "pitch_type": None if pitch_type == "__all__" else pitch_type,
+            "game_scope": input.pp_game_scope(),
+            "game_id": game_id,
+        }
+
+    # -------------------------------------------------------------------
+    # Physical Profile -- pure chart builders called directly (Sept
+    # 2026 rebuild, see module docstring). _physical_target(db) is the
+    # one shared query pp_metrics_section and the three chart outputs
+    # below all call -- same "player_pitches" scope (this pitcher's
+    # WHOLE Rapsodo history, GAMES ONLY -- see module docstring's
+    # "games only, not bullpen sessions" note -- filtered by date
+    # range/pitch type/game scope) the old bullpen-dashboard fragment
+    # used, just without that fragment's kaleido/click-gate machinery.
+    # -------------------------------------------------------------------
+
+    def _physical_target(db):
+        pid = _current_player_id(db)
+        if pid is None:
+            return None, []
+        player = db.query(Player).filter(Player.player_id == pid).first()
+        if player is None:
+            return None, []
+        f = _current_filters()
+        rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
+            db, pid, date_from=f["date_from"], date_to=f["date_to"],
+            pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+            game_id=f["game_id"], game_linked_only=True,
+        )
+        return player, rapsodo_pitches
+
+    @render.ui
+    def pp_view_picker():
+        """The "View" dropdown driving which of the sections below
+        actually renders -- same convention pitcher_game_report.py's
+        report_section_picker already established (Sept 2026, Ryker:
+        "have the drop down menu to where we can select what to view
+        rather than all of it showing up and having to scroll down
+        forever"). Each gated section function below checks
+        input.pp_view() itself and returns None immediately when not
+        selected, before doing any query -- switching this dropdown is
+        what stops the DB work for the other views, not CSS visibility."""
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        if role in STAFF_ROLES:
+            req("pp_player_select" in input)
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            f = _current_filters()
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
+                game_id=f["game_id"], game_linked_only=True,
+            )
+            if not game_pitches and not rapsodo_pitches:
+                return None
+            # Oct 2026 reorganization (Ryker approved): grouped menu (optgroups);
+            # the view keys themselves are unchanged.
+            # Oct 2026 coach-usability pass (Ryker): a plain-language Coach
+            # Summary opens first; research-grade views sit under Advanced.
+            view_choices = {
+                "Start here": {"summary": "Coach Summary"},
+                "Summary": {"overview": "Overview (grades)", "trends": "Trends"},
+                "Stuff & Shape": {"release": "Release Point", "metrics": "Metrics (Physical Profile)", "arsenal": "Arsenal",
+                                  "arsenal_plan": "Arsenal Plan"},
+                "Command": {"command": "Command & Execution", "zone": "Zone"},
+                "Usage & Results": {"results": "Results", "get_ahead": "Get Ahead, Miss Bats",
+                                    "sequencing": "Sequencing", "count_leverage": "Count Leverage",
+                                    "usage_split": "Usage Split"},
+                "Advanced (deep dive)": {"seam_shift": "Seam Shift"},
+            }
+            # Oct 2026, Ryker: "i don't want guys to see it" -- the
+            # label checks are staff-only data-cleanup tools.
+            if app_state.role_name() in STAFF_ROLES:
+                view_choices["Staff tools"] = {"fastball_shape": "Fastball Shape Check",
+                                               "pitch_type_check": "Pitch Type Check"}
+            default_view = "summary"
+            if app_state.role_name() == "Player":
+                # Nov 2026, Ryker: players don't see the Coach Summary --
+                # it's written for staff. They open on Overview instead.
+                view_choices.pop("Start here", None)
+                default_view = PLAYER_DEFAULT_VIEW
+            pending = _take_pending_view()
+            if pending == "summary" and app_state.role_name() == "Player":
+                pending = None
+            return ui.div(
+                ui.hr(),
+                ui.input_select("pp_view", "View", choices=view_choices, selected=pending or default_view),
+            )
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Per-tab "Glossary" links (Sept 2026, Ryker: reference is
+    # mlbpitchprofiler.com's own per-page "Zone Glossary"/"Results
+    # Glossary" links) -- one input_action_link wired up in each view
+    # section above (ui_helpers.glossary_link), one reactive.effect
+    # here per link that pops the matching glossary_content.py list as
+    # a modal. Content lives in glossary_content.py, not inline here,
+    # so it can be reused if another page ever wants the same terms.
+    # -------------------------------------------------------------------
+
+    @reactive.effect
+    @reactive.event(input.pp_glossary_overview)
+    def _pp_show_overview_glossary():
+        # Oct 2026, Ryker: deeper dive -- how every grade is built and how
+        # much each ingredient counts (visualizations/grade_explainer.py),
+        # then the original term-by-term glossary underneath.
+        from visualizations.grade_explainer import render_html
+        ui.modal_show(ui.modal(
+            ui.HTML(render_html()),
+            ui.hr(),
+            ui.h5("Every term on this page", style="margin-bottom:10px;"),
+            *[ui.div(ui.p(t, style="font-weight:700;margin-bottom:2px;"), ui.p(d, class_="text-muted small"))
+              for t, d in glossary_content.OVERVIEW],
+            title="How your grades are built", easy_close=True, size="xl",
+            footer=ui.modal_button("Got it"),
+        ))
+
+    @reactive.effect
+    @reactive.event(input.pp_glossary_command)
+    def _pp_show_command_glossary():
+        ui.modal_show(ui_helpers.glossary_modal("Command Glossary", glossary_content.COMMAND))
+
+    @reactive.effect
+    @reactive.event(input.pp_glossary_metrics)
+    def _pp_show_metrics_glossary():
+        ui.modal_show(ui_helpers.glossary_modal("Metrics Glossary", glossary_content.METRICS))
+
+    @reactive.effect
+    @reactive.event(input.pp_glossary_results)
+    def _pp_show_results_glossary():
+        ui.modal_show(ui_helpers.glossary_modal("Results Glossary", glossary_content.RESULTS))
+
+    @reactive.effect
+    @reactive.event(input.pp_glossary_zone)
+    def _pp_show_zone_glossary():
+        ui.modal_show(ui_helpers.glossary_modal("Zone Glossary", glossary_content.ZONE))
+
+    @reactive.effect
+    @reactive.event(input.pp_glossary_arsenal)
+    def _pp_show_arsenal_glossary():
+        ui.modal_show(ui_helpers.glossary_modal("Arsenal Glossary", glossary_content.ARSENAL))
+
+    @render.ui
+    def pp_outperform():
+        """Release outliers + beats his stuff (Oct 2026, analytics/outperform.py)."""
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "overview":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            try:
+                summ = outperform.staff_summary(db, f["date_from"], f["date_to"], f["game_scope"])
+            except Exception:
+                return None
+        finally:
+            db.close()
+        mine = summ["by_pid"].get(pid)
+        if not mine:
+            return None
+        rel, beats = mine["release"], mine["beats"]
+        items = []
+        rel_lines = []
+        for key in ("height", "side", "ext"):
+            d = rel.get(key)
+            if not d:
+                continue
+            rel_lines.append(ui.tags.li(
+                f"{d['name'].capitalize()}: {d['value']:.2f} {d['unit']} -- {ordinal(d['pct'])} percentile of our staff",
+                ui.strong(f" ({d['tag']})") if d["tag"] else ""))
+        if rel_lines:
+            tags = [rel[k]["tag"] for k in ("height", "side", "ext") if rel.get(k) and rel[k]["tag"]]
+            items.append(ui.div(
+                ui.strong("Release vs. our staff: "),
+                ("Stands out from our staff: " + ", ".join(tags) + ". An unusual look can help average stuff play up "
+                 "-- hitters see fewer arms like it.") if tags else "A typical release for our staff.",
+                ui.tags.ul(*rel_lines, style="margin:4px 0 8px; padding-left:18px;"), class_="small"))
+        if beats:
+            v = beats["value"]
+            txt = (f"{v:+.1f} runs per 100 pitches vs. what his Stuff+ predicts -- {outperform.describe_beats(v)}. "
+                   f"Actual RV/100 {beats['actual']:+.2f} vs. expected {beats['expected']:+.2f} "
+                   "(negative RV = good for the pitcher).")
+            if not beats["reliable"]:
+                txt += f" Only {beats['n']} game pitches -- needs {outperform.MIN_PITCHES} before it means much."
+            items.append(ui.div(ui.strong("Results vs. stuff: "), txt, class_="small"))
+        if not items:
+            return None
+        return ui_helpers.card(
+            ui_helpers.how_to_link("outperform"),
+            *items,
+            ui.p("From Paradigm's \"Outperform Your Stuff\": arms without big stuff win with an unusual release, "
+                 "command and mix. Release = his median release point vs. the rest of our staff (percentile; tagged "
+                 "when he's in roughly the top or bottom 10%). Results vs. stuff = how far his run value per 100 "
+                 "pitches beats a line fit across our staff from Stuff+. Uses this page's date range.",
+                 class_="text-muted small", style="margin:6px 0 0;"),
+            title="Release & results vs. stuff",
+        )
+
+    @render.ui
+    def pp_release_comps():
+        """Closest PSU teammates (Nov 2026, Ryker: Past The Eye Test-style
+        pitcher similarity, PSU vs PSU only). analytics/release_comps.py,
+        game pitches only, this page's date range. Players see their own
+        comps; staff also get a jump to Arsenal Comparison."""
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "overview":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            from analytics import release_comps
+            try:
+                summ = release_comps.staff_pool(db, f["date_from"], f["date_to"], f["game_scope"])
+            except Exception:
+                return None
+        finally:
+            db.close()
+        comps = release_comps.closest_teammates(summ, pid, n=3)
+        if not comps:
+            return None
+        items = []
+        for p, overall, cats in comps:
+            best = sorted(cats.items(), key=lambda kv: -kv[1])[:2]
+            why = ", ".join(f"{k.lower()} {v:.0f}%" for k, v in best)
+            items.append(ui.tags.li(ui.strong(f"{p.first_name} {p.last_name}"), f" -- {overall:.0f}% similar",
+                                    ui.span(f" (closest on {why})", class_="text-muted") if why else ""))
+        children = [ui.tags.ul(*items, style="margin:4px 0 8px; padding-left:18px;", class_="small")]
+        if role != "Player":
+            children.append(ui.div(
+                ui.input_select("pp_comp_pick", None,
+                                choices={str(p.player_id): f"{p.first_name} {p.last_name}" for p, *_ in comps},
+                                width="220px"),
+                ui.input_action_button("pp_comp_open", "Compare side by side", class_="btn-sm"),
+                style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;",
+            ))
+        children.append(ui.p("Our pitchers only, game pitches in this date range. Compares release, arsenal, whiffs, "
+                             "command and contact; 100% = identical, categories with no data yet are skipped.",
+                             class_="text-muted small", style="margin:6px 0 0;"))
+        return ui_helpers.card(*children, title="Closest teammates")
+
+    @render.ui
+    def pp_release_view():
+        """Release Point view (Nov 2026, Ryker: player-facing release card +
+        "Pitchers Like You"). Players open it from My Pitcher Deep
+        Dive > View > Release Point -- not shown on the Dashboard (Ryker:
+        "it needs to be something they can click to view"). Release window / trend use games + bullpens (more
+        readings per pitch type); comps use the staff comp pool (game pitches
+        only, release_comps.MIN_COMP_GAME_PITCHES+). Data:
+        analytics/release_view.py, rendering: release_view_display.py."""
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "release":
+            return None
+        f = _current_filters()
+        from analytics import release_view, release_comps
+        import release_view_display as rvd
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            player = db.query(Player).filter(Player.player_id == pid).first()
+            if player is None:
+                return None
+            if f["game_id"] is not None:
+                raps = profile_queries.get_pitcher_rapsodo_pitches(db, pid, game_id=f["game_id"]) or []
+            else:
+                raps = release_view.player_pitches(db, pid, f["date_from"], f["date_to"])
+            fb_pitches, fb_label = release_graphics.card_pitches(raps)
+            profile = release_graphics.profile_from_rapsodo(
+                player, raps, subtitle=f"{fb_label} avg -- {len(fb_pitches)} pitches (games + bullpens)")
+            types = release_view.by_type(raps, player)
+            outs = release_view.outings(raps, player)
+            try:
+                summ = release_comps.staff_pool(db, f["date_from"], f["date_to"], f["game_scope"])
+            except Exception:
+                summ = None
+            comps = release_view.slot_comps(summ, pid) if summ else []
+            best = {}
+            for pl, _sim, _prof in comps:
+                try:
+                    best[pl.player_id] = release_view.best_pitch(db, pl.player_id, f["date_from"], f["date_to"], f["game_scope"])
+                except Exception:
+                    best[pl.player_id] = None
+            points = release_view.staff_points(summ) if summ else []
+        finally:
+            db.close()
+
+        throws = player.throws or "R"
+        if profile is None:
+            return ui_helpers.card(
+                ui.p(f"Needs {release_graphics.MIN_CARD_READINGS}+ Rapsodo fastball readings with a release point "
+                     "in this date range.", class_="text-muted small"), title="Release Point")
+        lines = release_view.takeaways(types, outs)
+        children = [
+            ui_helpers.card(
+                ui.HTML(rvd.dashboard_card_html(profile)),
+                ui.p("Games and bullpens in this date range. The Pitch Type filter doesn't apply here -- every pitch "
+                     "type is shown below.", class_="text-muted small", style="margin:0;"),
+                title="Where it comes out", right=f"{fb_label} · catcher's view"),
+            ui_helpers.card(ui.HTML(rvd.window_html(types, throws)), title="Release window by pitch"),
+            ui_helpers.card(ui.HTML(rvd.trend_html(outs)), title="Arm angle by outing"),
+            ui_helpers.card(ui.HTML(rvd.takeaways_html(lines)), title="What this means"),
+        ]
+        me_angle = next((p[3] for p in points if p[0] == pid), None)
+        slot = release_view.slot_word(me_angle, [p[3] for p in points])
+        if comps:
+            children.append(ui_helpers.card(
+                ui.p("Teammates who release the ball from about where you do, and what works for them.",
+                     class_="text-muted small"),
+                ui.HTML(rvd.staff_fit_html(pid, points, comps, throws, slot, me_angle)),
+                ui.h6("Similar arm slots", style="margin-top:14px;"),
+                ui.HTML(rvd.comps_html(comps, best)),
+                ui.p("Use these for pitch ideas to talk through with your pitching coach -- your arm slot is yours, "
+                     "not something to copy.", style="margin:6px 0 4px;"),
+                ui.p(f"Game pitches in this date range. Teammates need {release_comps.MIN_COMP_GAME_PITCHES}+ charted "
+                     "game pitches to appear. No rankings here.", class_="text-muted small", style="margin:0;"),
+                title="Pitchers like you"))
+        else:
+            children.append(ui_helpers.card(
+                ui.p(f"Shows up once you and at least 3 teammates have {release_comps.MIN_COMP_GAME_PITCHES}+ charted "
+                     "game pitches with Rapsodo release data in this date range.", class_="text-muted small"),
+                title="Pitchers like you"))
+        return ui.div(*children)
+
+    @reactive.effect
+    @reactive.event(input.pp_comp_open)
+    def _pp_open_comparison():
+        import deep_link
+        if app_state.role_name() == "Player" or "pp_comp_pick" not in input or not input.pp_comp_pick():
+            return
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+        finally:
+            db.close()
+        if pid is None:
+            return
+        deep_link.go(app_state, session, "Arsenal Comparison", pid=pid, pid_b=int(input.pp_comp_pick()))
+
+    @render.ui
+    def pp_overview_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "overview":
+            return None
+        f = _current_filters()
+
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            player = db.query(Player).filter(Player.player_id == pid).first()
+            if player is None:
+                return None
+
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
+                game_id=f["game_id"], game_linked_only=True,
+            )
+            if not game_pitches and not rapsodo_pitches:
+                return ui_helpers.card(ui_helpers.empty_state(
+                    "No pitches in this date range yet. Widen the filters, or check back once games/bullpens are tracked."
+                ))
+
+            sections = [ui.div(
+                ui.h5(f"{player.first_name} {player.last_name}", class_="gbo-section-title", style="margin-bottom:0;"),
+                ui_helpers.glossary_link("pp_glossary_overview", "How your grades are built + Glossary"),
+                style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+            )]
+
+            if game_pitches:
+                # Runner-event outs / forced-end runs belong to the whole
+                # outing, not any one pitch type -- only fold them in for
+                # the unfiltered line (see get_pitching_extras_for_pitches).
+                if f["pitch_type"]:
+                    line = compute_pitching_line(game_pitches)
+                else:
+                    line = pitching_line_for(db, pid, game_pitches)
+                sections.append(ui.p(ui.strong("Line")))
+                sections.append(ui_helpers.render_kpi_cards([
+                    {"label": "IP", "value": str(line["IP"])},
+                    {"label": "Pitches", "value": str(line["Pitches"])},
+                    {"label": "K", "value": str(line["K"])},
+                    {"label": "BB", "value": str(line["BB"])},
+                    {"label": "WHIP", "value": _fmt(line["WHIP"])},
+                    {"label": "FIP", "value": _fmt(line["FIP"])},
+                    {"label": "Strike %", "value": _fmt_pct(line["Strike %"])},
+                    {"label": "Hit-the-spot %", "value": _fmt_pct(line["Zone Execution %"])},
+                ]))
+                if "SB Allowed" in line:   # whole-outing stat; not shown when filtered to one pitch type
+                    sections.append(ui.p(f"SB allowed: {line['SB Allowed']} · CS: {line['CS Allowed']}", class_="text-muted small"))
+                # Oct 2026 coach pass: the rarely-used rate stats sit behind a
+                # click, each with a one-line meaning.
+                sections.append(ui.tags.details(
+                    ui.tags.summary("More stats"),
+                    ui_helpers.render_kpi_cards([
+                        {"label": "TBIP", "value": _fmt(line["TBIP"]), "delta": "bases allowed per inning"},
+                        {"label": "SIERA", "value": _fmt(line.get("SIERA")), "delta": "ERA his K / BB / grounders predict"},
+                        {"label": "OBA", "value": _fmt(line["OBA (opponent AVG)"], 3), "delta": "hitters' average off him"},
+                        {"label": "wOBA", "value": _fmt(line["wOBA"], 3), "delta": "overall damage per hitter (.320 ~ avg)"},
+                    ]),
+                    class_="gbo-seq-details",
+                ))
+
+                ip_dec = line.get("IP (decimal)") or 0
+                plus = ui_helpers.plus_stat_cards(league_baselines.pitching_plus(line), league_baselines.PITCHING_PLUS_ORDER,
+                                                  league_baselines.pitching_actuals(line))
+                sections.append(ui.p(ui.strong("Compared with D2 (100 = D2 average, higher is better)")))
+                if ip_dec < PLUS_MIN_IP:
+                    sections.append(ui.p(f"Only {line['IP']} innings -- these swing wildly until about {PLUS_MIN_IP} "
+                                         "innings, so they're hidden. Open to see them anyway.", class_="text-muted small"))
+                    sections.append(ui.tags.details(ui.tags.summary("Show anyway"), plus, class_="gbo-seq-details"))
+                else:
+                    sections.append(plus)
+
+            sections.append(ui.hr())
+            sections.append(ui.p(ui.strong("Overview")))
+            sections.append(ui.p(
+                "Grades: 100 = our staff's average. Around 110 is clearly better than most of the staff, 90 clearly "
+                "worse. Each pitch is only compared with the same pitch on our staff (his fastball vs our fastballs). "
+                "Stuff = how nasty the pitch is (velo, movement, spin), Location = where it ends up, Pitching = both.",
+                class_="text-muted small",
+            ))
+
+            bundle = profile_queries.compute_grading_bundle(db, game_pitches, rapsodo_pitches)
+            stuff_plus_value = bundle["stuff_plus_value"]
+            location_plus_value = bundle["location_plus_value"]
+            pitching_plus_value = bundle["pitching_plus_value"]
+            arsenal_rows = bundle["arsenal_rows"]
+
+            grade_bars = ui_helpers.render_percentile_bars([
+                ("Stuff+ (Overall)", stuff_plus_value),
+                ("Location+ (Overall)", location_plus_value),
+                ("Pitching+ (Overall)", pitching_plus_value),
+            ])
+            if grade_bars is not None:
+                sections.append(grade_bars)
+            else:
+                sections.append(ui.p("No graded pitches yet in this range -- needs Rapsodo-linked pitches (Stuff+) or located game pitches (Location+).", class_="text-muted small"))
+
+            # Per-pitch-type grades (Sept 2026, Ryker: "for pitcher
+            # profile overview i want stuff+, location+, pitching+ for
+            # each pitch as well as overall pitches not just for all
+            # pitches... a 4sfb would have a stuff+ score and a
+            # percentile that is specific to that pitch type") --
+            # arsenal_rows (from compute_grading_bundle -> arsenal_
+            # summary) already grades every pitch type against ITS OWN
+            # team-wide population (stuff_baselines/location_baseline
+            # are both keyed by pitch type label -- see
+            # profile_queries.compute_grading_bundle), so this is
+            # display-only: the same per-type numbers the Overall bars
+            # above are themselves averaged FROM, just shown
+            # individually instead of blended. Reuses the exact same
+            # mlbpitchprofiler.com-style percentile-bar component as
+            # Overall, one group per pitch type, sorted by usage
+            # (arsenal_summary's own sort order).
+            if arsenal_rows:
+                sections.append(ui.p(ui.strong("By Pitch Type"), class_="mt-3"))
+                for row in arsenal_rows:
+                    reliability_note = "" if row["Reliable"] else " -- small sample, grade may swing"
+                    sections.append(ui.p(
+                        ui.strong(row["Pitch Type"]),
+                        f" — {row['Usage %']}% usage, {row['Pitches']} pitches{reliability_note}",
+                        class_="mt-2 mb-1",
+                    ))
+                    type_bars = ui_helpers.render_percentile_bars([
+                        ("Stuff+", row["Stuff+"]),
+                        ("Location+", row["Location+"]),
+                        ("Pitching+", row["Pitching+"]),
+                    ])
+                    sections.append(
+                        type_bars if type_bars is not None
+                        else ui.p("No graded pitches of this type yet.", class_="text-muted small")
+                    )
+
+            if game_pitches:
+                baselines = _team_command_plus_baselines(db)
+                cmd_view_pitches = command_metrics.game_pitches_command_view(game_pitches, player.throws)
+                cmd_scorecard = command_metrics.session_command_scorecard(cmd_view_pitches)
+                command_plus_value = None
+                if baselines["pooled"][2] >= command_metrics.MIN_BASELINE_PITCHES:
+                    command_plus_value = command_metrics.session_command_plus(cmd_view_pitches, baselines)
+
+                arsenal_pitching_value = performance_score.usage_weighted_average(arsenal_rows, "Pitching+")
+
+                pitcher_results_line = dict(line, **{"CSW %": performance_score.csw_pct(game_pitches)})
+                team_pitching_lines = profile_queries.team_pitching_lines(db, date_from=f["date_from"], date_to=f["date_to"])
+                results_score = None
+                if len(team_pitching_lines) >= performance_score.MIN_BASELINE_PLAYERS:
+                    results_baseline = performance_score.team_pitcher_results_baseline(team_pitching_lines)
+                    results_score = performance_score.pitcher_results_score(pitcher_results_line, results_baseline)
+
+                performance_value = performance_score.combine_pitcher_performance(
+                    stuff_plus_value, location_plus_value, command_plus_value, arsenal_pitching_value, results_score,
+                )
+
+                sections.append(ui.hr())
+                # Nov 2026 (Ryker: remove the overall grades): the five
+                # grades stay, the blended Performance number is no longer shown.
+                sections.append(ui.p(ui.strong("Grades")))
+                sections.append(ui.p(
+                    "His stuff, location, command, pitch mix and game results, each vs the staff. "
+                    "100 = staff average.",
+                    class_="text-muted small",
+                ))
+                performance_bars = ui_helpers.render_percentile_bars([
+                    ("Stuff+", stuff_plus_value),
+                    ("Location+", location_plus_value),
+                    ("Command+", command_plus_value),
+                    ("Arsenal", arsenal_pitching_value),
+                    ("Results", results_score),
+                ])
+                if performance_bars is not None:
+                    sections.append(performance_bars)
+                else:
+                    sections.append(ui.p("Not enough graded pitches or team baseline yet for these grades.", class_="text-muted small"))
+
+            total_pitches = sum(bundle["usage_counts"].values())
+            if total_pitches:
+                sections.append(ui.p(ui.strong("Pitch Usage"), class_="mt-3"))
+                sections.append(_stacked_bar([
+                    (label, round(100 * n / total_pitches, 1), get_pitch_color(label))
+                    for label, n in sorted(bundle["usage_counts"].items(), key=lambda kv: -kv[1])
+                ]))
+
+            if len(bundle["trend_points"]) >= 2:
+                sections.append(ui.p(ui.strong("Pitching+ Trend"), class_="mt-3"))
+                sections.append(ui.p(
+                    "One point per outing (that appearance's average Pitching+), with an error bar showing the "
+                    "spread from its lowest- to highest-graded pitch.",
+                    class_="text-muted small",
+                ))
+                sections.append(output_widget("pp_trend_chart"))
+
+            return ui.div(*sections)
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # VAAA / HAAAA (Oct 2026, Ryker sent Paradigm's HAAAA thread: "build
+    # both"). Approach angles minus what the pitch's context predicts --
+    # see analytics/approach_angles.py for the model and sign conventions.
+    # -------------------------------------------------------------------
+    def _fmt_deg(v, signed=True):
+        if v is None:
+            return "—"
+        return f"{v:+.1f}°" if signed else f"{v:.1f}°"
+
+    def _approach_children(db, player, rapsodo_pitches):
+        try:
+            model = approach_angles.get_model(db)
+            scored = approach_angles.score_pitches(rapsodo_pitches, player.throws, model)
+        except Exception:
+            return []
+        rows = approach_angles.summary_by_type(scored, player.throws, FASTBALL_TYPES)
+        if not rows or all(r["n_vaaa"] == 0 and r["n_haaaa"] == 0 for r in rows):
+            return [ui.hr(), ui.p(ui.strong("Approach Angles Above Expected (VAAA / HAAAA)")),
+                    ui.p("Not enough Rapsodo readings with plate location yet to build the expected-angle model.",
+                         class_="text-muted small")]
+        table = [{
+            "Pitch Type": r["label"] + (" *" if r["rough"] else ""), "#": r["n"],
+            "VAA": _fmt_deg(r["vaa"], signed=False), "VAAA": _fmt_deg(r["vaaa"]), "Vertical read": r["vaaa_text"],
+            "HAA": _fmt_deg(r["haa"]), "HAAAA": _fmt_deg(r["haaaa"]), "Horizontal read": r["haaaa_text"],
+        } for r in rows]
+        # Fit quality of the per-pitch-type lines actually used here
+        # (the pooled fallback line is always weaker -- it ignores type).
+        labels = {r["label"] for r in rows}
+        v_r2 = [model["vaa"][l]["r2"] for l in labels if l in model["vaa"]]
+        h_r2 = [model["haa"][l]["r2"] for l in labels if l in model["haa"]]
+        fit_note = []
+        if v_r2:
+            fit_note.append(f"VAA lines R² {min(v_r2):.2f}–{max(v_r2):.2f}" if len(v_r2) > 1 else f"VAA line R² {v_r2[0]:.2f}")
+        if h_r2:
+            fit_note.append(f"HAA lines R² {min(h_r2):.2f}–{max(h_r2):.2f}" if len(h_r2) > 1 else f"HAA line R² {h_r2[0]:.2f}")
+        return [
+            ui.hr(),
+            ui.p(ui.strong("Approach Angles Above Expected (VAAA / HAAAA)")),
+            ui.p(
+                "Raw approach angles mostly reflect where a pitch crossed the plate and where it was released. These "
+                "subtract what that context predicts, leaving what's unusual about the pitch itself. "
+                "VAAA: + = flatter than expected for its height (fastballs up), − = steeper (breaking balls). "
+                "HAAAA (Paradigm's convention): + = sharper toward a right-handed hitter than expected, − = toward a "
+                "lefty. Expected angles come from lines fit on all of our Rapsodo readings"
+                + (f" ({', '.join(fit_note)})" if fit_note else "") + ". * = rougher estimate (too few team readings of "
+                "that pitch type yet, so a pooled line was used). Built on estimated VAA/HAA.",
+                class_="text-muted small",
+            ),
+            ui_helpers.render_dict_table(table),
+            ui_helpers.card(
+                *[ui.div(
+                    ui.strong(r["label"]),
+                    ui.tags.ul(*[ui.tags.li(t) for t in approach_angles.usage_tips(r, player.throws)],
+                               style="margin:2px 0 8px; padding-left:18px;"),
+                ) for r in rows],
+                ui.p("Starting points, not proven on our own games yet: side-to-side lines follow Paradigm's 2026 D1 "
+                     "swing/whiff findings, up-and-down lines follow the standard VAA patterns.",
+                     class_="text-muted small", style="margin:0;"),
+                title="How to use it",
+            ),
+            *_angle_extras(db, player, rapsodo_pitches, model),
+            ui.input_switch("pp_aa_show_chart", "Show advanced chart (every pitch's VAAA vs. HAAAA)", value=False),
+            output_widget("pp_approach_chart"),
+        ]
+
+    def _angle_extras(db, player, rapsodo_pitches, model):
+        """Oct 2026 (Paradigm, "The Angle Advantage"): staff top/bottom-10%
+        angle flags with a one-line cue, and rubber-position moves."""
+        out = []
+        try:
+            data = approach_angles.staff_profiles(db)
+            mine = approach_angles.staff_extremes(data).get(player.player_id, [])
+        except Exception:
+            mine = []
+        if mine:
+            out.append(ui_helpers.card(
+                *[ui.p(e["text"], class_="small mb-1") for e in sorted(mine, key=lambda e: e["label"])],
+                ui.p(f"Top / bottom {int(approach_angles.EXTREME_PCT * 100)}% of our staff for that pitch type "
+                     f"({approach_angles.EXTREME_MIN_PITCHERS}+ pitchers with {approach_angles.TIP_MIN_N}+ readings). "
+                     "HAAAA here is re-signed so + = toward his arm side for either hand.", class_="text-muted small"),
+                title="Angle standouts on our staff"))
+        try:
+            from game_stats import get_pitching_pitches
+            moves = approach_angles.rubber_moves(rapsodo_pitches, player.throws, model,
+                                                 get_pitching_pitches(db, player.player_id))
+        except Exception:
+            moves = []
+        rows = []
+        for m in moves:
+            for t in m["by_type"] or [{}]:
+                gb, ga = t.get("game_before"), t.get("game_after")
+                pct = lambda v: "—" if v is None else f"{v:.0f}%"
+                rows.append({
+                    "Date": m["date"].strftime("%b %-d"), "Moved": f"{abs(m['to_in'] - m['from_in']):.1f}\" toward {m['toward']}",
+                    "Pitch": t.get("label", "—"),
+                    "HAAAA (arm side +)": (f"{t['haaaa_before']:+.1f}° → {t['haaaa_after']:+.1f}°" if t else "—"),
+                    "Game whiff % (of swings)": (f"{pct(gb[0])} → {pct(ga[0])}" if gb and ga else "—"),
+                    "Game chase %": (f"{pct(gb[1])} → {pct(ga[1])}" if gb and ga else "—"),
+                })
+        out.append(ui_helpers.card(
+            ui_helpers.render_dict_table(rows) if rows else ui.p(
+                f"No rubber move found -- his median release side hasn't shifted "
+                f"{approach_angles.RUBBER_SHIFT_IN:.0f}\"+ between Rapsodo outings.", class_="text-muted small"),
+            ui.p(f"A shift of {approach_angles.RUBBER_SHIFT_IN:.0f}\"+ in median release side between outings "
+                 "(usually a move on the rubber). Before = the "
+                 f"{approach_angles.RUBBER_SIDE_OUTINGS} outings before it, after = the move on. Changing rubber "
+                 "position changes the horizontal angle without touching grip or arm action -- worth trying before "
+                 "rebuilding a pitch (Paradigm). Game rates need 5+ swings / chase chances on each side.",
+                 class_="text-muted small"),
+            title="Rubber position moves"))
+        return out
+
+    # -------------------------------------------------------------------
+    # IVB over expected (Oct 2026, from Ryker's article batch: Paradigm's
+    # VAA piece, O'Brien's FB deception index, SABRLions' sliders). Ride
+    # minus what his arm slot predicts -- analytics/ivb_expected.py.
+    # -------------------------------------------------------------------
+    def _ivb_over_children(db, player, rapsodo_pitches):
+        try:
+            model = ivb_expected.get_model(db)
+            scored = ivb_expected.score_pitches(rapsodo_pitches, player, model)
+        except Exception:
+            return []
+        rows = ivb_expected.summary_by_type(scored, FASTBALL_TYPES)
+        title = ui.p(ui.strong("IVB Over Expected (ride vs. his arm slot)"), "  ", ui_helpers.how_to_link("ivb_expected"))
+        if not rows:
+            reason = ("Set his height on the Players page -- the arm angle needs it."
+                      if player.height_in is None else "Not enough Rapsodo readings yet.")
+            return [ui.hr(), title, ui.p(reason, class_="text-muted small")]
+        fb = model.get("4-Seam Fastball")
+        slope = (f" On our staff a 4-seam gains about {fb['slope']:.2f}\" of ride per degree of arm slot."
+                 if fb and fb["slope"] > 0 else "")
+        table = [{
+            "Pitch Type": r["label"] + (" *" if r["rough"] else ""), "#": r["n"],
+            "Arm angle": f"{r['arm']:.0f}°", "IVB": f"{r['ivb']:.1f}\"", "Expected IVB": f"{r['exp']:.1f}\"",
+            "Over expected": f"{r['over']:+.1f}\"", "Read": r["read"],
+        } for r in rows]
+        return [
+            ui.hr(), title,
+            ui.p("Ride (IVB) mostly follows arm slot: higher slots get more ride, lower slots more run. This "
+                 "takes out what his slot predicts, so what's left is what's unusual about the pitch -- the part "
+                 "hitters don't expect from that arm. Fastballs: + = carries more than his slot (plays up in the "
+                 "zone), − = sinks/runs more. Breaking balls: + = more carry, − = more depth." + slope +
+                 " Expected values come from lines fit on all of our Rapsodo readings, so this is vs. our staff, "
+                 "not a league. * = rough (too few team readings of that type, pooled line used). "
+                 f"Within ±{ivb_expected.TYPICAL_IN:.1f}\" reads as typical.",
+                 class_="text-muted small"),
+            ui_helpers.render_dict_table(table),
+        ]
+
+    @render_plotly
+    def pp_approach_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "metrics":
+            return None
+        if "pp_aa_show_chart" not in input or not input.pp_aa_show_chart():
+            return None
+        db = get_session()
+        try:
+            player, rapsodo_pitches = _physical_target(db)
+            if player is None or not rapsodo_pitches:
+                return None
+            model = approach_angles.get_model(db)
+            scored = [r for r in approach_angles.score_pitches(rapsodo_pitches, player.throws, model)
+                      if r["vaaa"] is not None and r["haaaa"] is not None]
+            if not scored:
+                return None
+            fig = go.Figure()
+            by_type = {}
+            for r in scored:
+                by_type.setdefault(r["label"], []).append(r)
+            for label, rs in sorted(by_type.items(), key=lambda kv: -len(kv[1])):
+                fig.add_trace(go.Scatter(
+                    x=[r["haaaa"] for r in rs], y=[r["vaaa"] for r in rs], mode="markers", name=label,
+                    marker=dict(color=get_pitch_color(label), size=8, opacity=0.75, line=dict(width=0.5, color="#1E1E1E")),
+                    hovertemplate=f"{label}<br>HAAAA %{{x:+.1f}}°<br>VAAA %{{y:+.1f}}°<extra></extra>",
+                ))
+                mx = sum(r["haaaa"] for r in rs) / len(rs)
+                my = sum(r["vaaa"] for r in rs) / len(rs)
+                fig.add_trace(go.Scatter(
+                    x=[mx], y=[my], mode="markers", showlegend=False,
+                    marker=dict(color=get_pitch_color(label), size=16, symbol="diamond", line=dict(width=2, color="#FFFDE5")),
+                    hovertemplate=f"{label} average<br>HAAAA {mx:+.1f}°<br>VAAA {my:+.1f}°<extra></extra>",
+                ))
+            fig.add_hline(y=0, line=dict(color="#6b7280", width=1))
+            fig.add_vline(x=0, line=dict(color="#6b7280", width=1))
+            return apply_gbo_theme(
+                fig, title="Approach angles vs. expected (diamond = pitch average)", height=430,
+                x_title="HAAAA (°)  ← toward LHH · toward RHH →", y_title="VAAA (°)  ↓ steeper · flatter ↑",
+            )
+        finally:
+            db.close()
+
+    @render.ui
+    def pp_metrics_section():
+        """Sept 2026 rebuild -- see module docstring. Header + per-
+        pitch-type physical table render immediately (a plain DB query,
+        same cost as any other tab's table); the three charts below are
+        output_widget placeholders filled in by the @render_plotly
+        functions right after this one, same split pp_zone_section uses
+        for its own pp_location_heatmap widget."""
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "metrics":
+            return None
+        db = get_session()
+        try:
+            header = ui.div(
+                ui.p(ui.strong("Physical Profile"), style="margin-bottom:0;"),
+                ui_helpers.glossary_link("pp_glossary_metrics", "Metrics Glossary"),
+                style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+            )
+            player, rapsodo_pitches = _physical_target(db)
+            if player is None or not rapsodo_pitches:
+                return ui.div(
+                    header,
+                    ui.p("No Rapsodo-linked GAME pitches in this range yet.", class_="text-muted small"),
+                )
+
+            # pitch_type_summary already covers Velo/Max Velo/Spin/IVB/
+            # HB/Release Height/Release Side/Est. Arm Angle (passing
+            # player=player); Spin Efficiency and Gyro Degree are added
+            # locally below rather than widening that shared function
+            # (see _avg_or_none's docstring).
+            summary_rows = pitch_type_summary(rapsodo_pitches, player=player)
+            team_bu = bauer_units.team_by_type(db)
+            groups_by_label = {}
+            for p in rapsodo_pitches:
+                groups_by_label.setdefault(pitch_type_label(p), []).append(p)
+            table_rows = []
+            for row in summary_rows:
+                group = groups_by_label.get(row["Pitch Type"], [])
+                table_rows.append({
+                    "Pitch Type": row["Pitch Type"], "#": row["#"],
+                    "Velo": row["Avg Velo"], "Max Velo": row["Max Velo"],
+                    "Spin Rate": row["Avg Spin"],
+                    "Bauer Units": row.get("Bauer Units"),
+                    "BU vs team": bauer_units.vs_team(row.get("Bauer Units"), team_bu.get(row["Pitch Type"])),
+                    "Spin Eff %": _avg_or_none([p.spin_efficiency for p in group]),
+                    "Gyro °": _avg_or_none([p.gyro_degree for p in group]),
+                    "IVB": row["IVB"], "HB": row["HB"],
+                    "Release Ht": row["Release Height"], "Release Side": row["Release Side"],
+                    "Arm Angle": row.get("Est. Arm Angle", "N/A"),
+                    "Est. VAA": row.get("Est. VAA", "N/A"),
+                })
+
+            # Fastball Trajectory / HAVAA (Sept 2026, Ryker: "add height
+            # adjusted vertical approach angle (HAVAA) to pitcher
+            # profile") -- same fastball_trajectory_diagnostic() card
+            # Bullpen Dashboard already shows (analytics/bullpen_metrics.py,
+            # ported here rather than reinventing it), one per fastball-
+            # family pitch type this pitcher actually threw in this
+            # window. Rendered with this page's own KPI-card look
+            # (ui_helpers.render_kpi_cards) instead of Bullpen Dashboard's
+            # dark-themed _card() styling, for visual consistency with the
+            # rest of Pitcher Profile.
+            havaa_baseline = _team_havaa_baseline(db)
+            trajectory_children = []
+            present_fastball_types = [t for t in FASTBALL_TYPES if t in groups_by_label]
+            for canonical_type in present_fastball_types:
+                diag = fastball_trajectory_diagnostic(
+                    rapsodo_pitches, player, canonical_pitch_type=canonical_type, havaa_baseline=havaa_baseline,
+                )
+                if diag is None:
+                    continue
+                trajectory_children.append(ui.p(
+                    ui.strong(f"Fastball Trajectory — {canonical_type}"), f" (n={diag['n']})",
+                    class_="mt-3 mb-1",
+                ))
+                trajectory_children.append(ui_helpers.render_kpi_cards([
+                    {"label": "Velocity", "value": f"{diag['Velocity']:.1f} mph" if diag["Velocity"] is not None else "—"},
+                    {"label": "VB", "value": f'{diag["VB"]:.1f}"' if diag["VB"] is not None else "—"},
+                    {"label": "VAA", "value": diag["VAA"]},
+                    {"label": "HAVAA", "value": diag["HAVAA"]},
+                    {"label": "Release Height", "value": f'{diag["Release Height"]:.2f} ft' if diag["Release Height"] is not None else "—"},
+                    {"label": "Extension", "value": f'{diag["Extension"]:.2f} ft' if diag["Extension"] is not None else "—"},
+                    {"label": "Arm Angle", "value": diag["Arm Angle"]},
+                    {"label": "Trajectory", "value": diag["Trajectory"]},
+                ]))
+            if trajectory_children:
+                trajectory_children.append(ui.p(
+                    "Approach angle = how flat or steep the pitch comes into the zone. HAVAA adjusts that for where "
+                    "the pitch crosses (pitches up in the zone are naturally flatter): + = flatter than our staff's "
+                    "same pitch at that height (good for a riding fastball up), - = steeper (good for sinkers and "
+                    "breaking balls down). Arm angle and approach angle are estimates from Rapsodo release and "
+                    "plate data.",
+                    class_="text-muted small",
+                ))
+
+            # Release-point pitcher graphic (Sept 2026, Ryker: "want to
+            # be able to see the graphic of pitcher outline with the
+            # estimated arm angle") -- same visualizations.pitcher_
+            # graphic.pitcher_release_svg already live on Pitcher Game
+            # Report and Bullpen Dashboard (the web-designer graphic
+            # that replaced the older release_silhouette.py illustration),
+            # reused here rather than a second, differently-styled
+            # graphic, so this pitcher looks the same across every page
+            # that shows their release point. One averaged release
+            # point per pitch type -- same groups_by_label already
+            # built above for the table.
+            releases = []
+            for label, group in groups_by_label.items():
+                heights = [float(p.release_height) for p in group if p.release_height is not None]
+                sides = [float(p.release_side) for p in group if p.release_side is not None]
+                if not heights or not sides:
+                    continue
+                releases.append({
+                    "label": label,
+                    "color": color_for_pitch_label(label),
+                    "side_ft": sum(sides) / len(sides),
+                    "height_ft": sum(heights) / len(heights),
+                    "count": len(group),
+                })
+            player_height_in = float(player.height_in) if player.height_in is not None else None
+            graphic_children = [ui.p(ui.strong("Release Point & Arm Angle"), class_="mt-3")]
+            if releases:
+                # Nov 2026, Ryker: "i want to have both views" -- the
+                # behind-the-pitcher graphic above (every pitch type) plus
+                # the Past The Eye Test-style catcher's-view card (his
+                # fastball), side by side. Same game-linked pitches.
+                graphic_children.append(ui.div(
+                    ui.HTML(release_graphics.both_views_html(
+                        pitcher_release_svg(releases, throws=player.throws or "R", height_in=player_height_in or 73),
+                        release_graphics.profile_from_rapsodo(player, rapsodo_pitches),
+                    )),
+                ))
+                if player_height_in is None:
+                    graphic_children.append(ui.p(
+                        "Using an average height -- add this pitcher's real height on the Players page for a "
+                        "more accurate figure.",
+                        class_="text-muted small", style="text-align:center;",
+                    ))
+            else:
+                graphic_children.append(ui.p("No release point data yet.", class_="text-muted small"))
+
+            return ui.div(
+                header,
+                ui.p(
+                    "Every Rapsodo-linked pitch this pitcher has thrown in real games (intrasquad or external) "
+                    "in this window, broken out by pitch type -- bullpen sessions aren't counted here.",
+                    class_="text-muted small",
+                ),
+                ui_helpers.render_dict_table(table_rows),
+                ui.p("Bauer units = spin / velo (rpm per mph): spin ability apart from arm speed -- most telling on "
+                     "breaking balls. BU vs team compares him to our staff's average for that pitch type (within ±1 = "
+                     "typical). ", ui_helpers.how_to_link("bauer_units"), class_="text-muted small"),
+                *trajectory_children,
+                *_approach_children(db, player, rapsodo_pitches),
+                *_ivb_over_children(db, player, rapsodo_pitches),
+                ui.hr(),
+                *graphic_children,
+                ui.hr(),
+                ui.input_slider(
+                    "pp_phys_shading", "Minimum pitches to shade a pitch type's cluster",
+                    min=1, max=10, value=2,
+                ),
+                output_widget("pp_movement_chart"),
+                ui.p(
+                    "IVB vs. HB, one point per pitch -- shaded regions show each pitch type's own cluster; dashed "
+                    "rays show that type's estimated arm angle.",
+                    class_="text-muted small",
+                ),
+                ui.input_radio_buttons(
+                    "pp_phys_release_mode", "Release point view",
+                    ["Individual Pitches", "Average by Pitch Type"], inline=True,
+                ),
+                output_widget("pp_release_chart"),
+                ui.input_radio_buttons(
+                    "pp_phys_spin_mode", "Spin axis view",
+                    ["Average by Pitch Type", "Individual Pitches"], inline=True,
+                ),
+                output_widget("pp_spin_axis_chart"),
+            )
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_movement_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "metrics":
+            return None
+        db = get_session()
+        try:
+            player, pitches = _physical_target(db)
+            if not pitches:
+                return None
+            min_shading = input.pp_phys_shading() if "pp_phys_shading" in input else 2
+            throws = player.throws if player is not None else None
+            order, groups = [], {}
+            for p in pitches:
+                label = pitch_type_label(p)
+                if label not in groups:
+                    groups[label] = []
+                    order.append(label)
+                groups[label].append(p)
+            arm_angles_by_type = []
+            for label in order:
+                angle, n = average_estimated_arm_angle(groups[label], player)
+                if angle is not None:
+                    arm_angles_by_type.append((label, color_for_pitch_label(label), angle))
+            return movement_chart(
+                pitches, min_pitches_for_shading=min_shading,
+                arm_angles_by_type=arm_angles_by_type, throws=throws,
+            )
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_release_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "metrics":
+            return None
+        db = get_session()
+        try:
+            _, pitches = _physical_target(db)
+            if not pitches:
+                return None
+            mode_label = input.pp_phys_release_mode() if "pp_phys_release_mode" in input else "Individual Pitches"
+            mode = "average" if mode_label == "Average by Pitch Type" else "individual"
+            return release_point_chart(pitches, mode=mode)
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_spin_axis_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "metrics":
+            return None
+        db = get_session()
+        try:
+            _, pitches = _physical_target(db)
+            if not pitches:
+                return None
+            mode_label = input.pp_phys_spin_mode() if "pp_phys_spin_mode" in input else "Average by Pitch Type"
+            if mode_label == "Individual Pitches":
+                return individual_spin_axis_chart(pitches)
+            return average_spin_axis_chart(pitches)
+        finally:
+            db.close()
+
+    @render.ui
+    def pp_results_section():
+        """Oct 2026 rebuild (Ryker: "results chart/graph needs work"): pitch
+        scorecards graded vs our staff, contact-quality bars, and a bigger
+        Damage by Zone on Rapsodo location. One Batters filter drives all of
+        it. Math in analytics/results_view.py."""
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "results":
+            return None
+        return ui.div(
+            ui.div(
+                ui.p(ui.strong("Results"), "  ", ui_helpers.how_to_link("results"), style="margin-bottom:0;"),
+                ui_helpers.glossary_link("pp_glossary_results", "Results Glossary"),
+                style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+            ),
+            ui.p("How hitters did against each of his pitches. Charted games only, with the date range above; "
+                 "locations come from Rapsodo.", class_="text-muted small"),
+            ui.input_select("pp_results_hand", "Batters",
+                            choices={"all": "Both (All Batters)", "R": "vs RHH", "L": "vs LHH"},
+                            selected=_current_results_hand(), width="220px"),
+            ui.output_ui("pp_results_body"),
+        )
+
+    def _current_results_hand():
+        with reactive.isolate():
+            try:
+                choice = input.pp_results_hand() if "pp_results_hand" in input else "all"
+            except Exception:
+                choice = "all"
+        return choice if choice in ("all", "R", "L") else "all"
+
+    def _fmt_rate(v, kind):
+        if v is None:
+            return "—"
+        if kind in ("avg", "slg"):
+            return f"{v:.3f}".lstrip("0") if v < 1 else f"{v:.3f}"
+        if kind == "rv100":
+            return f"{v:+.2f}"
+        return f"{v:.0f}%"
+
+    def _rv_color(v):
+        """Per-pitch run value -> red (hitter) / blue (pitcher) background."""
+        if v is None:
+            return "transparent"
+        a = min(abs(v) / 0.08, 1.0) * 0.75 + 0.1
+        return f"rgba(191,30,45,{a:.2f})" if v > 0 else f"rgba(47,111,176,{a:.2f})"
+
+    def _damage_html(grid, hand):
+        cells = grid["cells"]
+        rows = []
+        for r in range(5):
+            tds = []
+            for c in range(5):
+                d = cells.get((r, c))
+                zone = 1 <= r <= 3 and 1 <= c <= 3
+                cls = "gbo-dz-zone" if zone else "gbo-dz-out"
+                if not d:
+                    tds.append(f'<td class="{cls} gbo-dz-none"></td>')
+                    continue
+                bg = "transparent" if d["thin"] else _rv_color(d["avg_rv"])
+                hit = f'{d["hits"]} H / {d["bip"]} BIP' if d["bip"] else (f'{d["k"]} K' if d["k"] else "")
+                tip = (f'{d["n"]} pitches · avg run value {d["avg_rv"]:+.3f}' if d["avg_rv"] is not None else f'{d["n"]} pitches')
+                tip += f' · {d["hits"]} hits ({d["hr"]} HR) on {d["bip"]} balls in play · {d["k"]} strikeouts'
+                tds.append(f'<td class="{cls}{" gbo-dz-thin" if d["thin"] else ""}" style="background:{bg}" title="{tip}">'
+                           f'<b>{d["n"]}</b><span>{hit}</span></td>')
+            rows.append(f'<tr>{"".join(tds)}</tr>')
+        side = ""
+        if hand == "R":
+            side = '<div class="gbo-dz-bat gbo-dz-bat-l">RHH</div>'
+        elif hand == "L":
+            side = '<div class="gbo-dz-bat gbo-dz-bat-r">LHH</div>'
+        return ui.HTML(f'<div class="gbo-dz-wrap">{side}<table class="gbo-dz"><tbody>{"".join(rows)}</tbody></table></div>')
+
+    @render.ui
+    def pp_results_body():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "results":
+            return None
+        f = _current_filters()
+        hand = input.pp_results_hand() if "pp_results_hand" in input else "all"
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            mine = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"], game_id=f["game_id"],
+            ) or []
+            team = trends.team_pitches_in_range(db, f["date_from"], f["date_to"], pitching=True)
+            hands = get_batter_hands(db, list(mine) + list(team))
+            loc = sequencing.loc_map(profile_queries.rapsodo_by_game_pitch_id(
+                db, [p.game_pitch_id for p in list(mine) + list(team)]))
+        finally:
+            db.close()
+        if hand in ("R", "L"):
+            mine = [p for p in mine if hands.get(p.game_pitch_id) == hand]
+            team = [p for p in team if hands.get(p.game_pitch_id) == hand]
+        who = {"R": "right-handed", "L": "left-handed"}.get(hand)
+        if not mine:
+            return ui_helpers.empty_state(f"No pitches to {who} hitters in this range yet." if who
+                                          else "No game pitches in this range yet.")
+        sc = results_view.scorecard(mine, team, loc)
+
+        # 1. Scorecard
+        head = "".join(f"<th>{h}</th>" for h in ["Pitch", "Thrown"] + [lbl for _k, lbl, *_ in results_view.METRICS]
+                       + ["K", "BB", "Hits"])
+        body = []
+        for r in sc["rows"]:
+            tds = [f'<th class="gbo-rc-pt">{r["type"]}<span>{r["n"]} pitches</span></th>',
+                   f'<td>{_fmt_rate(r["usage"], "pct")}</td>']
+            for key, label, *_ in results_view.METRICS:
+                g = r["grade"].get(key)
+                staff = r["staff"].get(key)
+                tip = f"Staff {r['type']}: {_fmt_rate(staff, key)}" if staff is not None else "No staff comparison"
+                tds.append(f'<td class="gbo-rc-{g or "none"}" title="{tip}">{_fmt_rate(r[key], key)}</td>')
+            tds += [f'<td>{r["k"]}</td>', f'<td>{r["bb"]}</td>', f'<td title="{r["hr"]} HR">{r["hits"]}</td>']
+            body.append(f'<tr class="{"gbo-rc-thin" if r["thin"] else ""}">{"".join(tds)}</tr>')
+        t = sc["total"]
+        if t:
+            body.append('<tr class="gbo-rc-total"><th class="gbo-rc-pt">All pitches<span>'
+                        f'{t["n"]} pitches</span></th><td></td>'
+                        + "".join(f'<td>{_fmt_rate(t[k], k)}</td>' for k, *_ in results_view.METRICS)
+                        + f'<td>{t["k"]}</td><td>{t["bb"]}</td><td>{t["hits"]}</td></tr>')
+        s1 = ui.div(
+            ui.h6("How each pitch did", class_="gbo-seq-h"),
+            ui.p("Green = better than our staff on that same pitch, red = worse (hover a number to see the staff's). "
+                 "Weak % = weak, jammed, off the end or clipped contact. RV/100 = runs per 100 pitches, minus is good for "
+                 f"him. AVG/SLG are against. Faded rows have fewer than {results_view.MIN_PITCHES} pitches"
+                 + (f"; only pitches to {who} hitters." if who else "."), class_="text-muted small gbo-seq-how"),
+            ui.HTML(f'<div class="gbo-sg-wrap"><table class="gbo-rc"><thead><tr>{head}</tr></thead>'
+                    f'<tbody>{"".join(body)}</tbody></table></div>'),
+            class_="gbo-seq-sec",
+        )
+
+        # 2. Contact quality
+        mix = results_view.contact_mix(mine)
+        bars = []
+        for m in mix:
+            segs = "".join(f'<span class="gbo-cq-{lbl.split()[0].lower()}" style="width:{pct}%" title="{lbl} {pct:.0f}%">'
+                           f'{lbl if pct >= 22 else ""}</span>' for lbl, pct in m["parts"] if pct)
+            if m["unrated"] >= 1:
+                segs += f'<span class="gbo-cq-none" style="width:{m["unrated"]}%" title="Not rated {m["unrated"]:.0f}%"></span>'
+            bars.append(f'<div class="gbo-cq-row"><div class="gbo-cq-lbl">{m["type"]}<span>{m["bip"]} in play</span></div>'
+                        f'<div class="gbo-cq-bar">{segs}</div></div>')
+        legend = "".join(f'<span><i class="gbo-cq-{lbl.split()[0].lower()}"></i>{lbl}</span>' for _k, lbl in results_view.CONTACT_ORDER)
+        s2 = ui.div(
+            ui.h6("How hard they hit it", class_="gbo-seq-h"),
+            ui.p("Every ball in play on that pitch, by contact quality -- left side (weak, jammed, off the end, "
+                 "clipped) is good for him, right side (solid, barreled) is good for the hitter.",
+                 class_="text-muted small gbo-seq-how"),
+            ui.HTML("".join(bars) + f'<div class="gbo-cq-legend">{legend}</div>') if bars
+            else ui.p("No balls in play yet.", class_="small text-muted"),
+            class_="gbo-seq-sec",
+        )
+
+        # 3. Damage by zone
+        label = f["pitch_type"] or "All pitches"
+        grid = results_view.damage_grid(mine, loc)
+        s3 = ui.div(
+            ui.h6(f"Where hitters did damage — {label}", class_="gbo-seq-h"),
+            ui.p("Catcher's view. The middle 3x3 is the strike zone, the outer ring is out of the zone. Big number = "
+                 "pitches there; red = hitters did damage (run value for the hitter), blue = good for him, "
+                 f"gray = fewer than {results_view.MIN_CELL} pitches. Use the Pitch Type filter above for one pitch. "
+                 f"{grid['located']} of {grid['total']} pitches have a Rapsodo location.",
+                 class_="text-muted small gbo-seq-how"),
+            _damage_html(grid, hand) if grid["located"] else ui.p("No Rapsodo locations in this range yet.", class_="small text-muted"),
+            ui.HTML('<div class="gbo-dz-key"><span><i style="background:rgba(47,111,176,.8)"></i>good for him</span>'
+                    '<span><i style="background:rgba(191,30,45,.8)"></i>good for the hitter</span></div>'),
+            class_="gbo-seq-sec",
+        )
+
+        # Details: the full table
+        rows = compute_pitch_type_breakdown(results_view._real(mine))
+        detail = ui.tags.details(
+            ui.tags.summary("All stats (details)"),
+            ui_helpers.render_dict_table([
+                {"Pitch Type": r["Pitch Type"], "% Thrown": _fmt_pct(r["Pitch Usage %"]), "BIP": r["Balls in Play"],
+                 "Weak %": _fmt_pct(r["Weak %"]), "Jammed %": _fmt_pct(r["Jammed %"]),
+                 "Off the End %": _fmt_pct(r["Off the End %"]), "Clipped %": _fmt_pct(r["Clipped %"]),
+                 "Solid %": _fmt_pct(r["Solid Contact %"]), "Barreled %": _fmt_pct(r["Barreled %"]),
+                 "Hard Hit %": _fmt_pct(r["Hard Hit %"]), "Whiff %": _fmt_pct(r["Whiff %"]),
+                 "SwStr %": _fmt_pct(r["SwStr %"]), "CSW %": _fmt_pct(r["CSW %"]),
+                 "RV/100": r["RV/100"] if r["RV/100"] is not None else "—"}
+                for r in rows
+            ]),
+            class_="gbo-seq-details",
+        )
+        # 4. Outs per extra-base hit (Driveline, Oct 2026)
+        from analytics import pitch_insights as pins
+        import pitch_insights_display as pid_html
+        s4 = ui.HTML(pid_html.outs_xbh_html(
+            pins.outs_per_xbh(mine), "Outs per extra-base hit",
+            "How many outs each pitch got for every double, triple or homer it gave up (Driveline's 2026 MLB "
+            "table: splitter 11.8, changeup 11.2, sweeper/curve 9.9, sinker 9.6, slider 9.1, 4-seam 8.0, cutter 7.5). "
+            "Outs = strikeouts plus outs made on balls in play on the last pitch of the at-bat."
+            + (f" Only pitches to {who} hitters." if who else "")))
+        s5 = ui.tags.details(
+            ui.tags.summary("Our staff: outs per XBH by pitch"),
+            ui.HTML(pid_html.outs_xbh_html(pins.outs_per_xbh(team), "Staff, same date range", "Every pitcher on staff.")),
+            class_="gbo-seq-details",
+        )
+        return ui.div(s1, s2, s3, s4, s5, detail)
+
+    # -------------------------------------------------------------------
+    # Oct 2026 reading-list views (analytics/pitch_insights.py,
+    # pitch_insights_display.py): Plane & Preference, Seam Shift,
+    # Get Ahead / Miss Bats, Usage Split.
+    # -------------------------------------------------------------------
+    _INSIGHT_VIEWS = ("summary", "plane", "seam_shift", "get_ahead", "usage_split")
+    _DIG = (("arsenal_plan", "Arsenal Plan"), ("results", "Results by pitch"), ("command", "Command"),
+            ("sequencing", "Sequencing"), ("trends", "Trends"))
+
+    for _key, _lbl in _DIG:
+        def _mk(key):
+            @reactive.effect
+            @reactive.event(input[f"pp_dig_{key}"])
+            def _go():
+                ui.update_select("pp_view", selected=key)
+        _mk(_key)
+
+    @render.ui
+    def pp_insights_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        view = input.pp_view()
+        if view not in _INSIGHT_VIEWS:
+            return None
+        if view == "summary" and role == "Player":
+            return None
+        extra = None
+        if view == "summary":
+            extra = ui.div(
+                ui.p(ui.strong("Coach Summary"), "  ", ui.span("the short version -- open a view below for the detail",
+                                                             class_="text-muted small"), style="margin-bottom:4px;"),
+                ui.div(ui.span("Dig deeper: ", class_="small text-muted"),
+                       *[ui.input_action_button(f"pp_dig_{k}", lbl, class_="btn-sm btn-outline-light",
+                                                style="margin:0 6px 6px 0;") for k, lbl in _DIG]),
+            )
+        if view == "usage_split":
+            f = _current_filters()
+            db = get_session()
+            try:
+                pid = _current_player_id(db)
+                dates = sorted({p.game.game_date for p in (profile_queries.get_pitcher_profile_pitches(
+                    db, pid, date_from=f["date_from"], date_to=f["date_to"], game_scope=f["game_scope"]) or [])
+                    if p.game is not None and p.game.game_date is not None}) if pid is not None else []
+            finally:
+                db.close()
+            if len(dates) < 2:
+                return ui_helpers.empty_state("Usage Split needs games on at least two dates in this range.")
+            mid = dates[len(dates) // 2]
+            extra = ui.input_date("pp_split_at", "Split at (first day of the 'after' period)", value=mid,
+                                  min=dates[0], max=dates[-1], width="260px")
+        return ui.div(extra, ui.output_ui("pp_insights_body"))
+
+    @render.ui
+    def pp_insights_body():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        view = input.pp_view()
+        if view not in _INSIGHT_VIEWS:
+            return None
+        if view == "summary" and app_state.role_name() == "Player":
+            return None
+        import pitch_insights_display as pid_html
+        from analytics import pitch_insights as pins
+        from game_stats import _pitcher_of
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            player = db.query(Player).filter(Player.player_id == pid).first() if pid is not None else None
+            if player is None:
+                return None
+            throws = player.throws
+            if view == "summary":
+                from analytics import coach_summary
+                mine = profile_queries.get_pitcher_profile_pitches(
+                    db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+                    game_scope=f["game_scope"], game_id=f["game_id"]) or []
+                team = trends.team_pitches_in_range(db, f["date_from"], f["date_to"], pitching=True)
+                loc = sequencing.loc_map(profile_queries.rapsodo_by_game_pitch_id(
+                    db, [p.game_pitch_id for p in list(mine) + list(team)]))
+                raps = profile_queries.get_pitcher_rapsodo_pitches(
+                    db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+                    game_scope=f["game_scope"], game_id=f["game_id"]) or []
+                fb_like = [r for r in raps if pitch_type_label(r) in arsenal_plan.FASTBALLS]
+                arm, _n = average_estimated_arm_angle(fb_like or raps, player)
+                hs = [float(r.release_height) for r in (fb_like or raps) if r.release_height is not None]
+                game_ids = sorted({p.game_id for p in mine})
+                label = (f"{f['date_from']:%b %d, %Y} – {f['date_to']:%b %d, %Y}" if f["date_from"] and f["date_to"] else "this range")
+                summ = coach_summary.build(db, pid, game_ids, label, list(mine), list(team), loc, raps, throws, arm,
+                                           sum(hs) / len(hs) if hs else None, overrides=_ap_overrides(db, pid))
+                from analytics import pitcher_type
+                try:
+                    pt = pitcher_type.for_pitcher(db, player, f["date_from"], f["date_to"])
+                except Exception:
+                    db.rollback()
+                    pt = None
+                return ui.HTML(pid_html.coach_summary_html(summ, f"{player.first_name} {player.last_name}", label)
+                               + (pid_html.pitcher_type_html(pt) if pt else ""))
+            if view in ("plane", "seam_shift"):
+                raps = profile_queries.get_pitcher_rapsodo_pitches(
+                    db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+                    game_scope=f["game_scope"], game_id=f["game_id"]) or []
+                if view == "plane":
+                    arm, _n = average_estimated_arm_angle(raps, player)
+                    return ui.HTML(pid_html.plane_html(pins.plane(raps, throws, arm)))
+                q = db.query(RapsodoPitch).options(joinedload(RapsodoPitch.pitch_type))
+                if f["date_from"] is not None:
+                    q = q.filter(RapsodoPitch.pitch_date >= f["date_from"])
+                if f["date_to"] is not None:
+                    q = q.filter(RapsodoPitch.pitch_date <= f["date_to"])
+                staff_raps = {}
+                for r in q.all():
+                    staff_raps.setdefault(r.player_id, []).append(r)
+                staff_raps[pid] = raps
+                throws_by = {p.player_id: p.throws for p in db.query(Player).filter(Player.player_id.in_(list(staff_raps))).all()}
+                gids = [r.game_pitch_id for rs in staff_raps.values() for r in rs if r.game_pitch_id is not None]
+                game_by = {}
+                for i in range(0, len(gids), 500):
+                    for g in db.query(GamePitch).filter(GamePitch.game_pitch_id.in_(gids[i:i + 500])).all():
+                        game_by[g.game_pitch_id] = g
+                names = {p.player_id: f"{p.first_name} {p.last_name}" for p in
+                         db.query(Player).filter(Player.player_id.in_(list(staff_raps))).all()}
+                staff = pins.seam_shift_staff(staff_raps, throws_by, game_by)
+                return ui.HTML(pid_html.seam_shift_html(pins.seam_shift_by_type(raps, throws), staff,
+                                                        lambda x: names.get(x, "?"), pid))
+            mine = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+                game_scope=f["game_scope"], game_id=f["game_id"]) or []
+            if view == "get_ahead":
+                team = trends.team_pitches_in_range(db, f["date_from"], f["date_to"], pitching=True)
+                loc = sequencing.loc_map(profile_queries.rapsodo_by_game_pitch_id(
+                    db, [p.game_pitch_id for p in list(mine) + list(team)]))
+                by = {}
+                for p in team:
+                    who = _pitcher_of(p)
+                    if who is not None:
+                        by.setdefault(who, []).append(p)
+                by[pid] = list(mine)
+                staff = pins.get_ahead_staff(by, loc)
+                if not mine:
+                    return ui_helpers.empty_state("No charted game pitches in this range yet.")
+                return ui.HTML(pid_html.get_ahead_html(pins.get_ahead(mine, loc), staff, pid))
+            # usage split
+            req("pp_split_at" in input)
+            cut = input.pp_split_at()
+            if cut is None:
+                return None
+            a = [p for p in mine if p.game is not None and p.game.game_date < cut]
+            b = [p for p in mine if p.game is not None and p.game.game_date >= cut]
+            raps = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], game_scope=f["game_scope"]) or []
+            ra = [r for r in raps if r.pitch_date is not None and r.pitch_date.date() < cut]
+            rb = [r for r in raps if r.pitch_date is not None and r.pitch_date.date() >= cut]
+            sp = pins.usage_split(a, b, ra, rb, throws)
+            return ui.HTML(pid_html.usage_split_html(sp, f"Before {cut:%b %d}", f"From {cut:%b %d}"))
+        finally:
+            db.close()
+
+    @render.ui
+    def pp_zone_hand_filter():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "zone":
+            return None
+        # Sept 2026, Ryker: "for the zone tab in pitcher profile be
+        # able to select vs right and left handed hitters" -- a plain
+        # radio-button filter (not a small-multiples split like the
+        # Results tab's Damage by Zone) so the density heatmap below
+        # stays ONE interactive Plotly widget rather than three, same
+        # single-selector-drives-one-widget shape hitter_tracking.py's
+        # own "Filter by pitcher hand" heatmap control already uses.
+        # Split into its own function/placeholder (rather than folding
+        # into pp_zone_section itself) for the same reason hitter_
+        # tracking.py splits heatmap_hand_filter from heatmap_body --
+        # a render.ui can't reliably read an input it defines in that
+        # same call, since the client hasn't registered the widget's
+        # default value back into `input` until after this render
+        # finishes.
+        return ui.input_radio_buttons(
+            "pp_zone_hand", "Filter by batter hand",
+            choices=["All Batters", "vs RHH", "vs LHH"], selected="All Batters", inline=True,
+        )
+
+    @render.ui
+    def pp_zone_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "zone":
+            return None
+        req("pp_zone_hand" in input)
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
+                game_id=f["game_id"], game_linked_only=True,
+            )
+            if not game_pitches and not rapsodo_pitches:
+                return None
+
+            hand_choice = input.pp_zone_hand()
+            game_pitches = _zone_hand_filtered(db, game_pitches, hand_choice)
+            if hand_choice != "All Batters" and not game_pitches:
+                return ui.div(
+                    ui.p(ui.strong("Attack Zone Distribution"), style="margin-bottom:0;"),
+                    ui.p(
+                        f"No pitches {'vs a right-handed' if hand_choice == 'vs RHH' else 'vs a left-handed'} batter in this range.",
+                        class_="text-muted small",
+                    ),
+                )
+
+            bundle = profile_queries.compute_grading_bundle(db, game_pitches, rapsodo_pitches)
+            sections = [ui.div(
+                ui.p(ui.strong("Attack Zone Distribution"), style="margin-bottom:0;"),
+                ui_helpers.glossary_link("pp_glossary_zone", "Zone Glossary"),
+                style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+            )]
+            total_located = sum(bundle["zone_counts"].values())
+            if not total_located:
+                sections.append(ui.p("No located pitches yet.", class_="text-muted small"))
+            else:
+                sections.append(ui.p("Heart = down the middle, Shadow = zone edge, Chase = tempting but outside, Waste = nowhere near.", class_="text-muted small"))
+                sections.append(_stacked_bar([
+                    (zone, round(100 * bundle["zone_counts"][zone] / total_located, 1), ATTACK_ZONE_COLORS[zone])
+                    for zone in ("Heart", "Shadow", "Chase", "Waste")
+                ]))
+
+            # Sept 2026, Ryker (reference: mlbpitchprofiler.com's own
+            # "2026 PITCH LOCATIONS" section) -- per-pitch-type density
+            # heatmaps below the aggregate Attack Zone bar above, plus
+            # the matching per-type Heart/Shadow/Chase/Waste/Zone %
+            # mix table (game_stats.compute_pitch_type_breakdown's new
+            # "Zone %"/"Heart Zone %"/etc. columns -- see that
+            # function's docstring for how these differ from the
+            # existing swing-rate "Chase %").
+            if game_pitches:
+                sections.append(ui.hr())
+                sections.append(ui.p(ui.strong("Pitch Locations")))
+                sections.append(ui.p(
+                    "Density of where each pitch type actually landed, real-game charted locations only "
+                    f"(n={len(game_pitches)} charted pitches in this window; bullpen-only reps aren't located "
+                    "so they can't appear here). Fewer than "
+                    f"{MIN_FOR_CONTOUR} located pitches of a type shows plain dots instead of a density "
+                    "surface -- not enough to smooth reliably.",
+                    class_="text-muted small",
+                ))
+                sections.append(output_widget("pp_location_heatmap"))
+                type_rows = [
+                    r for r in compute_pitch_type_breakdown(game_pitches)
+                    if r["Pitch Type"] != "Total" and r.get("Zone %") is not None
+                ]
+                if type_rows:
+                    sections.append(ui_helpers.render_dict_table([
+                        {
+                            "Pitch Type": r["Pitch Type"], "% Thrown": _fmt_pct(r["Pitch Usage %"]),
+                            "Zone %": _fmt_pct(r["Zone %"]), "Heart %": _fmt_pct(r["Heart Zone %"]),
+                            "Shadow %": _fmt_pct(r["Shadow Zone %"]), "Chase %": _fmt_pct(r["Chase Zone %"]),
+                            "Waste %": _fmt_pct(r["Waste Zone %"]),
+                        }
+                        for r in type_rows
+                    ]))
+
+            sections += _best_zone_children(db, pid, game_pitches)
+            return ui.div(*sections)
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Best Zone (Oct 2026, Ryker sent Paradigm's "Miss Distance" thread:
+    # "build it") -- how far each pitch landed from the area where that
+    # pitch plays best, by batter hand. See analytics/best_zone.py.
+    # -------------------------------------------------------------------
+    def _bz_pct(v):
+        return "—" if v is None else f"{v:.0f}%"
+
+    def _best_zone_children(db, pid, game_pitches):
+        player = db.query(Player).filter(Player.player_id == pid).first()
+        if player is None or player.throws not in ("R", "L"):
+            return []
+        scored, maps = best_zone.score_for_pitcher(db, game_pitches, player.throws)
+        head = [ui.hr(), ui.p(ui.strong("Best Zone (distance from where each pitch plays best)"))]
+        if not scored:
+            return head + [ui.p("No located pitches with a known batter hand yet (locations come from video review).",
+                                class_="text-muted small")]
+        any_team = any(r["source"] == "team" for r in scored)
+        type_rows = best_zone.summary_by_type(scored)
+        table = [{
+            "Pitch Type": r["label"], "#": r["n"],
+            "In best zone": _bz_pct(r["inside_pct"]), "Within 3\"": _bz_pct(r["near_pct"]),
+            "6\"+ away": _bz_pct(r["far_pct"]), "Avg distance": f'{r["avg_dist"]:.1f}"',
+            "Best zone": r["where"],
+        } for r in type_rows]
+        band_rows = [{
+            "Distance": b["band"], "Pitches": b["n"], "Strike %": _bz_pct(b["strike_pct"]),
+            "Swing %": _bz_pct(b["swing_pct"]), "Whiff / swing": _bz_pct(b["whiff_pct"]),
+            "Hits / ball in play": _bz_pct(b["hit_pct_bip"]),
+            "Run value / 100": "—" if b["rv100"] is None else f'{b["rv100"]:+.1f}',
+        } for b in best_zone.results_by_band(scored) if b["n"]]
+        return head + [
+            ui.p(
+                "Each pitch has an area where it plays best (four-seams up, breaking balls down and glove side, "
+                "changeups down and arm side, adjusted by batter hand). This measures how far every pitch landed "
+                "from that whole area -- not from the called spot -- in Paradigm's bands. "
+                + ("Some areas are drawn from our own run values (enough games logged); the rest are starting maps. "
+                   if any_team else
+                   "Areas are educated starting maps for now; they switch to our own run-value data as games add up. ")
+                + "Results by distance are small-sample and use run value and hits on balls in play (no exit velo, "
+                "so no xwOBA).",
+                class_="text-muted small",
+            ),
+            ui_helpers.render_dict_table(table),
+            ui.p(ui.strong("Results by distance"), class_="mt-2 mb-1"),
+            ui_helpers.render_dict_table(band_rows),
+            ui.p("Run value / 100 is from the hitter's side: lower (more negative) is better for the pitcher.",
+                 class_="text-muted small"),
+            output_widget("pp_best_zone_chart"),
+            # Oct 2026 (Ryker): "All Batters" shows both hands -- each hand has its
+            # own best zone, so it's two charts (vs RHH, then vs LHH), not one.
+            output_widget("pp_best_zone_chart_l") if input.pp_zone_hand() == "All Batters" else None,
+        ]
+
+    @render_plotly
+    def pp_best_zone_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "zone":
+            return None
+        req("pp_zone_hand" in input)
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            player = db.query(Player).filter(Player.player_id == pid).first() if pid else None
+            if player is None or player.throws not in ("R", "L"):
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"], game_id=f["game_id"],
+            )
+            game_pitches = _zone_hand_filtered(db, game_pitches, input.pp_zone_hand())
+            scored, maps = best_zone.score_for_pitcher(db, game_pitches, player.throws)
+            if not scored:
+                return None
+            choice = input.pp_zone_hand()
+            hand = "L" if choice == "vs LHH" else "R"      # All Batters: vs RHH here, vs LHH in the chart below
+            return best_zone_figure(scored, maps, player.throws, hand)
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_best_zone_chart_l():
+        """Second chart (vs LHH) when "All Batters" is selected."""
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "zone":
+            return None
+        req("pp_zone_hand" in input)
+        req(input.pp_zone_hand() not in ("vs RHH", "vs LHH"))   # req (not return None) so the old chart clears
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            player = db.query(Player).filter(Player.player_id == pid).first() if pid else None
+            if player is None or player.throws not in ("R", "L"):
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"], game_id=f["game_id"],
+            )
+            scored, maps = best_zone.score_for_pitcher(db, game_pitches, player.throws)
+            return best_zone_figure(scored, maps, player.throws, "L") if scored else None
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_location_heatmap():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "zone":
+            return None
+        req("pp_zone_hand" in input)
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            if not game_pitches:
+                return None
+            # Same pp_zone_hand selection pp_zone_section's Attack Zone
+            # Distribution bar and per-type table already apply, so the
+            # heatmap below them stays in sync with the rest of the tab.
+            game_pitches = _zone_hand_filtered(db, game_pitches, input.pp_zone_hand())
+            if not game_pitches:
+                return None
+            return pitch_location_heatmaps(game_pitches)
+        finally:
+            db.close()
+
+    @render.ui
+    def pp_arsenal_extras():
+        """Outcome profile + Arsenal Breadth+ (Oct 2026, analytics/outcome_profile.py,
+        analytics/arsenal_breadth.py)."""
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "arsenal":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            player = db.query(Player).filter(Player.player_id == pid).first()
+            if player is None:
+                return None
+            mine = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None, game_id=f["game_id"]) or []
+            throws = {pl.player_id: pl.throws for pl in db.query(Player).all()}
+            pairs = (db.query(RapsodoPitch, GamePitch)
+                     .join(GamePitch, RapsodoPitch.game_pitch_id == GamePitch.game_pitch_id)
+                     .options(joinedload(RapsodoPitch.pitch_type)).all())
+            train = outcome_profile.training_rows(pairs, throws)
+            q = db.query(RapsodoPitch).options(joinedload(RapsodoPitch.pitch_type))
+            if f["date_from"] is not None:
+                q = q.filter(RapsodoPitch.pitch_date >= f["date_from"])
+            if f["date_to"] is not None:
+                q = q.filter(RapsodoPitch.pitch_date <= f["date_to"] + timedelta(days=1))
+            staff = {}
+            for r in q.all():
+                staff.setdefault(r.player_id, []).append(r)
+        finally:
+            db.close()
+
+        sections = []
+        prof = outcome_profile.profile(mine, [r for r in train if r["pid"] == pid], player.throws, train, pid)
+        if prof:
+            def pc(v):
+                return f"{v:.0f}%" if v is not None else "—"
+            rows = []
+            notes = []
+            for r in prof:
+                if r.get("too_few"):
+                    notes.append(f"{r['label']}: only {r['fam_n']} linked {r['fam'].lower()} on the staff so far -- not enough to compare.")
+                    continue
+                rows.append({
+                    "Pitch Type": r["label"],
+                    "Whiff % (like it)": pc(r["like"]["whiff"]), "CSW % (like it)": pc(r["like"]["csw"]),
+                    "GB % (like it)": pc(r["like"]["gb"]),
+                    "Staff, same family": f"{pc(r['staff']['whiff'])} / {pc(r['staff']['csw'])} / {pc(r['staff']['gb'])}",
+                    "His actual": f"{pc(r['his']['whiff'])} / {pc(r['his']['csw'])} / {pc(r['his']['gb'])}",
+                })
+            early = any(r.get("early") for r in prof)
+            sections += [
+                ui.hr(),
+                ui.p(ui.strong("Outcome profile: what pitches shaped like his do"), "  ", ui_helpers.how_to_link("arsenal_extras"), " ",
+                     ui.span("early", class_="badge bg-secondary") if early else None),
+                ui.p(f"For each pitch, the {outcome_profile.K} most similar game pitches (velo, ride, run) thrown by OTHER "
+                     "pitchers on our staff with a Rapsodo reading and a charted result -- what they got. Whiff % is of "
+                     "swings, CSW % of all pitches, GB % of balls in play. Pulled toward the staff rate when the sample is "
+                     "thin. Staff and his actual columns read whiff / CSW / GB. When his actual beats 'like it', he's "
+                     "getting more from location, sequencing or deception than the shape alone; when it trails, the shape "
+                     "is better than his results. No lefty/righty split yet.",
+                     class_="text-muted small"),
+                ui_helpers.render_dict_table(rows) if rows else None,
+                *[ui.p(n, class_="text-muted small") for n in notes],
+            ]
+
+        br = arsenal_breadth.breadth_plus({k: arsenal_breadth.spreads(v, pitch_type_label) for k, v in staff.items()})
+        b = br.get(pid)
+        sections.append(ui.hr())
+        sections.append(ui.p(ui.strong("Arsenal Breadth+")))
+        if b is None:
+            sections.append(ui.p("Needs at least two pitch types with 5+ Rapsodo readings (and five pitchers on the staff) "
+                                 "in this range.", class_="text-muted small"))
+        else:
+            sections.append(ui_helpers.render_kpi_cards([
+                {"label": "Arsenal Breadth+", "value": f"{b['plus']:.0f}"},
+                {"label": "Speed spread", "value": f"{b['speed']:.1f} mph"},
+                {"label": "Movement spread", "value": f"{b['move']:.1f}\""},
+                {"label": "Velo range", "value": f"{b['velo_range']:.0f} mph"},
+            ]))
+            sections.append(ui.p(f"Staff average: {b['speed_avg']:.1f} mph speed spread, {b['move_avg']:.1f}\" movement "
+                                 f"spread. {b['types']} pitch types counted.", class_="small"))
+            sections.append(ui.p(
+                "How much speed and movement range his arsenal covers, weighted by how often he throws each pitch "
+                "(Greenberg, \"Arsenal Models in College Baseball\"). 100 = our staff average, 25 points = one SD. "
+                "Descriptive, not a grade: the article found breadth barely predicts results -- a narrow arsenal that "
+                "tunnels well can be just as good.", class_="text-muted small"))
+        return ui.div(*sections)
+
+    @render.ui
+    def pp_arsenal_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "arsenal":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
+                game_id=f["game_id"], game_linked_only=True,
+            )
+            if not game_pitches and not rapsodo_pitches:
+                return None
+            bundle = profile_queries.compute_grading_bundle(db, game_pitches, rapsodo_pitches)
+            sections = [ui.div(
+                ui_helpers.glossary_link("pp_glossary_arsenal", "Arsenal Glossary"),
+                style="text-align:right;",
+            )]
+
+            if bundle["arsenal_rows"]:
+                sections.append(ui.p(ui.strong("Arsenal")))
+                sections.append(ui.p(
+                    f"'Reliable' needs at least {MIN_BASELINE_PITCHES} pitches of that type in this window -- "
+                    "fewer than that and the grade swings wildly with every new pitch.",
+                    class_="text-muted small",
+                ))
+                sections.append(ui_helpers.render_dict_table([
+                    {
+                        "Pitch Type": row["Pitch Type"], "Usage %": _fmt_pct(row["Usage %"]), "Pitches": row["Pitches"],
+                        "Stuff+": _fmt_grade(row["Stuff+"]), "Location+": _fmt_grade(row["Location+"]),
+                        "Pitching+": _fmt_grade(row["Pitching+"]), "Reliable": "Yes" if row["Reliable"] else "No",
+                    }
+                    for row in bundle["arsenal_rows"]
+                ]))
+
+            sb = _sb_data()
+            if sb and any(e["features"] for e in sb["breakdown"]):
+                sb_types = {e["label"]: f"{e['label']}  ·  {e['stuff_plus']:.0f}" for e in sb["breakdown"] if e["features"]}
+                sections.append(ui.hr())
+                sections.append(ui.div(
+                    ui.tags.style(_SB_CSS),
+                    ui_helpers.section_title("Stuff+ Breakdown",
+                                             ui.input_select("pp_sb_type", None, choices=sb_types, width="260px")),
+                    ui.div(ui_helpers.how_to_link("stuff_breakdown", "How to read the breakdown"), "  ·  ",
+                           ui_helpers.how_to_link("grades", "How Stuff+ is built"), style="margin:-4px 0 6px;"),
+                    ui.output_ui("pp_sb_header"),
+                    ui.layout_columns(
+                        ui_helpers.card(output_widget("pp_sb_traits"),
+                                        ui.output_ui("pp_sb_traits_note"),
+                                        title="What's driving the grade"),
+                        ui_helpers.card(output_widget("pp_sb_outcomes"),
+                                        ui.output_ui("pp_sb_outcome_note"),
+                                        title="Do game results match?"),
+                        col_widths=[6, 6],
+                    ),
+                    ui.output_ui("pp_sb_strip_titles"),
+                    class_="gbo-sb",
+                ))
+
+            if game_pitches:
+                sections.append(ui.hr())
+                sections.append(ui.p(ui.strong("Pitch Type Breakdown")))
+                # Derived via get_batter_hands (Sept 2026), not the raw
+                # opponent_hand column -- that column can hold 'S' for a
+                # switch hitter and is the PITCHER's hand, not the
+                # batter's, on our-team-batting rows (see that column's
+                # comment on models.GamePitch), so comparing it directly
+                # here silently dropped/miscounted switch hitters from
+                # both buckets.
+                _hands = get_batter_hands(db, game_pitches)
+                vs_rhh = [p for p in game_pitches if _hands.get(p.game_pitch_id) == "R"]
+                vs_lhh = [p for p in game_pitches if _hands.get(p.game_pitch_id) == "L"]
+                # Cards (headline stats, incl. Stuff+ -- this cut is by
+                # opponent hand, which the Arsenal table above doesn't
+                # split by, so it's not pure duplication) + grouped
+                # detail tabs, same _pitch_type_breakdown_with_stuff/
+                # _pitch_type_breakdown_view pitcher_game_report.py uses.
+                rap_by_gp = profile_queries.rapsodo_by_game_pitch_id(db, [p.game_pitch_id for p in game_pitches])
+                stuff_baselines = profile_queries.team_stuff_plus_baselines(db)
+                sections.append(ui.navset_tab(
+                    ui.nav_panel("All Batters", _pitch_type_breakdown_view(_pitch_type_breakdown_with_stuff(game_pitches, rap_by_gp, stuff_baselines))),
+                    ui.nav_panel("vs RHH", _pitch_type_breakdown_view(_pitch_type_breakdown_with_stuff(vs_rhh, rap_by_gp, stuff_baselines)) if vs_rhh else ui.p("No pitches vs a right-handed batter in this range.", class_="text-muted small")),
+                    ui.nav_panel("vs LHH", _pitch_type_breakdown_view(_pitch_type_breakdown_with_stuff(vs_lhh, rap_by_gp, stuff_baselines)) if vs_lhh else ui.p("No pitches vs a left-handed batter in this range.", class_="text-muted small")),
+                ))
+
+            if bundle["individual_rows"]:
+                sections.append(ui.hr())
+                sections.append(ui.p(ui.strong("Individual Pitches")))
+                sections.append(ui_helpers.render_dict_table(list(reversed(bundle["individual_rows"]))))
+
+            if not sections:
+                return ui.p("Nothing to show for the Arsenal view yet in this range.", class_="text-muted small")
+            return ui.div(*sections)
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Trends (Oct 2026, Ryker approved). One point per game (or week), a
+    # rolling line, and his / team / D2 reference lines. Math:
+    # analytics/trends.py, charts: visualizations/trend_charts.py.
+    # -------------------------------------------------------------------
+    def _trend_gate():
+        if not app_state.is_authenticated():
+            return False
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return False
+        req("pp_view" in input)
+        return input.pp_view() == "trends"
+
+    @render.ui
+    def pp_trends_section():
+        if not _trend_gate():
+            return None
+        return ui.div(
+            ui.p(ui.strong("Trends"), "  ", ui_helpers.how_to_link("trends"), style="margin-bottom:0;"),
+            ui.p("Is he getting better? Dots = each game (or week), red line = rolling average (pools the pitches, "
+                 "so one short outing doesn't swing it). Dotted = his average over this range, gray dashed = team, "
+                 "gold dashed = D2. Uses the date range above.", class_="text-muted small"),
+            ui.layout_columns(
+                    ui.input_radio_buttons("pp_trend_by", "Each point is", {"game": "A game", "week": "A week"},
+                                           selected="game", inline=True),
+                    ui.input_radio_buttons("pp_trend_roll", "Rolling line over", {"3": "3", "5": "5", "10": "10"},
+                                           selected="5", inline=True),
+                    col_widths=[6, 6],
+                ),
+            output_widget("pp_trend_metrics"),
+            ui.p(ui.strong("Velo, Stuff+ and Bauer units by pitch (Rapsodo: bullpens + games)"), "  ",
+                 ui_helpers.how_to_link("bauer_units", "What are Bauer units?"), style="margin:14px 0 0;"),
+            output_widget("pp_trend_velo"),
+            ui.hr(),
+            ui.p(ui.strong("Pitch mix over time"), "  ", ui_helpers.how_to_link("pitch_mix_trend"), style="margin:0;"),
+            ui.input_radio_buttons("pp_mix_src", None, {"games": "Games (charted)", "bullpens": "Bullpens (Rapsodo)"},
+                                   selected="games", inline=True),
+            ui.output_ui("pp_mix_read"),
+            output_widget("pp_mix_chart"),
+            ui.hr(),
+            ui.output_ui("pp_trend_fade"),
+        )
+
+    @render_plotly
+    def pp_trend_metrics():
+        req(_trend_gate())
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            req(pid)
+            ps = profile_queries.get_pitcher_profile_pitches(db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                                                             pitch_type=f["pitch_type"], game_scope=f["game_scope"])
+            req(ps)
+            team = trends.team_pitches_in_range(db, f["date_from"], f["date_to"], pitching=True)
+            by = input.pp_trend_by() if "pp_trend_by" in input else "game"
+            roll = int(input.pp_trend_roll()) if "pp_trend_roll" in input else 5
+            return trend_charts.metrics_figure(trends.build(db, ps, team, True, by, roll))
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_trend_velo():
+        req(_trend_gate())
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            req(pid)
+            by = input.pp_trend_by() if "pp_trend_by" in input else "game"
+            vs = trends.velo_stuff(db, pid, f["date_from"], f["date_to"], by)
+            req(vs)
+            return trend_charts.velo_stuff_figure(vs)
+        finally:
+            db.close()
+
+    def _mix_data():
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            req(pid)
+            by = input.pp_trend_by() if "pp_trend_by" in input else "game"
+            src = input.pp_mix_src() if "pp_mix_src" in input else "games"
+            if src == "bullpens":
+                raps = profile_queries.get_pitcher_rapsodo_pitches(db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                                                                   pitch_type=None) or []
+                return trends.mix_over_time(bullpen_raps=[r for r in raps if r.bullpen_id is not None], by=by)
+            ps = profile_queries.get_pitcher_profile_pitches(db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                                                             pitch_type=None, game_scope=f["game_scope"]) or []
+            return trends.mix_over_time(game_pitches=ps, by=by)
+        finally:
+            db.close()
+
+    @render.ui
+    def pp_mix_read():
+        req(_trend_gate())
+        mix = _mix_data()
+        if not mix["buckets"]:
+            return ui.p("No pitches in this range yet.", class_="text-muted small")
+        return ui.p(ui.strong(mix["read"]) if mix["read"] else
+                    "Usage % of each pitch per game (or week). No pitch has moved 8+ points lately.", class_="small")
+
+    @render_plotly
+    def pp_mix_chart():
+        req(_trend_gate())
+        mix = _mix_data()
+        req(mix["buckets"])
+        return trend_charts.mix_figure(mix)
+
+    @render.ui
+    def pp_trend_fade():
+        """Velo fade by outing (Oct 2026, analytics/velo_fade.py)."""
+        req(_trend_gate())
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            req(pid)
+            raps = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+                game_scope=f["game_scope"], game_id=f["game_id"],
+            )
+            return velo_fade_display.season_block(velo_fade.by_outing(raps or [], pitch_type_label))
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Stuff+ Breakdown (Oct 2026, Ryker, after Kyle Bland's "Why doesn't
+    # he get whiffs if he has good Stuff?" thread). Lives in the Arsenal
+    # view; staff + player. Math in analytics/stuff_breakdown.py.
+    # -------------------------------------------------------------------
+
+    @reactive.calc
+    def _sb_data():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "arsenal":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"], game_id=f["game_id"],
+            )
+            rapsodo_pitches = profile_queries.get_pitcher_rapsodo_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
+                game_scope=f["game_scope"], game_id=f["game_id"], game_linked_only=True,
+            )
+            if not rapsodo_pitches:
+                return None
+            breakdown, outcomes = stuff_breakdown.get_for_pitcher(db, rapsodo_pitches, game_pitches)
+            return {"breakdown": breakdown, "outcomes": outcomes}
+        finally:
+            db.close()
+
+    def _sb_entry():
+        data = _sb_data()
+        if not data:
+            return None, None
+        req("pp_sb_type" in input)
+        label = input.pp_sb_type()
+        entry = next((e for e in data["breakdown"] if e["label"] == label), None)
+        return entry, data["outcomes"].get(label)
+
+    def _sb_top_features(entry, k=3):
+        return [f for f in entry["features"] if entry["team_values"].get(f["name"])][:k]
+
+    @render.ui
+    def pp_sb_header():
+        entry, o = _sb_entry()
+        if entry is None:
+            return None
+        sp = entry["stuff_plus"]
+        cards = [
+            {"label": f"{entry['label']} Stuff+", "value": f"{sp:.0f}",
+             "delta": f"{sp - 100:+.0f} vs team avg", "delta_positive": sp >= 100},
+            {"label": "Rapsodo readings", "value": str(entry["n"])},
+            {"label": f"Team {entry['label']}s compared ({entry.get('team_pitchers', '—')} pitchers)",
+             "value": str(entry.get("team_n", "—"))},
+        ]
+        if o is not None:
+            cards.append({"label": "Game results vs team", "value": f"{o['gap']:+.2f}",
+                          "delta": "runs saved / 100 pitches" + ("" if o["enough"] else " · small sample"),
+                          "delta_positive": o["gap"] >= 0})
+        line = stuff_breakdown.why_line(entry, {entry["label"]: o} if o else None)
+        tips = []
+        for f in entry["features"]:
+            if f["contrib"] <= -2.0 and f["name"] in stuff_breakdown.FEATURE_TIPS:
+                want = stuff_breakdown.FEATURE_TIPS[f["name"]] if f["weight"] > 0 else "less " + f["label"].lower()
+                tips.append(ui.tags.li(ui.strong(f["label"]), f" is costing {abs(f['contrib']):.0f} points -- the model rewards {want}."))
+        kids = [ui_helpers.render_kpi_cards(cards)]
+        if line:
+            kids.append(ui.p(line, class_="gbo-sb-why"))
+        if tips:
+            kids.append(ui.tags.ul(*tips[:3], class_="gbo-sb-tips"))
+        kids.append(ui.p(
+            f"Compared only against team {entry['label']}s -- never other pitch types. 100 = the team's average "
+            f"{entry['label']}; each trait's bar is how many points it adds or costs.",
+            class_="text-muted small",
+        ))
+        if not entry.get("enough"):
+            kids.append(ui.p(f"Only {entry['n']} readings on this pitch -- read the bars loosely.", class_="text-muted small"))
+        return ui.div(*kids)
+
+    @render_plotly
+    def pp_sb_traits():
+        entry, _o = _sb_entry()
+        req(entry is not None and entry["features"])
+        return trait_impact_figure(entry)
+
+    @render.ui
+    def pp_sb_traits_note():
+        entry, _o = _sb_entry()
+        if entry is None:
+            return None
+        return ui.p("Hover a bar for his average, the team average and his percentile.", class_="text-muted small")
+
+    @render.ui
+    def pp_sb_strip_titles():
+        entry, _o = _sb_entry()
+        if entry is None:
+            return None
+        feats = _sb_top_features(entry)
+        if not feats:
+            return None
+        cards = []
+        for i, f in enumerate(feats):
+            tone = "up" if f["contrib"] >= 0 else "down"
+            right = ui.span(f"{ordinal(f['pct'])} pct", class_=f"gbo-sb-pct {tone}")
+            cards.append(ui_helpers.card(
+                ui.div(ui.span(fmt_value(f), class_="gbo-sb-val"),
+                       ui.span(f"  team {fmt_value(f, f['team_avg'])}  ·  {f['contrib']:+.1f} Stuff+", class_="text-muted small")),
+                output_widget(f"pp_sb_strip_{i}"),
+                title=f["label"], right=right, small=True,
+            ))
+        return ui.div(
+            ui.p(ui.strong("Where he ranks on the traits that matter most"),
+                 ui.span(f"  ·  grey = every team {entry['label']}, color = his", class_="text-muted small"),
+                 style="margin:14px 0 6px;"),
+            ui.layout_columns(*cards, col_widths=[12 // len(cards)] * len(cards)),
+        )
+
+    def _sb_strip(i):
+        entry, _o = _sb_entry()
+        req(entry is not None)
+        feats = _sb_top_features(entry)
+        req(len(feats) > i)
+        return strip_figure(entry, feats[i]["name"])
+
+    @render_plotly
+    def pp_sb_strip_0():
+        return _sb_strip(0)
+
+    @render_plotly
+    def pp_sb_strip_1():
+        return _sb_strip(1)
+
+    @render_plotly
+    def pp_sb_strip_2():
+        return _sb_strip(2)
+
+    @render_plotly
+    def pp_sb_outcomes():
+        entry, o = _sb_entry()
+        req(entry is not None and o is not None)
+        return outcome_figure(entry["label"], o)
+
+    @render.ui
+    def pp_sb_outcome_note():
+        entry, o = _sb_entry()
+        if entry is None:
+            return None
+        if o is None:
+            return ui.p("No game pitches with run value for this pitch yet.", class_="text-muted small")
+        sign = "better" if o["gap"] >= 0 else "worse"
+        msg = (f"{abs(o['gap']):.2f} runs per 100 pitches {sign} than team {entry['label']}s (n={o['n']}). "
+               "A red Balls bar = more costly balls than teammates; red Balls in play = more damage on contact.")
+        if not o["enough"]:
+            msg += f" Greyed until {stuff_breakdown.MIN_PITCHES_FOR_OUTCOMES} game pitches -- noisy at this size."
+        return ui.p(msg, class_="text-muted small")
+
+    # -------------------------------------------------------------------
+    # Count Leverage (Sept 2026, Ryker: "create a count leverage chart in
+    # pitcher stats looking at what pitches thrown in certain counts
+    # using pie charts" -- reference is Lance Brozdowski's "count
+    # leverage" framing and the Marlins' own pitch-calling system, both
+    # of which treat pitch selection as something that should shift with
+    # the count rather than stay fixed across an at-bat). Same
+    # render.ui-wrapper / render_plotly split every other chart-bearing
+    # view on this page uses (a render_plotly output needs its own
+    # registered function, not one nested inside a render.ui's return).
+    #
+    # vs RHH/vs LHH tabs added Sept 2026 (Ryker: "tabs like pitch type
+    # breakdown with one tree visible at a time") -- same get_batter_hands
+    # split as the Pitch Type Breakdown tabs above, in pp_arsenal_section.
+    # Each tab needs its own registered render_plotly function for the
+    # same nesting reason noted above, so there are three chart functions
+    # below (_all / _rhh / _lhh) instead of one.
+    # -------------------------------------------------------------------
+
+    # -------------------------------------------------------------------
+    # Sequencing (Oct 2026, from Paradigm's "Sequencing vs Tunneling" --
+    # Ryker picked "Pitch-pair sequencing"). What follows what, and how
+    # the second pitch did. Math in analytics/sequencing.py.
+    # -------------------------------------------------------------------
+    def _seq_gate():
+        if not app_state.is_authenticated():
+            return False
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return False
+        return "pp_view" in input and input.pp_view() == "sequencing"
+
+    @render.ui
+    def pp_sequencing_section():
+        if not _seq_gate():
+            return None
+        return ui.div(
+            ui.p(ui.strong("Sequencing"), "  ", ui_helpers.how_to_link("sequencing"), style="margin-bottom:0;"),
+            ui.p("How he strings pitches together, in four questions. Charted games only, with the date range above; "
+                 "locations come from Rapsodo. Faded = too few pitches to trust yet.", class_="text-muted small"),
+            ui.input_radio_buttons("pp_seq_side", "Hitters", {"all": "All", "R": "vs RHH", "L": "vs LHH"},
+                                   selected="all", inline=True),
+            ui.output_ui("pp_seq_table"),
+        )
+
+    def _seq_data():
+        """This pitcher's and the staff's game pitches in range, batter hands,
+        and Rapsodo locations -- shared by every Sequencing section."""
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            mine = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+                game_scope=f["game_scope"], game_id=f["game_id"],
+            ) or []
+            team = trends.team_pitches_in_range(db, f["date_from"], f["date_to"], pitching=True)
+            hands = get_batter_hands(db, list(mine) + list(team))
+            ids = [p.game_pitch_id for p in list(mine) + list(team)]
+            loc = sequencing.loc_map(profile_queries.rapsodo_by_game_pitch_id(db, ids))
+        finally:
+            db.close()
+        return mine, team, hands, loc
+
+    def _seq_head(title, how):
+        return ui.div(ui.h6(title, class_="gbo-seq-h"), ui.p(how, class_="text-muted small gbo-seq-how"))
+
+    def _seq_grid_html(g):
+        types = g["types"]
+        sh = sequencing.short
+        head = "".join(f"<th>{sh(t)}</th>" for t in types)
+        body = []
+        for a in types:
+            if not g["after"].get(a):
+                continue
+            tds = []
+            for b in types:
+                c = g["cells"].get((a, b))
+                if not c:
+                    tds.append('<td class="gbo-sg-empty">·</td>')
+                    continue
+                team = f" · staff {c['team_csw']}%" if c["team_csw"] is not None else ""
+                tip = f"{sh(a)} → {sh(b)}: {c['n']} times, {c['csw']}% CSW{team}"
+                tds.append(f'<td class="gbo-sg-{c["verdict"]}" title="{tip}"><b>{c["share"]}%</b>'
+                           f'<span>{c["n"]} · {c["csw"] if c["csw"] is not None else "—"}%</span></td>')
+            body.append(f'<tr><th class="gbo-sg-row">after {sh(a)}<span>{g["after"][a]} times</span></th>{"".join(tds)}</tr>')
+        return ui.HTML(f'<div class="gbo-sg-wrap"><table class="gbo-sg"><thead><tr><th class="gbo-sg-corner">next →</th>{head}</tr></thead>'
+                       f'<tbody>{"".join(body)}</tbody></table></div>')
+
+    @render.ui
+    def pp_seq_table():
+        if not _seq_gate():
+            return None
+        req("pp_seq_side" in input)
+        side = input.pp_seq_side()
+        data = _seq_data()
+        if data is None:
+            return None
+        mine, team, hands, loc = data
+        g = sequencing.grid(mine, hands, side, "all", team_pitches=team, loc=loc)
+        if not g["rows"]:
+            return ui_helpers.empty_state("No back-to-back pitches in this range yet -- sequencing needs charted games.")
+        sh = sequencing.short
+        legend = " · ".join(sorted({f"{sh(t)} = {t}" for t in g["types"]}))
+        notes = sequencing.takeaways(g["rows"])
+
+        # 1. What does he throw next?
+        s1 = ui.div(
+            _seq_head("1. What does he throw next?",
+                      "Read across a row: after that pitch, how often each pitch comes next (big number). Small numbers = "
+                      "times thrown · CSW % (called strikes + whiffs) on the next pitch. Green = that follow-up gets more "
+                      "CSW than the same pair across our staff, red = less, faded = fewer than "
+                      f"{sequencing.MIN_N} times."),
+            *[ui.p(ui.strong(n), class_="small", style="margin:0 0 4px;") for n in notes],
+            _seq_grid_html(g),
+            ui.p(legend, class_="text-muted small", style="margin:4px 0 0;"),
+            class_="gbo-seq-sec",
+        )
+
+        # 2. Is he predictable?
+        pr = sequencing.predictability(mine, hands, side)
+        flags = [r for r in pr if r["flag"]]
+        rel = [r for r in pr if r["reliable"]][:12]
+        if flags:
+            flag_el = ui.div(*[ui.p(ui.HTML(
+                f'<span class="gbo-seq-flag">{r["count"]}</span> after a {sh(r["after"])}: '
+                f'<b>{sh(r["top"])} {r["top_share"]}%</b> of the time ({r["n"]} times) -- a hitter can sit on it.'),
+                class_="small", style="margin:0 0 4px;") for r in flags[:6]])
+        elif rel:
+            flag_el = ui.p("Nothing a hitter can sit on: no count + previous pitch where one pitch comes "
+                           f"{sequencing.PREDICTABLE_SHARE}%+ of the time.", class_="small text-success")
+        else:
+            flag_el = ui.p("Not enough pitches yet to judge.", class_="small text-muted")
+        s2 = ui.div(
+            _seq_head("2. Is he predictable?",
+                      "From the hitter's side: in this count, right after this pitch, what's coming? Flagged when one "
+                      f"pitch comes {sequencing.PREDICTABLE_SHARE}%+ of the time (at least {sequencing.PREDICTABLE_MIN_N} times)."),
+            flag_el,
+            ui_helpers.render_dict_table([
+                {"Count": r["count"], "After": sh(r["after"]), "Next pitch": r["mix"], "Times": r["n"]} for r in rel
+            ]) if rel else None,
+            class_="gbo-seq-sec",
+        )
+
+        # 3. Changing eye level / sides
+        mv = sequencing.location_moves(mine, loc, hands, side, "all")
+
+        def mv_rows(rows):
+            return [{"2nd pitch": r["label"], "Times": r["n"],
+                     "CSW %": f"{r['csw']}%" if r["csw"] is not None else "—",
+                     "Whiff %": f"{r['whiff']}%" if r["whiff"] is not None else "—",
+                     "Chase %": f"{r['chase']}%" if r["chase"] is not None else "—"} for r in rows]
+        s3 = ui.div(
+            _seq_head("3. Is changing eye level and sides working?",
+                      "Back-to-back pitches graded by where the 2nd one went compared to the 1st (Rapsodo location). "
+                      "Went down/up = at least 9 inches lower/higher; in/away is from the hitter's side. "
+                      f"{mv['pairs_used']} pairs had a Rapsodo location on both pitches."),
+            ui.layout_columns(
+                ui.div(ui.p(ui.strong("Up / down"), class_="small", style="margin:0 0 2px;"),
+                       ui_helpers.render_dict_table(mv_rows(mv["vertical"]))),
+                ui.div(ui.p(ui.strong("In / away"), class_="small", style="margin:0 0 2px;"),
+                       ui_helpers.render_dict_table(mv_rows(mv["horizontal"]))),
+                col_widths={"sm": [12, 12], "lg": [6, 6]},
+            ) if mv["pairs_used"] else ui.p("No back-to-back pitches with Rapsodo locations in this range yet.", class_="small text-muted"),
+            class_="gbo-seq-sec",
+        )
+
+        # 4. How does he finish hitters?
+        fin = sequencing.finishing(mine, loc, hands, side)
+        fin_rows = [r for r in fin["rows"] if r["reliable"]][:10] or fin["rows"][:6]
+        s4 = ui.div(
+            _seq_head("4. How does he finish hitters?",
+                      "At-bats that got to two strikes: the last two pitches (setup → finish) and how they ended. "
+                      "'up' / 'down' = top or bottom third of the zone and beyond (Rapsodo)."),
+            ui_helpers.render_dict_table([
+                {"Setup → finish": r["label"], "At-bats": r["n"], "K": r["k"],
+                 "K %": f"{r['k_pct']}%" if r["k_pct"] is not None else "—",
+                 "Hits": r["hit"], "BB/HBP": r["walk"], "Other outs": r["out"]} for r in fin_rows
+            ]) if fin_rows else ui.p("No two-strike at-bats in this range yet.", class_="small text-muted"),
+            ui.p(ui.strong("Most common strikeout sequences (last 3 pitches): "),
+                 " · ".join(f"{s} ({k})" for s, k in fin["k_seqs"]), class_="small", style="margin-top:6px;")
+            if fin["k_seqs"] else None,
+            class_="gbo-seq-sec",
+        )
+
+        # Details: the old pair table, trimmed
+        detail = ui.tags.details(
+            ui.tags.summary("All pairs (details)"),
+            ui_helpers.render_dict_table([{
+                "Pair": r["label"], "Times": r["n"], "Next-pitch share": f"{r['share']}%" if r["share"] is not None else "—",
+                "CSW %": f"{r['csw']}%" if r["csw"] is not None else "—",
+                "Whiff %": f"{r['whiff']}%" if r["whiff"] is not None else "—",
+                "Staff CSW %": (f"{g['cells'][(r['first'], r['second'])]['team_csw']}%"
+                                if g["cells"][(r["first"], r["second"])]["team_csw"] is not None else "—"),
+            } for r in g["rows"]]),
+            class_="gbo-seq-details",
+        )
+        return ui.div(s1, s2, s3, s4, detail)
+
+    @render.ui
+    def pp_count_leverage_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "count_leverage":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            if not game_pitches:
+                return ui.p("No game pitches in this range yet.", class_="text-muted small")
+            counts = compute_pitch_mix_by_count(game_pitches)
+            if not any(counts[c]["Total"] for c in counts):
+                return ui.p(
+                    "No pitches with a recorded count in this range yet.",
+                    class_="text-muted small",
+                )
+
+            _hands = get_batter_hands(db, game_pitches)
+            vs_rhh = [p for p in game_pitches if _hands.get(p.game_pitch_id) == "R"]
+            vs_lhh = [p for p in game_pitches if _hands.get(p.game_pitch_id) == "L"]
+            rhh_counts = compute_pitch_mix_by_count(vs_rhh)
+            lhh_counts = compute_pitch_mix_by_count(vs_lhh)
+            rhh_has_counts = any(rhh_counts[c]["Total"] for c in rhh_counts)
+            lhh_has_counts = any(lhh_counts[c]["Total"] for c in lhh_counts)
+
+            return ui.div(
+                ui.p(ui.strong("Count Leverage")),
+                ui.p(
+                    "What he throws in every count. 0-0 is at the top; counts where he's ahead lean left, counts "
+                    "where he's behind lean right, down to 3-2 at the bottom. Each pie is that count only (pitches "
+                    "in its title). Hover a slice to see if that pitch is working there -- a negative run value is "
+                    "good for him. Rule of thumb: best strike pitch early, put-away pitch with two strikes.",
+                    class_="text-muted small",
+                ),
+                ui.navset_tab(
+                    ui.nav_panel("All Batters", output_widget("pp_count_leverage_chart_all")),
+                    ui.nav_panel(
+                        "vs RHH",
+                        output_widget("pp_count_leverage_chart_rhh") if rhh_has_counts
+                        else ui.p("No pitches with a recorded count vs a right-handed batter in this range.", class_="text-muted small"),
+                    ),
+                    ui.nav_panel(
+                        "vs LHH",
+                        output_widget("pp_count_leverage_chart_lhh") if lhh_has_counts
+                        else ui.p("No pitches with a recorded count vs a left-handed batter in this range.", class_="text-muted small"),
+                    ),
+                ),
+            )
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_count_leverage_chart_all():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "count_leverage":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            if not game_pitches:
+                return None
+            counts = compute_pitch_mix_by_count(game_pitches)
+            return count_leverage_chart(counts)
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_count_leverage_chart_rhh():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "count_leverage":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            if not game_pitches:
+                return None
+            _hands = get_batter_hands(db, game_pitches)
+            vs_rhh = [p for p in game_pitches if _hands.get(p.game_pitch_id) == "R"]
+            if not vs_rhh:
+                return None
+            counts = compute_pitch_mix_by_count(vs_rhh)
+            return count_leverage_chart(counts)
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_count_leverage_chart_lhh():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "count_leverage":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            if not game_pitches:
+                return None
+            _hands = get_batter_hands(db, game_pitches)
+            vs_lhh = [p for p in game_pitches if _hands.get(p.game_pitch_id) == "L"]
+            if not vs_lhh:
+                return None
+            counts = compute_pitch_mix_by_count(vs_lhh)
+            return count_leverage_chart(counts)
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_trend_chart():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "overview":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            game_pitch_ids = [p.game_pitch_id for p in game_pitches]
+            rap_by_gp = profile_queries.rapsodo_by_game_pitch_id(db, game_pitch_ids)
+            stuff_baselines = profile_queries.team_stuff_plus_baselines(db)
+            location_baseline = profile_queries.team_location_plus_baseline(db)
+            pitch_points = []
+            for p in game_pitches:
+                label = p.pitch_type.type_name if p.pitch_type else "Unspecified"
+                rap = rap_by_gp.get(p.game_pitch_id)
+                s_val = stuff_plus(rap, stuff_baselines.get(label)) if rap is not None else None
+                l_val = location_plus(p, location_baseline)
+                pi_val = pitching_plus(s_val, l_val)
+                if pi_val is not None and p.game is not None:
+                    pitch_points.append((p.game.game_id, p.game.game_date, pi_val))
+            # One point per OUTING (mean/lo/hi), not per pitch -- see
+            # profile_queries.aggregate_trend_by_game's docstring.
+            points = profile_queries.aggregate_trend_by_game(pitch_points)
+            return profile_charts.trend_chart(points, y_label="Pitching+")
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Command Target Zones -- same code pitcher_game_report.py uses
+    # (Command Tracker's own scorecard/table/chart via
+    # command_metrics.game_pitches_command_view), scoped by this page's
+    # filters instead of a single game_id. Own render.ui/render_plotly
+    # split, same reason as pitcher_game_report.py: a render_plotly
+    # output needs its own registered function.
+    # -------------------------------------------------------------------
+
+    @render.ui
+    def pp_command_lanes():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        req("pp_lanes_type" in input)
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        want = input.pp_lanes_type()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            player = db.query(Player).filter(Player.player_id == pid).first() if pid is not None else None
+            if player is None:
+                return None
+            throws = player.throws
+            f = _current_filters()
+            pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"], game_id=f["game_id"],
+            ) or []
+            sel = [p for p in pitches
+                   if want == "__all__" or (p.pitch_type is not None and p.pitch_type.type_name == want)]
+            hands = get_batter_hands(db, sel)
+        finally:
+            db.close()
+        if not sel:
+            return None
+        side = input.pp_lanes_side() if "pp_lanes_side" in input else "all"
+        if side in ("R", "L"):
+            sel = [p for p in sel if hands.get(p.game_pitch_id) == side]
+        return command_lanes_display.lanes_block(command_lanes.compute_lanes(sel, hands, throws))
+
+    @reactive.calc
+    def _view_pitches():
+        """Command Target Zones' filtered view-pitch list, shared by
+        pp_command_section/pp_command_table/pp_command_chart below.
+        Was a plain function taking a caller-supplied `db`, called
+        fresh (a full query) from each of those three render
+        functions independently on every reactive tick -- now computed
+        once and reused, same @reactive.calc memoization pattern
+        bullpen_dashboard.py's _resolved() already uses for the
+        identical reason. Opens and fully closes its own db session
+        (rather than reusing a caller's) so the cached result is safe
+        to read after this function returns, no matter which caller
+        reads it or when -- game_pitches_command_view()'s objects only
+        carry plain scalars plus the already-joinedload'd .pitch_type
+        (see profile_queries._base_pitching_query), so nothing on them
+        needs a live session once this returns."""
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None, None
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None, None
+            player = db.query(Player).filter(Player.player_id == pid).first()
+            if player is None:
+                return None, None
+            f = _current_filters()
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            if not game_pitches:
+                return None, None
+            return command_metrics.game_pitches_command_view(game_pitches, player.throws), player.throws
+        finally:
+            db.close()
+
+    def _team_command_plus_baselines(db):
+        """Same all-time, all-games team population Pitcher Game Breakdown's
+        Command+ uses (see that module's docstring) -- not scoped to
+        this page's own filters, a stable roster-wide reference. Returns
+        command_metrics.team_command_plus_baselines()'s {"pooled": (mean,
+        stdev, n), "by_type": {...}} -- Sept 2026, widened so
+        session_command_plus() can grade each pitch against its own
+        pitch type (see that function's module comment in
+        analytics/command_metrics.py for why)."""
+        return profile_queries.team_command_baselines(db)   # cached (egress fix)
+
+    def _team_havaa_baseline(db):
+        """Team-wide Height-Adjusted VAA baseline (Sept 2026, Ryker:
+        "add height adjusted vertical approach angle (HAVAA) to pitcher
+        profile") -- ported from bullpen_dashboard_display.py's own
+        _team_havaa_baseline_query/_havaa_baseline rather than
+        reinventing it. HAVAA compares a pitch's VAA against every
+        OTHER pitch in a real game (any pitcher) that crossed the plate
+        at roughly the same height, so this is deliberately NOT scoped
+        to this page's own player/date filters -- same
+        team-wide-population idea as _team_command_plus_baselines
+        above. Only pulls the 4 columns calculate_estimated_vaa needs,
+        filtered not-null here so a missing value can't silently
+        produce a bad baseline entry.
+
+        Games-only (Sept 2026, Ryker: "i want pitcher profile to only
+        pull pitches from games") -- excludes bullpen-sourced readings
+        via RapsodoPitch.bullpen_id.is_(None), same filter every
+        rapsodo_pitches query on this page now applies (see
+        profile_queries.get_pitcher_rapsodo_pitches' game_linked_only
+        param), so the population a pitcher's OWN games-only HAVAA gets
+        compared against matches what's actually being measured."""
+        rows = (
+            db.query(RapsodoPitch)
+            .options(joinedload(RapsodoPitch.pitch_type))
+            .filter(
+                RapsodoPitch.bullpen_id.is_(None),
+                RapsodoPitch.release_height.isnot(None),
+                RapsodoPitch.release_angle.isnot(None),
+                RapsodoPitch.release_extension.isnot(None),
+                RapsodoPitch.plate_z_ft.isnot(None),
+            )
+            .all()
+        )
+        return team_havaa_baseline(vaa_trajectory_triples(rows))
+
+    def _cmd_bias_label(bias):
+        parts = []
+        if bias["horizontal_bias_in"] is not None:
+            parts.append(f'{bias["horizontal_bias_in"]:.1f}" {bias["horizontal_bias_label"]}')
+        if bias["vertical_bias_in"] is not None:
+            parts.append(f'{bias["vertical_bias_in"]:.1f}" {bias["vertical_bias_label"]}')
+        return " / ".join(parts) if parts else "—"
+
+    @render.ui
+    def pp_command_section():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        _current_filters()
+        view_pitches, _throws = _view_pitches()
+        if not view_pitches:
+            return None
+        return ui.div(
+            # Oct 2026 (Ryker): Zone Execution % -- called cell + 6 in cushion.
+            ui.div(
+                ui.p(ui.strong("Zone Execution"), "  ", ui_helpers.how_to_link("zone_execution"), style="margin:0;"),
+                ui_helpers.glossary_link("pp_glossary_command", "Command Glossary"),
+                style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;",
+            ),
+            ui.p(
+                "A pitch hits its spot if it lands in the box the catcher called, or within 6 inches (half a foot) of it. Calls "
+                "off the plate (the outside boxes) count anywhere off the plate on that side.",
+                class_="text-muted small",
+            ),
+            ui.output_ui("pp_zone_exec"),
+            ui.hr(),
+            ui.output_ui("pp_release_consistency"),
+            # Oct 2026 (Ryker, after "Learning to miss better"): command by
+            # where the catcher set up -- analytics/command_lanes.py.
+            ui.p(ui.strong("Command by Target Lane")),
+            ui.p("Where the catcher set up (in / middle / away from the hitter, up / middle / down) and how close he got. "
+                 "Shows whether working the corners is costing him the zone.", class_="text-muted small"),
+            ui.div(
+                ui.input_select("pp_lanes_type", "Pitch type", choices={"__all__": "All pitches"} | {t: t for t in sorted({x.pitch_type.type_name for x in view_pitches if x.pitch_type is not None})}),
+                ui.input_radio_buttons("pp_lanes_side", "Hitters", choices={"all": "All", "R": "vs RHH", "L": "vs LHH"}, inline=True),
+                style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end;",
+            ),
+            ui.output_ui("pp_command_lanes"),
+            ui.hr(),
+            ui.p(ui.strong("Command Target Zones")),
+            ui.p(
+                "Same Precision/Command/Competitive target-radius bands and concentric-ring chart Command "
+                "Tracker uses -- built from this window's intended-vs-actual pitch locations. Only pitches with "
+                "a logged intended location count (a real opponent's pitcher never has one on file).",
+                class_="text-muted small",
+            ),
+            ui.output_ui("pp_command_table"),
+            output_widget("pp_command_chart"),
+
+            ui.hr(),
+            ui.p(ui.strong("Miss Map")),
+            ui.p(
+                "Every pitch placed by how it missed its called spot, one panel per pitch. Arm side is always to "
+                "the right (lefties flipped to match). The gold star is his average miss -- the way he leans. A "
+                "pitch that landed inside the called spot sits on the center x.",
+                class_="text-muted small",
+            ),
+            output_widget("pp_miss_map"),
+
+            ui.hr(),
+            ui.p(ui.strong("Attack Zones")),
+            ui.p(
+                "Heart = down the middle, Shadow = straddles the zone edge, Chase = tempting but outside, Waste "
+                "= nowhere near. GBO approximation of Statcast's own tiers.",
+                class_="text-muted small",
+            ),
+            ui.output_ui("pp_attack_zones_table"),
+            output_widget("pp_attack_zones_chart"),
+
+            ui.hr(),
+            ui.p(ui.strong("Miss by Call")),
+            ui.p(
+                "For pitches called to each location, by pitch type, how they actually missed on average -- scan "
+                "for a pitch/call combo that consistently misses the same way.",
+                class_="text-muted small",
+            ),
+            ui.output_ui("pp_miss_by_call_table"),
+
+            ui.hr(),
+            ui.p(ui.strong("Pitch Targeting Plan")),
+            ui.p(
+                "Recommended aim point per pitch type -- shifted opposite this pitcher's own average miss bias "
+                "for that pitch, so if he tends to miss glove side on his slider, the recommendation aims a bit "
+                "arm side of the true target instead.",
+                class_="text-muted small",
+            ),
+            ui.output_ui("pp_targeting_plan_table"),
+            output_widget("pp_targeting_plan_chart"),
+        )
+
+    @render.ui
+    def pp_zone_exec():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        from analytics import zone_execution as ze
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            player = db.query(Player).filter(Player.player_id == pid).first()
+            f = _current_filters()
+            pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=f["pitch_type"],
+                game_scope=f["game_scope"], game_id=f["game_id"])
+            rep = ze.breakdown(pitches, player.throws if player else None)
+        finally:
+            db.close()
+        if rep is None:
+            return ui.p("No pitches with both a called spot and a charted location in this window.",
+                        class_="text-muted small")
+        o, m = rep["overall"], rep["miss"]
+        cards = [
+            {"label": "Zone Execution %", "value": f"{o['pct']:.0f}%" if o["pct"] is not None else "—",
+             "delta": f"{o['hits']} of {o['n']} hit their spot"},
+            {"label": "Missed over the middle", "value": f"{m['over_middle']:.0f}%" if m["over_middle"] is not None else "—",
+             "delta": "of his misses -- the ones that get hit", "delta_positive": (m["over_middle"] or 0) < 20},
+            {"label": "Miss lean", "value": (m["lean"] or "No clear lean").capitalize(),
+             "delta": f"from {m['n']} misses"},
+        ]
+
+        def _rows(items):
+            return [{"": r["label"], "Zone Exec %": f"{r['pct']:.0f}%" if r["pct"] is not None else "—",
+                     "Hit": r["hits"], "Pitches": r["n"]} for r in items]
+        miss_rows = [{"Missed": k, "% of misses": f"{m[key]:.0f}%" if m[key] is not None else "—"}
+                     for k, key in (("Up", "up"), ("Down", "down"), ("Arm side", "arm"), ("Glove side", "glove"),
+                                    ("Over the middle", "over_middle"))]
+        return ui.div(
+            ui_helpers.render_kpi_cards(cards),
+            ui.layout_columns(
+                ui_helpers.card(ui_helpers.render_dict_table(_rows(rep["by_type"])), title="By pitch"),
+                ui_helpers.card(ui_helpers.render_dict_table(_rows(rep["by_count"])), title="By count"),
+                ui_helpers.card(ui_helpers.render_dict_table(miss_rows),
+                                ui.p("A miss can be both up and arm side, so these don't add to 100%.",
+                                     class_="text-muted small"), title="When he misses"),
+                col_widths=[4, 4, 4],
+            ),
+        )
+
+    @render.ui
+    def pp_command_table():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        view_pitches, throws = _view_pitches()
+        if not view_pitches:
+            return None
+        scorecard = command_metrics.session_command_scorecard(view_pitches)
+        db = get_session()
+        try:
+            if scorecard["located_pitches"] == 0:
+                return ui.p("No pitches have an actual location recorded yet -- needs Video Review or a Rapsodo link.", class_="text-muted small")
+
+            baselines = _team_command_plus_baselines(db)
+            command_plus_value = None
+            if baselines["pooled"][2] >= command_metrics.MIN_BASELINE_PITCHES:
+                command_plus_value = command_metrics.session_command_plus(view_pitches, baselines)
+
+            tier_cards = [
+                {"label": f'{label} Hit% (\u2264{radius:.0f}")', "value": _fmt_pct(scorecard["tier_pcts"].get(label))}
+                for radius, label in command_config.TARGET_RADII_IN
+            ]
+            children = [ui_helpers.render_kpi_cards([
+                {"label": "Located / Total", "value": f'{scorecard["located_pitches"]}/{scorecard["total_pitches"]}'},
+                {"label": "Command+", "value": _fmt_grade(command_plus_value)},
+                {"label": "Avg Miss", "value": f'{scorecard["avg_miss_distance"]}"' if scorecard["avg_miss_distance"] is not None else "—"},
+                *tier_cards,
+                {"label": "Major Miss %", "value": _fmt_pct(scorecard["major_miss_pct"])},
+            ])]
+            bias = command_metrics.miss_bias(view_pitches, throws)
+            children.append(ui.p(f"Average miss bias: {_cmd_bias_label(bias)}", class_="text-muted small mt-2"))
+
+            # Command+ by pitch type (Ryker, Sept 2026: "i want command+
+            # by pitch type to show up in pitcher profile command and
+            # execution" -- same table/column Pitcher Game Breakdown already
+            # has, added here too since Pitcher Profile's own window can
+            # span multiple games/a date range, which is exactly the
+            # larger sample this needs to be a trustworthy read (a
+            # single game's count of one pitch type is noisy -- see the
+            # caption below).
+            plus_by_type = (
+                command_metrics.command_plus_by_pitch_type(view_pitches, baselines)
+                if baselines["pooled"][2] >= command_metrics.MIN_BASELINE_PITCHES else {}
+            )
+            by_type = command_metrics.command_by_pitch_type(view_pitches, throws)
+            if len(by_type) > 1:
+                # Ryker, Sept 2026: "the command+ should be the big card
+                # style look ... by pitch type and then put command+ and
+                # big cards have each pitch and its respective command+.
+                # so we know what pitch each pitcher commands best, if
+                # there is one he struggles with, etc" -- one KPI-style
+                # card per pitch type instead of a column buried in the
+                # detail table below, so the best/worst pitch reads at a
+                # glance rather than requiring a scan across columns.
+                if plus_by_type:
+                    children.append(ui.h6("Command+ by pitch type", class_="mt-3"))
+                    children.append(ui_helpers.render_kpi_cards([
+                        {"label": row["Pitch Type"], "value": _fmt_grade(plus_by_type.get(row["Pitch Type"]))}
+                        for row in by_type
+                    ]))
+                    children.append(ui.p(
+                        "Which pitch this pitcher commands best -- and which he struggles with -- at a glance. "
+                        "Same Command+ scale as the KPI above (100 = team average for that pitch type), just "
+                        "broken out per pitch instead of blended into one number. A small pitch count for one "
+                        "type is a noisy read -- widen the date range above for a steadier number.",
+                        class_="text-muted small",
+                    ))
+                by_type_rows = []
+                for row in by_type:
+                    tier_cols = {
+                        f'{label} % (\u2264{radius:.0f}")': (row["Tier Pcts"].get(label) if row["Tier Pcts"].get(label) is not None else "—")
+                        for radius, label in command_config.TARGET_RADII_IN
+                    }
+                    by_type_rows.append({
+                        "Pitch Type": row["Pitch Type"],
+                        "Pitches": row["Pitches"],
+                        "Avg Miss (in)": row["Avg Miss"] if row["Avg Miss"] is not None else "—",
+                        "Danger-Adj. Miss (in)": row["Danger-Adj. Miss"] if row["Danger-Adj. Miss"] is not None else "—",
+                        "Command Execution %": row["Command Execution %"] if row["Command Execution %"] is not None else "—",
+                        **tier_cols,
+                        "Major Miss %": row["Major Miss %"] if row["Major Miss %"] is not None else "—",
+                        "Miss Bias": _cmd_bias_label(row["Miss Bias"]),
+                    })
+                children.append(ui.h6("By pitch type", class_="mt-3"))
+                children.append(ui_helpers.render_dict_table(by_type_rows))
+
+            # Per-pitch miss direction (Ryker, Sept 2026: "would like to
+            # be able to see a miss bias for each individual pitch ...
+            # figure out why they miss where they miss ... if i am
+            # trying to go down and away do i always miss arm side") --
+            # no inches, just which way each pitch missed and what it
+            # was called, so a pattern by call is scannable at a glance.
+            children.append(ui.h6("Miss direction by pitch", class_="mt-3"))
+            children.append(ui.p(
+                "Called is the pitcher's own Level+Zone code (e.g. \"25\") for that pitch's target -- scan for a "
+                "repeated code to see whether that call tends to miss the same way.",
+                class_="text-muted small",
+            ))
+            children.append(ui_helpers.render_dict_table(command_metrics.miss_direction_rows(view_pitches, throws)))
+
+            return ui.div(*children)
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_command_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        view_pitches, _throws = _view_pitches()
+        if not view_pitches:
+            return None
+        located = [p for p in view_pitches if p.horizontal_miss is not None]
+        if not located:
+            return None
+        return command_charts.command_chart(view_pitches)
+
+    @render_plotly
+    def pp_miss_map():
+        """Oct 2026, Ryker: "build miss map" -- see command_charts.miss_map."""
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        view_pitches, throws = _view_pitches()
+        if not view_pitches:
+            return None
+        return command_charts.miss_map(view_pitches, throws)
+
+    # -------------------------------------------------------------------
+    # Attack Zones / Miss by Call / Pitch Targeting Plan -- Sept 2026,
+    # Ryker: "for pitcher profile command and execution tab add: attack
+    # zones with attack zone chart ... miss by call, pitch targeting
+    # plan, and command+." Command+ is the pre-existing Command Target
+    # Zones block above. Attack Zones needs RAW GamePitch rows (all
+    # located pitches, intended location irrelevant) so it queries
+    # profile_queries directly rather than reusing _view_pitches()'s
+    # command-view wrapper, which excludes any pitch with no intended
+    # location on file -- same reasoning pitcher_game_report.py's
+    # command_execution_section/attack_zones_chart already established;
+    # chart itself now lives in visualizations/attack_zones_chart.py so
+    # both pages share one implementation. Miss by Call and Pitch
+    # Targeting Plan are both intent-vs-actual comparisons, so they
+    # reuse _view_pitches() like Command Target Zones does, and mirror
+    # pitcher_game_report.py's command_target_section/
+    # pitch_targeting_plan_section table layouts exactly.
+    # -------------------------------------------------------------------
+
+    @render.ui
+    def pp_attack_zones_table():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            if not game_pitches:
+                return None
+            az_overall, az_by_type = compute_attack_zones(game_pitches)
+            if az_overall["Located"] == 0:
+                return ui.p("No located pitches yet.", class_="text-muted small")
+            return ui.div(
+                ui_helpers.render_kpi_cards([
+                    {"label": "Heart %", "value": _fmt_pct(az_overall["Heart %"])},
+                    {"label": "Shadow %", "value": _fmt_pct(az_overall["Shadow %"])},
+                    {"label": "Chase Zone %", "value": _fmt_pct(az_overall["Chase Zone %"])},
+                    {"label": "Waste %", "value": _fmt_pct(az_overall["Waste %"])},
+                ]),
+                ui_helpers.render_dict_table(az_by_type),
+            )
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_attack_zones_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        f = _current_filters()
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            if pid is None:
+                return None
+            game_pitches = profile_queries.get_pitcher_profile_pitches(
+                db, pid, date_from=f["date_from"], date_to=f["date_to"],
+                pitch_type=f["pitch_type"], game_scope=f["game_scope"],
+                game_id=f["game_id"],
+            )
+            located = [p for p in game_pitches if p.actual_plate_x is not None and p.actual_plate_z is not None]
+            if not located:
+                return None
+            return attack_zones_figure(located)
+        finally:
+            db.close()
+
+    @render.ui
+    def pp_miss_by_call_table():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        view_pitches, throws = _view_pitches()
+        if not view_pitches:
+            return None
+        call_rows = command_metrics.miss_by_call(view_pitches, throws)
+        if not call_rows:
+            return ui.p("No called pitches with a logged location yet.", class_="text-muted small")
+        return ui_helpers.render_dict_table([
+            {
+                "Pitch Type": row["Pitch Type"],
+                "Called": row["Called"],
+                "Pitches": row["Pitches"],
+                "Typical Miss": _cmd_bias_label(row["Miss Bias"]),
+            }
+            for row in call_rows
+        ])
+
+    @render.ui
+    def pp_targeting_plan_table():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        view_pitches, throws = _view_pitches()
+        if not view_pitches:
+            return None
+        plan = command_metrics.pitch_targeting_plan(view_pitches, throws)
+        if not plan:
+            return ui.p(
+                f"Pitch Targeting Plan needs at least {command_metrics.MIN_TARGETING_PITCHES} located pitches "
+                "of a given pitch type in this window to recommend an aim point -- none qualify yet.",
+                class_="text-muted small",
+            )
+        return ui_helpers.render_dict_table([
+            {
+                "Pitch Type": row["Pitch Type"],
+                "Located": row["Located"],
+                "Bias": row["Bias"],
+                "Recommended Aim Shift": f'{row["recommended_aim_horizontal_in"]:+.1f}" horiz / {row["recommended_aim_vertical_in"]:+.1f}" vert',
+            }
+            for row in plan
+        ])
+
+    @render_plotly
+    def pp_targeting_plan_chart():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "command":
+            return None
+        view_pitches, throws = _view_pitches()
+        if not view_pitches:
+            return None
+        plan = command_metrics.pitch_targeting_plan(view_pitches, throws)
+        if not plan:
+            return None
+        return command_charts.pitch_targeting_chart(plan)
+
+    # -------------------------------------------------------------------
+    # Arsenal Plan (Oct 2026, Ryker sent Paradigm's REAPER thread: "build
+    # it"). Keep / tune / add, built off his own fastball and arm slot --
+    # see analytics/arsenal_plan.py for the rules and their limits.
+    # Players see it; FS_SWITCH_ROLES can save their own target shapes.
+    # -------------------------------------------------------------------
+    _ap_tick = reactive.Value(0)
+
+    def _ap_overrides(db, pid):
+        try:
+            rows = db.query(ArsenalTarget).filter(ArsenalTarget.player_id == pid).all()
+        except Exception:
+            db.rollback()
+            return {}
+        return {r.family: {"velo": float(r.velo) if r.velo is not None else None, "ivb": float(r.ivb),
+                           "run": float(r.run), "note": r.note} for r in rows}
+
+    def _ap_data(db):
+        pid = _current_player_id(db)
+        if pid is None:
+            return None, None, None
+        player = db.query(Player).filter(Player.player_id == pid).first()
+        if player is None:
+            return None, None, None
+        f = _current_filters()
+        games_only = ("pp_ap_source" in input) and input.pp_ap_source() == "games"
+        raps = profile_queries.get_pitcher_rapsodo_pitches(
+            db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+            game_scope=f["game_scope"], game_id=f["game_id"], game_linked_only=games_only,
+        )
+        fb_like = [p for p in raps if pitch_type_label(p) in arsenal_plan.FASTBALLS]
+        arm, _n = average_estimated_arm_angle(fb_like or raps, player)
+        heights = [float(p.release_height) for p in (fb_like or raps) if p.release_height is not None]
+        rel_h = sum(heights) / len(heights) if heights else None
+        overrides = _ap_overrides(db, pid)
+        plan = arsenal_plan.build_plan(raps, player.throws or "R", arm, rel_h, overrides=overrides, label_of=pitch_type_label)
+        return player, plan, raps
+
+    def _slider_fit_card(db, player, plan, raps):
+        """Slider type + fit (Oct 2026, analytics/slider_fit.py)."""
+        try:
+            model = ivb_expected.get_model(db)
+            scored = ivb_expected.score_pitches(raps, player, model)
+            overs = {lab: ivb_expected.over_for_type(scored, lab) for lab in {r["label"] for r in scored}}
+            fit = slider_fit.build(plan, raps, pitch_type_label, player.throws or "R", overs)
+        except Exception:
+            return None
+        if fit is None:
+            return None
+        names = {"gyro": "a hard gyro slider", "sweeper": "a sweeper", "either": "either a gyro slider or a sweeper"}
+        if fit["se"] is None:
+            hint = ui.p(f"Not enough fastball spin-efficiency readings yet ({fit['n_se']} of 5) for the fit hint.",
+                        class_="text-muted small")
+        else:
+            lean_txt = {"pronator": "leans pronator", "supinator": "leans supinator",
+                        "neutral": "sits in between"}[fit["lean"]]
+            line = (f"Fastball spin efficiency {fit['se']:.0f}% -- {lean_txt}, which usually suits "
+                    f"{names[fit['suggested']]}. His arm slot / fastball shape points to {names[fit['slot_suggested']]}.")
+            if fit["agree"] is True:
+                line += " Both agree."
+            elif fit["agree"] is False:
+                line += " These disagree -- worth trying both grips in a bullpen and letting the Rapsodo shape decide."
+            hint = ui.p(line, class_="small")
+        items = []
+        for r in fit["rows"]:
+            c = r["cur"]
+            over = f" · {r['ivb_over']:+.1f}\" ride vs. his slot" if r["ivb_over"] is not None else ""
+            v = f"{c['velo']:.1f} mph · " if c.get("velo") is not None else ""
+            items.append(ui.div(
+                ui.strong(f"{r['label']}: ", style=f"color:{get_pitch_color(r['label'])};"),
+                ui.strong(r["type_name"]),
+                ui.div(f"{v}{c['ivb']:.1f}\" ride · {-c['run']:.1f}\" glove-side{over}", class_="small"),
+                *[ui.div(n, class_="small text-muted") for n in r["notes"]],
+                style="margin-bottom:8px;",
+            ))
+        if not items:
+            items = [ui.p("No slider, sweeper or curveball with 5+ readings in this range.", class_="text-muted small")]
+        return ui_helpers.card(
+            ui_helpers.how_to_link("slider_fit"), hint, *items,
+            ui.p(f"Types by shape: gyro = within {slider_fit.GYRO_RUN:.0f}\" side to side and "
+                 f"{slider_fit.CURVE_IVB:.0f} to +{slider_fit.GYRO_IVB[1]:.0f}\" ride; traditional slider = 5-10\" "
+                 "glove-side; sweeper = "
+                 f"{slider_fit.SWEEP_IN:.0f}\"+ glove-side; carry sweeper = a sweeper with {slider_fit.CARRY_IN:.0f}\"+ "
+                 f"ride over expected; curveball = {slider_fit.CURVE_IVB:.0f}\" ride or less (slurve if it also sweeps 10\"+). Fit hint: fastball spin "
+                 f"efficiency {slider_fit.PRONATOR_SE:.0f}%+ leans pronator (gyro), {slider_fit.SUPINATOR_SE:.0f}% or "
+                 "less leans supinator (sweeper) -- a rule of thumb from public pitch-design work, not a measurement "
+                 "of his forearm.", class_="text-muted small", style="margin:4px 0 0;"),
+            title="Slider type & fit",
+        )
+
+    def _release_window_card(pl):
+        """Where each pitch leaves his hand vs his fastball (pitch_insights.plane)."""
+        if pl is None:
+            return None
+        rows = []
+        for r in pl["release"]:
+            off = "his fastball" if r["offset"] is None else f"{r['offset']:.1f}\" away"
+            flag = (" -- hitters can pick it up early" if r["tell"] else "") + (" -- release wanders" if r["wander"] else "")
+            rows.append(ui.div(ui.strong(r["type"], style=f"color:{get_pitch_color(r['type'])};"),
+                               ui.span(f"  {off} · spread {r['sd']:.1f}\"" if r["sd"] is not None else f"  {off}",
+                                       class_="small"),
+                               ui.span(flag, class_="small", style="color:#F2A65A;") if flag else None))
+        return ui_helpers.card(
+            ui.p("Where each pitch leaves his hand compared with his fastball. Every pitch should come out of the "
+                 "same window; a pitch that leaves 3\"+ away, or a release that wanders 6\"+, tips hitters off.",
+                 class_="text-muted small"), *rows, title="Release window")
+
+    @render.ui
+    def pp_arsenal_plan_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role != "Player" and role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "arsenal_plan":
+            return None
+        _ap_tick()
+        db = get_session()
+        try:
+            player, plan, raps = _ap_data(db)
+            source = input.pp_ap_source() if "pp_ap_source" in input else "all"
+            controls = ui.input_radio_buttons(
+                "pp_ap_source", "Rapsodo readings",
+                {"all": "Games + bullpens", "games": "Games only"}, selected=source, inline=True,
+            )
+            head = [
+                ui.hr(),
+                ui.h5("Arsenal Plan", class_="gbo-section-title"),
+                ui.p("What to keep, what to tune, and what to add -- built off his own fastball shape and arm slot "
+                     "with standard pitch-design rules. Targets are starting points; coaches can save their own. "
+                     "Ride = how much the pitch holds up (inches), run = sideways movement (+ toward his arm side).",
+                     class_="text-muted small"),
+                controls,
+            ]
+            if player is None or plan is None:
+                return ui.div(*head, ui.p("Needs at least 5 Rapsodo fastball readings in this range.",
+                                          class_="text-muted small"))
+            fb = plan["fb"]
+            slot_txt = {"high": "high slot", "low": "low slot", "mid": "three-quarter slot"}[plan["slot"]]
+            arm_txt = f" (est. arm angle {plan['arm_angle']:.0f}°)" if plan.get("arm_angle") is not None else ""
+            # Oct 2026 (one voice): the plane read (pitch_insights.plane) is
+            # folded in here instead of its own view, in the same words.
+            from analytics import pitch_insights as _pins
+            kind_txt = {"ride": "a vertical mover -- build around ride and depth (riding fastball, downer breaking ball, "
+                                "splitter/vertical changeup)",
+                        "run": "a horizontal mover -- build around run and sweep (sinker, sweeper, fading changeup)",
+                        "mid": "in between -- neither ride nor run dominates, so both directions are open"}[plan["kind"]]
+            pl = _pins.plane(raps, player.throws, plan.get("arm_angle"))
+            pl_word = {"vertical": "ride", "horizontal": "run", "diagonal": "mid"}.get(pl["kind"]) if pl else None
+            second = None
+            if pl is not None and pl_word != plan["kind"] and "mid" not in (pl_word, plan["kind"]):
+                second = ui.p(f"Second check disagrees: the line from his {pl['fb'].lower()} to his {pl['bb'].lower()} "
+                              f"reads {pl['kind']}. Mixed signals -- check high-speed video before changing his arm path.",
+                              class_="small", style="color:#F2A65A;")
+            summary = ui.div(ui.p(
+                ui.strong(f"{plan['primary']}: "),
+                f"{fb['velo']:.1f} mph, {fb['ivb']:.1f}\" ride, {fb['run']:.1f}\" arm-side run · {slot_txt}{arm_txt}. "
+                f"He looks like {kind_txt}.", class_="small",
+            ), second)
+            # Only mention the plane when the target also moves the pitch back
+            # toward his natural movement line -- then both reads agree.
+            off_plane = {o["type"]: o["dist"] for o in (pl["off"] if pl else []) if o["off"]}
+            if pl is not None:
+                F, B = pl["shapes"][pl["fb"]], pl["shapes"][pl["bb"]]
+                dh, dv = B["h"] - F["h"], B["v"] - F["v"]
+                L = (dh * dh + dv * dv) ** 0.5 or 1.0
+
+                def _line_dist(h, v):
+                    return abs(dv * (h - F["h"]) - dh * (v - F["v"])) / L
+                for r in plan["rows"]:
+                    t = r.get("target")
+                    if r["label"] in off_plane and r["status"] == "tune" and t:
+                        to = _line_dist(t["run"], t["ivb"])
+                        if to <= off_plane[r["label"]] - 3:
+                            r["text"] += (f" It now sits {off_plane[r['label']]:.0f}\" off the line from his fastball to "
+                                          "his breaking ball, which is why it can feel forced -- the target brings it "
+                                          "back toward his natural movement.")
+
+            def fmt_shape(sh):
+                v = f"{sh['velo']:.1f} mph · " if sh.get("velo") is not None else ""
+                return f"{v}{sh['ivb']:.1f}\" ride · {sh['run']:+.1f}\" run"
+
+            keeps = [r for r in plan["rows"] if r["status"] in ("keep", "anchor")]
+            tunes = [r for r in plan["rows"] if r["status"] == "tune"]
+
+            def item(title, lines, color):
+                return ui.div(ui.strong(title, style=f"color:{color};"),
+                              *[ui.div(l, class_="small") for l in lines],
+                              style="margin-bottom:10px;")
+
+            keep_card = ui_helpers.card(*[
+                item(r["label"], [f"Now: {fmt_shape(r['cur'])}", r["text"]], get_pitch_color(r["label"])) for r in keeps
+            ] or [ui.p("Nothing at its target yet.", class_="text-muted small")], title="Keep")
+            tune_card = ui_helpers.card(*[
+                item(r["label"] + (f" → {arsenal_plan.NAMES[r['family']]} target" if arsenal_plan.NAMES.get(r["family"]) != r["label"] else ""),
+                     [f"Now: {fmt_shape(r['cur'])}",
+                      f"Target{' (coach)' if r.get('source') == 'coach' else ''}: {fmt_shape(r['target'])} · {r['dist']:.1f}\" away",
+                      r["text"]], get_pitch_color(r["label"])) for r in tunes
+            ] or [ui.p("Nothing to tune.", class_="text-muted small")], title="Tune")
+            add_card = ui_helpers.card(*[
+                item(f"+ {a['label']}" + ("" if a["core"] else " (option)"),
+                     [f"Target{' (coach)' if a.get('source') == 'coach' else ''}: {fmt_shape(a['target'])}", a["why"]],
+                     get_pitch_color(a["label"])) for a in plan["adds"]
+            ] or [ui.p("Nothing missing for his profile.", class_="text-muted small")], title="Add")
+
+            children = head + [summary,
+                ui.layout_columns(keep_card, tune_card, add_card, col_widths=[4, 4, 4]),
+                _slider_fit_card(db, player, plan, raps),
+                _release_window_card(pl),
+                output_widget("pp_ap_movement"),
+                ui.p("Progress: how far each pitch's shape was from its target in each session (all readings that day).",
+                     class_="text-muted small mt-2"),
+                output_widget("pp_ap_progress"),
+            ]
+            if app_state.role_name() in FS_SWITCH_ROLES:
+                fam_choices = {k: v for k, v in arsenal_plan.NAMES.items()}
+                children.append(ui_helpers.card(
+                    ui.layout_columns(
+                        ui.input_select("pp_ap_family", "Pitch", choices=fam_choices,
+                                        selected=input.pp_ap_family() if "pp_ap_family" in input else "changeup"),
+                        ui.output_ui("pp_ap_fields"),
+                        col_widths=[3, 9],
+                    ),
+                    ui.div(
+                        ui.input_action_button("pp_ap_save", "Save target", class_="btn-sm btn-primary"),
+                        ui.input_action_button("pp_ap_reset", "Reset to rule", class_="btn-sm btn-outline-light",
+                                               style="margin-left:8px;"),
+                    ),
+                    ui.p("Ride = induced vertical break; run is + toward his arm side, - toward his glove side (inches).",
+                         class_="text-muted small", style="margin-top:6px;"),
+                    title="Set a target (coaches)",
+                ))
+            return ui.div(*children)
+        finally:
+            db.close()
+
+    @render.ui
+    def pp_ap_fields():
+        if app_state.role_name() not in FS_SWITCH_ROLES:
+            return None
+        req("pp_ap_family" in input)
+        fam = input.pp_ap_family()
+        _ap_tick()
+        db = get_session()
+        try:
+            _player, plan, _raps = _ap_data(db)
+            t = (plan or {}).get("targets", {}).get(fam) or {"velo": None, "ivb": 0.0, "run": 0.0}
+            return ui.layout_columns(
+                ui.input_numeric("pp_ap_velo", "Velo (mph)", value=t.get("velo"), step=0.5),
+                ui.input_numeric("pp_ap_ivb", "Ride (in)", value=t["ivb"], step=0.5),
+                ui.input_numeric("pp_ap_run", "Run (in)", value=t["run"], step=0.5),
+                ui.input_text("pp_ap_note", "Note", value=""),
+                col_widths=[2, 2, 2, 6],
+            )
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.pp_ap_save)
+    def _pp_ap_save():
+        if app_state.role_name() not in FS_SWITCH_ROLES:
+            return
+        ivb, run = input.pp_ap_ivb(), input.pp_ap_run()
+        if ivb is None or run is None:
+            ui.notification_show("Enter ride and run.", type="warning", duration=5)
+            return
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            fam = input.pp_ap_family()
+            row = db.query(ArsenalTarget).filter(ArsenalTarget.player_id == pid, ArsenalTarget.family == fam).first()
+            if row is None:
+                row = ArsenalTarget(player_id=pid, family=fam)
+                db.add(row)
+            row.velo = input.pp_ap_velo()
+            row.ivb, row.run = ivb, run
+            row.note = (input.pp_ap_note() or "").strip() or None
+            row.updated_by_user_id = app_state.user_id()
+            db.commit()
+            ui.notification_show(f"Saved {arsenal_plan.NAMES.get(fam, fam)} target.", type="message", duration=5)
+        except Exception as e:
+            db.rollback()
+            ui.notification_show(f"Couldn't save -- has migrate_arsenal_targets been run? ({e})", type="error", duration=10)
+        finally:
+            db.close()
+        _ap_tick.set(_ap_tick() + 1)
+
+    @reactive.effect
+    @reactive.event(input.pp_ap_reset)
+    def _pp_ap_reset():
+        if app_state.role_name() not in FS_SWITCH_ROLES:
+            return
+        db = get_session()
+        try:
+            pid = _current_player_id(db)
+            db.query(ArsenalTarget).filter(ArsenalTarget.player_id == pid,
+                                           ArsenalTarget.family == input.pp_ap_family()).delete()
+            db.commit()
+            ui.notification_show("Back to the rule-based target.", type="message", duration=5)
+        except Exception as e:
+            db.rollback()
+            ui.notification_show(f"Couldn't reset ({e})", type="error", duration=10)
+        finally:
+            db.close()
+        _ap_tick.set(_ap_tick() + 1)
+
+    @render_plotly
+    def pp_ap_movement():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "arsenal_plan":
+            return None
+        _ap_tick()
+        db = get_session()
+        try:
+            _player, plan, _raps = _ap_data(db)
+            return plan_movement_figure(plan) if plan else None
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_ap_progress():
+        if not app_state.is_authenticated():
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "arsenal_plan":
+            return None
+        _ap_tick()
+        db = get_session()
+        try:
+            player, plan, raps = _ap_data(db)
+            if not plan:
+                return None
+            return progress_figure(arsenal_plan.progress(raps, player.throws or "R", plan, label_of=pitch_type_label))
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Fastball Shape Check (Oct 2026, Ryker: "build this into the
+    # website. fastball shape check. if it fits the other type then we
+    # can switch it"). Pitches are logged by GRIP; this compares each
+    # Rapsodo-tracked fastball's movement against the pitcher's own
+    # 4-seam/2-seam groups (analytics/fastball_shape.py) and lists the
+    # ones that move like the other type. A coach checks the ones to
+    # switch and confirms -- the Rapsodo reading and its matched game
+    # pitch are relabeled together and logged (PitchTypeChange) so every
+    # switch can be undone. Ignores the page's Pitch Type filter (it's
+    # always about fastballs); honors the date range / game picker.
+    # Bullpen readings are included (their labels feed Stuff+ too).
+    # -------------------------------------------------------------------
+    FS_SWITCH_ROLES = ("Administrator", "Head Coach", "Coach", "Data Analyst")
+    _fs_tick = reactive.Value(0)
+
+    def _fs_data(db):
+        pid = _current_player_id(db)
+        if pid is None:
+            return None, None
+        player = db.query(Player).filter(Player.player_id == pid).first()
+        if player is None:
+            return None, None
+        f = _current_filters()
+        raps = profile_queries.get_pitcher_rapsodo_pitches(
+            db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+            game_scope=f["game_scope"], game_id=f["game_id"], game_linked_only=False,
+        )
+        arsenal = [
+            pt.type_name for pt in db.query(PitchType)
+            .join(PlayerPitchArsenal, PlayerPitchArsenal.pitch_type_id == PitchType.pitch_type_id)
+            .filter(PlayerPitchArsenal.player_id == pid, PlayerPitchArsenal.active.is_(True)).all()
+        ]
+        return player, fastball_shape.check_pitcher(raps, player.throws or "R", arsenal=arsenal or None)
+
+    def _fs_pitch_label(fl):
+        p = fl["pitch"]
+        when = p.pitch_date.strftime("%b %d") if p.pitch_date else "—"
+        src = "Game" if p.bullpen_id is None else "Bullpen"
+        velo = f"{fl['velo']:.1f} mph · " if fl.get("velo") is not None else ""
+        return (f"{when} {src} #{p.pitch_number}: {fl['labeled']} → {fl['suggested']} "
+                f"({velo}{fl['ivb']:.1f}\" ride, {fl['run']:.1f}\" run)")
+
+    @render.ui
+    def pp_fastball_shape_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "fastball_shape":
+            return None
+        _fs_tick()
+        db = get_session()
+        try:
+            player, res = _fs_data(db)
+            if player is None:
+                return None
+            if res["mode"] == "none":
+                return ui.p("No Rapsodo-tracked fastballs (4-seam / 2-seam / Fastball) with movement data in this range yet.", class_="text-muted small")
+            can_switch = role in FS_SWITCH_ROLES
+            counts = " · ".join(f"{t}: {n}" for t, n in sorted(res["counts"].items()))
+            if res["mode"] == "per_pitcher":
+                c4, c2 = res["centers"][fastball_shape.FOUR_SEAM], res["centers"][fastball_shape.TWO_SEAM]
+                mode_text = (f"Compared to his own fastballs -- 4-seam avg {c4[0]:.1f}\" ride / {c4[1]:.1f}\" arm-side run, "
+                             f"2-seam avg {c2[0]:.1f}\" ride / {c2[1]:.1f}\" run (group medians).")
+            else:
+                mode_text = ("He doesn't throw enough of both fastballs (or they move too much alike) to compare him to himself, "
+                             "so this uses general guidelines: a 4-seam rides well over its run, a 2-seam runs more than it rides.")
+            fb_ref = res.get("fb_ref")
+            if fb_ref is not None:
+                src = res.get("offspeed_sources") or {}
+                src_txt = ", ".join(f"{t} ({'his own' if v == 'his' else 'guideline'})" for t, v in src.items())
+                mode_text += (f" Off-speed check: his fastball sits {fb_ref[2]:.1f} mph, {fb_ref[0]:.1f}\" ride / "
+                              f"{fb_ref[1]:.1f}\" run. A pitch logged as a fastball that's {fastball_shape.OFFSPEED_VELO_GAP:.0f}+ mph "
+                              f"slower, or breaks well glove-side with much less ride, is flagged with the off-speed pitch it "
+                              f"moves most like" + (f" -- checking {src_txt}." if src_txt else "."))
+            else:
+                mode_text += (f" Off-speed check needs at least {fastball_shape.MIN_FB_REFERENCE} fastball readings "
+                              f"with velo to know his fastball, so it's skipped here.")
+            flags = res["flags"]
+            children = [
+                ui.hr(),
+                ui.h5("Fastball Shape Check", class_="gbo-section-title"),
+                ui.p("Pitches are logged by grip. This flags Rapsodo-tracked pitches logged as fastballs that are really "
+                     "off-speed (too slow or breaking the wrong way), and fastballs that move like his other fastball, "
+                     "so you can confirm and switch the label. " + mode_text, class_="text-muted small"),
+                ui.p(f"Checked: {counts}", class_="text-muted small"),
+                output_widget("pp_fastball_shape_chart"),
+            ]
+            if not flags:
+                children.append(ui_helpers.card(ui_helpers.empty_state("Every fastball matches its label. Nothing to switch.")))
+            else:
+                osn = sum(1 for f in flags if f["kind"] == "offspeed")
+                mism = sum(1 for f in flags if f["kind"] == "mismatch")
+                unl = sum(1 for f in flags if f["kind"] == "unlabeled")
+                parts = []
+                if osn:
+                    parts.append(f"{osn} logged as a fastball but look off-speed")
+                if mism:
+                    parts.append(f"{mism} move like the other fastball")
+                if unl:
+                    parts.append(f"{unl} unlabeled \"Fastball\" reading(s) with a suggested type")
+                summary = "; ".join(parts) + "."
+                table = ui_helpers.render_dict_table([{
+                    "Date": f["pitch"].pitch_date.strftime("%Y-%m-%d") if f["pitch"].pitch_date else "—",
+                    "Source": "Game" if f["pitch"].bullpen_id is None else "Bullpen",
+                    "#": f["pitch"].pitch_number,
+                    "Logged as": f["labeled"], "Moves like": f["suggested"],
+                    "Velo": f"{f['velo']:.1f}" if f["velo"] is not None else "—",
+                    "Ride (IVB)": f"{f['ivb']:.1f}", "Arm-side run": f"{f['run']:.1f}",
+                    "Why": f["reason"],
+                } for f in flags])
+                body = [ui.p(summary, class_="small"), table]
+                if can_switch:
+                    body += [
+                        ui.input_checkbox_group(
+                            "pp_fs_select", "Switch these pitches to the type they move like:",
+                            choices={str(f["pitch"].rapsodo_pitch_id): _fs_pitch_label(f) for f in flags},
+                        ),
+                        ui.input_action_button("pp_fs_switch", "Switch selected", class_="btn-sm btn-primary"),
+                        ui.p("Updates the Rapsodo reading and its matched game pitch. Every switch is logged and can be undone below.",
+                             class_="text-muted small", style="margin-top:6px;"),
+                    ]
+                children.append(ui_helpers.card(*body, title="Flagged pitches"))
+
+            if can_switch:
+                recent = (
+                    db.query(PitchTypeChange)
+                    .filter(PitchTypeChange.player_id == player.player_id, PitchTypeChange.undone_at.is_(None))
+                    .order_by(PitchTypeChange.changed_at.desc()).limit(50).all()
+                )
+                if recent:
+                    type_names = {t.pitch_type_id: t.type_name for t in db.query(PitchType).all()}
+                    choices = {
+                        str(ch.pitch_type_change_id):
+                            f"{ch.changed_at.strftime('%b %d %H:%M')} -- Rapsodo #{ch.rapsodo_pitch_id or '?'}: "
+                            f"{type_names.get(ch.from_rapsodo_pitch_type_id, '?')} → {type_names.get(ch.to_pitch_type_id, '?')}"
+                        for ch in recent
+                    }
+                    children.append(ui_helpers.card(
+                        ui.input_checkbox_group("pp_fs_undo_select", None, choices=choices),
+                        ui.input_action_button("pp_fs_undo", "Undo selected", class_="btn-sm btn-outline-light"),
+                        title="Recent switches", right="undo puts both labels back",
+                    ))
+            return ui.div(*children)
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_fastball_shape_chart():
+        if not app_state.is_authenticated() or app_state.role_name() not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "fastball_shape":
+            return None
+        _fs_tick()
+        db = get_session()
+        try:
+            player, res = _fs_data(db)
+            if player is None or not res or not res["points"]:
+                return None
+            fig = go.Figure()
+            for label in (fastball_shape.FOUR_SEAM, fastball_shape.TWO_SEAM, fastball_shape.GENERIC):
+                pts = [pt for pt in res["points"] if pt["labeled"] == label and not pt.get("offspeed")]
+                if not pts:
+                    continue
+                fig.add_trace(go.Scatter(
+                    x=[pt["run"] for pt in pts], y=[pt["ivb"] for pt in pts], mode="markers", name=f"Logged {label}",
+                    marker=dict(size=[12 if pt["flagged"] else 8 for pt in pts], color=get_pitch_color(label),
+                                line=dict(width=[2.5 if pt["flagged"] else 0 for pt in pts], color="#FFFDE5"), opacity=0.85),
+                    text=[f"{'FLAGGED -- ' if pt['flagged'] else ''}{label}<br>{pt['ivb']:.1f}\" ride, {pt['run']:.1f}\" run"
+                          + (f"<br>{pt['velo']:.1f} mph" if pt['velo'] is not None else "") for pt in pts],
+                    hovertemplate="%{text}<extra></extra>",
+                ))
+            for os_type in sorted({pt["offspeed"] for pt in res["points"] if pt.get("offspeed")}):
+                pts = [pt for pt in res["points"] if pt.get("offspeed") == os_type]
+                fig.add_trace(go.Scatter(
+                    x=[pt["run"] for pt in pts], y=[pt["ivb"] for pt in pts], mode="markers",
+                    name=f"Logged fastball → looks like {os_type}",
+                    marker=dict(size=12, symbol="diamond", color=get_pitch_color(os_type),
+                                line=dict(width=2.5, color="#FFFDE5"), opacity=0.9),
+                    text=[f"FLAGGED -- logged {pt['labeled']}, looks like {os_type}<br>{pt['ivb']:.1f}\" ride, {pt['run']:.1f}\" run"
+                          + (f"<br>{pt['velo']:.1f} mph" if pt['velo'] is not None else "") for pt in pts],
+                    hovertemplate="%{text}<extra></extra>",
+                ))
+            fb_ref = res.get("fb_ref")
+            if fb_ref is not None:
+                fig.add_trace(go.Scatter(
+                    x=[fb_ref[1]], y=[fb_ref[0]], mode="markers", name="His fastball (reference)",
+                    marker=dict(symbol="star", size=16, color="#FFFDE5", line=dict(width=1, color="#000")),
+                    hovertemplate=f"His fastball reference<br>{fb_ref[2]:.1f} mph, {fb_ref[0]:.1f}\" ride, {fb_ref[1]:.1f}\" run<extra></extra>",
+                ))
+            for label, c in res["centers"].items():
+                fig.add_trace(go.Scatter(
+                    x=[c[1]], y=[c[0]], mode="markers", name=f"His {label} center",
+                    marker=dict(symbol="x", size=14, color=get_pitch_color(label), line=dict(width=2)),
+                    hovertemplate=f"{label} group center<br>{c[0]:.1f}\" ride, {c[1]:.1f}\" run<extra></extra>",
+                ))
+            fig = apply_gbo_theme(fig, title="Pitches logged as fastballs (outlined = flagged)", height=420,
+                                  x_title="Arm-side run (in)", y_title="Induced vertical break (in)")
+            return fig
+        finally:
+            db.close()
+
+    # -------------------------------------------------------------------
+    # Pitch Type Check (Oct 2026, Ryker: "build it") -- every pitch type,
+    # not just fastballs: fastball / breaking ball / changeup by speed off
+    # his fastball + arm-side run + IVB (analytics/pitch_class.py, after
+    # SABR Tooth Tigers' TopoTagger, centered on OUR Rapsodo data). Same
+    # review-then-switch flow as Fastball Shape Check, same logged/undoable
+    # switching (services/pitch_type_switch.py, source "pitch_type_check").
+    # -------------------------------------------------------------------
+    _ptc_tick = reactive.Value(0)
+
+    def _ptc_centers(db):
+        return pitch_class.team_centers(db)
+
+    def _ptc_data(db):
+        pid = _current_player_id(db)
+        if pid is None:
+            return None, None
+        player = db.query(Player).filter(Player.player_id == pid).first()
+        if player is None:
+            return None, None
+        f = _current_filters()
+        raps = profile_queries.get_pitcher_rapsodo_pitches(
+            db, pid, date_from=f["date_from"], date_to=f["date_to"], pitch_type=None,
+            game_scope=f["game_scope"], game_id=f["game_id"], game_linked_only=False,
+        )
+        return player, pitch_class.check_pitcher(raps, player.throws or "R", _ptc_centers(db)["centers"])
+
+    def _ptc_staff_rows(db):
+        """Flag counts for every pitcher in the same date range."""
+        f = _current_filters()
+        q = db.query(RapsodoPitch).options(joinedload(RapsodoPitch.pitch_type))
+        if f["date_from"] is not None:
+            q = q.filter(RapsodoPitch.pitch_date >= f["date_from"])
+        if f["date_to"] is not None:
+            q = q.filter(RapsodoPitch.pitch_date < f["date_to"] + timedelta(days=1))
+        by_p = {}
+        for r in q.all():
+            by_p.setdefault(r.player_id, []).append(r)
+        if not by_p:
+            return []
+        players = {pl.player_id: pl for pl in db.query(Player).filter(Player.player_id.in_(list(by_p))).all()}
+        centers = _ptc_centers(db)["centers"]
+        rows = []
+        for pid, raps in by_p.items():
+            pl = players.get(pid)
+            if pl is None:
+                continue
+            res = pitch_class.check_pitcher(raps, pl.throws or "R", centers)
+            if not res["points"]:
+                continue
+            rows.append({"Pitcher": f"{pl.name_last_first}", "Pitches": len(res["points"]),
+                         "Flagged": len(res["flags"]), "Agree %": res["agree_pct"] if res["agree_pct"] is not None else "--"})
+        return sorted(rows, key=lambda r: (-r["Flagged"], r["Pitcher"]))
+
+    @render.ui
+    def pp_pitch_type_check_section():
+        if not app_state.is_authenticated():
+            return None
+        role = app_state.role_name()
+        if role not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "pitch_type_check":
+            return None
+        _ptc_tick()
+        db = get_session()
+        try:
+            player, res = _ptc_data(db)
+            if player is None:
+                return None
+            cal = _ptc_centers(db)
+            cen = cal["centers"]
+            def _c(g):
+                c = cen[g]
+                return f"{g.lower()} {c[2]:+.1f} mph / {c[0]:.1f}\" run / {c[1]:.1f}\" IVB"
+            src = "our own Rapsodo pitches" if all(v == "ours" for v in cal["source"].values()) else "our pitches where we have enough, the article's D1 numbers otherwise"
+            children = [
+                ui.hr(),
+                ui.h5("Pitch Type Check", class_="gbo-section-title"),
+                ui.p("Every Rapsodo-tracked pitch sorted into what a hitter sees -- fastball, breaking ball or changeup -- "
+                     "by its speed off his own fastball, arm-side run and ride (IVB). A pitch is flagged when it clearly "
+                     "behaves like a different group than its label. Cutters can sit with fastballs or breaking balls and "
+                     "splitters with changeups or breaking balls, so those aren't flagged for either. Pitches are logged by "
+                     f"grip -- nothing changes until you switch it. Group centers come from {src}: " + "; ".join(_c(g) for g in cen) + ".",
+                     class_="text-muted small"),
+            ]
+            staff = _ptc_staff_rows(db)
+            if staff:
+                children.append(ui_helpers.card(ui_helpers.render_dict_table(staff), title="Whole staff (same dates)",
+                                                right="pick a pitcher above to review"))
+            if not res or not res["points"]:
+                children.append(ui.p("No Rapsodo pitches with movement and velocity for him in this range.", class_="text-muted small"))
+                return ui.div(*children)
+            children.append(ui.p(f"{player.first_name} {player.last_name}: {len(res['points'])} pitches checked, "
+                                 f"{res['agree_pct']}% match their label." if res["agree_pct"] is not None else "", class_="small"))
+            children.append(output_widget("pp_ptc_chart"))
+            can_switch = role in FS_SWITCH_ROLES
+            flags = res["flags"]
+            if not flags:
+                children.append(ui_helpers.card(ui_helpers.empty_state("Every pitch behaves like its label. Nothing to switch.")))
+            else:
+                table = ui_helpers.render_dict_table([{
+                    "Date": fl["pitch"].pitch_date.strftime("%Y-%m-%d") if fl["pitch"].pitch_date else "--",
+                    "Source": "Game" if fl["pitch"].bullpen_id is None else "Bullpen",
+                    "#": fl["pitch"].pitch_number,
+                    "Logged as": fl["labeled"], "Behaves like": fl["looks_like"], "Suggested": fl["suggested"],
+                    "Velo": f"{fl['velo']:.1f}", "vs FB": f"{fl['dv']:+.1f}",
+                    "Arm-side run": f"{fl['run']:.1f}", "IVB": f"{fl['ivb']:.1f}",
+                } for fl in flags])
+                body = [ui.p(f"{len(flags)} pitch(es) behave like a different group than their label.", class_="small"), table]
+                if can_switch:
+                    body += [
+                        ui.input_checkbox_group(
+                            "pp_ptc_select", "Switch these pitches to the suggested type:",
+                            choices={str(fl["pitch"].rapsodo_pitch_id):
+                                     (f"{fl['pitch'].pitch_date.strftime('%b %d') if fl['pitch'].pitch_date else '--'} "
+                                      f"{'Game' if fl['pitch'].bullpen_id is None else 'Bullpen'} #{fl['pitch'].pitch_number}: "
+                                      f"{fl['labeled']} → {fl['suggested']} ({fl['velo']:.1f} mph, {fl['run']:.1f}\" run, {fl['ivb']:.1f}\" IVB)")
+                                     for fl in flags},
+                        ),
+                        ui.input_action_button("pp_ptc_switch", "Switch selected", class_="btn-sm btn-primary"),
+                        ui.p("Updates the Rapsodo reading and its matched game pitch. Every switch is logged and can be undone "
+                             "(Fastball Shape Check's Recent switches list shows them too).", class_="text-muted small", style="margin-top:6px;"),
+                    ]
+                children.append(ui_helpers.card(*body, title="Flagged pitches"))
+            if can_switch:
+                recent = (db.query(PitchTypeChange)
+                          .filter(PitchTypeChange.player_id == player.player_id, PitchTypeChange.undone_at.is_(None))
+                          .order_by(PitchTypeChange.changed_at.desc()).limit(50).all())
+                if recent:
+                    names = {t.pitch_type_id: t.type_name for t in db.query(PitchType).all()}
+                    children.append(ui_helpers.card(
+                        ui.input_checkbox_group("pp_ptc_undo_select", None, choices={
+                            str(ch.pitch_type_change_id):
+                                f"{ch.changed_at.strftime('%b %d %H:%M')} -- Rapsodo #{ch.rapsodo_pitch_id or '?'}: "
+                                f"{names.get(ch.from_rapsodo_pitch_type_id, '?')} → {names.get(ch.to_pitch_type_id, '?')}"
+                            for ch in recent}),
+                        ui.input_action_button("pp_ptc_undo", "Undo selected", class_="btn-sm btn-outline-light"),
+                        title="Recent switches", right="undo puts both labels back",
+                    ))
+            return ui.div(*children)
+        finally:
+            db.close()
+
+    @render_plotly
+    def pp_ptc_chart():
+        if not app_state.is_authenticated() or app_state.role_name() not in STAFF_ROLES:
+            return None
+        req("pp_view" in input)
+        if input.pp_view() != "pitch_type_check":
+            return None
+        _ptc_tick()
+        db = get_session()
+        try:
+            player, res = _ptc_data(db)
+            if player is None or not res or not res["points"]:
+                return None
+            cen = _ptc_centers(db)["centers"]
+            fig = go.Figure()
+            for label in sorted({pt["labeled"] or "Unlabeled" for pt in res["points"]}):
+                pts = [pt for pt in res["points"] if (pt["labeled"] or "Unlabeled") == label]
+                fig.add_trace(go.Scatter(
+                    x=[pt["run"] for pt in pts], y=[pt["ivb"] for pt in pts], mode="markers", name=f"Logged {label}",
+                    marker=dict(size=[13 if pt["flagged"] else 8 for pt in pts],
+                                symbol=["diamond" if pt["flagged"] else "circle" for pt in pts],
+                                color=get_pitch_color(label),
+                                line=dict(width=[2.5 if pt["flagged"] else 0 for pt in pts], color="#FFFDE5"), opacity=0.85),
+                    text=[f"{'FLAGGED -- behaves like a ' + pt['pred'].lower() + '<br>' if pt['flagged'] else ''}{label}<br>"
+                          f"{pt['velo']:.1f} mph ({pt['dv']:+.1f} vs FB)<br>{pt['run']:.1f}\" run, {pt['ivb']:.1f}\" IVB" for pt in pts],
+                    hovertemplate="%{text}<extra></extra>",
+                ))
+            for g, c in cen.items():
+                fig.add_trace(go.Scatter(
+                    x=[c[0]], y=[c[1]], mode="markers+text", name=f"{g} center", text=[g], textposition="top center",
+                    marker=dict(symbol="x", size=14, color="#FFFDE5", line=dict(width=2)),
+                    hovertemplate=f"{g} group center (staff)<br>{c[2]:+.1f} mph vs FB, {c[0]:.1f}\" run, {c[1]:.1f}\" IVB<extra></extra>",
+                ))
+            return apply_gbo_theme(fig, title="Every pitch by movement (diamonds = flagged)", height=440,
+                                   x_title="Arm-side run (in)", y_title="Induced vertical break (in)")
+        finally:
+            db.close()
+
+    @reactive.effect
+    @reactive.event(input.pp_ptc_switch)
+    def _pp_ptc_switch():
+        if app_state.role_name() not in FS_SWITCH_ROLES:
+            return
+        selected = set(input.pp_ptc_select() or []) if "pp_ptc_select" in input else set()
+        if not selected:
+            ui.notification_show("Check at least one pitch to switch.", type="warning", duration=6)
+            return
+        db = get_session()
+        try:
+            _player, res = _ptc_data(db)
+            switches = [(fl["pitch"].rapsodo_pitch_id, fl["suggested"], fl["reason"])
+                        for fl in (res or {}).get("flags", []) if str(fl["pitch"].rapsodo_pitch_id) in selected]
+            n = apply_switches(db, switches, user_id=app_state.user_id(), source="pitch_type_check")
+            ui.notification_show(f"Switched {n} pitch(es).", type="message", duration=6)
+        except Exception as e:
+            ui.notification_show(f"Couldn't switch those pitches -- nothing was changed. ({e})", type="error", duration=10)
+        finally:
+            db.close()
+        _ptc_tick.set(_ptc_tick() + 1)
+        _fs_tick.set(_fs_tick() + 1)
+
+    @reactive.effect
+    @reactive.event(input.pp_ptc_undo)
+    def _pp_ptc_undo():
+        if app_state.role_name() not in FS_SWITCH_ROLES:
+            return
+        selected = [int(x) for x in (input.pp_ptc_undo_select() or [])] if "pp_ptc_undo_select" in input else []
+        if not selected:
+            ui.notification_show("Check at least one switch to undo.", type="warning", duration=6)
+            return
+        db = get_session()
+        try:
+            n = undo_switches(db, selected)
+            ui.notification_show(f"Undid {n} switch(es).", type="message", duration=6)
+        except Exception as e:
+            ui.notification_show(f"Couldn't undo -- nothing was changed. ({e})", type="error", duration=10)
+        finally:
+            db.close()
+        _ptc_tick.set(_ptc_tick() + 1)
+        _fs_tick.set(_fs_tick() + 1)
+
+    @reactive.effect
+    @reactive.event(input.pp_fs_switch)
+    def _pp_fs_switch():
+        if app_state.role_name() not in FS_SWITCH_ROLES:
+            return
+        selected = set(input.pp_fs_select() or []) if "pp_fs_select" in input else set()
+        if not selected:
+            ui.notification_show("Check at least one pitch to switch.", type="warning", duration=6)
+            return
+        db = get_session()
+        try:
+            _player, res = _fs_data(db)
+            switches = [
+                (f["pitch"].rapsodo_pitch_id, f["suggested"], f["reason"])
+                for f in (res or {}).get("flags", []) if str(f["pitch"].rapsodo_pitch_id) in selected
+            ]
+            n = apply_switches(db, switches, user_id=app_state.user_id())
+            ui.notification_show(f"Switched {n} pitch(es).", type="message", duration=6)
+        except Exception as e:
+            ui.notification_show(f"Couldn't switch those pitches -- nothing was changed. ({e})", type="error", duration=10)
+        finally:
+            db.close()
+        _fs_tick.set(_fs_tick() + 1)
+
+    @reactive.effect
+    @reactive.event(input.pp_fs_undo)
+    def _pp_fs_undo():
+        if app_state.role_name() not in FS_SWITCH_ROLES:
+            return
+        selected = [int(x) for x in (input.pp_fs_undo_select() or [])] if "pp_fs_undo_select" in input else []
+        if not selected:
+            ui.notification_show("Check at least one switch to undo.", type="warning", duration=6)
+            return
+        db = get_session()
+        try:
+            n = undo_switches(db, selected)
+            ui.notification_show(f"Undid {n} switch(es).", type="message", duration=6)
+        except Exception as e:
+            ui.notification_show(f"Couldn't undo -- nothing was changed. ({e})", type="error", duration=10)
+        finally:
+            db.close()
+        _fs_tick.set(_fs_tick() + 1)

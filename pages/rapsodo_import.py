@@ -25,12 +25,47 @@ from datetime import date
 from sqlalchemy.orm import joinedload
 
 from database import get_session
-from models import Player, StaffPlayerAssignment, BullpenSession, BullpenType, RapsodoPitch
+from models import Player, StaffPlayerAssignment, BullpenSession, BullpenType, RapsodoImport, RapsodoPitch
 from ui_components import page_header, page_footer, empty_state
 from services.rapsodo_import import (
-    import_rapsodo_file, validate_file_structure, read_csv_bytes,
-    DuplicateImportError, RapsodoValidationError, RapsodoImportError,
+    import_rapsodo_file, validate_file_structure, read_csv_bytes, delete_rapsodo_import,
+    DuplicateImportError, RapsodoValidationError, RapsodoImportError, RapsodoImportNotFoundError,
 )
+
+
+@st.dialog("Delete this Rapsodo import?")
+def _confirm_delete_import(import_id: int, original_filename: str, uploaded_at, pitch_count: int):
+    """Confirmation modal for deleting one previously-imported Rapsodo
+    file -- deletion is permanent (see delete_rapsodo_import's docstring),
+    so this is a deliberate extra click rather than a bare button on the
+    list below. Opens its own db session/commit, independent of the
+    page's main `session` (that one may be mid-import-flow when this is
+    triggered), and stashes the result in session_state so the message
+    survives the st.rerun() this triggers."""
+    st.warning(
+        f"This will permanently delete {pitch_count} pitch(es) imported from "
+        f"\"{original_filename}\" on {uploaded_at.strftime('%Y-%m-%d %H:%M') if uploaded_at else 'an unknown date'}. "
+        "This can't be undone."
+    )
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Cancel", key=f"rapsodo_delete_cancel_{import_id}"):
+            st.rerun()
+    with col2:
+        if st.button("Delete", type="primary", key=f"rapsodo_delete_confirm_{import_id}"):
+            delete_session = get_session()
+            try:
+                result = delete_rapsodo_import(delete_session, import_id)
+                st.session_state["rapsodo_delete_success"] = (
+                    f"Deleted {result['deleted_pitch_count']} pitch(es) imported from "
+                    f"\"{result['original_filename']}\"."
+                )
+            except (RapsodoImportNotFoundError, RapsodoImportError) as e:
+                st.session_state["rapsodo_delete_error"] = str(e)
+            finally:
+                delete_session.close()
+            st.rerun()
+
 
 page_header("Import Rapsodo Data")
 
@@ -81,6 +116,40 @@ try:
         key="rapsodo_selected_pitcher_id",
     )
     selected_pitcher = pitchers_by_id[selected_pitcher_id]
+
+    if delete_success_msg := st.session_state.pop("rapsodo_delete_success", None):
+        st.success(delete_success_msg)
+    if delete_error_msg := st.session_state.pop("rapsodo_delete_error", None):
+        st.error(delete_error_msg)
+
+    with st.expander("Manage previously imported files for this pitcher"):
+        pitcher_imports = (
+            session.query(RapsodoImport)
+            .options(joinedload(RapsodoImport.bullpen).joinedload(BullpenSession.bullpen_type))
+            .filter(RapsodoImport.player_id == selected_pitcher_id)
+            .order_by(RapsodoImport.uploaded_at.desc())
+            .all()
+        )
+        if not pitcher_imports:
+            st.caption("No Rapsodo files imported for this pitcher yet.")
+        else:
+            for imp in pitcher_imports:
+                if imp.bullpen and imp.bullpen.bullpen_type:
+                    session_label = f"{imp.bullpen.session_date.strftime('%Y-%m-%d (%a)')} — {imp.bullpen.bullpen_type.type_name}"
+                elif imp.bullpen:
+                    session_label = imp.bullpen.session_date.strftime('%Y-%m-%d (%a)')
+                else:
+                    session_label = "—"
+                cols = st.columns([3, 3, 2, 2, 2])
+                cols[0].write(imp.original_filename)
+                cols[1].write(session_label)
+                cols[2].write(imp.uploaded_at.strftime("%Y-%m-%d %H:%M"))
+                cols[3].write(f"{imp.imported_row_count} pitch(es)")
+                if can_edit_sessions:
+                    if cols[4].button("Delete", key=f"rapsodo_delete_btn_{imp.import_id}"):
+                        _confirm_delete_import(imp.import_id, imp.original_filename, imp.uploaded_at, imp.imported_row_count)
+            if not can_edit_sessions:
+                st.caption("Your role has read-only access -- deleting imports isn't available here.")
 
     st.divider()
     st.subheader("Bullpen session")

@@ -1,0 +1,126 @@
+"""
+GBO -- per-session app state for the Shiny UI.
+
+This is the Shiny analogue of the st.session_state.gbo_* keys the
+original Streamlit app.py set after login/role lookup. Every field is a
+reactive.Value so page modules can react to login/logout/role changes
+without polling for them.
+
+IMPORTANT: an AppState instance must be created INSIDE the top-level
+server() function (once per browser session, via new_app_state()),
+never at module import time. A reactive.Value created at import time is
+shared by every user connected to the running app process; one created
+inside server() is private to that one session. Getting this wrong is
+the single easiest way to leak one coach's screen into another's.
+"""
+
+from dataclasses import dataclass
+
+from shiny import reactive
+
+
+@dataclass
+class AppState:
+    auth_user: reactive.Value       # Supabase auth user object, or None
+    auth_error: reactive.Value      # str | None -- login failure message
+    is_guest: reactive.Value        # bool
+
+    user_id: reactive.Value         # int | None -- GBO users.user_id
+    first_name: reactive.Value      # str | None
+    last_name: reactive.Value       # str | None
+    role_name: reactive.Value       # str | None, e.g. "Head Coach"
+    role_title: reactive.Value      # str | None -- shown title when it differs from role_name (Oct 2026:
+                                    # a Pitching Strategist runs as role_name "Coach" + Pitching specialty)
+    can_view_all_players: reactive.Value
+    can_edit_assessments: reactive.Value
+    can_edit_sessions: reactive.Value
+    coach_specialty: reactive.Value  # str | None
+    is_pitcher: reactive.Value       # bool -- only meaningful for role "Player"
+
+    # "dark" | "light" -- synced from ui.input_dark_mode() in app.py.
+    # Deliberately NOT touched by reset() -- a user's light/dark
+    # preference should survive login/logout, unlike every other field
+    # here which is identity/role state tied to the authenticated user.
+    dark_mode: reactive.Value
+    is_phone: reactive.Value          # bool -- browser narrower than 700px (Oct 2026, phone layouts)
+
+    # int | None -- a one-shot "open this specific bullpen session" deep
+    # link, e.g. from Import Rapsodo Data's "Open full Bullpen Dashboard"
+    # button. Shiny has no per-page URL the way Streamlit's st.query_params
+    # did (see the migration plan's translation table), so a same-page
+    # nav-switch (ui.update_navs()) plus this shared, consume-once value
+    # is the in-app equivalent: the setter calls ui.update_navs(...) then
+    # sets this; modules/bullpen_dashboard.py reads it once on the next
+    # render and immediately clears it back to None so revisiting the
+    # page later doesn't keep jumping back to that same old session.
+    deep_link_bullpen_id: reactive.Value
+    deep_link_player_id: reactive.Value   # set by Roster, consumed once by Player Profile
+    deep_link_game_id: reactive.Value     # set by Data Health "Fix in Game Tracking", consumed once by Game Tracking
+    deep_link_pitcher: reactive.Value     # (player_id, pp_view) -- set by Data Health "Pitch labels", consumed once by Pitcher Profile
+    # Oct 2026, Ryker: Player Profile is the coach's hub -- its "Go to"
+    # buttons open a page with the player (and game) already picked.
+    # deep_link_open = {"page": title, "pid": .., "game_id": .., "n": k},
+    # consumed once by that page (see shiny_app/deep_link.py). back_to =
+    # (pid, name) while the coach is on a page reached that way; the
+    # "Back to <name>" bar shows until they use the sidebar.
+    deep_link_open: reactive.Value
+    back_to: reactive.Value
+
+    def is_authenticated(self) -> bool:
+        """True once Supabase login succeeded AND a matching, active GBO
+        users row was found (role_name gets set only then)."""
+        return self.auth_user() is not None and self.role_name() is not None
+
+    def is_pending_setup(self) -> bool:
+        """Logged in via Supabase, but no matching GBO users row --
+        mirrors the original app.py's account_not_set_up_page state."""
+        return self.auth_user() is not None and self.role_name() is None
+
+    def reset(self):
+        """Clear everything back to logged-out state (used on logout)."""
+        self.auth_user.set(None)
+        self.auth_error.set(None)
+        self.is_guest.set(False)
+        self.user_id.set(None)
+        self.first_name.set(None)
+        self.last_name.set(None)
+        self.role_name.set(None)
+        self.role_title.set(None)
+        self.can_view_all_players.set(False)
+        self.can_edit_assessments.set(False)
+        self.can_edit_sessions.set(False)
+        self.coach_specialty.set(None)
+        self.is_pitcher.set(False)
+        self.deep_link_bullpen_id.set(None)
+        self.deep_link_game_id.set(None)
+        self.deep_link_player_id.set(None)
+        self.deep_link_pitcher.set(None)
+        self.deep_link_open.set(None)
+        self.back_to.set(None)
+
+
+def new_app_state() -> AppState:
+    """Factory -- call this ONCE inside server(), never at module scope."""
+    return AppState(
+        auth_user=reactive.Value(None),
+        auth_error=reactive.Value(None),
+        is_guest=reactive.Value(False),
+        user_id=reactive.Value(None),
+        first_name=reactive.Value(None),
+        last_name=reactive.Value(None),
+        role_name=reactive.Value(None),
+        role_title=reactive.Value(None),
+        can_view_all_players=reactive.Value(False),
+        can_edit_assessments=reactive.Value(False),
+        can_edit_sessions=reactive.Value(False),
+        coach_specialty=reactive.Value(None),
+        is_pitcher=reactive.Value(False),
+        dark_mode=reactive.Value("dark"),
+        is_phone=reactive.Value(False),
+        deep_link_bullpen_id=reactive.Value(None),
+        deep_link_player_id=reactive.Value(None),
+        deep_link_game_id=reactive.Value(None),
+        deep_link_pitcher=reactive.Value(None),
+        deep_link_open=reactive.Value(None),
+        back_to=reactive.Value(None),
+    )

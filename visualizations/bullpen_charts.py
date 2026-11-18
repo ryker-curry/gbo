@@ -20,18 +20,41 @@ did that). Pitch-type colors and display labels come from
 pitch_type_config.py / analytics.bullpen_metrics.pitch_type_label --
 never hardcoded or positionally assigned here, per spec Section 23.
 
-Movement (IVB/HB) uses vb_spin/hb_spin (Rapsodo's spin-induced break
-columns) -- matches the mapping already established in Phase 1's
-importer and Phase 2's pitch-type summary table, not the trajectory-
-fit or seam-shifted-wake break columns also preserved on RapsodoPitch.
+Movement chart axes: vertical (IVB) uses vb_spin (Rapsodo's
+spin-induced vertical break -- confirmed Sept 2026 against Rapsodo's
+own displayed session V-Break averages, matches exactly); horizontal
+(HB) uses hb_trajectory, NOT hb_spin (Sept 2026 fix, Ryker: a 2-seamer
+of Porter Starnes's showed 10.7" HB in GBO vs 16.4" on Rapsodo's own
+site -- hb_spin is the theoretical Magnus-only estimate and
+undershoots real movement on pitches with meaningful seam-shifted-wake
+effect, which trajectory-based hb_trajectory already includes;
+vb_spin/vb_trajectory don't have this gap since gravity, not seam
+effects, dominates the vertical-vs-spin difference). Both axes
+previously used the spin-induced pair for consistency with Phase 1's
+importer and Phase 2's summary table -- those shared the same HB bug,
+fixed alongside this at the same time (see bullpen_metrics.py,
+rapsodo_import.py, pitcher_game_report.py).
+
+Aug 2026 addition: movement_chart() takes optional arm_angle_degrees/
+throws kwargs (both default None -- every existing call site,
+including the legacy Streamlit pages, is unaffected and renders
+pixel-identical output to before). When given, an Estimated-Arm-Angle
+ray is drawn from the origin via _add_arm_angle_ray() below -- pure
+visualization, the actual geometric estimate is computed elsewhere
+(analytics/pitch_trajectory.calculate_estimated_arm_angle), per the
+existing "calculations separate from visualization" rule this module
+already follows.
 """
+
+import math
 
 import plotly.graph_objects as go
 
 from pitch_type_config import get_pitch_color
 from analytics.bullpen_metrics import pitch_type_label
-from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, TEXT_CREAM, GOLD
+from visualizations.chart_theme import apply_gbo_theme, GRID_GRAY, TEXT_CREAM, GOLD, MUTED_GRAY
 from strike_zone import ZONE_HALF_WIDTH, ZONE_BOTTOM, ZONE_TOP
+from visualizations.hitter_graphic import home_plate_shape
 
 
 def _group_by_type(pitches):
@@ -58,7 +81,105 @@ def color_for_pitch_label(label):
     return get_pitch_color(label)
 
 
-def movement_chart(pitches, min_pitches_for_shading=2):
+def _add_arm_angle_ray(fig, arm_angle_degrees, throws, extent):
+    """Overlay a ray from (0,0) representing Estimated Arm Angle onto an
+    already-built movement_chart figure -- drawn as a real plotly shape
+    (not a separate image), so it rides along with the same single
+    kaleido render movement_chart already pays for, no extra chart/
+    render cost.
+
+    Handedness: RHP points into +X, LHP mirrors into -X. This is a
+    clean, self-consistent, DOCUMENTED convention picked independently
+    of HB's own sign meaning -- movement_chart's own docstring already
+    flags that Rapsodo's HB sign convention (which side is "arm side"
+    for a given hand) is still unconfirmed in this codebase. Arm angle
+    is a property of the throwing arm's slot, not of pitch movement, so
+    there's no existing convention to inherit here; RHP=+X/LHP=-X is
+    simply the choice made, applied consistently, and it only needs to
+    be internally consistent (both hands mirror each other) to satisfy
+    the "handedness-aware, positive magnitude either way" requirement --
+    it does not need to line up with HB's sign one way or the other.
+
+    Ray length is fixed at 80% of the chart's half-extent (so, for the
+    current +/-25" axis, an 20" ray) -- comfortably inside the plot
+    area with room left for the label, and independent of any actual
+    pitch data (this is a geometric overlay, not a data series, so it
+    doesn't auto-scale to the session's movement spread the ray sits
+    on top of)."""
+    if arm_angle_degrees is None:
+        return
+    angle_rad = math.radians(float(arm_angle_degrees))
+    ray_length = extent * 0.8
+    end_x = ray_length * math.cos(angle_rad)
+    end_y = ray_length * math.sin(angle_rad)
+    if throws == "L":
+        end_x = -end_x
+
+    fig.add_shape(
+        type="line", xref="x", yref="y", x0=0, y0=0, x1=end_x, y1=end_y,
+        line=dict(color=GOLD, width=3),
+    )
+    fig.add_annotation(
+        x=end_x, y=end_y, xref="x", yref="y",
+        text=f"Estimated Arm Angle: {round(float(arm_angle_degrees))}°",
+        showarrow=False, font=dict(color=GOLD, size=12, family="inherit"),
+        xanchor="right" if throws == "L" else "left",
+        yanchor="bottom" if end_y >= 0 else "top",
+        xshift=6 if throws != "L" else -6,
+    )
+
+
+def _add_arm_angle_rays(fig, arm_angles_by_type, throws, extent):
+    """Multi-ray sibling of _add_arm_angle_ray() above (Aug 2026): one
+    ray per pitch type instead of a single blended-average ray, each
+    colored to match that type's own established chart color (via
+    color_for_pitch_label -- same convention movement_chart's dots,
+    release_point_chart, and the release-point silhouette all already
+    use) rather than a single gold line for everything. Ryker's
+    reference image (a competing product's Movement Profile panel)
+    showed one thin ray fanning out per pitch type in that type's own
+    color -- this mirrors that idea with GBO's own styling, not a copy
+    of that product's artwork.
+
+    Same handedness convention and ray-length rule as
+    _add_arm_angle_ray() -- see its docstring for the reasoning; not
+    repeated here since both must stay in lockstep.
+
+    arm_angles_by_type: list of (label, color, angle_degrees) tuples,
+    one per pitch type the pitcher threw that has a computable
+    Estimated Arm Angle (types with no release-point/height data to
+    estimate from are simply absent from the list -- never a fabricated
+    0 or blended-in average). throws: single value, same for every ray
+    since it's a property of the pitcher, not the pitch type.
+
+    No per-ray text label here (Aug 2026, Ryker: "the wording that
+    shows the angles all overlaps") -- when two pitch types have close
+    arm angles (common: a pitcher's fastball/sinker/cutter often sit
+    within a couple degrees of each other), their ray-tip labels landed
+    on top of each other and were unreadable. The rays alone still show
+    each type's direction/color at a glance; the numeric angle per type
+    already has a clean, non-overlapping home in the caption list the
+    caller (_chart_movement) renders below this chart -- no information
+    is lost, just the colliding on-chart text."""
+    if not arm_angles_by_type:
+        return
+    ray_length = extent * 0.8
+    for label, color, angle_degrees in arm_angles_by_type:
+        if angle_degrees is None:
+            continue
+        angle_rad = math.radians(float(angle_degrees))
+        end_x = ray_length * math.cos(angle_rad)
+        end_y = ray_length * math.sin(angle_rad)
+        if throws == "L":
+            end_x = -end_x
+
+        fig.add_shape(
+            type="line", xref="x", yref="y", x0=0, y0=0, x1=end_x, y1=end_y,
+            line=dict(color=color, width=2.5),
+        )
+
+
+def movement_chart(pitches, min_pitches_for_shading=2, arm_angle_degrees=None, throws=None, arm_angles_by_type=None):
     """Horizontal Break (x) vs. Induced Vertical Break (y) -- a plain
     Cartesian grid with real tick labels on both axes, matching Rapsodo's
     own native movement plot rather than a Baseball-Savant-style radial
@@ -92,8 +213,17 @@ def movement_chart(pitches, min_pitches_for_shading=2):
 
     Deliberately still not included, same as before: an MLB/league-
     average reference overlay (no real external benchmark dataset to
-    draw from) and an arm-angle/pitcher-silhouette indicator (needs the
-    same physics review already deferred to Phase 4). The horizontal
+    draw from). An arm-angle indicator (previously deferred here
+    pending the "physics review") is now available via the optional
+    arm_angle_degrees/throws kwargs below -- see _add_arm_angle_ray().
+    Aug 2026: an arm_angles_by_type kwarg was added alongside it -- a
+    list of (label, color, angle_degrees) tuples -- to draw one ray per
+    pitch type (each in that type's own chart color) instead of a
+    single blended-average ray; see _add_arm_angle_rays(). When given,
+    arm_angles_by_type takes priority over arm_angle_degrees for what
+    gets drawn (both kwargs stay available -- no existing call site,
+    including the legacy Streamlit pages, passes either one, so nothing
+    else is affected). The horizontal
     axis also still keeps its plain "Horizontal Break (in)" label rather
     than a hand-dependent "1B / 3B" label, pending Ryker confirming
     Rapsodo's HB sign convention -- unaffected by this rings-to-grid
@@ -107,7 +237,7 @@ def movement_chart(pitches, min_pitches_for_shading=2):
     """
     fig = go.Figure()
 
-    usable = [p for p in pitches if p.hb_spin is not None and p.vb_spin is not None]
+    usable = [p for p in pitches if p.hb_trajectory is not None and p.vb_spin is not None]
     order, groups = _group_by_type(usable)
 
     # Axis extent: fixed at -25"/+25" on both axes per Ryker's call, not
@@ -127,7 +257,7 @@ def movement_chart(pitches, min_pitches_for_shading=2):
         group = groups[label]
         if len(group) < min_pitches_for_shading:
             continue
-        xs = [float(p.hb_spin) for p in group]
+        xs = [float(p.hb_trajectory) for p in group]
         ys = [float(p.vb_spin) for p in group]
         cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
         spread = max(max(xs) - min(xs), max(ys) - min(ys)) / 2 + 1.5
@@ -140,13 +270,21 @@ def movement_chart(pitches, min_pitches_for_shading=2):
     # Bold gold reference lines through the origin -- drawn after the
     # cluster shading (so they sit on top of it) but before the data
     # points, same layering as the ring version.
-    fig.add_shape(type="line", x0=0, x1=0, y0=-y_extent, y1=y_extent, line=dict(color=GOLD, width=2.5))
-    fig.add_shape(type="line", x0=-x_extent, x1=x_extent, y0=0, y1=0, line=dict(color=GOLD, width=2.5))
+    fig.add_shape(type="line", x0=0, x1=0, y0=-y_extent, y1=y_extent, line=dict(color=MUTED_GRAY, width=2.5))
+    fig.add_shape(type="line", x0=-x_extent, x1=x_extent, y0=0, y1=0, line=dict(color=MUTED_GRAY, width=2.5))
+
+    # Arm-angle ray -- drawn after the origin lines (so it reads as part
+    # of the same "reference geometry" layer) but before the actual
+    # pitch data points (so real data always sits visually on top).
+    if arm_angles_by_type:
+        _add_arm_angle_rays(fig, arm_angles_by_type, throws, MOVEMENT_EXTENT)
+    else:
+        _add_arm_angle_ray(fig, arm_angle_degrees, throws, MOVEMENT_EXTENT)
 
     for label in order:
         group = groups[label]
         color = color_for_pitch_label(label)
-        xs = [float(p.hb_spin) for p in group]
+        xs = [float(p.hb_trajectory) for p in group]
         ys = [float(p.vb_spin) for p in group]
         customdata = [
             [p.pitch_number, float(p.velocity) if p.velocity is not None else None,
@@ -155,7 +293,7 @@ def movement_chart(pitches, min_pitches_for_shading=2):
         ]
         fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="markers", name=label,
-            marker=dict(color=color, size=10, opacity=0.9, line=dict(color="#1E1E1E", width=1)),
+            marker=dict(color=color, size=10, opacity=0.9, line=dict(color="#171B21", width=1)),
             customdata=customdata,
             hovertemplate=(
                 f"{label}<br>Pitch #%{{customdata[0]}}<br>"
@@ -226,8 +364,8 @@ def release_point_chart(pitches, mode="individual"):
 
     # Bold gold crosshair at (0, 0) -- drawn first so it sits behind
     # the data points.
-    fig.add_shape(type="line", x0=0, x1=0, y0=Y_MIN, y1=Y_MAX, line=dict(color=GOLD, width=2.5))
-    fig.add_shape(type="line", x0=X_MIN, x1=X_MAX, y0=0, y1=0, line=dict(color=GOLD, width=2.5))
+    fig.add_shape(type="line", x0=0, x1=0, y0=Y_MIN, y1=Y_MAX, line=dict(color=MUTED_GRAY, width=2.5))
+    fig.add_shape(type="line", x0=X_MIN, x1=X_MAX, y0=0, y1=0, line=dict(color=MUTED_GRAY, width=2.5))
 
     if mode == "average":
         for label in order:
@@ -238,7 +376,7 @@ def release_point_chart(pitches, mode="individual"):
             avg_x, avg_y = sum(xs) / len(xs), sum(ys) / len(ys)
             fig.add_trace(go.Scatter(
                 x=[avg_x], y=[avg_y], mode="markers", name=label,
-                marker=dict(color=color, size=20, line=dict(color="#1E1E1E", width=1.5)),
+                marker=dict(color=color, size=20, line=dict(color="#171B21", width=1.5)),
                 hovertemplate=f"{label} average ({len(group)} pitches)<br>Side: %{{x:.2f}} ft<br>Height: %{{y:.2f}} ft<extra></extra>",
             ))
         title = "Release Point — Average by Pitch Type"
@@ -251,7 +389,7 @@ def release_point_chart(pitches, mode="individual"):
             customdata = [[p.pitch_number, float(p.velocity) if p.velocity is not None else None] for p in group]
             fig.add_trace(go.Scatter(
                 x=xs, y=ys, mode="markers", name=label,
-                marker=dict(color=color, size=10, opacity=0.75, line=dict(color="#1E1E1E", width=1)),
+                marker=dict(color=color, size=10, opacity=0.75, line=dict(color="#171B21", width=1)),
                 customdata=customdata,
                 hovertemplate=f"{label}<br>Pitch #%{{customdata[0]}}<br>Velocity: %{{customdata[1]:.1f}} mph<br>Side: %{{x:.2f}} ft<br>Height: %{{y:.2f}} ft<extra></extra>",
             ))
@@ -268,8 +406,8 @@ def release_point_chart(pitches, mode="individual"):
         # real screenshot Ryker sent. Push the legend further up and
         # widen the top margin so the two don't compete for the same
         # cramped default space.
-        legend=dict(orientation="h", yanchor="bottom", y=1.15, xanchor="left", x=0, bgcolor="rgba(0,0,0,0)"),
-        margin=dict(t=90, b=40, l=50, r=30),
+        legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0, bgcolor="rgba(0,0,0,0)"),
+        margin=dict(t=44, b=70, l=50, r=30),
     )
     return fig
 
@@ -299,7 +437,7 @@ def location_chart(pitches, mode="heatmap"):
             customdata = [[p.pitch_number, float(p.velocity) if p.velocity is not None else None] for p in group]
             fig.add_trace(go.Scatter(
                 x=xs, y=ys, mode="markers", name=label,
-                marker=dict(color=color, size=10, opacity=0.8, line=dict(color="#1E1E1E", width=1)),
+                marker=dict(color=color, size=10, opacity=0.8, line=dict(color="#171B21", width=1)),
                 customdata=customdata,
                 hovertemplate=f"{label}<br>Pitch #%{{customdata[0]}}<br>Velocity: %{{customdata[1]:.1f}} mph<br>Side: %{{x:.2f}} ft<br>Height: %{{y:.2f}} ft<extra></extra>",
             ))
@@ -330,9 +468,22 @@ def location_chart(pitches, mode="heatmap"):
         line=dict(color=TEXT_CREAM, width=2), fillcolor="rgba(0,0,0,0)",
     )
 
+    # Home plate on the ground line (Sept 2026, Ryker). This chart's
+    # plate_x_ft already follows the catcher-behind-the-plate/Statcast
+    # sign convention (rapsodo_conventions.py: positive = first-base
+    # side/catcher's right facing the pitcher) -- view="catcher" here
+    # matches that, not view="pitcher" like Command Tracking's
+    # pitch_locations_chart, which uses the opposite viewpoint. See
+    # visualizations.hitter_graphic.home_plate_shape for what each
+    # draws differently.
+    fig.add_shape(**home_plate_shape(half_width_ft=ZONE_HALF_WIDTH, ground_y=0.0, view="catcher"))
+
     apply_gbo_theme(
         fig, title="Pitch Location", x_title="Plate Side (ft)", y_title="Plate Height (ft)", height=480,
         xaxis=dict(range=[-2.5, 2.5], gridcolor=GRID_GRAY, zerolinecolor=GRID_GRAY, scaleanchor="y", scaleratio=1),
-        yaxis=dict(range=[0, 5], gridcolor=GRID_GRAY, zerolinecolor=GRID_GRAY),
+        # Lower bound extended a touch past 0 so the plate (partly below
+        # the ground line) isn't clipped -- purely this figure's display
+        # window, ZONE_BOTTOM/TOP and the zone math elsewhere are unaffected.
+        yaxis=dict(range=[-0.4, 5], gridcolor=GRID_GRAY, zerolinecolor=GRID_GRAY),
     )
     return fig

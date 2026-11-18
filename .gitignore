@@ -1,0 +1,31 @@
+# Secrets / local config
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Virtual environments
+ven/
+venv/
+.venv/
+env/
+
+# OS / editor cruft
+.DS_Store
+.vscode/
+.idea/
+
+# Local runtime artifacts
+shiny_debug.log
+_to_delete/
+
+# Local scratch / previews (not app code)
+Claude outputs/
+_style_preview/
+data/backups/
+
+# Player data (imports, testing exports, research workbooks) stays local -- never commit
+data/

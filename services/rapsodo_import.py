@@ -29,6 +29,15 @@ the architecture review:
     file's own "No" column -- see RapsodoPitch's docstring in models.py
     for why ("No" was found to be most-recent-first in the real export
     reviewed).
+  - Sept 2026, restored: each pitch's flight-path trajectory (see
+    pitch_trajectory.py) is computed and cached on trajectory_json at
+    import time again, for pitch-tunneling analytics to consume later
+    -- backend data only this time, no chart (see pitch_trajectory.py's
+    docstring for the full history of why this was pulled once and is
+    back now). A pitch missing the inputs a trajectory needs
+    (release_extension, hb_spin, etc.) just gets trajectory_json=None,
+    same "never guess a missing physics input" rule pitch_trajectory.py
+    itself follows.
 
 Kept deliberately free of any Streamlit import -- this is pure data
 logic, callable from a page, a script, or a test, per the spec's
@@ -37,13 +46,16 @@ logic, callable from a page, a script, or a test, per the spec's
 
 import hashlib
 import io
+import re
 from datetime import datetime
 
 import pandas as pd
 
-from models import RapsodoImport, RapsodoPitch, PitchType
+from models import RapsodoImport, RapsodoPitch, PitchType, GamePitch
 from pitch_type_config import normalize_pitch_type
 from rapsodo_conventions import spin_clock_to_degrees, strike_zone_inches_to_plate_feet
+from strike_zone import derive_old_zone
+from game_stats import get_pitching_pitches
 
 
 class RapsodoImportError(Exception):
@@ -51,12 +63,28 @@ class RapsodoImportError(Exception):
 
 
 class DuplicateImportError(RapsodoImportError):
-    """This exact file has already been imported for this player."""
+    """This exact file has already been imported for this player.
+
+    Carries the existing RapsodoImport's id (and, when it was a game-linked
+    import, its game_id) so a caller can offer to re-check the match
+    instead of just dead-ending -- see rapsodo_import.py's _do_game_import,
+    which is the only place that currently uses these."""
+
+    def __init__(self, message, import_id=None, game_id=None):
+        super().__init__(message)
+        self.import_id = import_id
+        self.game_id = game_id
 
 
 class RapsodoValidationError(RapsodoImportError):
     """The file isn't a usable Rapsodo export -- missing required columns,
     unreadable structure, or no usable pitch rows at all."""
+
+
+class RapsodoImportNotFoundError(RapsodoImportError):
+    """No RapsodoImport exists with the given import_id (already deleted,
+    or a bad id -- e.g. a stale button click after someone else deleted
+    the same import a moment earlier)."""
 
 
 # Normalized (lowercase, alnum-only) column-header text -> RapsodoPitch raw
@@ -214,11 +242,46 @@ def _parse_str(val):
     return s if s not in ("", "-") else None
 
 
+# Oct 2026 (Webb Fern's 9/30 export): Rapsodo writes the Date in the
+# exporting device's language. A Japanese-locale export reads
+# '水 9月 30 2026 4:04:04 午後' (= Wed Sep 30 2026 4:04:04 PM) and every row
+# was rejected as "unparseable Date". Chinese ('周三 9月 30 2026 4:04:04 下午')
+# and Korean ('수 9월 30 2026 4:04:04 오후') use the same layout. The weekday
+# word is ignored -- the date itself says which day it is.
+_CJK_DATE = re.compile(
+    r"^\S+\s+(\d{1,2})\s*[月월]\s*(\d{1,2})\s*[日일]?\s+(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})\s*(\S+)?$")
+_PM_WORDS = {"午後", "下午", "오후", "PM", "pm", "p.m."}
+_AM_WORDS = {"午前", "上午", "오전", "AM", "am", "a.m."}
+
+
 def _parse_pitch_date(val):
-    """Rapsodo's real "Date" format: 'Sat Aug 08 2026 6:03:29 PM'."""
+    """Rapsodo's real "Date" format: 'Sat Aug 08 2026 6:03:29 PM' -- plus the
+    same layout in Japanese / Chinese / Korean (see _CJK_DATE above)."""
+    if val is None:
+        return None
+    s = str(val).strip()
     try:
-        return datetime.strptime(str(val).strip(), "%a %b %d %Y %I:%M:%S %p")
+        return datetime.strptime(s, "%a %b %d %Y %I:%M:%S %p")
     except (ValueError, TypeError):
+        pass
+    m = _CJK_DATE.match(s)
+    if not m:
+        return None
+    mo, d, y, h, mi, sec, ap = m.groups()
+    h = int(h)
+    if ap in _PM_WORDS:
+        if not 1 <= h <= 12:
+            return None
+        h = h % 12 + 12
+    elif ap in _AM_WORDS:
+        if not 1 <= h <= 12:
+            return None
+        h = h % 12
+    elif ap is not None:
+        return None       # some other trailing word we don't know -- don't guess
+    try:
+        return datetime(int(y), int(mo), int(d), h, int(mi), int(sec))
+    except ValueError:
         return None
 
 
@@ -260,15 +323,34 @@ def import_rapsodo_file(
     file_bytes: bytes,
     original_filename: str,
     player_id: int,
-    bullpen_id: int,
     uploaded_by_user_id: int,
+    bullpen_id: int = None,
+    game_id: int = None,
 ):
-    """Parses and imports one Rapsodo export file for one player into one
-    existing BullpenSession. Raises DuplicateImportError or
-    RapsodoValidationError without touching the database on failure.
-    Commits on success and returns the created RapsodoImport (with
-    .pitches populated).
+    """Parses and imports one Rapsodo export file for one player, into
+    either one existing BullpenSession (bullpen_id) or one intrasquad
+    Game outing (game_id) -- exactly one of the two must be given; they
+    are mutually exclusive on both RapsodoImport and every RapsodoPitch
+    row it creates. Raises DuplicateImportError or RapsodoValidationError
+    without touching the database on failure. Commits on success and
+    returns the created RapsodoImport (with .pitches populated).
+
+    A game-linked import (game_id set) only writes the raw Rapsodo
+    pitches and physical measurements here -- it does NOT attempt to
+    match individual pitches to specific GamePitch rows. That's a
+    separate, explicit step (auto_match_rapsodo_to_game_pitches /
+    apply_manual_rapsodo_game_pitch_matches below), called by the UI
+    right after a successful game-linked import, so a coach always sees
+    the match result (clean auto-match vs. a count mismatch needing
+    manual reconciliation) rather than it happening silently inside the
+    upload call.
     """
+    if (bullpen_id is None) == (game_id is None):
+        raise RapsodoImportError(
+            "Exactly one of bullpen_id or game_id must be given when importing a Rapsodo file -- an import is "
+            "linked to either a bullpen session or an intrasquad-game outing, never both, never neither."
+        )
+
     file_hash = compute_file_hash(file_bytes)
 
     existing_import = (
@@ -282,7 +364,9 @@ def import_rapsodo_file(
             f"{existing_import.uploaded_at.strftime('%Y-%m-%d %H:%M')} "
             f"({existing_import.imported_row_count} pitch(es) imported at the time). "
             f"Re-uploading it again would create duplicate pitches -- if this is intentionally a "
-            f"different/corrected file, re-save it or note the difference before uploading."
+            f"different/corrected file, re-save it or note the difference before uploading.",
+            import_id=existing_import.import_id,
+            game_id=existing_import.game_id,
         )
 
     df = read_csv_bytes(file_bytes)
@@ -320,12 +404,24 @@ def import_rapsodo_file(
             rejected.append((file_row_num, "unparseable or missing Date -- can't establish chronological order"))
             continue
 
-        has_any_measurement = any(
+        # A row with a real timestamp but no velocity/spin/break data is
+        # a genuine Rapsodo "no read" (the unit saw the pitch attempt but
+        # couldn't get a reading) -- NOT the same as a blank/junk row.
+        # Kept as a placeholder RapsodoPitch (every numeric field None)
+        # rather than rejected, so its pitch_number still occupies its
+        # true chronological slot instead of leaving a hole that silently
+        # shifts every later pitch's number down by one everywhere else
+        # in the app compares to it (Ryker, Sept 2026, re: Gavin Derr's
+        # game 14 outing -- pitch 6 was a no-read, and dropping it
+        # entirely made Rapsodo's own numbering disagree with the
+        # charted pitch count until manually reconciled). Auto-matching
+        # will still link this placeholder to its real charted pitch by
+        # position -- it just has no plate_x_ft/plate_z_ft to copy, so
+        # that pitch correctly ends up with no actual location, with no
+        # manual reconciliation needed at all.
+        is_no_read = not any(
             raw.get(k) is not None for k in ("velocity", "total_spin", "vb_spin", "hb_spin", "true_spin")
         )
-        if not has_any_measurement:
-            rejected.append((file_row_num, "no velocity, spin, or break data present -- nothing usable to import"))
-            continue
 
         unique_id = raw.get("rapsodo_unique_id")
         if unique_id is not None and unique_id in already_imported_unique_ids:
@@ -340,7 +436,7 @@ def import_rapsodo_file(
                 if s not in ("", "-"):
                     raw_extra[col] = s
 
-        parsed_rows.append({"raw": raw, "raw_extra": raw_extra, "file_row_num": file_row_num})
+        parsed_rows.append({"raw": raw, "raw_extra": raw_extra, "file_row_num": file_row_num, "is_no_read": is_no_read})
 
     if not parsed_rows:
         reason_summary = "; ".join(f"row {n}: {r}" for n, r in rejected[:10])
@@ -356,6 +452,7 @@ def import_rapsodo_file(
     import_record = RapsodoImport(
         player_id=player_id,
         bullpen_id=bullpen_id,
+        game_id=game_id,
         original_filename=original_filename,
         file_hash=file_hash,
         uploaded_by_user_id=uploaded_by_user_id,
@@ -386,7 +483,7 @@ def import_rapsodo_file(
                 raw.get("strike_zone_side"), raw.get("strike_zone_height")
             )
 
-            db_session.add(RapsodoPitch(
+            new_pitch = RapsodoPitch(
                 bullpen_id=bullpen_id,
                 player_id=player_id,
                 import_id=import_record.import_id,
@@ -426,7 +523,10 @@ def import_rapsodo_file(
                 spin_axis_degrees=spin_axis_degrees,
                 plate_x_ft=plate_x_ft,
                 plate_z_ft=plate_z_ft,
-            ))
+            )
+            # trajectory_json no longer computed (Oct 2026: Tunneling+, its only
+            # reader, was removed). Column kept so older rows aren't touched.
+            db_session.add(new_pitch)
         db_session.commit()
     except Exception:
         db_session.rollback()
@@ -437,3 +537,328 @@ def import_rapsodo_file(
         )
 
     return import_record
+
+
+def delete_rapsodo_import(db_session, import_id: int) -> dict:
+    """Deletes one previously-imported Rapsodo file: every RapsodoPitch row
+    it created, plus the RapsodoImport audit record itself. This is what
+    lets a coach recover from uploading the wrong file (or a bad export)
+    without leaving orphaned pitches behind -- see the DuplicateImportError
+    message above, which points a coach here when a re-upload is a
+    correction rather than a mistake.
+
+    For a game-linked import (RapsodoImport.game_id set) whose readings
+    were matched to charted GamePitch rows, also clears actual_plate_x/z
+    and pitch_zone on each matched GamePitch -- but ONLY when they still
+    exactly equal that RapsodoPitch's own plate_x_ft/plate_z_ft, i.e. this
+    import is still what put them there and nothing else (a video review
+    pass, a different Rapsodo row) has overwritten them since. Ryker,
+    Sept 2026: deleted a bad Gavin Derr import and Command Target Zones /
+    "Miss direction by pitch" kept showing data anyway -- those read
+    GamePitch.actual_plate_x/z directly (a one-time copy made at match
+    time), never RapsodoPitch, so deleting the import used to leave every
+    location it had copied over sitting on the game's own pitches intact.
+    Without this, "delete this import" didn't actually undo the import's
+    effect on any stat that depends on location -- only its own audit
+    rows disappeared.
+
+    RapsodoPitch rows are deleted explicitly rather than relying on ORM
+    cascade -- RapsodoImport.pitches has no cascade="delete-orphan"
+    configured (only BullpenSession -> RapsodoPitch has that, for deleting
+    a whole session at once), so an unqualified db_session.delete() on the
+    RapsodoImport row alone would violate RapsodoPitch.import_id's NOT
+    NULL foreign key instead of cleaning up.
+
+    Deliberately does NOT touch the parent BullpenSession -- a session can
+    hold pitches from more than one import, or a mix of Rapsodo and
+    manually-tracked BullpenPitch rows, so only this one import's pitches
+    are removed. If this was the session's only data, the session is left
+    behind as an empty shell rather than auto-deleted; that's a
+    deliberate choice (the session itself may carry its own notes/date a
+    coach still wants), not an oversight.
+
+    Raises RapsodoImportNotFoundError if the import doesn't exist (already
+    deleted, or a bad id). Raises RapsodoImportError if the delete itself
+    fails partway through, leaving nothing changed. Commits on success and
+    returns a small summary dict (player_id, bullpen_id,
+    original_filename, uploaded_at, deleted_pitch_count,
+    cleared_location_count) so the caller can build a confirmation message
+    without a second query.
+    """
+    import_record = db_session.query(RapsodoImport).filter(RapsodoImport.import_id == import_id).first()
+    if import_record is None:
+        raise RapsodoImportNotFoundError(
+            f"No Rapsodo import found with id {import_id} -- it may have already been deleted."
+        )
+
+    summary = {
+        "player_id": import_record.player_id,
+        "bullpen_id": import_record.bullpen_id,
+        "original_filename": import_record.original_filename,
+        "uploaded_at": import_record.uploaded_at,
+    }
+
+    try:
+        cleared_location_count = 0
+        matched_pitches = (
+            db_session.query(RapsodoPitch)
+            .filter(RapsodoPitch.import_id == import_id, RapsodoPitch.game_pitch_id.isnot(None))
+            .all()
+        )
+        for rp in matched_pitches:
+            gp = db_session.query(GamePitch).filter(GamePitch.game_pitch_id == rp.game_pitch_id).first()
+            if (
+                gp is not None
+                and rp.plate_x_ft is not None
+                and rp.plate_z_ft is not None
+                and gp.actual_plate_x == rp.plate_x_ft
+                and gp.actual_plate_z == rp.plate_z_ft
+            ):
+                gp.actual_plate_x = None
+                gp.actual_plate_z = None
+                gp.pitch_zone = None
+                cleared_location_count += 1
+
+        deleted_pitch_count = (
+            db_session.query(RapsodoPitch)
+            .filter(RapsodoPitch.import_id == import_id)
+            .delete(synchronize_session=False)
+        )
+        db_session.delete(import_record)
+        db_session.commit()
+    except Exception:
+        db_session.rollback()
+        raise RapsodoImportError(
+            f"Couldn't delete this import (id {import_id}) -- nothing was removed. Try again, and if it keeps "
+            f"failing check for other data (e.g. a report) that might still reference these pitches."
+        )
+
+    summary["deleted_pitch_count"] = deleted_pitch_count
+    summary["cleared_location_count"] = cleared_location_count
+    return summary
+
+
+
+def _use_game_pitch_type(db_session, rp, gp):
+    """Make a matched Rapsodo reading carry the pitch type charted in
+    Game Tracking, not the label Rapsodo assigned. Some pitchers'
+    Rapsodo labels can't be fixed on the device (e.g. everything comes
+    through as "Fastball"), and the coach's call in Game Tracking is the
+    source of truth for game pitches. Rapsodo's own label stays in
+    raw_pitch_type. If the game pitch has no type charted, or the
+    reading is unlinked (gp is None), fall back to Rapsodo's label.
+    """
+    if gp is not None and gp.pitch_type_id is not None:
+        rp.pitch_type_id = gp.pitch_type_id
+        return
+    rapsodo_name = normalize_pitch_type(rp.raw_pitch_type)
+    pt = (
+        db_session.query(PitchType).filter(PitchType.type_name == rapsodo_name).first()
+        if rapsodo_name else None
+    )
+    rp.pitch_type_id = pt.pitch_type_id if pt else None
+
+
+def auto_match_rapsodo_to_game_pitches(db_session, import_id: int, game_id: int) -> dict:
+    """Attempts to automatically match every RapsodoPitch row from a
+    game-linked import (RapsodoImport.game_id set) to the specific
+    GamePitch it came from.
+
+    Only auto-matches when the two sides' pitch counts line up exactly,
+    pairing them in the two chronological orders Ryker's own conventions
+    already establish on each side: RapsodoPitch.pitch_number (derived
+    from the file's parsed pitch Date at import time -- see
+    import_rapsodo_file / RapsodoPitch's docstring) against
+    GamePitch.pitch_sequence (the overall pitch number for the game,
+    entered live by the coach). Pairing two same-length lists just
+    because their lengths happen to match, without this being count-
+    verified first, would risk silently mislabeling every pitch after a
+    single missed one on either side -- a foul-off Rapsodo didn't
+    register, a warm-up throw that leaked into the export, a pitch the
+    coach logged but Rapsodo missed. So this refuses to guess when the
+    counts differ and instead reports the mismatch for a coach to
+    reconcile by hand (see apply_manual_rapsodo_game_pitch_matches).
+
+    For each matched pair: sets RapsodoPitch.game_pitch_id, sets
+    RapsodoPitch.pitch_type_id to the pitch type charted in Game Tracking
+    (see _use_game_pitch_type -- Rapsodo's label stays in raw_pitch_type),
+    and -- only
+    when the GamePitch doesn't already have a location on file (a video
+    review pass may have already set one, and that's the more-verified
+    source per Ryker's call: Rapsodo's raw coordinates are the first-pass
+    source, video review is the correction step, so an existing video-
+    reviewed location is never overwritten here) -- copies
+    RapsodoPitch.plate_x_ft/plate_z_ft onto GamePitch.actual_plate_x/z
+    and re-derives GamePitch.pitch_zone via strike_zone.derive_old_zone,
+    so anything already reading pitch_zone (execution-accuracy stats,
+    Command Precision, etc.) picks up the Rapsodo-sourced location right
+    away, without waiting on a separate video review pass.
+
+    Commits on success (whether or not every pitch matched). Returns
+    {"status": "matched" | "count_mismatch" | "no_pitches",
+    "rapsodo_pitch_count", "game_pitch_count", "matched_count"}.
+    """
+    import_record = db_session.query(RapsodoImport).filter(RapsodoImport.import_id == import_id).first()
+    if import_record is None:
+        raise RapsodoImportNotFoundError(f"No Rapsodo import found with id {import_id} -- it may have already been deleted.")
+
+    rapsodo_pitches = sorted(
+        db_session.query(RapsodoPitch).filter(RapsodoPitch.import_id == import_id).all(),
+        key=lambda p: p.pitch_number,
+    )
+    game_pitches = sorted(
+        get_pitching_pitches(db_session, import_record.player_id, game_id=game_id),
+        key=lambda p: p.pitch_sequence,
+    )
+
+    if not rapsodo_pitches or not game_pitches:
+        return {
+            "status": "no_pitches",
+            "rapsodo_pitch_count": len(rapsodo_pitches),
+            "game_pitch_count": len(game_pitches),
+            "matched_count": 0,
+        }
+
+    if len(rapsodo_pitches) != len(game_pitches):
+        return {
+            "status": "count_mismatch",
+            "rapsodo_pitch_count": len(rapsodo_pitches),
+            "game_pitch_count": len(game_pitches),
+            "matched_count": 0,
+        }
+
+    matched_count = 0
+    try:
+        for rp, gp in zip(rapsodo_pitches, game_pitches):
+            rp.game_pitch_id = gp.game_pitch_id
+            _use_game_pitch_type(db_session, rp, gp)
+            if (
+                gp.actual_plate_x is None
+                and gp.actual_plate_z is None
+                and rp.plate_x_ft is not None
+                and rp.plate_z_ft is not None
+            ):
+                gp.actual_plate_x = rp.plate_x_ft
+                gp.actual_plate_z = rp.plate_z_ft
+                # float(...) -- rp.plate_x_ft/plate_z_ft are Numeric
+                # columns (Decimal at runtime), and Decimal vs. the plain
+                # float literals inside derive_old_zone's comparisons
+                # raises TypeError. Same cast plate_discipline.py already
+                # applies for the identical reason when reading
+                # GamePitch.actual_plate_x/z back out.
+                gp.pitch_zone = derive_old_zone(float(rp.plate_x_ft), float(rp.plate_z_ft))
+            matched_count += 1
+        db_session.commit()
+    except Exception:
+        db_session.rollback()
+        raise RapsodoImportError(
+            "Matching failed partway through -- nothing from this match pass was saved. The imported Rapsodo "
+            "pitches themselves are unaffected; try matching again."
+        )
+
+    return {
+        "status": "matched",
+        "rapsodo_pitch_count": len(rapsodo_pitches),
+        "game_pitch_count": len(game_pitches),
+        "matched_count": matched_count,
+    }
+
+
+def apply_manual_rapsodo_game_pitch_matches(db_session, import_id: int, matches: dict) -> dict:
+    """Manual reconciliation for a game-linked import -- either one
+    whose pitch count didn't line up with the game stint
+    (auto_match_rapsodo_to_game_pitches returned "count_mismatch") or
+    one that matched cleanly by count but paired positions wrong anyway
+    (a misread/garbage reading still counts as a row, so it never trips
+    the count check -- see the "Reassign pitches by hand" flow in
+    shiny_app/modules/rapsodo_import.py). Either way, a coach pairs
+    individual Rapsodo readings with individual charted pitches by hand
+    instead of GBO guessing at an order that may not hold.
+
+    matches: {rapsodo_pitch_id: game_pitch_id_or_None}. None means "no
+    charted pitch" (the coach picked "-- unmatched --", e.g. for a
+    misread that shouldn't be linked to any real pitch). Every
+    RapsodoPitch the coach's table covered should be a key here, even
+    when its choice is unchanged from before -- unlike the plain-insert
+    path, this can be REPOINTING an already-linked pitch (the reassign-
+    after-a-clean-match case), so a pair silently left out would leave
+    a stale wrong link in place rather than the "not linked yet" state
+    that used to be the only possibility here.
+
+    Before applying a new pointer (or None) for a RapsodoPitch that was
+    already linked to a different GamePitch, clears that OLD GamePitch's
+    actual_plate_x/z and pitch_zone -- but only when they still exactly
+    match this same RapsodoPitch's own plate_x_ft/plate_z_ft, i.e. they
+    really did come from this reading and not from a video-review pass
+    or a different Rapsodo row since. Otherwise a corrected reassignment
+    would fix the link but leave the wrong pitch's location/zone data
+    behind, still wrong.
+
+    Applies the same "don't overwrite an existing video-reviewed
+    location" rule as the automatic path for the NEW target. Raises
+    RapsodoImportError and rolls back (applying none of the pairs) if
+    any pair references a Rapsodo pitch outside this import or a
+    nonexistent game pitch, rather than partially applying a table that
+    may have been built from stale data.
+    """
+    if not matches:
+        return {"status": "no_pitches", "matched_count": 0}
+
+    rapsodo_pitches = {
+        p.rapsodo_pitch_id: p
+        for p in db_session.query(RapsodoPitch).filter(RapsodoPitch.import_id == import_id).all()
+    }
+
+    matched_count = 0
+    try:
+        for rapsodo_pitch_id, game_pitch_id in matches.items():
+            rp = rapsodo_pitches.get(rapsodo_pitch_id)
+            if rp is None:
+                raise RapsodoImportError(
+                    f"Rapsodo pitch {rapsodo_pitch_id} doesn't belong to import {import_id} -- refusing to apply "
+                    f"a possibly-stale reconciliation table."
+                )
+            gp = None
+            if game_pitch_id is not None:
+                gp = db_session.query(GamePitch).filter(GamePitch.game_pitch_id == game_pitch_id).first()
+                if gp is None:
+                    raise RapsodoImportError(f"No game pitch found with id {game_pitch_id}.")
+
+            old_game_pitch_id = rp.game_pitch_id
+            if old_game_pitch_id is not None and old_game_pitch_id != game_pitch_id:
+                old_gp = db_session.query(GamePitch).filter(GamePitch.game_pitch_id == old_game_pitch_id).first()
+                if (
+                    old_gp is not None
+                    and rp.plate_x_ft is not None
+                    and rp.plate_z_ft is not None
+                    and old_gp.actual_plate_x == rp.plate_x_ft
+                    and old_gp.actual_plate_z == rp.plate_z_ft
+                ):
+                    old_gp.actual_plate_x = None
+                    old_gp.actual_plate_z = None
+                    old_gp.pitch_zone = None
+
+            rp.game_pitch_id = game_pitch_id
+            _use_game_pitch_type(db_session, rp, gp)
+            if (
+                gp is not None
+                and gp.actual_plate_x is None
+                and gp.actual_plate_z is None
+                and rp.plate_x_ft is not None
+                and rp.plate_z_ft is not None
+            ):
+                gp.actual_plate_x = rp.plate_x_ft
+                gp.actual_plate_z = rp.plate_z_ft
+                # See auto_match_rapsodo_to_game_pitches's identical cast
+                # above for why float(...) is needed here.
+                gp.pitch_zone = derive_old_zone(float(rp.plate_x_ft), float(rp.plate_z_ft))
+            matched_count += 1
+        db_session.commit()
+    except RapsodoImportError:
+        db_session.rollback()
+        raise
+    except Exception:
+        db_session.rollback()
+        raise RapsodoImportError("Manual matching failed partway through -- nothing from this reconciliation pass was saved.")
+
+    return {"status": "matched", "matched_count": matched_count}
