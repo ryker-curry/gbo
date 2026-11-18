@@ -26,3 +26,6 @@ _to_delete/
 Claude outputs/
 _style_preview/
 data/backups/
+
+# Player data (imports, testing exports, research workbooks) stays local -- never commit
+data/

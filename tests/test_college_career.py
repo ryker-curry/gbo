@@ -31,6 +31,8 @@ def test_innings():
 def test_every_csv_row_matches_a_roster_player():
     import os
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "college_season_stats.csv")
+    if not os.path.exists(path):
+        pytest.skip("data/college_season_stats.csv is local-only (not in the repo)")
     roster = _roster()
     for rec in cc.read_csv(path):
         assert cc.match_player(rec["player"], roster) is not None, rec["player"]
