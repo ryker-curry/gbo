@@ -502,6 +502,7 @@ def plan_game(rows, game, matcher, opponent_players=None, pitch_type_ids=None, r
             "opponent_player_id": opponent_player, "_opponent_key": opponent_key,
             "opponent_our_player_id": opponent_our_player,
             "pitch_type_id": pt_id, "actual_plate_x": px, "actual_plate_z": pz,
+            "location_source": "smartpark" if px is not None and pz is not None else None,
             "pitch_zone": derive_old_zone(px, pz) if px is not None and pz is not None else None,
             "pitch_outcome": outcome, "contact_quality": contact,
             "batted_ball_type": bb_type, "batted_ball_x": bb_x, "batted_ball_y": bb_y,

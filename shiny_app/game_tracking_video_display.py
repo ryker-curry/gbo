@@ -549,6 +549,7 @@ def register_game_tracking_video(input, output, session, _refresh_tick, _active_
             p.actual_plate_x = x
             p.actual_plate_z = z
             p.pitch_zone = strike_zone.derive_old_zone(x, z)
+            p.location_source = "video"  # not counted in Zone Whiff % (Nov 2026)
             db.commit()
             game_id = p.game_id
             ui.notification_show(f"Saved actual location for pitch #{p.pitch_sequence}.", type="message", duration=8)

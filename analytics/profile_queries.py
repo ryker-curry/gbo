@@ -853,6 +853,7 @@ def team_hitting_lines(db, date_from=None, date_to=None):
         discipline = compute_hitter_discipline(ps)
         line["Chase %"] = discipline["Chase %"]
         line["Whiff %"] = discipline["Whiff %"]
+        line["Zone Whiff %"] = discipline["Zone Whiff %"]
         line["Zone Swing %"] = discipline["Zone Swing %"]
         lines.append(line)
     return lines

@@ -6119,6 +6119,7 @@ def game_tracking_server(input, output, session, app_state):
                 pitch_zone=strike_zone.derive_old_zone(actual_x, actual_z),
                 actual_plate_x=actual_x,
                 actual_plate_z=actual_z,
+                location_source="manual" if actual_x is not None and actual_z is not None else None,
                 intended_plate_x=intended_x,
                 intended_plate_z=intended_z,
                 pitch_outcome=outcome,

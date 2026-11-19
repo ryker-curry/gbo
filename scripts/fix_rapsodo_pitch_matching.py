@@ -192,6 +192,7 @@ def main():
                 old_gp.actual_plate_x = None
                 old_gp.actual_plate_z = None
                 old_gp.pitch_zone = None
+                old_gp.location_source = None
                 cleared_count += 1
 
             rp.game_pitch_id = target_gp.game_pitch_id
@@ -203,6 +204,7 @@ def main():
             ):
                 target_gp.actual_plate_x = rp.plate_x_ft
                 target_gp.actual_plate_z = rp.plate_z_ft
+                target_gp.location_source = "rapsodo"
                 target_gp.pitch_zone = derive_old_zone(float(rp.plate_x_ft), float(rp.plate_z_ft))
                 copied_count += 1
 

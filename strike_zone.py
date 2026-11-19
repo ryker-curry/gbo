@@ -99,6 +99,89 @@ def is_in_zone(plate_x, plate_z):
 
 
 # ---------------------------------------------------------------------
+# Zone Whiff % location source, by season (Nov 19 2026, Ryker's call).
+# Zone Whiff % = whiffs / swings on pitches in the zone. "In the zone"
+# is the pitch's tracked plate location checked against the GBO box
+# above, and only locations from that season's tracking system count:
+#   Fall 2026 (and earlier)  -> Rapsodo strike-zone location
+#   Spring 2027 onward        -> SmartPark (fixed install, more accurate)
+# Hand-clicked / video locations never count toward Zone Whiff %. When a
+# pitch's game date isn't loaded, either tracking system is accepted.
+# To move the switch date, edit this list (newest first).
+# ---------------------------------------------------------------------
+import datetime as _dt
+
+ZONE_SOURCE_BY_SEASON = [
+    (_dt.date(2027, 1, 1), "smartpark"),
+    (_dt.date.min, "rapsodo"),
+]
+TRACKED_LOCATION_SOURCES = {"rapsodo", "smartpark"}
+
+
+def zone_source_for_date(game_date):
+    """'rapsodo' / 'smartpark' for a game date, or None if no date."""
+    if game_date is None:
+        return None
+    if isinstance(game_date, _dt.datetime):
+        game_date = game_date.date()
+    for start, source in ZONE_SOURCE_BY_SEASON:
+        if game_date >= start:
+            return source
+    return None
+
+
+def _pitch_game_date(p):
+    # Never trigger a lazy load on a detached row -- the game date is a
+    # nice-to-have here, the source tag alone still filters.
+    try:
+        g = getattr(p, "game", None)
+    except Exception:
+        return None
+    return getattr(g, "game_date", None)
+
+
+def zone_whiff_location(p):
+    """(plate_x, plate_z) floats if this pitch's location counts toward
+    Zone Whiff %, else None."""
+    x, z = getattr(p, "actual_plate_x", None), getattr(p, "actual_plate_z", None)
+    if x is None or z is None:
+        return None
+    src = getattr(p, "location_source", None)
+    want = zone_source_for_date(_pitch_game_date(p))
+    if want is not None:
+        if src != want:
+            return None
+    elif src not in TRACKED_LOCATION_SOURCES:
+        return None
+    return float(x), float(z)
+
+
+def zone_whiff_counts(pitches, swing_outcomes=None, whiff_outcomes=None):
+    """-> (zone_swings, zone_whiffs) using the season source rule."""
+    if swing_outcomes is None:
+        swing_outcomes = {"Swing and Miss", "Foul", "In Play"}
+    if whiff_outcomes is None:
+        whiff_outcomes = {"Swing and Miss"}
+    swings = whiffs = 0
+    for p in pitches:
+        if p.pitch_outcome not in swing_outcomes:
+            continue
+        loc = zone_whiff_location(p)
+        if loc is None or not is_in_zone(*loc):
+            continue
+        swings += 1
+        if p.pitch_outcome in whiff_outcomes:
+            whiffs += 1
+    return swings, whiffs
+
+
+def zone_whiff_pct(pitches, swing_outcomes=None, whiff_outcomes=None):
+    """Zone Whiff % rounded to 0.1, or None with no qualifying swings."""
+    sw, wh = zone_whiff_counts(pitches, swing_outcomes, whiff_outcomes)
+    return round(100 * wh / sw, 1) if sw else None
+
+
+# ---------------------------------------------------------------------
 # Pitch code shorthand (Sep 2026, revised Sep 2026) -- Ryker's own
 # live-charting notation for INTENDED location: a 2-digit "Level-Zone"
 # code (e.g. "14"), typed once instead of clicking the zone graphic.

@@ -12,7 +12,7 @@ state model needs bat-tracking data; this is the simple rolling version.
 """
 
 from plate_discipline import SWING_OUTCOMES, WHIFF_OUTCOMES
-from strike_zone import is_in_zone
+from strike_zone import is_in_zone, zone_whiff_location
 
 WINDOW = 30
 FLAG_PTS = 10.0
@@ -21,8 +21,16 @@ MIN_SWINGS = 40
 
 def zone_swings(pitches):
     ps = sorted(pitches, key=lambda p: (getattr(p, "game_id", 0) or 0, p.pitch_sequence or 0))
-    return [p for p in ps if p.actual_plate_x is not None and p.actual_plate_z is not None
-            and is_in_zone(float(p.actual_plate_x), float(p.actual_plate_z)) and p.pitch_outcome in SWING_OUTCOMES]
+    # Nov 2026: same season-sourced locations as Zone Whiff % everywhere
+    # else (Rapsodo fall / SmartPark spring, strike_zone.zone_whiff_location).
+    out = []
+    for p in ps:
+        if p.pitch_outcome not in SWING_OUTCOMES:
+            continue
+        loc = zone_whiff_location(p)
+        if loc is not None and is_in_zone(*loc):
+            out.append(p)
+    return out
 
 
 def rolling(pitches):

@@ -1515,6 +1515,11 @@ class GamePitch(Base):
     # time -- never entered separately, so the two can't drift.
     actual_plate_x = Column(Numeric(5, 3), nullable=True)
     actual_plate_z = Column(Numeric(5, 3), nullable=True)
+    # Where actual_plate_x/z came from: 'rapsodo' / 'smartpark' / 'video' /
+    # 'manual' (NULL = unknown). Zone Whiff % counts only the season's
+    # tracking system -- strike_zone.ZONE_SOURCE_BY_SEASON (Nov 2026).
+    # migrations/migrate_location_source.py.
+    location_source = Column(String(20), nullable=True)
     intended_plate_x = Column(Numeric(5, 3), nullable=True)
     intended_plate_z = Column(Numeric(5, 3), nullable=True)
     pitch_outcome = Column(String(30), nullable=True)  # "Ball" / "Called Strike" / "Swing and Miss" / "Foul" / "In Play" / "HBP"

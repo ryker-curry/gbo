@@ -489,7 +489,7 @@ def _populate(db):
                             batting_slot_id=None, pa_pitch_number=n, balls_before=b0, strikes_before=s0, outs_before=outs,
                             bases_before=bases, pitch_type_id=ptype[name],
                             intended_plate_x=round(ix, 3), intended_plate_z=round(iz, 3),
-                            intended_zone=derive_old_zone(ix, iz), actual_plate_x=round(x, 3), actual_plate_z=round(z, 3),
+                            intended_zone=derive_old_zone(ix, iz), actual_plate_x=round(x, 3), actual_plate_z=round(z, 3), location_source="rapsodo",
                             pitch_zone=derive_old_zone(x, z), pitch_outcome=ev, contact_quality=cq, batted_ball_type=bbt,
                             batted_ball_x=round(bx, 1) if bx is not None else None, batted_ball_y=round(by, 1) if by is not None else None,
                             is_sword=False, ends_plate_appearance=ends, ab_outcome=ab,

@@ -505,6 +505,7 @@ def hitter_profile_server(input, output, session, app_state):
                     {"label": "Swing %", "value": _fmt_pct(discipline["Swing %"])},
                     {"label": "Chase %", "value": _fmt_pct(discipline["Chase %"])},
                     {"label": "Whiff %", "value": _fmt_pct(discipline["Whiff %"])},
+                    {"label": "Zone Whiff %", "value": _fmt_pct(discipline["Zone Whiff %"])},
                     {"label": "SwStr %", "value": _fmt_pct(discipline["SwStr %"])},
                     {"label": "1st-Pitch Swing %", "value": _fmt_pct(discipline["First-Pitch Swing %"])},
                 ]))

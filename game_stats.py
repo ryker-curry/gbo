@@ -21,10 +21,10 @@ definition isn't unambiguous from the raw data alone -- see that
 function's docstring.
 """
 
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, contains_eager
 from models import GamePitch, Game, GameForcedHalfInningEnd, GameRunnerEvent, Player, OpponentPlayer
 from plate_discipline import SWING_OUTCOMES, WHIFF_OUTCOMES
-from strike_zone import is_in_zone, classify_attack_zone, pitch_hit_spot
+from strike_zone import is_in_zone, classify_attack_zone, pitch_hit_spot, zone_whiff_counts
 from field_location import classify_spray_direction
 from gbo_cache import cached
 from run_scorers import rbi_on_play, running_line_for, sb_cs_allowed_for
@@ -40,7 +40,11 @@ def get_batting_pitches(session, player_id, season_id=None, game_id=None):
     query = (
         session.query(GamePitch)
         .join(Game, GamePitch.game_id == Game.game_id)
-        .options(joinedload(GamePitch.pitch_type))
+        # contains_eager(game): Zone Whiff % needs the game date to pick
+        # the season's location source (strike_zone.zone_whiff_location)
+        # -- reuses the join above, no extra query; date only (egress).
+        .options(joinedload(GamePitch.pitch_type),
+                 contains_eager(GamePitch.game).load_only(Game.game_id, Game.game_date))
         .filter(
             ((GamePitch.is_our_team_batting.is_(True)) & (GamePitch.our_player_id == player_id))
             | ((GamePitch.is_our_team_batting.is_(False)) & (GamePitch.opponent_our_player_id == player_id))
@@ -60,7 +64,11 @@ def get_pitching_pitches(session, player_id, season_id=None, game_id=None):
     query = (
         session.query(GamePitch)
         .join(Game, GamePitch.game_id == Game.game_id)
-        .options(joinedload(GamePitch.pitch_type))
+        # contains_eager(game): Zone Whiff % needs the game date to pick
+        # the season's location source (strike_zone.zone_whiff_location)
+        # -- reuses the join above, no extra query; date only (egress).
+        .options(joinedload(GamePitch.pitch_type),
+                 contains_eager(GamePitch.game).load_only(Game.game_id, Game.game_date))
         .filter(
             ((GamePitch.is_our_team_batting.is_(False)) & (GamePitch.our_player_id == player_id))
             | ((GamePitch.is_our_team_batting.is_(True)) & (GamePitch.opponent_our_player_id == player_id))
@@ -525,7 +533,11 @@ def get_pitches_thrown_to_opponent_batter(session, opponent_player_id, season_id
     query = (
         session.query(GamePitch)
         .join(Game, GamePitch.game_id == Game.game_id)
-        .options(joinedload(GamePitch.pitch_type))
+        # contains_eager(game): Zone Whiff % needs the game date to pick
+        # the season's location source (strike_zone.zone_whiff_location)
+        # -- reuses the join above, no extra query; date only (egress).
+        .options(joinedload(GamePitch.pitch_type),
+                 contains_eager(GamePitch.game).load_only(Game.game_id, Game.game_date))
         .filter(GamePitch.is_our_team_batting.is_(False), GamePitch.opponent_player_id == opponent_player_id)
     )
     if season_id is not None:
@@ -1488,7 +1500,9 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
     in_zone = [p for p in located if is_in_zone(float(p.actual_plate_x), float(p.actual_plate_z))]
     out_zone = [p for p in located if not is_in_zone(float(p.actual_plate_x), float(p.actual_plate_z))]
     zone_swings = [p for p in in_zone if p.pitch_outcome in SWING_OUTCOMES]
-    zone_whiffs = [p for p in in_zone if p.pitch_outcome in WHIFF_OUTCOMES]
+    # Zone Whiff % (Nov 2026): season-sourced locations only (Rapsodo in
+    # the fall, SmartPark from spring 2027) -- strike_zone.zone_whiff_counts.
+    zw_swings, zw_whiffs = zone_whiff_counts(pitches, SWING_OUTCOMES, WHIFF_OUTCOMES)
     chase_swings = [p for p in out_zone if p.pitch_outcome in SWING_OUTCOMES]
 
     # Attack-zone tier mix (Heart/Shadow/Chase/Waste) for THIS pitch
@@ -1573,7 +1587,7 @@ def _pitch_type_row(label, pitches, total_all_types, a3p_attempts=0, a3p_ahead=0
         "Whiffs": len(whiffs), "Whiff %": _rate(len(whiffs), len(swings)),
         "SwStr %": _rate(len(whiffs), n),
         "CSW %": _rate(len(called_strikes) + len(whiffs), n),
-        "Zone Whiffs": len(zone_whiffs), "Zone Whiff %": _rate(len(zone_whiffs), len(zone_swings)),
+        "Zone Whiffs": zw_whiffs, "Zone Whiff %": _rate(zw_whiffs, zw_swings),
         "Pitches Out of Zone": len(out_zone), "Chase": len(chase_swings), "Chase %": _rate(len(chase_swings), len(out_zone)),
         "Zone %": _rate(len(in_zone), len(located)),
         "Heart Zone %": _rate(tier_counts["Heart"], len(located)),

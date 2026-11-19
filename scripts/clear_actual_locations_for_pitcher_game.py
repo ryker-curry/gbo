@@ -100,6 +100,7 @@ def main():
             p.actual_plate_x = None
             p.actual_plate_z = None
             p.pitch_zone = None
+            p.location_source = None
         db.commit()
         print(f"\nDone -- cleared actual location on {len(located)} pitch(es). Ready for a fresh Rapsodo import.")
     finally:

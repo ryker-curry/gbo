@@ -37,7 +37,7 @@ until they're migrated.
 
 import plotly.graph_objects as go
 
-from strike_zone import is_in_zone, derive_old_zone, classify_attack_zone
+from strike_zone import is_in_zone, derive_old_zone, classify_attack_zone, zone_whiff_pct
 
 SWING_OUTCOMES = {"Swing and Miss", "Foul", "In Play"}
 WHIFF_OUTCOMES = {"Swing and Miss"}
@@ -76,6 +76,9 @@ def compute_hitter_discipline(pitches):
         "Zone Swing %": _pct(len(zone_swings), len(in_zone_located)),
         "Chase %": _pct(len(chase_swings), len(out_zone_located)),
         "Zone Contact %": _pct(len(zone_contacts), len(zone_swings)),
+        # Misses on strikes he swings at -- season-sourced locations only
+        # (Rapsodo fall / SmartPark spring), strike_zone.zone_whiff_pct.
+        "Zone Whiff %": zone_whiff_pct(pitches, SWING_OUTCOMES, WHIFF_OUTCOMES),
         "Chase Contact %": _pct(len(chase_contacts), len(chase_swings)),
         "First-Pitch Swing %": _pct(len(first_pitch_swings), len(first_pitches)),
     }
@@ -141,6 +144,7 @@ def compute_pitcher_command(pitches):
         "Located Pitches": len(located),
         "Zone %": _pct(len(in_zone_located), len(located)),
         "Whiff % Induced": _pct(len(whiffs), len(swings)),
+        "Zone Whiff %": zone_whiff_pct(pitches, SWING_OUTCOMES, WHIFF_OUTCOMES),
         "SwStr % Induced": _pct(len(whiffs), total),
         "Chase % Induced": _pct(len(chase_swings_induced), len(out_zone_located)),
         "Usage %": usage_pct,

@@ -411,10 +411,12 @@ def _pitch_type_row(type_pitches, completed_pas, type_id, total_pitches_all_type
     whiffs = sum(1 for p in type_pitches if p.pitch_outcome == "Swing and Miss")
 
     reviewed = [p for p in type_pitches if p.actual_plate_x is not None and p.actual_plate_z is not None]
-    zone_swings = zone_whiffs = chases = out_of_zone_reviewed = None
+    zone_swings = zone_whiffs = chases = out_of_zone_reviewed = zw_swings = None
     if reviewed:
         zone_swings = sum(1 for p in reviewed if p.pitch_outcome in SWING_OUTCOMES and strike_zone.is_in_zone(float(p.actual_plate_x), float(p.actual_plate_z)))
-        zone_whiffs = sum(1 for p in reviewed if p.pitch_outcome == "Swing and Miss" and strike_zone.is_in_zone(float(p.actual_plate_x), float(p.actual_plate_z)))
+        # Zone Whiff % (Nov 2026): its own season-sourced swing count
+        # (Rapsodo fall / SmartPark spring) -- strike_zone.zone_whiff_counts.
+        zw_swings, zone_whiffs = strike_zone.zone_whiff_counts(type_pitches, SWING_OUTCOMES)
         out_of_zone_reviewed = [p for p in reviewed if not strike_zone.is_in_zone(float(p.actual_plate_x), float(p.actual_plate_z))]
         chases = sum(1 for p in out_of_zone_reviewed if p.pitch_outcome in SWING_OUTCOMES)
 
@@ -456,7 +458,7 @@ def _pitch_type_row(type_pitches, completed_pas, type_id, total_pitches_all_type
         "total_swings": len(swings), "whiffs": whiffs, "whiff_pct": round(whiffs / len(swings) * 100, 1) if swings else None,
         "swstr_pct": round(whiffs / n * 100, 1) if n else None,
         "zone_swings": zone_swings, "zone_whiffs": zone_whiffs,
-        "zone_whiff_pct": round(zone_whiffs / zone_swings * 100, 1) if zone_swings else None,
+        "zone_whiff_pct": round(zone_whiffs / zw_swings * 100, 1) if (zone_swings is not None and zw_swings) else None,
         "chases": chases, "out_of_zone_reviewed": len(out_of_zone_reviewed) if out_of_zone_reviewed is not None else None,
         "chase_pct": round(chases / len(out_of_zone_reviewed) * 100, 1) if out_of_zone_reviewed else None,
         "swords": sum(1 for p in type_pitches if p.is_sword),

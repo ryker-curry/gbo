@@ -617,6 +617,7 @@ def delete_rapsodo_import(db_session, import_id: int) -> dict:
                 gp.actual_plate_x = None
                 gp.actual_plate_z = None
                 gp.pitch_zone = None
+                gp.location_source = None
                 cleared_location_count += 1
 
         deleted_pitch_count = (
@@ -740,6 +741,7 @@ def auto_match_rapsodo_to_game_pitches(db_session, import_id: int, game_id: int)
             ):
                 gp.actual_plate_x = rp.plate_x_ft
                 gp.actual_plate_z = rp.plate_z_ft
+                gp.location_source = "rapsodo"  # Zone Whiff % source (Nov 2026)
                 # float(...) -- rp.plate_x_ft/plate_z_ft are Numeric
                 # columns (Decimal at runtime), and Decimal vs. the plain
                 # float literals inside derive_old_zone's comparisons
@@ -837,6 +839,7 @@ def apply_manual_rapsodo_game_pitch_matches(db_session, import_id: int, matches:
                     old_gp.actual_plate_x = None
                     old_gp.actual_plate_z = None
                     old_gp.pitch_zone = None
+                    old_gp.location_source = None
 
             rp.game_pitch_id = game_pitch_id
             _use_game_pitch_type(db_session, rp, gp)
@@ -849,6 +852,7 @@ def apply_manual_rapsodo_game_pitch_matches(db_session, import_id: int, matches:
             ):
                 gp.actual_plate_x = rp.plate_x_ft
                 gp.actual_plate_z = rp.plate_z_ft
+                gp.location_source = "rapsodo"  # Zone Whiff % source (Nov 2026)
                 # See auto_match_rapsodo_to_game_pitches's identical cast
                 # above for why float(...) is needed here.
                 gp.pitch_zone = derive_old_zone(float(rp.plate_x_ft), float(rp.plate_z_ft))

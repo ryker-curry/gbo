@@ -82,6 +82,7 @@ from shinywidgets import output_widget, render_plotly
 from sqlalchemy.orm import joinedload
 from database import get_session
 from models import Player, User, PitchType, PlayerPitchArsenal, StaffPlayerAssignment, Game, GamePitch, RapsodoPitch
+from strike_zone import zone_whiff_pct  # Zone Whiff % (Nov 2026)
 from game_stats import compute_pitching_line, compute_pitch_type_breakdown, get_batter_hands, compute_pitch_mix_by_count, pitching_line_for
 from strike_zone import classify_attack_zone
 import command_config
@@ -935,6 +936,8 @@ def pitcher_profile_server(input, output, session, app_state):
                         {"label": "SIERA", "value": _fmt(line.get("SIERA")), "delta": "ERA his K / BB / grounders predict"},
                         {"label": "OBA", "value": _fmt(line["OBA (opponent AVG)"], 3), "delta": "hitters' average off him"},
                         {"label": "wOBA", "value": _fmt(line["wOBA"], 3), "delta": "overall damage per hitter (.320 ~ avg)"},
+                        {"label": "Zone Whiff %", "value": _fmt_pct(zone_whiff_pct(game_pitches)),
+                         "delta": "misses when hitters swing at strikes"},
                     ]),
                     class_="gbo-seq-details",
                 ))
@@ -1715,6 +1718,7 @@ def pitcher_profile_server(input, output, session, app_state):
                  "Off the End %": _fmt_pct(r["Off the End %"]), "Clipped %": _fmt_pct(r["Clipped %"]),
                  "Solid %": _fmt_pct(r["Solid Contact %"]), "Barreled %": _fmt_pct(r["Barreled %"]),
                  "Hard Hit %": _fmt_pct(r["Hard Hit %"]), "Whiff %": _fmt_pct(r["Whiff %"]),
+                 "Zone Whiff %": _fmt_pct(r["Zone Whiff %"]),
                  "SwStr %": _fmt_pct(r["SwStr %"]), "CSW %": _fmt_pct(r["CSW %"]),
                  "RV/100": r["RV/100"] if r["RV/100"] is not None else "—"}
                 for r in rows

@@ -10,7 +10,7 @@ from analytics import (decision_value, decision_score, hitter_counts, leverage, 
 
 def _gp(seq=1, x=0.0, z=2.5, out="Called Strike", b=0, s=0, rv=0.0, pa_no=1, ends=False, ab=None, gid=1,
         label="4-Seam Fastball", cq=None, outs=0, bases="000", inning=1, batting=True, runs=0, pid=5):
-    return NS(game_pitch_id=seq + 1000 * gid, game_id=gid, pitch_sequence=seq, actual_plate_x=x, actual_plate_z=z,
+    return NS(game_pitch_id=seq + 1000 * gid, game_id=gid, pitch_sequence=seq, actual_plate_x=x, actual_plate_z=z, location_source="rapsodo",
               pitch_outcome=out, balls_before=b, strikes_before=s, run_value=rv, pa_pitch_number=pa_no,
               ends_plate_appearance=ends, ab_outcome=ab, pitch_type=NS(type_name=label), contact_quality=cq,
               outs_before=outs, bases_before=bases, inning=inning, is_our_team_batting=batting,

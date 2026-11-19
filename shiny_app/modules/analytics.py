@@ -190,6 +190,7 @@ def analytics_server(input, output, session, app_state):
                             {"label": "Swing %", "value": _fmt_pct(discipline["Swing %"])},
                             {"label": "Chase %", "value": _fmt_pct(discipline["Chase %"])},
                             {"label": "Whiff %", "value": _fmt_pct(discipline["Whiff %"])},
+                            {"label": "Zone Whiff %", "value": _fmt_pct(discipline["Zone Whiff %"])},
                             {"label": "SwStr %", "value": _fmt_pct(discipline["SwStr %"])},
                             {"label": "1st-Pitch Swing %", "value": _fmt_pct(discipline["First-Pitch Swing %"])},
                         ]))
@@ -249,6 +250,7 @@ def analytics_server(input, output, session, app_state):
                         [
                             ("Zone %", command["Zone %"]),
                             ("Whiff % Induced", command["Whiff % Induced"]),
+                            ("Zone Whiff %", command["Zone Whiff %"]),
                             ("SwStr % Induced", command["SwStr % Induced"]),
                             ("Chase % Induced", command["Chase % Induced"]),
                             ("Zone Execution %", pitching_line["Zone Execution %"]),
@@ -330,6 +332,7 @@ def analytics_server(input, output, session, app_state):
                         sections.append(ui_helpers.render_kpi_cards([
                             {"label": "Zone %", "value": _fmt_pct(command["Zone %"])},
                             {"label": "Whiff % Induced", "value": _fmt_pct(command["Whiff % Induced"])},
+                            {"label": "Zone Whiff %", "value": _fmt_pct(command["Zone Whiff %"])},
                             {"label": "SwStr % Induced", "value": _fmt_pct(command["SwStr % Induced"])},
                             {"label": "Chase % Induced", "value": _fmt_pct(command["Chase % Induced"])},
                         ]))
