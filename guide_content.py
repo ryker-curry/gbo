@@ -460,7 +460,7 @@ GUIDE += [
     },
     {
         "key": "scoring_chances", "title": "Runs per Scoring Chance", "who": "all",
-        "pages": ["Scoring Chances", "Pitcher Profile", "Hitter Profile"],
+        "pages": ["Scoring Chances", "Pitcher Deep Dive", "Hitter Profile"],
         "shows": "A scoring chance is a half-inning where a runner got to 2nd or 3rd (or a run scored). R/Chance is the "
                  "runs scored in those innings divided by how many there were (from PEAR Ratings' D1 chart). Pitchers: "
                  "innings you pitched with a runner on 2nd or 3rd, and runs charged to you -- a runner you put on who "
