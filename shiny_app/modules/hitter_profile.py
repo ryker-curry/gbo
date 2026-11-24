@@ -70,6 +70,7 @@ from modules.hitter_tracking import _compute_zone_scores, _build_zone_heatmap_fi
 from visualizations.spray_chart import hit_spray_chart, infield_slice_chart, all_bip_spray_chart
 
 import ui_helpers
+import scoring_chances_display
 import deep_link
 import format_helpers
 import glossary_content
@@ -740,6 +741,12 @@ def hitter_profile_server(input, output, session, app_state):
                 {"label": "QAB %", "value": _fmt_pct(line["QAB %"])},
             ]))
             sections.append(ui.p(f"QAB: {line['QAB']} of {line['PA']} PA", class_="text-muted small"))
+
+            # Nov 2026: Runs per Scoring Chance (analytics/scoring_chances.py).
+            f = _current_filters()
+            sections.extend(scoring_chances_display.hitter_section(
+                db, pid, f["date_from"], f["date_to"], f["game_scope"],
+                note="(All pitch types -- the pitch-type filter doesn't apply here.)" if f["pitch_type"] else None))
 
             sections.append(ui.hr())
             sections.append(ui.p(ui.strong("Count Leverage (Ahead / Even / Behind)")))

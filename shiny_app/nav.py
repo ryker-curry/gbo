@@ -167,6 +167,10 @@ def build_nav_sections(role_name: str, coach_specialty: Optional[str], is_pitche
             NavPage("pitching_leaderboard", "Pitching Leaderboard", "trophy"),
             # Oct 2026, Ryker: same board for hitters.
             NavPage("hitting_leaderboard", "Hitting Leaderboard", "trophy"),
+            # Nov 2026, Ryker (PEAR Ratings idea): runs per scoring chance --
+            # team offense vs staff + pitcher/hitter scatter. Staff only;
+            # lands under "More tools" on the simple coach sidebar.
+            NavPage("scoring_chances", "Scoring Chances", "bullseye"),
             # Oct 2026: research project (S&C tests vs fastball velo/spin) --
             # data checklist + analysis for staff.
             NavPage("research_project", "Research Project", "flask"),

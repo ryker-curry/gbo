@@ -125,13 +125,23 @@ def predicted_scorers(runners, runs, batter):
 # ---------------------------------------------------------------------------
 # The walk
 # ---------------------------------------------------------------------------
-def walk_game(pitches, runner_events=(), forced_ends=(), confirmed=None):
+def walk_game(pitches, runner_events=(), forced_ends=(), confirmed=None, batter_fn=None, honor_named=True):
     """Replay one game. Returns {"runners": {base: identity} at the end,
     "scored": [(kind, ref_id, identity, inferred)]} where kind is "pitch"
     (ref_id = game_pitch_id), "event" (runner_event_id) or "forced"
     (forced_end_id). confirmed: {game_pitch_id: [identity, ...]} from
-    GamePlayRunScorer."""
+    GamePlayRunScorer.
+
+    batter_fn / honor_named (Nov 2026, Runs per Scoring Chance,
+    analytics/scoring_chances.py): batter_fn(pitch) replaces batter_of()
+    as the token placed on base, so a caller can carry something other
+    than the runner's identity along the bases -- scoring_chances passes
+    a (pitcher responsible, plate appearance) token to charge a run to
+    the pitcher who put that runner on. honor_named=False keeps that
+    token when a runner event names the runner, instead of swapping in
+    the named identity. Defaults leave the walk exactly as before."""
     confirmed = confirmed or {}
+    batter_fn = batter_fn or batter_of
     ev_after = defaultdict(list)
     for e in runner_events or []:
         ev_after[e.pitch_sequence_after].append(e)
@@ -145,7 +155,7 @@ def walk_game(pitches, runner_events=(), forced_ends=(), confirmed=None):
     def apply_events(runners, anchor):
         for e in ev_after.get(anchor, []):
             who = runners.pop(e.from_base, None)
-            named = identity_of(e.our_player_id, e.opponent_player_id)
+            named = identity_of(e.our_player_id, e.opponent_player_id) if honor_named else None
             if named:
                 who = named
             if e.is_out:
@@ -173,7 +183,7 @@ def walk_game(pitches, runner_events=(), forced_ends=(), confirmed=None):
         runners = {b: runners.get(b) for b in on_before}
         if p.ends_plate_appearance and p.ab_outcome not in (None, "No Result"):
             rs = p.runs_scored_on_play or 0
-            batter = batter_of(p)
+            batter = batter_fn(p)
             lead_desc = sorted(runners, reverse=True)
             gpid = getattr(p, "game_pitch_id", None)
             conf = confirmed.get(gpid)

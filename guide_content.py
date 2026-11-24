@@ -459,6 +459,20 @@ GUIDE += [
         "good": ["No shape far below the team in RV/100."],
     },
     {
+        "key": "scoring_chances", "title": "Runs per Scoring Chance", "who": "all",
+        "pages": ["Scoring Chances", "Pitcher Profile", "Hitter Profile"],
+        "shows": "A scoring chance is a half-inning where a runner got to 2nd or 3rd (or a run scored). R/Chance is the "
+                 "runs scored in those innings divided by how many there were (from PEAR Ratings' D1 chart). Pitchers: "
+                 "innings you pitched with a runner on 2nd or 3rd, and runs charged to you -- a runner you put on who "
+                 "scores after you leave still counts against you. Hitters: runs that scored on the play that ended your "
+                 "at-bat with a runner on 2nd or 3rd, plus RISP RE24 (runs added in those spots).",
+        "use": ["Pitchers: lower R/Chance = you get out of jams. Chance % = how often you get into them.",
+                "Hitters: RISP RE24 is the better read -- a 3-run double counts more than a sac fly, and outs cost value.",
+                "Small samples swing a lot: under 3 chances (pitcher) or 5 RISP PA (hitter) is flagged."],
+        "good": ["Pitchers: R/Chance under the staff line, and 'got out clean' over 50%.",
+                 "Hitters: positive RISP RE24."],
+    },
+    {
         "key": "zone_whiff", "title": "In-zone whiff check", "who": "hitters",
         "pages": ["Hitter Profile", "My Hitter Profile"],
         "shows": "Hitter Profile > Trends. Your miss rate on strikes you swing at, over your last 30, against your normal.",

@@ -73,7 +73,7 @@ from modules import (  # noqa: E402
     team_schedule, player_assignments, at_appointments, rapsodo_import, assessment_import,
     player_development, player_game_stats, player_hitting, player_video, player_bullpens,
     analytics, pitcher_game_report, hitter_game_report, bullpen_dashboard,
-    pitcher_profile, hitter_profile, pitching_leaderboard, hitting_leaderboard,
+    pitcher_profile, hitter_profile, pitching_leaderboard, hitting_leaderboard, scoring_chances,
     user_management, staff_assignments, hitter_tracking,
     opponent_teams, bullpen_scripts, training_routines, idp, bullpen_tracking,
     game_tracking, command_tracker, roster, player_profile,
@@ -125,6 +125,7 @@ MODULE_UI = {
     "pitcher_profile": lambda: pitcher_profile.pitcher_profile_ui("pitcher_profile"),
     "hitter_profile": lambda: hitter_profile.hitter_profile_ui("hitter_profile"),
     "pitching_leaderboard": lambda: pitching_leaderboard.pitching_leaderboard_ui("pitching_leaderboard"),
+    "scoring_chances": lambda: scoring_chances.scoring_chances_ui("scoring_chances"),
     "arsenal_comparison": lambda: arsenal_comparison.arsenal_comparison_ui("arsenal_comparison"),
     "athlete_performance": lambda: athlete_performance.athlete_performance_ui("athlete_performance"),
     "staff_compensation": lambda: staff_compensation.staff_compensation_ui("staff_compensation"),
@@ -394,6 +395,7 @@ def server(input, output, session):
     pitcher_profile.pitcher_profile_server("pitcher_profile", app_state)
     hitter_profile.hitter_profile_server("hitter_profile", app_state)
     pitching_leaderboard.pitching_leaderboard_server("pitching_leaderboard", app_state)
+    scoring_chances.scoring_chances_server("scoring_chances", app_state)
     arsenal_comparison.arsenal_comparison_server("arsenal_comparison", app_state)
     athlete_performance.athlete_performance_server("athlete_performance", app_state)
     staff_compensation.staff_compensation_server("staff_compensation", app_state)
@@ -486,7 +488,7 @@ _NAV_GROUPS = [
     ("Reports", ["team_game_report", "pitcher_game_report", "pitcher_meeting_report", "hitter_game_report",
                  "hitter_meeting_report", "exit_report", "weekly_report"]),
     # Sept 2026, Ryker: profiles / stats / leaderboards live under Analytics.
-    ("Analytics", ["analytics", "pitcher_profile", "arsenal_comparison", "player_types", "staff_compensation", "hitter_profile", "pitching_leaderboard", "hitting_leaderboard"]),
+    ("Analytics", ["analytics", "pitcher_profile", "arsenal_comparison", "player_types", "staff_compensation", "hitter_profile", "pitching_leaderboard", "hitting_leaderboard", "scoring_chances"]),
     ("Scouting", ["advance_scouting", "pitch_cards", "opponent_teams"]),
     ("Admin", ["user_management", "staff_assignments", "video_import"]),
     ("Me", ["player_profile", "player_schedule", "player_development", "player_stats", "player_game_stats", "player_hitting", "player_video", "player_bullpens", "pitcher_profile", "pitcher_meeting_report", "weekly_report", "advance_scouting", "hitter_profile", "hitter_meeting_report", "exit_report", "pitching_leaderboard", "hitting_leaderboard"]),
@@ -536,6 +538,7 @@ _ICONS = {
     "pitcher_profile": '<path d="M3 17l6-6 4 4 8-8M14 7h7v7"/><circle cx="12" cy="12" r="9"/>',
     "hitter_profile": '<path d="M3 17l6-6 4 4 8-8M14 7h7v7"/><circle cx="12" cy="12" r="9"/>',
     "pitching_leaderboard": '<path d="M8 21h8M12 17v4M17 3H7v5a5 5 0 0010 0V3z"/><path d="M5 5H3v2a3 3 0 003 3M19 5h2v2a3 3 0 01-3 3"/>',
+    "scoring_chances": '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/>',
     "arsenal_comparison": '<circle cx="7" cy="12" r="4"/><circle cx="17" cy="12" r="4"/><path d="M11 12h2"/>',
     "athlete_performance": '<path d="M4 20V10M10 20V4M4 20h16"/><path d="M14 16l3-5 4 2"/>',
     "staff_compensation": '<path d="M4 6h16M4 12h10M4 18h6"/><circle cx="18" cy="16" r="3"/>',

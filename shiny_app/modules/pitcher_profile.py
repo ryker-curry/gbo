@@ -136,6 +136,7 @@ from visualizations.arsenal_plan_chart import plan_movement_figure, progress_fig
 from visualizations.best_zone_chart import best_zone_figure
 
 import ui_helpers
+import scoring_chances_display
 from analytics import league_baselines
 import format_helpers
 from analytics.bullpen_metrics import (
@@ -952,6 +953,12 @@ def pitcher_profile_server(input, output, session, app_state):
                     sections.append(ui.tags.details(ui.tags.summary("Show anyway"), plus, class_="gbo-seq-details"))
                 else:
                     sections.append(plus)
+
+                # Nov 2026: Runs per Scoring Chance (analytics/scoring_chances.py) --
+                # a whole-outing stat, so not shown filtered to one pitch type or game.
+                if not f["pitch_type"] and not f["game_id"]:
+                    sections.extend(scoring_chances_display.pitcher_section(
+                        db, pid, f["date_from"], f["date_to"], f["game_scope"]))
 
             sections.append(ui.hr())
             sections.append(ui.p(ui.strong("Overview")))

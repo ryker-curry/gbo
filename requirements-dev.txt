@@ -2,3 +2,4 @@
 -r requirements.txt
 pytest>=8.0
 pyflakes>=3.0
+pearatings>=1.1   # PEAR Ratings API client -- scripts/pear_d2_context.py (local only, not the app)
